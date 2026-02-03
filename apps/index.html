@@ -10,115 +10,112 @@
         <link rel="stylesheet" href="/src/styles/responsive.css" />
     </head>
     <body>
-        <div class="app">
-            <aside class="sidebar">
+        <div class="app-shell">
+            <header id="topNav" class="top-nav">
                 <div class="brand">
-                    <h1>CodexManager</h1>
-                    <span>Codex 兼容 · 号池管理</span>
+                    <span class="brand-mark">CM</span>
+                    <div class="brand-meta">
+                        <h1>CodexManager</h1>
+                        <span>账号池 · 用量管理</span>
+                    </div>
                 </div>
-                <div class="nav">
+                <nav class="pill-nav">
                     <button id="navDashboard" class="active">仪表盘</button>
                     <button id="navAccounts">账号管理</button>
                     <button id="navApiKeys">平台 Key</button>
+                </nav>
+                <div class="top-actions">
+                    <div class="service-setup">
+                        <input id="serviceAddr" type="text" placeholder="端口，如 5050" />
+                        <button id="serviceToggle" class="secondary">启动服务</button>
+                    </div>
+                    <div class="service-meta">
+                        <div id="status" class="status-pill">未启动</div>
+                        <div id="serviceHint" class="hint"></div>
+                    </div>
+                    <button class="icon-btn" type="button" aria-label="主题">主题</button>
+                    <button class="icon-btn" type="button" aria-label="语言">EN</button>
                 </div>
-            </aside>
+            </header>
 
             <main class="content">
-                <div class="topbar">
-                    <div class="topbar-title">
+                <section class="page-head">
+                    <div class="page-title">
                         <h2 id="pageTitle">仪表盘</h2>
-                        <span>可用状态与用量概览</span>
+                        <p class="hint">可用状态与用量概览</p>
                     </div>
                     <div class="actions">
-                        <div class="service-setup">
-                            <input
-                                id="serviceAddr"
-                                type="text"
-                                placeholder="端口，如 5050"
-                            />
-                            <button id="serviceToggle" class="secondary">
-                                启动服务
-                            </button>
-                        </div>
-                        <div class="service-meta">
-                            <div id="status" class="status-pill">未启动</div>
-                            <div id="serviceHint" class="hint"></div>
-                        </div>
-                        <button id="globalRefresh" class="secondary">
-                            刷新数据
-                        </button>
+                        <button id="addAccount" class="ghost">添加账号</button>
+                        <button id="globalRefresh">刷新配额</button>
                     </div>
-                </div>
+                </section>
 
                 <section id="pageDashboard" class="page active">
-                    <div class="grid dashboard-metrics">
-                        <div class="card">
-                            <h3>可用账号</h3>
-                            <div class="metrics" id="metricAvailable">0</div>
-                            <div class="metric-sub">当前可用</div>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-icon"></div>
+                            <div class="stat-body">
+                                <h3>总账号数</h3>
+                                <div id="metricTotal" class="stat">0</div>
+                                <div class="metric-sub">总数</div>
+                            </div>
                         </div>
-                        <div class="card">
-                            <h3>不可用账号</h3>
-                            <div class="metrics" id="metricUnavailable">0</div>
-                            <div class="metric-sub">额度用尽/不可用</div>
+                        <div class="stat-card">
+                            <div class="stat-icon"></div>
+                            <div class="stat-body">
+                                <h3>可用账号</h3>
+                                <div id="metricAvailable" class="stat">0</div>
+                                <div class="metric-sub">当前可用</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon"></div>
+                            <div class="stat-body">
+                                <h3>不可用账号</h3>
+                                <div id="metricUnavailable" class="stat">0</div>
+                                <div class="metric-sub">额度不足</div>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon"></div>
+                            <div class="stat-body">
+                                <h3>低配额账号</h3>
+                                <div id="metricLowQuota" class="stat">0</div>
+                                <div class="metric-sub">< 20%</div>
+                            </div>
                         </div>
                     </div>
 
-                    <div class="grid dashboard-panels">
-                        <div class="panel">
-                            <div class="panel-header">
-                                <h3>状态分布</h3>
-                                <span class="hint" id="statusUpdated"
-                                    >最近刷新: --</span
-                                >
-                            </div>
-                            <div class="donut">
-                                <div id="statusDonut" class="donut-ring"></div>
-                                <div class="donut-legend">
-                                    <div class="legend-item">
-                                        <span
-                                            class="legend-dot legend-ok"
-                                        ></span
-                                        >可用 <span id="legendOk">0</span>
-                                    </div>
-                                    <div class="legend-item">
-                                        <span
-                                            class="legend-dot legend-warn"
-                                        ></span
-                                        >告警 <span id="legendWarn">0</span>
-                                    </div>
-                                    <div class="legend-item">
-                                        <span
-                                            class="legend-dot legend-bad"
-                                        ></span
-                                        >不可用 <span id="legendBad">0</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                    <div class="dashboard-duo">
+                        <div id="currentAccountCard" class="card"></div>
+                        <div id="recommendations" class="card"></div>
+                    </div>
 
-                        <div class="panel">
-                            <div class="panel-header">
-                                <h3>用量</h3>
-                                <span class="hint">按账号</span>
-                            </div>
-                            <div id="usageBars" class="usage-table"></div>
-                        </div>
+                    <div class="dashboard-actions">
+                        <button id="viewAllAccounts" class="ghost">查看所有账号</button>
+                        <button id="exportDashboard" class="ghost">导出账号数据</button>
                     </div>
                 </section>
 
                 <section id="pageAccounts" class="page">
-                    <div class="panel">
-                        <div class="panel-header">
-                            <div>
-                                <h3>账号管理</h3>
-                                <p>
-                                    一行一账号，支持备注/标签/分组与用量查询。
-                                </p>
+                    <div id="accountsToolbar" class="accounts-toolbar">
+                        <div class="toolbar-left">
+                            <div class="search-field">
+                                <input id="accountSearch" placeholder="搜索邮箱..." />
                             </div>
-                            <button id="addAccount">新增账号</button>
+                            <div class="segmented">
+                                <button id="filterAll" class="active">全部</button>
+                                <button id="filterActive">可用</button>
+                                <button id="filterLow">低配额</button>
+                            </div>
                         </div>
+                        <div class="actions">
+                            <button id="refreshAll">刷新所有</button>
+                            <button id="exportAccounts" class="secondary">导出</button>
+                        </div>
+                    </div>
 
+                    <div class="panel">
                         <div class="table table-header account-table">
                             <div>账号</div>
                             <div>分组</div>
@@ -139,9 +136,7 @@
                                 <h3>平台 Key</h3>
                                 <p>创建/管理网关调用所需的 Key</p>
                             </div>
-                            <button id="createApiKey" class="secondary">
-                                创建 Key
-                            </button>
+                            <button id="createApiKey" class="secondary">创建 Key</button>
                         </div>
                         <div class="table table-header api-table">
                             <div>Key ID</div>
@@ -230,25 +225,15 @@
                     />
                     <label>平台 Key</label>
                     <div class="login-url">
-                        <input
-                            id="apiKeyValue"
-                            class="mono"
-                            readonly
-                            value=""
-                        />
-                        <button id="copyApiKey" class="secondary">
-                            复制Key
-                        </button>
+                        <input id="apiKeyValue" class="mono" readonly value="" />
+                        <button id="copyApiKey" class="secondary">复制Key</button>
                     </div>
-                    <div class="hint">Key 仅创建时显示，请妥善保存。</div>
                 </div>
                 <div class="modal-footer">
-                    <button id="submitApiKey">生成Key</button>
-                    <button id="cancelApiKey" class="secondary">取消</button>
+                    <button id="submitApiKey">完成</button>
+                    <button id="cancelApiKey" class="secondary">关闭</button>
                 </div>
             </div>
         </div>
-
-        <script type="module" src="/src/main.js"></script>
     </body>
 </html>
