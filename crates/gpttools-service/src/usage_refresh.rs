@@ -5,7 +5,6 @@ use gpttools_core::auth::{
 use gpttools_core::storage::{now_ts, Event, Storage, Token, UsageSnapshotRecord};
 use gpttools_core::usage::{parse_usage_snapshot, usage_endpoint};
 use reqwest::blocking::Client;
-use reqwest::Error as ReqwestError;
 use std::collections::HashMap;
 use std::thread;
 use std::time::Duration;
@@ -313,50 +312,18 @@ fn fetch_usage_snapshot(
 ) -> Result<serde_json::Value, String> {
     // 调用上游用量接口
     let url = usage_endpoint(base_url);
-    let client = Client::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(12))
-        .build()
-        .map_err(|e| e.to_string())?;
-    for attempt in 0..=1 {
-        let mut req = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {bearer}"));
-        if let Some(workspace_id) = workspace_id {
-            req = req.header("ChatGPT-Account-Id", workspace_id);
-        }
-        match req.send() {
-            Ok(resp) => {
-                if !resp.status().is_success() {
-                    return Err(format!("usage endpoint status {}", resp.status()));
-                }
-                return resp.json().map_err(|e| e.to_string());
-            }
-            Err(err) => {
-                if attempt == 0 && is_transient_usage_error(&err) {
-                    log::warn!("usage request transient error: {}, retrying", err);
-                    thread::sleep(Duration::from_millis(500));
-                    continue;
-                }
-                return Err(format_reqwest_error(&err));
-            }
-        }
+    let client = Client::new();
+    let mut req = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {bearer}"));
+    if let Some(workspace_id) = workspace_id {
+        req = req.header("ChatGPT-Account-Id", workspace_id);
     }
-    Err("usage request failed".to_string())
-}
-
-fn is_transient_usage_error(err: &ReqwestError) -> bool {
-    err.is_timeout() || err.is_connect()
-}
-
-fn format_reqwest_error(err: &ReqwestError) -> String {
-    if err.is_timeout() {
-        "usage request timeout".to_string()
-    } else if err.is_connect() {
-        "usage request connect failed".to_string()
-    } else {
-        err.to_string()
+    let resp = req.send().map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("usage endpoint status {}", resp.status()));
     }
+    resp.json().map_err(|e| e.to_string())
 }
 
 #[derive(serde::Deserialize)]

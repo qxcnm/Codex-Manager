@@ -34,8 +34,6 @@ export const dom = {
   filterLow: byId("filterLow"),
   refreshAll: byId("refreshAll"),
   exportAccounts: byId("exportAccounts"),
-  viewAllAccounts: byId("viewAllAccounts"),
-  exportDashboard: byId("exportDashboard"),
   accountRows: byId("accountRows"),
   apiKeyRows: byId("apiKeyRows"),
   modalAccount: byId("modalAccount"),

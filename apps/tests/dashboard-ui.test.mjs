@@ -19,7 +19,6 @@ const mustHave = [
   "metricTotal",
   "metricAvailable",
   "metricUnavailable",
-  "metricLowQuota",
   "currentAccountCard",
   "recommendations",
   "accountsToolbar",

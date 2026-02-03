@@ -1,3 +1,9 @@
+@media (max-width: 1200px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 1024px) {
   .top-nav {
     flex-wrap: wrap;
@@ -11,6 +17,12 @@
 
   .content {
     padding: 24px 20px 32px;
+  }
+}
+
+@media (max-width: 960px) {
+  .dashboard-duo {
+    grid-template-columns: 1fr;
   }
 }
 

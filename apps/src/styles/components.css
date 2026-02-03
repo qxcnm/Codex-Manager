@@ -128,22 +128,24 @@ button.secondary.is-loading::after {
 }
 
 .page.active {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
 }
 
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 16px;
+  gap: 20px;
 }
 
 .stat-card {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 16px;
-  padding: 16px 18px;
+  padding: 18px 20px;
   display: flex;
-  gap: 14px;
+  gap: 16px;
   align-items: center;
   box-shadow: var(--shadow);
 }
@@ -153,6 +155,12 @@ button.secondary.is-loading::after {
   height: 38px;
   border-radius: 12px;
   background: linear-gradient(135deg, #dbeafe, #e0f2fe);
+}
+
+.stat-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .stat-body h3 {
@@ -170,12 +178,13 @@ button.secondary.is-loading::after {
 .metric-sub {
   font-size: 12px;
   color: var(--muted);
+  margin-top: 2px;
 }
 
 .dashboard-duo {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 20px;
+  gap: 24px;
 }
 
 .dashboard-actions {
@@ -188,16 +197,22 @@ button.secondary.is-loading::after {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 18px;
-  padding: 18px;
+  padding: 22px;
   box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .panel {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 18px;
-  padding: 18px;
+  padding: 22px;
   box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .panel-header {
@@ -205,15 +220,15 @@ button.secondary.is-loading::after {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 0;
 }
 
 .accounts-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  padding: 12px 14px;
+  gap: 16px;
+  padding: 14px 16px;
   border-radius: 16px;
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.9);
@@ -262,7 +277,7 @@ button.secondary.is-loading::after {
 
 .table {
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 
 .table.account-table {
@@ -281,14 +296,14 @@ button.secondary.is-loading::after {
 }
 
 .cell {
-  padding: 12px 14px;
+  padding: 14px 16px;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid var(--border);
   font-size: 13px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .cell strong {
@@ -343,13 +358,13 @@ button.secondary.is-loading::after {
 .mini-usage {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-top: 6px;
+  gap: 10px;
+  margin-top: 8px;
 }
 
 .progress-line {
   display: grid;
-  grid-template-columns: 60px 1fr;
+  grid-template-columns: 70px 1fr;
   gap: 8px;
   align-items: center;
   font-size: 11px;
@@ -357,7 +372,7 @@ button.secondary.is-loading::after {
 }
 
 .progress-line .track {
-  height: 8px;
+  height: 9px;
   background: rgba(15, 23, 42, 0.08);
   border-radius: 999px;
   overflow: hidden;

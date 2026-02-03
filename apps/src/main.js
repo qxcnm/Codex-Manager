@@ -377,9 +377,6 @@ function bindEvents() {
   dom.navDashboard.addEventListener("click", () => switchPage("dashboard"));
   dom.navAccounts.addEventListener("click", () => switchPage("accounts"));
   dom.navApiKeys.addEventListener("click", () => switchPage("apikeys"));
-  if (dom.viewAllAccounts) {
-    dom.viewAllAccounts.addEventListener("click", () => switchPage("accounts"));
-  }
   dom.addAccountBtn.addEventListener("click", openAccountModal);
   dom.createApiKeyBtn.addEventListener("click", openApiKeyModal);
   dom.closeAccountModal.addEventListener("click", closeAccountModal);

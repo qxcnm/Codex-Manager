@@ -45,7 +45,6 @@
                         <p class="hint">可用状态与用量概览</p>
                     </div>
                     <div class="actions">
-                        <button id="addAccount" class="ghost">添加账号</button>
                         <button id="globalRefresh">刷新配额</button>
                     </div>
                 </section>
@@ -76,24 +75,11 @@
                                 <div class="metric-sub">额度不足</div>
                             </div>
                         </div>
-                        <div class="stat-card">
-                            <div class="stat-icon"></div>
-                            <div class="stat-body">
-                                <h3>低配额账号</h3>
-                                <div id="metricLowQuota" class="stat">0</div>
-                                <div class="metric-sub">< 20%</div>
-                            </div>
-                        </div>
                     </div>
 
                     <div class="dashboard-duo">
                         <div id="currentAccountCard" class="card"></div>
                         <div id="recommendations" class="card"></div>
-                    </div>
-
-                    <div class="dashboard-actions">
-                        <button id="viewAllAccounts" class="ghost">查看所有账号</button>
-                        <button id="exportDashboard" class="ghost">导出账号数据</button>
                     </div>
                 </section>
 
@@ -110,6 +96,7 @@
                             </div>
                         </div>
                         <div class="actions">
+                            <button id="addAccount" class="ghost">添加账号</button>
                             <button id="refreshAll">刷新所有</button>
                             <button id="exportAccounts" class="secondary">导出</button>
                         </div>
@@ -235,5 +222,6 @@
                 </div>
             </div>
         </div>
+        <script type="module" src="/src/main.js"></script>
     </body>
 </html>
