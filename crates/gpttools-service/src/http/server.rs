@@ -1,4 +1,5 @@
 use std::io;
+use std::thread;
 use tiny_http::Request;
 use tiny_http::Server;
 
@@ -9,7 +10,9 @@ pub fn start_http(addr: &str) -> std::io::Result<()> {
             let _ = request.respond(tiny_http::Response::from_string("shutdown"));
             break;
         }
-        route_request(request);
+        thread::spawn(move || {
+            route_request(request);
+        });
     }
     Ok(())
 }

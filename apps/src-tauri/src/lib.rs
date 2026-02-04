@@ -311,8 +311,8 @@ fn rpc_call(
     log::warn!("rpc connect failed ({} -> {}): {}", method, addr, e);
     e
   })?;
-  let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-  let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+  let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+  let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
 
   let req = JsonRpcRequest {
     id: 1,
@@ -425,6 +425,9 @@ fn connect_with_timeout(addr: &str, timeout: Duration) -> Result<TcpStream, Stri
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::io::{Read, Write};
+  use std::net::TcpListener;
+  use std::time::Duration;
 
   #[cfg(target_os = "windows")]
   #[test]
@@ -451,5 +454,28 @@ mod tests {
       redirect_uri_for_addr("0.0.0.0:5050"),
       "http://localhost:5050/auth/callback"
     );
+  }
+
+  #[test]
+  fn rpc_call_tolerates_slow_response() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    std::thread::spawn(move || {
+      if let Ok((mut stream, _)) = listener.accept() {
+        let mut buf = [0u8; 512];
+        let _ = stream.read(&mut buf);
+        std::thread::sleep(Duration::from_secs(3));
+        let body = r#"{"result":{"ok":true}}"#;
+        let response = format!(
+          "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+          body.len(),
+          body
+        );
+        let _ = stream.write_all(response.as_bytes());
+      }
+    });
+
+    let res = rpc_call("initialize", Some(addr.to_string()), None);
+    assert!(res.is_ok());
   }
 }
