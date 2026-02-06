@@ -4,16 +4,353 @@ use reqwest::header::CONTENT_TYPE;
 use reqwest::blocking::Client;
 use reqwest::Method;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 use tiny_http::{Header, Request, Response, StatusCode};
 
 use crate::account_availability::{evaluate_snapshot, Availability, is_available};
 use crate::account_status::set_account_status;
 use crate::auth_tokens;
-use crate::storage_helpers::{hash_platform_key, open_storage};
-use crate::usage_refresh;
+use crate::storage_helpers::open_storage;
 use gpttools_core::auth::{DEFAULT_CLIENT_ID, DEFAULT_ISSUER};
 use gpttools_core::rpc::types::ModelOption;
 use serde_json::Value;
+
+mod local_validation;
+mod upstream_proxy;
+
+static UPSTREAM_CLIENT: OnceLock<Client> = OnceLock::new();
+static CANDIDATE_CURSOR: AtomicUsize = AtomicUsize::new(0);
+static ACCOUNT_INFLIGHT: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+static ACCOUNT_COOLDOWN_UNTIL: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
+static ACCOUNT_TOKEN_EXCHANGE_LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
+    OnceLock::new();
+static GATEWAY_TOTAL_REQUESTS: AtomicUsize = AtomicUsize::new(0);
+static GATEWAY_ACTIVE_REQUESTS: AtomicUsize = AtomicUsize::new(0);
+static GATEWAY_FAILOVER_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+static GATEWAY_COOLDOWN_MARKS: AtomicUsize = AtomicUsize::new(0);
+
+const DEFAULT_UPSTREAM_CONNECT_TIMEOUT_SECS: u64 = 15;
+const DEFAULT_ACCOUNT_MAX_INFLIGHT: usize = 0;
+const DEFAULT_ACCOUNT_COOLDOWN_SECS: i64 = 20;
+const DEFAULT_ACCOUNT_COOLDOWN_NETWORK_SECS: i64 = DEFAULT_ACCOUNT_COOLDOWN_SECS;
+const DEFAULT_ACCOUNT_COOLDOWN_429_SECS: i64 = 45;
+const DEFAULT_ACCOUNT_COOLDOWN_5XX_SECS: i64 = 30;
+const DEFAULT_ACCOUNT_COOLDOWN_4XX_SECS: i64 = DEFAULT_ACCOUNT_COOLDOWN_SECS;
+const DEFAULT_ACCOUNT_COOLDOWN_CHALLENGE_SECS: i64 = 60;
+const DEFAULT_MODELS_CLIENT_VERSION: &str = "0.98.0";
+const DEFAULT_GATEWAY_DEBUG: bool = false;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GatewayMetricsSnapshot {
+    pub total_requests: usize,
+    pub active_requests: usize,
+    pub account_inflight_total: usize,
+    pub failover_attempts: usize,
+    pub cooldown_marks: usize,
+}
+
+struct GatewayRequestGuard;
+
+impl Drop for GatewayRequestGuard {
+    fn drop(&mut self) {
+        GATEWAY_ACTIVE_REQUESTS.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+fn begin_gateway_request() -> GatewayRequestGuard {
+    GATEWAY_TOTAL_REQUESTS.fetch_add(1, Ordering::Relaxed);
+    GATEWAY_ACTIVE_REQUESTS.fetch_add(1, Ordering::Relaxed);
+    GatewayRequestGuard
+}
+
+fn record_gateway_failover_attempt() {
+    GATEWAY_FAILOVER_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+}
+
+fn account_inflight_total() -> usize {
+    let lock = ACCOUNT_INFLIGHT.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(map) = lock.lock() else {
+        return 0;
+    };
+    map.values().copied().sum()
+}
+
+pub(crate) fn gateway_metrics_snapshot() -> GatewayMetricsSnapshot {
+    GatewayMetricsSnapshot {
+        total_requests: GATEWAY_TOTAL_REQUESTS.load(Ordering::Relaxed),
+        active_requests: GATEWAY_ACTIVE_REQUESTS.load(Ordering::Relaxed),
+        account_inflight_total: account_inflight_total(),
+        failover_attempts: GATEWAY_FAILOVER_ATTEMPTS.load(Ordering::Relaxed),
+        cooldown_marks: GATEWAY_COOLDOWN_MARKS.load(Ordering::Relaxed),
+    }
+}
+
+pub(crate) fn gateway_metrics_prometheus() -> String {
+    let m = gateway_metrics_snapshot();
+    format!(
+        "gpttools_gateway_requests_total {}\n\
+gpttools_gateway_requests_active {}\n\
+gpttools_gateway_account_inflight_total {}\n\
+gpttools_gateway_failover_attempts_total {}\n\
+gpttools_gateway_cooldown_marks_total {}\n",
+        m.total_requests,
+        m.active_requests,
+        m.account_inflight_total,
+        m.failover_attempts,
+        m.cooldown_marks,
+    )
+}
+
+fn upstream_client() -> &'static Client {
+    UPSTREAM_CLIENT.get_or_init(|| {
+        Client::builder()
+            // 中文注释：显式关闭总超时，避免长时流式响应在客户端层被误判超时中断。
+            .timeout(None::<Duration>)
+            // 中文注释：连接阶段设置超时，避免网络异常时线程长期卡死占满并发槽位。
+            .connect_timeout(upstream_connect_timeout())
+            .pool_max_idle_per_host(32)
+            .pool_idle_timeout(Some(Duration::from_secs(90)))
+            .tcp_keepalive(Some(Duration::from_secs(30)))
+            .build()
+            .unwrap_or_else(|_| Client::new())
+    })
+}
+
+fn upstream_connect_timeout() -> Duration {
+    Duration::from_secs(DEFAULT_UPSTREAM_CONNECT_TIMEOUT_SECS)
+}
+
+fn rotate_candidates_for_fairness(candidates: &mut Vec<(Account, Token)>) {
+    if candidates.len() <= 1 {
+        return;
+    }
+    let cursor = CANDIDATE_CURSOR.fetch_add(1, Ordering::Relaxed);
+    let offset = cursor % candidates.len();
+    if offset > 0 {
+        // 中文注释：轮转起点可把并发请求均匀打散到不同账号，降低首账号被并发打爆的概率。
+        candidates.rotate_left(offset);
+    }
+}
+
+fn account_inflight_count(account_id: &str) -> usize {
+    let lock = ACCOUNT_INFLIGHT.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(map) = lock.lock() else {
+        return 0;
+    };
+    map.get(account_id).copied().unwrap_or(0)
+}
+
+struct AccountInFlightGuard {
+    account_id: String,
+}
+
+impl Drop for AccountInFlightGuard {
+    fn drop(&mut self) {
+        let lock = ACCOUNT_INFLIGHT.get_or_init(|| Mutex::new(HashMap::new()));
+        let Ok(mut map) = lock.lock() else {
+            return;
+        };
+        if let Some(value) = map.get_mut(&self.account_id) {
+            if *value > 1 {
+                *value -= 1;
+            } else {
+                map.remove(&self.account_id);
+            }
+        }
+    }
+}
+
+fn acquire_account_inflight(account_id: &str) -> AccountInFlightGuard {
+    let lock = ACCOUNT_INFLIGHT.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut map) = lock.lock() {
+        let entry = map.entry(account_id.to_string()).or_insert(0);
+        *entry += 1;
+    }
+    AccountInFlightGuard {
+        account_id: account_id.to_string(),
+    }
+}
+
+fn account_max_inflight_limit() -> usize {
+    DEFAULT_ACCOUNT_MAX_INFLIGHT
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CooldownReason {
+    Default,
+    Network,
+    RateLimited,
+    Upstream5xx,
+    Upstream4xx,
+    Challenge,
+}
+
+fn cooldown_secs_for_reason(reason: CooldownReason) -> i64 {
+    match reason {
+        CooldownReason::Default => DEFAULT_ACCOUNT_COOLDOWN_SECS,
+        CooldownReason::Network => DEFAULT_ACCOUNT_COOLDOWN_NETWORK_SECS,
+        CooldownReason::RateLimited => DEFAULT_ACCOUNT_COOLDOWN_429_SECS,
+        CooldownReason::Upstream5xx => DEFAULT_ACCOUNT_COOLDOWN_5XX_SECS,
+        CooldownReason::Upstream4xx => DEFAULT_ACCOUNT_COOLDOWN_4XX_SECS,
+        CooldownReason::Challenge => DEFAULT_ACCOUNT_COOLDOWN_CHALLENGE_SECS,
+    }
+}
+
+fn cooldown_reason_for_status(status: u16) -> CooldownReason {
+    match status {
+        429 => CooldownReason::RateLimited,
+        500..=599 => CooldownReason::Upstream5xx,
+        401 | 403 => CooldownReason::Challenge,
+        400..=499 => CooldownReason::Upstream4xx,
+        _ => CooldownReason::Default,
+    }
+}
+
+fn is_account_in_cooldown(account_id: &str) -> bool {
+    let lock = ACCOUNT_COOLDOWN_UNTIL.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(mut map) = lock.lock() else {
+        return false;
+    };
+    let now = now_ts();
+    map.retain(|_, until| *until > now);
+    map.get(account_id).copied().unwrap_or(0) > now
+}
+
+fn mark_account_cooldown(account_id: &str, reason: CooldownReason) {
+    let lock = ACCOUNT_COOLDOWN_UNTIL.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut map) = lock.lock() {
+        GATEWAY_COOLDOWN_MARKS.fetch_add(1, Ordering::Relaxed);
+        let cooldown_until = now_ts() + cooldown_secs_for_reason(reason);
+        // 中文注释：同账号短时间内可能触发不同失败类型；保留更晚的 until 可避免被较短冷却覆盖。
+        match map.get_mut(account_id) {
+            Some(until) => {
+                if cooldown_until > *until {
+                    *until = cooldown_until;
+                }
+            }
+            None => {
+                map.insert(account_id.to_string(), cooldown_until);
+            }
+        }
+    }
+}
+
+fn mark_account_cooldown_for_status(account_id: &str, status: u16) {
+    mark_account_cooldown(account_id, cooldown_reason_for_status(status));
+}
+
+fn clear_account_cooldown(account_id: &str) {
+    let lock = ACCOUNT_COOLDOWN_UNTIL.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut map) = lock.lock() {
+        map.remove(account_id);
+    }
+}
+
+fn account_token_exchange_lock(account_id: &str) -> Arc<Mutex<()>> {
+    let lock = ACCOUNT_TOKEN_EXCHANGE_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(mut map) = lock.lock() else {
+        return Arc::new(Mutex::new(()));
+    };
+    map.entry(account_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
+fn find_cached_api_key_access_token(storage: &Storage, account_id: &str) -> Option<String> {
+    storage
+        .list_tokens()
+        .ok()?
+        .into_iter()
+        .find(|t| t.account_id == account_id)
+        .and_then(|t| t.api_key_access_token)
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn resolve_openai_bearer_token(
+    storage: &Storage,
+    account: &Account,
+    token: &mut Token,
+) -> Result<String, String> {
+    if let Some(existing) = token
+        .api_key_access_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        return Ok(existing.to_string());
+    }
+
+    let exchange_lock = account_token_exchange_lock(&account.id);
+    let _guard = exchange_lock
+        .lock()
+        .map_err(|_| "token exchange lock poisoned".to_string())?;
+
+    if let Some(existing) = token
+        .api_key_access_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        return Ok(existing.to_string());
+    }
+
+    if let Some(cached) = find_cached_api_key_access_token(storage, &account.id) {
+        // 中文注释：并发下后到线程优先复用已落库的新 token，避免重复 token exchange 打上游。
+        token.api_key_access_token = Some(cached.clone());
+        return Ok(cached);
+    }
+
+    let client_id = std::env::var("GPTTOOLS_CLIENT_ID").unwrap_or_else(|_| DEFAULT_CLIENT_ID.to_string());
+    let issuer_env = std::env::var("GPTTOOLS_ISSUER").unwrap_or_else(|_| DEFAULT_ISSUER.to_string());
+    let issuer = if account.issuer.trim().is_empty() {
+        issuer_env
+    } else {
+        account.issuer.clone()
+    };
+    let exchanged = auth_tokens::obtain_api_key(&issuer, &client_id, &token.id_token)?;
+    token.api_key_access_token = Some(exchanged.clone());
+    let _ = storage.insert_token(token);
+    Ok(exchanged)
+}
+
+fn normalize_upstream_base_url(base: &str) -> String {
+    let mut normalized = base.trim().trim_end_matches('/').to_string();
+    let lower = normalized.to_ascii_lowercase();
+    if (lower.starts_with("https://chatgpt.com")
+        || lower.starts_with("https://chat.openai.com"))
+        && !lower.contains("/backend-api")
+    {
+        // 中文注释：对齐官方客户端的主机归一化，避免仅填域名时落到错误路径。
+        normalized = format!("{normalized}/backend-api/codex");
+    }
+    normalized
+}
+
+fn resolve_upstream_base_url() -> String {
+    let raw = std::env::var("GPTTOOLS_UPSTREAM_BASE_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "https://chatgpt.com/backend-api/codex".to_string());
+    normalize_upstream_base_url(&raw)
+}
+
+fn resolve_upstream_fallback_base_url(primary_base: &str) -> Option<String> {
+    std::env::var("GPTTOOLS_UPSTREAM_FALLBACK_BASE_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .map(|v| normalize_upstream_base_url(&v))
+        .or_else(|| {
+            if is_chatgpt_backend_base(primary_base) {
+                // 默认兜底到 OpenAI v1，避免 Cloudflare challenge 时模型列表不可用。
+                Some("https://api.openai.com/v1".to_string())
+            } else {
+                None
+            }
+        })
+}
 
 fn is_openai_api_base(base: &str) -> bool {
     let normalized = base.trim().to_ascii_lowercase();
@@ -23,6 +360,7 @@ fn is_openai_api_base(base: &str) -> bool {
 fn is_chatgpt_backend_base(base: &str) -> bool {
     let normalized = base.trim().to_ascii_lowercase();
     normalized.contains("chatgpt.com/backend-api")
+        || normalized.contains("chat.openai.com/backend-api")
 }
 
 fn extract_request_model(body: &[u8]) -> Option<String> {
@@ -89,7 +427,7 @@ fn write_request_log(
 
 pub(crate) fn handle_gateway_request(mut request: Request) -> Result<(), String> {
     // 处理代理请求（鉴权后转发到上游）
-    let debug = std::env::var("GPTTOOLS_GATEWAY_DEBUG").is_ok();
+    let debug = DEFAULT_GATEWAY_DEBUG;
     if request.method().as_str() == "OPTIONS" {
         let response = Response::empty(204);
         let _ = request.respond(response);
@@ -102,525 +440,17 @@ pub(crate) fn handle_gateway_request(mut request: Request) -> Result<(), String>
         return Ok(());
     }
 
-    // IMPORTANT: always consume request body before early-returning with auth errors.
-    // Some clients (e.g. codex-cli) will report "stream disconnected before completion"
-    // if the server responds and closes while the request body is still being sent.
-    let mut body = Vec::new();
-    let _ = request.as_reader().read_to_end(&mut body);
-
-    let Some(platform_key) = extract_platform_key(&request) else {
-        if debug {
-            let remote = request
-                .remote_addr()
-                .map(|a| a.to_string())
-                .unwrap_or_else(|| "<none>".to_string());
-            let auth_scheme = request
-                .headers()
-                .iter()
-                .find(|h| h.field.equiv("Authorization"))
-                .and_then(|h| h.value.as_str().split_whitespace().next())
-                .unwrap_or("<none>");
-            let header_names = request
-                .headers()
-                .iter()
-                .map(|h| h.field.as_str().as_str())
-                .collect::<Vec<_>>()
-                .join(",");
-            eprintln!(
-                "gateway auth missing: url={}, remote={}, has_auth={}, auth_scheme={}, has_x_api_key={}, headers=[{}]",
-                request.url(),
-                remote,
-                request
-                    .headers()
-                    .iter()
-                    .any(|h| h.field.equiv("Authorization")),
-                auth_scheme,
-                request.headers().iter().any(|h| h.field.equiv("x-api-key")),
-                header_names,
-            );
-        }
-        let response = Response::from_string("missing api key").with_status_code(401);
-        let _ = request.respond(response);
-        return Ok(());
-    };
-
-    let Some(storage) = open_storage() else {
-        let response = Response::from_string("storage unavailable").with_status_code(500);
-        let _ = request.respond(response);
-        return Ok(());
-    };
-    let key_hash = hash_platform_key(&platform_key);
-    let api_key = match storage.find_api_key_by_hash(&key_hash) {
+    let _request_guard = begin_gateway_request();
+    let validated = match local_validation::prepare_local_request(&mut request, debug) {
         Ok(v) => v,
         Err(err) => {
-            let response = Response::from_string(format!("storage read failed: {err}"))
-                .with_status_code(500);
-            let _ = request.respond(response);
-            return Ok(());
-        }
-    };
-    let Some(api_key) = api_key else {
-        if debug {
-            eprintln!(
-                "gateway auth invalid: url={}, key_hash_prefix={}",
-                request.url(),
-                &key_hash[..8]
-            );
-        }
-        let response = Response::from_string("invalid api key").with_status_code(403);
-        let _ = request.respond(response);
-        return Ok(());
-    };
-    if api_key.status != "active" {
-        if debug {
-            eprintln!("gateway auth disabled: url={}, key_id={}", request.url(), api_key.id);
-        }
-        let response = Response::from_string("api key disabled").with_status_code(403);
-        let _ = request.respond(response);
-        return Ok(());
-    }
-    // 按当前策略取消每次请求都更新 api_keys.last_used_at，减少并发写入冲突。
-
-    let path = normalize_models_path(request.url());
-    body = apply_request_overrides(
-        &path,
-        body,
-        api_key.model_slug.as_deref(),
-        api_key.reasoning_effort.as_deref(),
-    );
-    let request_method = request.method().as_str().to_string();
-    let key_id = api_key.id.clone();
-    let model_for_log = extract_request_model(&body).or(api_key.model_slug.clone());
-    let reasoning_for_log =
-        extract_request_reasoning_effort(&body).or(api_key.reasoning_effort.clone());
-
-    let candidates = match collect_gateway_candidates(&storage) {
-        Ok(v) => v,
-        Err(err) => {
-            let response = Response::from_string(format!("candidate resolve failed: {err}"))
-                .with_status_code(500);
-            let _ = request.respond(response);
-            return Ok(());
-        }
-    };
-    if candidates.is_empty() {
-        write_request_log(
-            &storage,
-            Some(&key_id),
-            &path,
-            &request_method,
-            model_for_log.as_deref(),
-            reasoning_for_log.as_deref(),
-            None,
-            Some(503),
-            Some("no available account"),
-        );
-        let response = Response::from_string("no available account").with_status_code(503);
-        let _ = request.respond(response);
-        return Ok(());
-    }
-
-    let upstream_base = std::env::var("GPTTOOLS_UPSTREAM_BASE_URL")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "https://chatgpt.com/backend-api/codex".to_string());
-    let base = upstream_base.trim_end_matches('/');
-    let upstream_fallback_base = std::env::var("GPTTOOLS_UPSTREAM_FALLBACK_BASE_URL")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .or_else(|| {
-            if is_chatgpt_backend_base(base) {
-                // 默认兜底到 OpenAI v1，避免 Cloudflare challenge 时模型列表不可用。
-                Some("https://api.openai.com/v1".to_string())
-            } else {
-                None
-            }
-        });
-    let (url, url_alt) = compute_upstream_url(&upstream_base, &path);
-
-    let method = match Method::from_bytes(request.method().as_str().as_bytes()) {
-        Ok(v) => v,
-        Err(_) => {
-            let response = Response::from_string("unsupported method").with_status_code(405);
+            let response = Response::from_string(err.message).with_status_code(err.status_code);
             let _ = request.respond(response);
             return Ok(());
         }
     };
 
-    let client = Client::new();
-    let upstream_cookie = std::env::var("GPTTOOLS_UPSTREAM_COOKIE").ok();
-
-    let candidate_count = candidates.len();
-    for (idx, (account, mut token)) in candidates.into_iter().enumerate() {
-        if is_openai_api_base(base) {
-            match try_openai_fallback(
-                &client,
-                &storage,
-                &method,
-                &request,
-                &body,
-                base,
-                &account,
-                &mut token,
-                upstream_cookie.as_deref(),
-                debug,
-            ) {
-                Ok(Some(resp)) => {
-                    let status = resp.status().as_u16();
-                    write_request_log(
-                        &storage,
-                        Some(&key_id),
-                        &path,
-                        &request_method,
-                        model_for_log.as_deref(),
-            reasoning_for_log.as_deref(),
-            Some(base),
-                        Some(status),
-                        if status >= 400 { Some("openai upstream non-success") } else { None },
-                    );
-                    return respond_with_upstream(request, resp);
-                }
-                Ok(None) => {
-                    write_request_log(
-                        &storage,
-                        Some(&key_id),
-                        &path,
-                        &request_method,
-                        model_for_log.as_deref(),
-            reasoning_for_log.as_deref(),
-            Some(base),
-                        Some(502),
-                        Some("openai upstream unavailable"),
-                    );
-                    let response = Response::from_string("openai upstream unavailable")
-                        .with_status_code(502);
-                    let _ = request.respond(response);
-                    return Ok(());
-                }
-                Err(err) => {
-                    write_request_log(
-                        &storage,
-                        Some(&key_id),
-                        &path,
-                        &request_method,
-                        model_for_log.as_deref(),
-            reasoning_for_log.as_deref(),
-            Some(base),
-                        Some(502),
-                        Some(err.as_str()),
-                    );
-                    let response = Response::from_string(format!("openai upstream error: {err}"))
-                        .with_status_code(502);
-                    let _ = request.respond(response);
-                    return Ok(());
-                }
-            }
-        }
-
-        let mut builder = client.request(method.clone(), &url);
-        let mut has_user_agent = false;
-
-        for header in request.headers() {
-            if header.field.equiv("Authorization")
-                || header.field.equiv("x-api-key")
-                || header.field.equiv("Host")
-                || header.field.equiv("Content-Length")
-            {
-                continue;
-            }
-            if header.field.equiv("User-Agent") {
-                has_user_agent = true;
-            }
-            if let (Ok(name), Ok(value)) = (
-                HeaderName::from_bytes(header.field.as_str().as_bytes()),
-                HeaderValue::from_str(header.value.as_str()),
-            ) {
-                builder = builder.header(name, value);
-            }
-        }
-        if !has_user_agent {
-            builder = builder.header("User-Agent", "codex-cli");
-        }
-        if let Some(cookie) = upstream_cookie.as_ref() {
-            if !cookie.trim().is_empty() {
-                builder = builder.header("Cookie", cookie);
-            }
-        }
-
-        let auth_token = token.access_token.clone();
-        if debug {
-            eprintln!(
-                "gateway upstream: base={}, token_source=access_token",
-                upstream_base
-            );
-        }
-        builder = builder.header("Authorization", format!("Bearer {}", auth_token));
-        if let Some(acc) = account
-            .chatgpt_account_id
-            .as_deref()
-            .or_else(|| account.workspace_id.as_deref())
-        {
-            builder = builder.header("ChatGPT-Account-Id", acc);
-        }
-
-        if !body.is_empty() {
-            builder = builder.body(body.clone());
-        }
-
-        let mut upstream = match builder.send() {
-            Ok(resp) => resp,
-            Err(err) => {
-                let err_msg = err.to_string();
-                write_request_log(
-                    &storage,
-                    Some(&key_id),
-                    &path,
-                    &request_method,
-                    model_for_log.as_deref(),
-            reasoning_for_log.as_deref(),
-            Some(url.as_str()),
-                    Some(502),
-                    Some(err_msg.as_str()),
-                );
-                let response = Response::from_string(format!("upstream error: {err}"))
-                    .with_status_code(502);
-                let _ = request.respond(response);
-                return Ok(());
-            }
-        };
-
-        let mut status = upstream.status();
-        if should_try_openai_fallback(base, &path, upstream.headers().get(CONTENT_TYPE))
-            || should_try_openai_fallback_by_status(base, &path, status.as_u16())
-        {
-            if let Some(fallback_base) = upstream_fallback_base.as_deref() {
-                if debug {
-                    eprintln!("gateway upstream fallback: from={} to={}", upstream_base, fallback_base);
-                }
-                match try_openai_fallback(
-                    &client,
-                    &storage,
-                    &method,
-                    &request,
-                    &body,
-                    fallback_base,
-                    &account,
-                    &mut token,
-                    upstream_cookie.as_deref(),
-                    debug,
-                ) {
-                    Ok(Some(resp)) => {
-                        if resp.status().is_success() {
-                            write_request_log(
-                                &storage,
-                                Some(&key_id),
-                                &path,
-                                &request_method,
-                                model_for_log.as_deref(),
-            reasoning_for_log.as_deref(),
-            Some(fallback_base),
-                                Some(resp.status().as_u16()),
-                                None,
-                            );
-                            return respond_with_upstream(request, resp);
-                        }
-                        upstream = resp;
-                        status = upstream.status();
-                    }
-                    Ok(None) => {
-                        write_request_log(
-                            &storage,
-                            Some(&key_id),
-                            &path,
-                            &request_method,
-                            model_for_log.as_deref(),
-            reasoning_for_log.as_deref(),
-            Some(fallback_base),
-                            Some(502),
-                            Some("upstream fallback unavailable"),
-                        );
-                        let response = Response::from_string(
-                            "upstream blocked by Cloudflare; set GPTTOOLS_UPSTREAM_COOKIE or enable OpenAI API-key fallback",
-                        )
-                        .with_status_code(502);
-                        let _ = request.respond(response);
-                        return Ok(());
-                    }
-                    Err(err) => {
-                        write_request_log(
-                            &storage,
-                            Some(&key_id),
-                            &path,
-                            &request_method,
-                            model_for_log.as_deref(),
-            reasoning_for_log.as_deref(),
-            Some(fallback_base),
-                            Some(502),
-                            Some(err.as_str()),
-                        );
-                        let response =
-                            Response::from_string(format!("upstream fallback error: {err}"))
-                                .with_status_code(502);
-                        let _ = request.respond(response);
-                        return Ok(());
-                    }
-                }
-            } else {
-                write_request_log(
-                    &storage,
-                    Some(&key_id),
-                    &path,
-                    &request_method,
-                    model_for_log.as_deref(),
-            reasoning_for_log.as_deref(),
-            Some(upstream_base.as_str()),
-                    Some(502),
-                    Some("upstream returned HTML challenge"),
-                );
-                let response = Response::from_string(
-                    "upstream returned HTML challenge; configure GPTTOOLS_UPSTREAM_COOKIE or GPTTOOLS_UPSTREAM_FALLBACK_BASE_URL",
-                )
-                .with_status_code(502);
-                let _ = request.respond(response);
-                return Ok(());
-            }
-        }
-        if !status.is_success() {
-            log::warn!(
-                "gateway upstream non-success: status={}, account_id={}",
-                status,
-                account.id
-            );
-        }
-        if (status.as_u16() == 400 || status.as_u16() == 404) && url_alt.is_some() {
-            let alt_url = url_alt.as_ref().unwrap();
-            if debug {
-                eprintln!("gateway upstream retry: url={alt_url}");
-            }
-            let mut retry = client.request(method.clone(), alt_url);
-            let mut has_user_agent = false;
-            for header in request.headers() {
-                if header.field.equiv("Authorization")
-                    || header.field.equiv("x-api-key")
-                    || header.field.equiv("Host")
-                    || header.field.equiv("Content-Length")
-                {
-                    continue;
-                }
-                if header.field.equiv("User-Agent") {
-                    has_user_agent = true;
-                }
-                if let (Ok(name), Ok(value)) = (
-                    HeaderName::from_bytes(header.field.as_str().as_bytes()),
-                    HeaderValue::from_str(header.value.as_str()),
-                ) {
-                    retry = retry.header(name, value);
-                }
-            }
-            if !has_user_agent {
-                retry = retry.header("User-Agent", "codex-cli");
-            }
-            if let Some(cookie) = upstream_cookie.as_ref() {
-                if !cookie.trim().is_empty() {
-                    retry = retry.header("Cookie", cookie);
-                }
-            }
-            retry = retry.header("Authorization", format!("Bearer {}", auth_token));
-            if let Some(acc) = account
-                .chatgpt_account_id
-                .as_deref()
-                .or_else(|| account.workspace_id.as_deref())
-            {
-                retry = retry.header("ChatGPT-Account-Id", acc);
-            }
-            if !body.is_empty() {
-                retry = retry.body(body.clone());
-            }
-            match retry.send() {
-                Ok(resp) => upstream = resp,
-                Err(err) => {
-                    let err_msg = err.to_string();
-                    let response = Response::from_string(format!("upstream error: {err}"))
-                        .with_status_code(502);
-                    write_request_log(
-                        &storage,
-                        Some(&key_id),
-                        &path,
-                        &request_method,
-                        model_for_log.as_deref(),
-            reasoning_for_log.as_deref(),
-            Some(alt_url.as_str()),
-                        Some(502),
-                        Some(err_msg.as_str()),
-                    );
-                    let _ = request.respond(response);
-                    return Ok(());
-                }
-            }
-            status = upstream.status();
-        }
-        if status.is_success() {
-            write_request_log(
-                &storage,
-                Some(&key_id),
-                &path,
-                &request_method,
-                model_for_log.as_deref(),
-            reasoning_for_log.as_deref(),
-            Some(url.as_str()),
-                Some(status.as_u16()),
-                None,
-            );
-            return respond_with_upstream(request, upstream);
-        }
-
-        // Cloudflare / WAF challenge 不应透传给客户端；优先切换候选账号重试。
-        let is_challenge =
-            is_upstream_challenge_response(status.as_u16(), upstream.headers().get(CONTENT_TYPE));
-        if is_challenge {
-            write_request_log(
-                &storage,
-                Some(&key_id),
-                &path,
-                &request_method,
-                model_for_log.as_deref(),
-            reasoning_for_log.as_deref(),
-            Some(url.as_str()),
-                Some(status.as_u16()),
-                Some("upstream challenge blocked"),
-            );
-            if idx + 1 < candidate_count {
-                continue;
-            }
-            let response = Response::from_string(
-                "upstream blocked by Cloudflare/WAF; please refresh account auth or configure GPTTOOLS_UPSTREAM_COOKIE",
-            )
-            .with_status_code(502);
-            let _ = request.respond(response);
-            return Ok(());
-        }
-
-        let refresh_result = usage_refresh::refresh_usage_for_account(&account.id);
-        let should_failover = should_failover_after_refresh(&storage, &account.id, refresh_result);
-        write_request_log(
-            &storage,
-            Some(&key_id),
-            &path,
-            &request_method,
-            model_for_log.as_deref(),
-            reasoning_for_log.as_deref(),
-            Some(url.as_str()),
-            Some(status.as_u16()),
-            Some("upstream non-success"),
-        );
-        if should_failover && idx + 1 < candidate_count {
-            continue;
-        }
-
-        return respond_with_upstream(request, upstream);
-    }
-
-    Err("no available account".to_string())
+    upstream_proxy::proxy_validated_request(request, validated, debug)
 }
 
 fn should_try_openai_fallback(
@@ -661,7 +491,9 @@ fn is_upstream_challenge_response(status_code: u16, content_type: Option<&Header
         .and_then(|v| v.to_str().ok())
         .map(is_html_content_type)
         .unwrap_or(false);
-    is_html || matches!(status_code, 403 | 429)
+    // 中文注释：403 并不总是 Cloudflare challenge（也可能是上游业务鉴权错误），
+    // 仅在明确 HTML challenge 或 429 限流时按 challenge 处理，避免误导排障方向。
+    is_html || status_code == 429
 }
 
 fn is_html_content_type(value: &str) -> bool {
@@ -686,11 +518,7 @@ fn normalize_models_path(path: &str) -> String {
     if has_client_version {
         return path.to_string();
     }
-    let client_version = std::env::var("GPTTOOLS_MODELS_CLIENT_VERSION")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "0.98.0".to_string());
+    let client_version = DEFAULT_MODELS_CLIENT_VERSION.to_string();
     let separator = if path.contains('?') { '&' } else { '?' };
     format!("{path}{separator}client_version={client_version}")
 }
@@ -767,30 +595,25 @@ fn apply_request_overrides(
 
 pub(crate) fn fetch_models_for_picker() -> Result<Vec<ModelOption>, String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let candidates = collect_gateway_candidates(&storage)?;
+    let mut candidates = collect_gateway_candidates(&storage)?;
     if candidates.is_empty() {
         return Err("no available account".to_string());
     }
 
-    let upstream_base = std::env::var("GPTTOOLS_UPSTREAM_BASE_URL")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "https://chatgpt.com/backend-api/codex".to_string());
-    let base = upstream_base.trim_end_matches('/');
-    let upstream_fallback_base = std::env::var("GPTTOOLS_UPSTREAM_FALLBACK_BASE_URL")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .or_else(|| {
-            if is_chatgpt_backend_base(base) {
-                Some("https://api.openai.com/v1".to_string())
-            } else {
-                None
-            }
-        });
+    let upstream_base = resolve_upstream_base_url();
+    let base = upstream_base.as_str();
+    let upstream_fallback_base = resolve_upstream_fallback_base_url(base);
     let path = normalize_models_path("/v1/models");
     let method = Method::GET;
-    let client = Client::new();
+    let client = upstream_client();
     let upstream_cookie = std::env::var("GPTTOOLS_UPSTREAM_COOKIE").ok();
+    candidates.sort_by_key(|(account, _)| {
+        (
+            is_account_in_cooldown(&account.id),
+            account_inflight_count(&account.id),
+        )
+    });
+    rotate_candidates_for_fairness(&mut candidates);
 
     let mut last_error = "models request failed".to_string();
     for (account, mut token) in candidates {
@@ -851,24 +674,7 @@ fn send_models_request(
 
     // OpenAI upstream requires api_key_access_token; backend-api/codex keeps access_token.
     let bearer = if is_openai_api_base(upstream_base) {
-        match token.api_key_access_token.as_deref() {
-            Some(v) if !v.trim().is_empty() => v.to_string(),
-            _ => {
-                let client_id =
-                    std::env::var("GPTTOOLS_CLIENT_ID").unwrap_or_else(|_| DEFAULT_CLIENT_ID.to_string());
-                let issuer_env =
-                    std::env::var("GPTTOOLS_ISSUER").unwrap_or_else(|_| DEFAULT_ISSUER.to_string());
-                let issuer = if account.issuer.trim().is_empty() {
-                    issuer_env
-                } else {
-                    account.issuer.clone()
-                };
-                let exchanged = auth_tokens::obtain_api_key(&issuer, &client_id, &token.id_token)?;
-                token.api_key_access_token = Some(exchanged.clone());
-                let _ = storage.insert_token(token);
-                exchanged
-            }
-        }
+        resolve_openai_bearer_token(storage, account, token)?
     } else {
         token.access_token.clone()
     };
@@ -970,19 +776,7 @@ fn try_openai_fallback(
 ) -> Result<Option<reqwest::blocking::Response>, String> {
     let path = normalize_models_path(request.url());
     let (url, _url_alt) = compute_upstream_url(upstream_base, &path);
-    let client_id = std::env::var("GPTTOOLS_CLIENT_ID").unwrap_or_else(|_| DEFAULT_CLIENT_ID.to_string());
-    let issuer = account.issuer.clone();
-    let bearer = match token.api_key_access_token.as_deref() {
-        Some(v) if !v.trim().is_empty() => v.to_string(),
-        _ => {
-            let issuer_env = std::env::var("GPTTOOLS_ISSUER").unwrap_or_else(|_| DEFAULT_ISSUER.to_string());
-            let issuer_for_exchange = if issuer.trim().is_empty() { issuer_env } else { issuer };
-            let exchanged = auth_tokens::obtain_api_key(&issuer_for_exchange, &client_id, &token.id_token)?;
-            token.api_key_access_token = Some(exchanged.clone());
-            let _ = storage.insert_token(token);
-            exchanged
-        }
-    };
+    let bearer = resolve_openai_bearer_token(storage, account, token)?;
 
     let mut builder = client.request(method.clone(), &url);
     let mut has_user_agent = false;
@@ -1175,6 +969,7 @@ fn should_failover_after_refresh(
 fn respond_with_upstream(
     request: Request,
     upstream: reqwest::blocking::Response,
+    _inflight_guard: AccountInFlightGuard,
 ) -> Result<(), String> {
     let status = StatusCode(upstream.status().as_u16());
     let mut headers = Vec::new();
@@ -1199,9 +994,15 @@ fn respond_with_upstream(
 #[cfg(test)]
 mod availability_tests {
     use super::should_failover_after_refresh;
-    use super::{compute_upstream_url, is_html_content_type, normalize_models_path, should_try_openai_fallback};
-    use gpttools_core::storage::{now_ts, Account, Storage, UsageSnapshotRecord};
+    use super::{
+        account_token_exchange_lock, compute_upstream_url, cooldown_reason_for_status,
+        gateway_metrics_prometheus, is_upstream_challenge_response, CooldownReason, is_html_content_type,
+        normalize_models_path, normalize_upstream_base_url, resolve_openai_bearer_token,
+        should_try_openai_fallback,
+    };
+    use gpttools_core::storage::{now_ts, Account, Storage, Token, UsageSnapshotRecord};
     use reqwest::header::HeaderValue;
+    use std::sync::Arc;
 
     #[test]
     fn failover_on_missing_usage() {
@@ -1261,6 +1062,30 @@ mod availability_tests {
     }
 
     #[test]
+    fn normalize_upstream_base_url_for_chatgpt_host() {
+        assert_eq!(
+            normalize_upstream_base_url("https://chatgpt.com"),
+            "https://chatgpt.com/backend-api/codex"
+        );
+        assert_eq!(
+            normalize_upstream_base_url("https://chat.openai.com/"),
+            "https://chat.openai.com/backend-api/codex"
+        );
+    }
+
+    #[test]
+    fn normalize_upstream_base_url_keeps_existing_backend_path() {
+        assert_eq!(
+            normalize_upstream_base_url("https://chatgpt.com/backend-api/codex/"),
+            "https://chatgpt.com/backend-api/codex"
+        );
+        assert_eq!(
+            normalize_upstream_base_url("https://api.openai.com/v1/"),
+            "https://api.openai.com/v1"
+        );
+    }
+
+    #[test]
     fn normalize_models_path_appends_client_version_when_missing() {
         assert_eq!(
             normalize_models_path("/v1/models"),
@@ -1294,6 +1119,91 @@ mod availability_tests {
             "/v1/responses",
             content_type.as_ref()
         ));
+    }
+
+    #[test]
+    fn cooldown_reason_maps_status() {
+        assert_eq!(cooldown_reason_for_status(429), CooldownReason::RateLimited);
+        assert_eq!(cooldown_reason_for_status(503), CooldownReason::Upstream5xx);
+        assert_eq!(cooldown_reason_for_status(403), CooldownReason::Challenge);
+        assert_eq!(cooldown_reason_for_status(400), CooldownReason::Upstream4xx);
+        assert_eq!(cooldown_reason_for_status(200), CooldownReason::Default);
+    }
+
+    #[test]
+    fn token_exchange_lock_reuses_same_account_lock() {
+        let first = account_token_exchange_lock("acc-1");
+        let second = account_token_exchange_lock("acc-1");
+        let third = account_token_exchange_lock("acc-2");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(!Arc::ptr_eq(&first, &third));
+    }
+
+    #[test]
+    fn resolve_openai_bearer_token_uses_cached_storage_value() {
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        let account = Account {
+            id: "acc-1".to_string(),
+            label: "main".to_string(),
+            issuer: "".to_string(),
+            chatgpt_account_id: None,
+            workspace_id: None,
+            workspace_name: None,
+            note: None,
+            tags: None,
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: now_ts(),
+            updated_at: now_ts(),
+        };
+        storage.insert_account(&account).expect("insert account");
+        storage
+            .insert_token(&Token {
+                account_id: "acc-1".to_string(),
+                id_token: "id-token".to_string(),
+                access_token: "access-token".to_string(),
+                refresh_token: "refresh-token".to_string(),
+                api_key_access_token: Some("cached-api-key-token".to_string()),
+                last_refresh: now_ts(),
+            })
+            .expect("insert token");
+        let mut runtime_token = Token {
+            account_id: "acc-1".to_string(),
+            id_token: "runtime-id-token".to_string(),
+            access_token: "runtime-access-token".to_string(),
+            refresh_token: "runtime-refresh-token".to_string(),
+            api_key_access_token: None,
+            last_refresh: now_ts(),
+        };
+
+        let bearer =
+            resolve_openai_bearer_token(&storage, &account, &mut runtime_token).expect("resolve");
+        assert_eq!(bearer, "cached-api-key-token");
+        assert_eq!(
+            runtime_token.api_key_access_token.as_deref(),
+            Some("cached-api-key-token")
+        );
+    }
+
+    #[test]
+    fn metrics_prometheus_contains_expected_series() {
+        let text = gateway_metrics_prometheus();
+        assert!(text.contains("gpttools_gateway_requests_total "));
+        assert!(text.contains("gpttools_gateway_requests_active "));
+        assert!(text.contains("gpttools_gateway_account_inflight_total "));
+        assert!(text.contains("gpttools_gateway_failover_attempts_total "));
+        assert!(text.contains("gpttools_gateway_cooldown_marks_total "));
+    }
+
+    #[test]
+    fn challenge_detection_requires_html_or_429() {
+        let html = HeaderValue::from_str("text/html; charset=utf-8").ok();
+        let json = HeaderValue::from_str("application/json").ok();
+        assert!(is_upstream_challenge_response(403, html.as_ref()));
+        assert!(!is_upstream_challenge_response(403, json.as_ref()));
+        assert!(is_upstream_challenge_response(429, json.as_ref()));
     }
 
 

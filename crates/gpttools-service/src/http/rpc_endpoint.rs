@@ -1,9 +1,11 @@
-use tiny_http::Request;
-use tiny_http::Response;
+use tiny_http::{Request, Response};
 
 pub fn handle_rpc(mut request: Request) {
     let mut body = String::new();
-    let _ = request.as_reader().read_to_string(&mut body);
+    if request.as_reader().read_to_string(&mut body).is_err() {
+        let _ = request.respond(Response::from_string("{}").with_status_code(400));
+        return;
+    }
     if body.trim().is_empty() {
         let _ = request.respond(Response::from_string("{}").with_status_code(400));
         return;
