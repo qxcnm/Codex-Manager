@@ -27,3 +27,16 @@ if ($output -notmatch "portable") {
 }
 
 Write-Host "rebuild.ps1 dry-run output looks ok"
+
+$multiOutput = & $scriptPath -DryRun -AllPlatforms -GitRef "master" -GithubToken "dummy" 2>&1 | Out-String
+if (-not $?) {
+  throw "rebuild.ps1 -AllPlatforms dry-run failed to run"
+}
+if ($multiOutput -notlike "*dispatch workflow build-multi-platform.yml*") {
+  throw "expected all-platform dispatch output"
+}
+if ($multiOutput -notlike "*repos/*/actions/workflows/build-multi-platform.yml/dispatches*") {
+  throw "expected github dispatch url in dry-run output"
+}
+
+Write-Host "rebuild.ps1 all-platform dry-run output looks ok"

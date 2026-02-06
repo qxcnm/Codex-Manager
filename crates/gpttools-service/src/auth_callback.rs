@@ -44,7 +44,7 @@ pub(crate) fn handle_login_request(request: Request) -> Result<(), String> {
     };
 
     // 完成登录流程并响应浏览器
-    let result = complete_login(&state, &code);
+    let result = handle_login_callback_params(&code, &state);
     match result {
         Ok(_) => {
             let _ = request.respond(Response::from_string(
@@ -58,6 +58,10 @@ pub(crate) fn handle_login_request(request: Request) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+pub(crate) fn handle_login_callback_params(code: &str, state: &str) -> Result<(), String> {
+    complete_login(state, code)
 }
 
 #[derive(Clone, Debug)]
