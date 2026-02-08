@@ -1,7 +1,7 @@
 use gpttools_core::rpc::types::JsonRpcRequest;
 use gpttools_core::storage::Storage;
 use std::io::{Read, Write};
-use std::net::{Shutdown, TcpStream, ToSocketAddrs};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -439,6 +439,72 @@ fn resolve_service_addr(addr: Option<String>) -> Result<String, String> {
   Ok(gpttools_service::DEFAULT_ADDR.to_string())
 }
 
+fn split_http_response(buf: &str) -> Option<(&str, &str)> {
+  if let Some((headers, body)) = buf.split_once("\r\n\r\n") {
+    return Some((headers, body));
+  }
+  if let Some((headers, body)) = buf.split_once("\n\n") {
+    return Some((headers, body));
+  }
+  None
+}
+
+fn response_uses_chunked(headers: &str) -> bool {
+  headers.lines().any(|line| {
+    let Some((name, value)) = line.split_once(':') else {
+      return false;
+    };
+    name.trim().eq_ignore_ascii_case("transfer-encoding")
+      && value.to_ascii_lowercase().contains("chunked")
+  })
+}
+
+fn decode_chunked_body(raw: &str) -> Result<String, String> {
+  let bytes = raw.as_bytes();
+  let mut cursor = 0usize;
+  let mut out = Vec::<u8>::new();
+
+  loop {
+    let Some(line_end_rel) = bytes[cursor..].windows(2).position(|w| w == b"\r\n") else {
+      return Err("Invalid chunked body: missing chunk size line".to_string());
+    };
+    let line_end = cursor + line_end_rel;
+    let line = std::str::from_utf8(&bytes[cursor..line_end])
+      .map_err(|err| format!("Invalid chunked body: chunk size is not utf8 ({err})"))?;
+    let size_hex = line.split(';').next().unwrap_or("").trim();
+    let size = usize::from_str_radix(size_hex, 16)
+      .map_err(|_| format!("Invalid chunked body: bad chunk size '{size_hex}'"))?;
+    cursor = line_end + 2;
+    if size == 0 {
+      break;
+    }
+    let end = cursor.saturating_add(size);
+    if end + 2 > bytes.len() {
+      return Err("Invalid chunked body: truncated chunk payload".to_string());
+    }
+    out.extend_from_slice(&bytes[cursor..end]);
+    if &bytes[end..end + 2] != b"\r\n" {
+      return Err("Invalid chunked body: missing chunk terminator".to_string());
+    }
+    cursor = end + 2;
+  }
+
+  String::from_utf8(out).map_err(|err| format!("Invalid chunked body utf8 payload: {err}"))
+}
+
+fn parse_http_body(buf: &str) -> Result<String, String> {
+  let Some((headers, body_raw)) = split_http_response(buf) else {
+    // 中文注释：旧实现按原始 socket 读取，理论上总是 HTTP 报文；但在代理/半关闭边界上可能只拿到 body。
+    // 这里回退为“整段按 body 处理”，避免把可解析的 JSON 误判成 malformed。
+    return Ok(buf.to_string());
+  };
+  if response_uses_chunked(headers) {
+    decode_chunked_body(body_raw)
+  } else {
+    Ok(body_raw.to_string())
+  }
+}
+
 fn rpc_call(
   method: &str,
   addr: Option<String>,
@@ -446,53 +512,64 @@ fn rpc_call(
 ) -> Result<serde_json::Value, String> {
   let addr = resolve_service_addr(addr)?;
   log::debug!("rpc {} -> {}", method, addr);
+  for attempt in 0..=1 {
+    let mut stream = connect_with_timeout(&addr, Duration::from_millis(400)).map_err(|e| {
+      log::warn!("rpc connect failed ({} -> {}): {}", method, addr, e);
+      e
+    })?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
 
-  let mut stream = connect_with_timeout(&addr, Duration::from_millis(400)).map_err(|e| {
-    log::warn!("rpc connect failed ({} -> {}): {}", method, addr, e);
-    e
-  })?;
-  let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-  let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+    let req = JsonRpcRequest {
+      id: 1,
+      method: method.to_string(),
+      params: params.clone(),
+    };
+    let json = serde_json::to_string(&req).map_err(|e| e.to_string())?;
+    let rpc_token = gpttools_service::rpc_auth_token();
+    let http = format!(
+      "POST /rpc HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nX-Gpttools-Rpc-Token: {rpc_token}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+      json.len(),
+      json
+    );
+    stream.write_all(http.as_bytes()).map_err(|e| {
+      let msg = e.to_string();
+      log::warn!("rpc write failed ({} -> {}): {}", method, addr, msg);
+      msg
+    })?;
 
-  let req = JsonRpcRequest {
-    id: 1,
-    method: method.to_string(),
-    params,
-  };
-  let json = serde_json::to_string(&req).map_err(|e| e.to_string())?;
-  let rpc_token = gpttools_service::rpc_auth_token();
-  let http = format!(
-    "POST /rpc HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nX-Gpttools-Rpc-Token: {rpc_token}\r\nContent-Length: {}\r\n\r\n{}",
-    json.len(),
-    json
-  );
-  stream.write_all(http.as_bytes()).map_err(|e| {
-    let msg = e.to_string();
-    log::warn!("rpc write failed ({} -> {}): {}", method, addr, msg);
-    msg
-  })?;
-  let _ = stream.shutdown(Shutdown::Write);
+    let mut buf = String::new();
+    stream.read_to_string(&mut buf).map_err(|e| {
+      let msg = e.to_string();
+      log::warn!("rpc read failed ({} -> {}): {}", method, addr, msg);
+      msg
+    })?;
+    let body = parse_http_body(&buf).map_err(|msg| {
+      log::warn!("rpc parse failed ({} -> {}): {}", method, addr, msg);
+      msg
+    })?;
+    if body.trim().is_empty() {
+      // 中文注释：前置代理在启动切换窗口可能返回空包；这里短重试一次，避免 UI 直接报“连接失败”。
+      if attempt == 0 {
+        std::thread::sleep(Duration::from_millis(120));
+        continue;
+      }
+      log::warn!("rpc empty response ({} -> {})", method, addr);
+      return Err("Empty response from service".to_string());
+    }
 
-  let mut buf = String::new();
-  stream.read_to_string(&mut buf).map_err(|e| {
-    let msg = e.to_string();
-    log::warn!("rpc read failed ({} -> {}): {}", method, addr, msg);
-    msg
-  })?;
-  let body = buf.split("\r\n\r\n").nth(1).unwrap_or("");
-  if body.trim().is_empty() {
-    log::warn!("rpc empty response ({} -> {})", method, addr);
-    return Err("Empty response from service".to_string());
+    let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+      let msg = e.to_string();
+      log::warn!("rpc json parse failed ({} -> {}): {}", method, addr, msg);
+      msg
+    })?;
+    if let Some(err) = v.get("error") {
+      log::warn!("rpc error ({} -> {}): {}", method, addr, err);
+    }
+    return Ok(v);
   }
-  let v: serde_json::Value = serde_json::from_str(body).map_err(|e| {
-    let msg = e.to_string();
-    log::warn!("rpc json parse failed ({} -> {}): {}", method, addr, msg);
-    msg
-  })?;
-  if let Some(err) = v.get("error") {
-    log::warn!("rpc error ({} -> {}): {}", method, addr, err);
-  }
-  Ok(v)
+
+  Err("Empty response from service".to_string())
 }
 
 fn normalize_host(value: &str) -> String {
@@ -618,5 +695,36 @@ mod tests {
 
     let res = rpc_call("initialize", Some(addr.to_string()), None);
     assert!(res.is_ok());
+  }
+
+  #[test]
+  fn rpc_call_handles_chunked_response() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    std::thread::spawn(move || {
+      if let Ok((mut stream, _)) = listener.accept() {
+        let mut buf = [0u8; 1024];
+        let read_n = stream.read(&mut buf).expect("read");
+        let request = String::from_utf8_lossy(&buf[..read_n]).to_string();
+        assert!(
+          request.to_ascii_lowercase().contains("connection: close"),
+          "request should require connection close: {request}"
+        );
+
+        let body = r#"{"result":{"ok":true}}"#;
+        let chunk_size = format!("{:X}", body.len());
+        let response = format!(
+          "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{chunk_size}\r\n{body}\r\n0\r\n\r\n"
+        );
+        let _ = stream.write_all(response.as_bytes());
+      }
+    });
+
+    let res = rpc_call("initialize", Some(addr.to_string()), None).expect("rpc_call");
+    let ok = res
+      .get("result")
+      .and_then(|v| v.get("ok"))
+      .and_then(|v| v.as_bool());
+    assert_eq!(ok, Some(true));
   }
 }
