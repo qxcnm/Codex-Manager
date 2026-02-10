@@ -28,6 +28,7 @@ import {
   stopAutoRefreshTimer,
 } from "./services/refresh";
 import { createServiceLifecycle } from "./services/service-lifecycle";
+import { createLoginFlow } from "./services/login-flow";
 import { openAccountModal, closeAccountModal } from "./views/accounts";
 import { renderApiKeys, openApiKeyModal, closeApiKeyModal, populateApiKeyModelSelect } from "./views/apikeys";
 import { openUsageModal, closeUsageModal, renderUsageSnapshot } from "./views/usage";
@@ -288,6 +289,15 @@ const serviceLifecycle = createServiceLifecycle({
   stopAutoRefreshTimer,
 });
 
+const loginFlow = createLoginFlow({
+  dom,
+  state,
+  withButtonBusy,
+  ensureConnected,
+  refreshAll,
+  closeAccountModal,
+});
+
 async function handleClearRequestLogs() {
   const confirmed = await showConfirmDialog({
     title: "清空请求日志",
@@ -456,121 +466,6 @@ async function updateApiKeyModel(item, modelSlug, reasoningEffort) {
   });
 }
 
-async function handleLogin() {
-  await withButtonBusy(dom.submitLogin, "授权中...", async () => {
-    const ok = await ensureConnected();
-    if (!ok) return;
-    dom.loginUrl.value = "生成授权链接中...";
-    try {
-      const res = await api.serviceLoginStart({
-        loginType: "chatgpt",
-        openBrowser: false,
-        note: dom.inputNote.value.trim(),
-        tags: dom.inputTags.value.trim(),
-        groupName: dom.inputGroup.value.trim(),
-      });
-      if (res && res.error) {
-        dom.loginHint.textContent = `登录失败：${res.error}`;
-        dom.loginUrl.value = "";
-        return;
-      }
-      dom.loginUrl.value = res && res.authUrl ? res.authUrl : "";
-      if (res && res.authUrl) {
-        await api.openInBrowser(res.authUrl);
-        if (res.warning) {
-          dom.loginHint.textContent = `注意：${res.warning}。如无法回调，可在下方粘贴回调链接手动解析。`;
-        } else {
-          dom.loginHint.textContent = "已打开浏览器，请完成授权。";
-        }
-      } else {
-        dom.loginHint.textContent = "未获取到授权链接，请重试。";
-      }
-      state.activeLoginId = res && res.loginId ? res.loginId : null;
-      const success = await waitForLogin(state.activeLoginId);
-      if (success) {
-        await refreshAll();
-        closeAccountModal();
-      } else {
-        dom.loginHint.textContent = "登录失败，请重试。";
-      }
-    } catch (err) {
-      dom.loginUrl.value = "";
-      dom.loginHint.textContent = "登录失败，请检查 service 状态。";
-    }
-  });
-}
-
-function parseCallbackUrl(raw) {
-  const value = String(raw || "").trim();
-  if (!value) {
-    return { error: "请粘贴回调链接" };
-  }
-  let url;
-  try {
-    url = new URL(value);
-  } catch (err) {
-    try {
-      url = new URL(`http://${value}`);
-    } catch (error) {
-      return { error: "回调链接格式不正确" };
-    }
-  }
-  const code = url.searchParams.get("code");
-  const state = url.searchParams.get("state");
-  if (!code || !state) {
-    return { error: "回调链接缺少 code/state" };
-  }
-  const redirectUri = `${url.origin}${url.pathname}`;
-  return { code, state, redirectUri };
-}
-
-async function handleManualCallback() {
-  const parsed = parseCallbackUrl(dom.manualCallbackUrl.value);
-  if (parsed.error) {
-    dom.loginHint.textContent = parsed.error;
-    return;
-  }
-  await withButtonBusy(dom.manualCallbackSubmit, "解析中...", async () => {
-    const ok = await ensureConnected();
-    if (!ok) return;
-    dom.loginHint.textContent = "解析回调中...";
-    try {
-      const res = await api.serviceLoginComplete(
-        parsed.state,
-        parsed.code,
-        parsed.redirectUri,
-      );
-      if (res && res.ok) {
-        dom.loginHint.textContent = "登录成功，正在刷新...";
-        await refreshAll();
-        closeAccountModal();
-        return;
-      }
-      const msg = res && res.error ? res.error : "解析失败";
-      dom.loginHint.textContent = `登录失败：${msg}`;
-    } catch (err) {
-      dom.loginHint.textContent = `登录失败：${String(err)}`;
-    }
-  });
-}
-
-async function waitForLogin(loginId) {
-  if (!loginId) return false;
-  const deadline = Date.now() + 2 * 60 * 1000;
-  while (Date.now() < deadline) {
-    const res = await api.serviceLoginStatus(loginId);
-    if (res && res.status === "success") return true;
-    if (res && res.status === "failed") {
-      dom.loginHint.textContent = `登录失败：${res.error || "unknown"}`;
-      return false;
-    }
-    await new Promise((r) => setTimeout(r, 1500));
-  }
-  dom.loginHint.textContent = "登录超时，请重试。";
-  return false;
-}
-
-
 function bindEvents() {
   bindMainEvents({
     dom,
@@ -579,9 +474,9 @@ function bindEvents() {
     openAccountModal,
     openApiKeyModal,
     closeAccountModal,
-    handleLogin,
+    handleLogin: loginFlow.handleLogin,
     showToast,
-    handleManualCallback,
+    handleManualCallback: loginFlow.handleManualCallback,
     closeUsageModal,
     refreshUsageForAccount,
     closeApiKeyModal,

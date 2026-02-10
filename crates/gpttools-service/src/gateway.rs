@@ -1,9 +1,8 @@
 use gpttools_core::storage::{now_ts, Account, RequestLog, Storage, Token};
 use reqwest::header::{HeaderName, HeaderValue};
-use reqwest::header::CONTENT_TYPE;
 use reqwest::blocking::Client;
 use reqwest::Method;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tiny_http::{Header, Request, Response, StatusCode};
@@ -11,8 +10,6 @@ use tiny_http::{Header, Request, Response, StatusCode};
 use crate::auth_tokens;
 use crate::storage_helpers::open_storage;
 use gpttools_core::auth::{DEFAULT_CLIENT_ID, DEFAULT_ISSUER};
-use gpttools_core::rpc::types::ModelOption;
-use serde_json::Value;
 
 mod local_validation;
 mod upstream_proxy;
@@ -21,6 +18,8 @@ mod request_rewrite;
 mod metrics;
 mod selection;
 mod failover;
+mod model_picker;
+mod upstream_config;
 
 pub(super) use request_helpers::{
     extract_request_model, extract_request_reasoning_effort, is_html_content_type,
@@ -28,6 +27,13 @@ pub(super) use request_helpers::{
     should_drop_incoming_header_for_failover,
 };
 use request_rewrite::{apply_request_overrides, compute_upstream_url};
+use upstream_config::{
+    is_openai_api_base,
+    resolve_upstream_base_url, resolve_upstream_fallback_base_url, should_try_openai_fallback,
+    should_try_openai_fallback_by_status,
+};
+#[cfg(test)]
+use upstream_config::normalize_upstream_base_url;
 pub(crate) use metrics::{
     AccountInFlightGuard, acquire_account_inflight,
     begin_gateway_request, gateway_metrics_prometheus,
@@ -35,6 +41,7 @@ pub(crate) use metrics::{
 };
 pub(crate) use selection::{collect_gateway_candidates, rotate_candidates_for_fairness};
 pub(crate) use failover::should_failover_after_refresh;
+pub(crate) use model_picker::fetch_models_for_picker;
 
 static UPSTREAM_CLIENT: OnceLock<Client> = OnceLock::new();
 static ACCOUNT_COOLDOWN_UNTIL: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
@@ -215,54 +222,6 @@ fn resolve_openai_bearer_token(
     Ok(exchanged)
 }
 
-fn normalize_upstream_base_url(base: &str) -> String {
-    let mut normalized = base.trim().trim_end_matches('/').to_string();
-    let lower = normalized.to_ascii_lowercase();
-    if (lower.starts_with("https://chatgpt.com")
-        || lower.starts_with("https://chat.openai.com"))
-        && !lower.contains("/backend-api")
-    {
-        // 中文注释：对齐官方客户端的主机归一化，避免仅填域名时落到错误路径。
-        normalized = format!("{normalized}/backend-api/codex");
-    }
-    normalized
-}
-
-fn resolve_upstream_base_url() -> String {
-    let raw = std::env::var("GPTTOOLS_UPSTREAM_BASE_URL")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "https://chatgpt.com/backend-api/codex".to_string());
-    normalize_upstream_base_url(&raw)
-}
-
-fn resolve_upstream_fallback_base_url(primary_base: &str) -> Option<String> {
-    std::env::var("GPTTOOLS_UPSTREAM_FALLBACK_BASE_URL")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .map(|v| normalize_upstream_base_url(&v))
-        .or_else(|| {
-            if is_chatgpt_backend_base(primary_base) {
-                // 默认兜底到 OpenAI v1，避免 Cloudflare challenge 时模型列表不可用。
-                Some("https://api.openai.com/v1".to_string())
-            } else {
-                None
-            }
-        })
-}
-
-fn is_openai_api_base(base: &str) -> bool {
-    let normalized = base.trim().to_ascii_lowercase();
-    normalized.contains("api.openai.com/v1")
-}
-
-fn is_chatgpt_backend_base(base: &str) -> bool {
-    let normalized = base.trim().to_ascii_lowercase();
-    normalized.contains("chatgpt.com/backend-api")
-        || normalized.contains("chat.openai.com/backend-api")
-}
-
-
 fn write_request_log(
     storage: &Storage,
     key_id: Option<&str>,
@@ -329,209 +288,6 @@ pub(crate) fn handle_gateway_request(mut request: Request) -> Result<(), String>
     };
 
     upstream_proxy::proxy_validated_request(request, validated, debug)
-}
-
-fn should_try_openai_fallback(
-    base: &str,
-    request_path: &str,
-    content_type: Option<&HeaderValue>,
-) -> bool {
-    if !is_chatgpt_backend_base(base) {
-        return false;
-    }
-    let is_models_path = request_path == "/v1/models" || request_path.starts_with("/v1/models?");
-    if is_models_path {
-        // /models 需要与官方行为一致地直接透传，避免 fallback token-exchange 影响模型列表稳定性。
-        return false;
-    }
-    let Some(content_type) = content_type else {
-        return false;
-    };
-    let Ok(value) = content_type.to_str() else {
-        return false;
-    };
-    is_html_content_type(value)
-}
-
-fn should_try_openai_fallback_by_status(base: &str, request_path: &str, status_code: u16) -> bool {
-    if !is_chatgpt_backend_base(base) {
-        return false;
-    }
-    let is_models_path = request_path == "/v1/models" || request_path.starts_with("/v1/models?");
-    if is_models_path {
-        return false;
-    }
-    matches!(status_code, 403 | 429)
-}
-
-
-pub(crate) fn fetch_models_for_picker() -> Result<Vec<ModelOption>, String> {
-    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let mut candidates = collect_gateway_candidates(&storage)?;
-    if candidates.is_empty() {
-        return Err("no available account".to_string());
-    }
-
-    let upstream_base = resolve_upstream_base_url();
-    let base = upstream_base.as_str();
-    let upstream_fallback_base = resolve_upstream_fallback_base_url(base);
-    let path = normalize_models_path("/v1/models");
-    let method = Method::GET;
-    let client = upstream_client();
-    let upstream_cookie = std::env::var("GPTTOOLS_UPSTREAM_COOKIE").ok();
-    candidates.sort_by_key(|(account, _)| {
-        (
-            is_account_in_cooldown(&account.id),
-            account_inflight_count(&account.id),
-        )
-    });
-    rotate_candidates_for_fairness(&mut candidates);
-
-    let mut last_error = "models request failed".to_string();
-    for (account, mut token) in candidates {
-        match send_models_request(
-            &client,
-            &storage,
-            &method,
-            &upstream_base,
-            &path,
-            &account,
-            &mut token,
-            upstream_cookie.as_deref(),
-        ) {
-            Ok(response_body) => return Ok(parse_model_options(&response_body)),
-            Err(err) => {
-                // ChatGPT upstream occasionally returns HTML challenge. Try OpenAI fallback.
-                if err.contains("text/html") || err.contains("cloudflare") {
-                    if let Some(fallback_base) = upstream_fallback_base.as_deref() {
-                        if let Ok(response_body) = send_models_request(
-                            &client,
-                            &storage,
-                            &method,
-                            fallback_base,
-                            &path,
-                            &account,
-                            &mut token,
-                            upstream_cookie.as_deref(),
-                        ) {
-                            return Ok(parse_model_options(&response_body));
-                        }
-                    }
-                }
-                last_error = err;
-            }
-        }
-    }
-    Err(last_error)
-}
-
-fn send_models_request(
-    client: &Client,
-    storage: &Storage,
-    method: &Method,
-    upstream_base: &str,
-    path: &str,
-    account: &Account,
-    token: &mut Token,
-    upstream_cookie: Option<&str>,
-) -> Result<Vec<u8>, String> {
-    let (url, _url_alt) = compute_upstream_url(upstream_base, path);
-    let mut builder = client.request(method.clone(), &url);
-    builder = builder.header("User-Agent", "codex-cli");
-    if let Some(cookie) = upstream_cookie {
-        if !cookie.trim().is_empty() {
-            builder = builder.header("Cookie", cookie);
-        }
-    }
-
-    // OpenAI upstream requires api_key_access_token; backend-api/codex keeps access_token.
-    let bearer = if is_openai_api_base(upstream_base) {
-        resolve_openai_bearer_token(storage, account, token)?
-    } else {
-        token.access_token.clone()
-    };
-    builder = builder.header("Authorization", format!("Bearer {}", bearer));
-    if let Some(acc) = account
-        .chatgpt_account_id
-        .as_deref()
-        .or_else(|| account.workspace_id.as_deref())
-    {
-        builder = builder.header("ChatGPT-Account-Id", acc);
-    }
-
-    let response = builder.send().map_err(|e| e.to_string())?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().unwrap_or_default();
-        return Err(format!("models upstream failed: status={} body={}", status, body));
-    }
-    let content_type = response
-        .headers()
-        .get(CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if is_html_content_type(content_type) {
-        return Err("models upstream returned text/html (cloudflare challenge)".to_string());
-    }
-    response.bytes().map(|v| v.to_vec()).map_err(|e| e.to_string())
-}
-
-fn parse_model_options(body: &[u8]) -> Vec<ModelOption> {
-    let mut items: Vec<ModelOption> = Vec::new();
-    let mut seen = HashSet::new();
-
-    if let Ok(value) = serde_json::from_slice::<Value>(body) {
-        if let Some(models) = value.get("models").and_then(|v| v.as_array()) {
-            for item in models {
-                let slug = item
-                    .get("slug")
-                    .and_then(|v| v.as_str())
-                    .map(str::trim)
-                    .filter(|v| !v.is_empty());
-                if let Some(slug) = slug {
-                    if seen.insert(slug.to_string()) {
-                        let display_name = item
-                            .get("title")
-                            .or_else(|| item.get("display_name"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(slug)
-                            .to_string();
-                        items.push(ModelOption {
-                            slug: slug.to_string(),
-                            display_name,
-                        });
-                    }
-                }
-            }
-        }
-        if let Some(models) = value.get("data").and_then(|v| v.as_array()) {
-            for item in models {
-                let slug = item
-                    .get("id")
-                    .or_else(|| item.get("slug"))
-                    .and_then(|v| v.as_str())
-                    .map(str::trim)
-                    .filter(|v| !v.is_empty());
-                if let Some(slug) = slug {
-                    if seen.insert(slug.to_string()) {
-                        let display_name = item
-                            .get("display_name")
-                            .or_else(|| item.get("title"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(slug)
-                            .to_string();
-                        items.push(ModelOption {
-                            slug: slug.to_string(),
-                            display_name,
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    items.sort_by(|a, b| a.slug.cmp(&b.slug));
-    items
 }
 
 fn try_openai_fallback(
