@@ -100,7 +100,12 @@
                     <div id="accountsToolbar" class="accounts-toolbar">
                         <div class="toolbar-left">
                             <div class="search-field">
-                                <input id="accountSearch" placeholder="搜索邮箱..." />
+                                <input id="accountSearch" placeholder="搜索账号名 / ID..." />
+                            </div>
+                            <div class="search-field">
+                                <select id="accountGroupFilter" class="inline-select">
+                                    <option value="all">全部分组</option>
+                                </select>
                             </div>
                             <div class="segmented">
                                 <button id="filterAll" class="active">全部</button>
@@ -121,7 +126,6 @@
                                     <tr>
                                         <th>账号</th>
                                         <th>分组</th>
-                                        <th>标签</th>
                                         <th>顺序</th>
                                         <th>可用状态</th>
                                         <th>最近刷新</th>

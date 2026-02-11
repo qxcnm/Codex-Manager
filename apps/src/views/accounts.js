@@ -3,16 +3,81 @@ import { dom } from "../ui/dom.js";
 import { calcAvailability, formatTs, remainingPercent } from "../utils/format.js";
 import { findUsage } from "./usage.js";
 
+function normalizeGroupName(value) {
+  return String(value || "").trim();
+}
+
+export function buildGroupFilterOptions(accounts) {
+  const list = Array.isArray(accounts) ? accounts : [];
+  const counter = new Map();
+  for (const account of list) {
+    const group = normalizeGroupName(account && account.groupName);
+    if (!group) continue;
+    counter.set(group, (counter.get(group) || 0) + 1);
+  }
+
+  const dynamicGroups = Array.from(counter.entries())
+    .sort((left, right) => left[0].localeCompare(right[0], "zh-Hans-CN"))
+    .map(([value, count]) => ({
+      value,
+      label: value,
+      count,
+    }));
+
+  return [
+    {
+      value: "all",
+      label: "全部分组",
+      count: list.length,
+    },
+    ...dynamicGroups,
+  ];
+}
+
+function syncGroupFilterSelect(options) {
+  if (!dom.accountGroupFilter) return;
+  const select = dom.accountGroupFilter;
+  const safeOptions = Array.isArray(options) ? options : [];
+  const nextValues = new Set(safeOptions.map((item) => item.value));
+
+  // 中文注释：分组来自实时账号数据；若分组被删除/重命名，不自动回退会导致列表“看似空白”且用户难定位原因。
+  if (!nextValues.has(state.accountGroupFilter)) {
+    state.accountGroupFilter = "all";
+  }
+
+  select.innerHTML = "";
+  for (const option of safeOptions) {
+    const node = document.createElement("option");
+    node.value = option.value;
+    node.textContent = `${option.label} (${option.count})`;
+    if (option.value === state.accountGroupFilter) {
+      node.selected = true;
+    }
+    select.appendChild(node);
+  }
+  if (!nextValues.has(state.accountGroupFilter)) {
+    select.value = "all";
+  }
+}
+
 // 渲染账号列表
-export function filterAccounts(accounts, usageList, query, filter) {
+export function filterAccounts(accounts, usageList, query, filter, groupFilter = "all") {
   const keyword = String(query || "").trim().toLowerCase();
-  const usageMap = new Map(usageList.map((item) => [item.accountId, item]));
-  return accounts.filter((account) => {
+  const normalizedGroupFilter = normalizeGroupName(groupFilter) || "all";
+  const usageMap = new Map((usageList || []).map((item) => [item.accountId, item]));
+
+  return (accounts || []).filter((account) => {
     if (keyword) {
       const label = String(account.label || "").toLowerCase();
       const id = String(account.id || "").toLowerCase();
       if (!label.includes(keyword) && !id.includes(keyword)) return false;
     }
+
+    if (normalizedGroupFilter !== "all") {
+      const accountGroup = normalizeGroupName(account.groupName);
+      if (accountGroup !== normalizedGroupFilter) return false;
+    }
+
     if (filter === "active" || filter === "low") {
       const usage = usageMap.get(account.id);
       const primaryRemain = remainingPercent(usage ? usage.usedPercent : null);
@@ -37,17 +102,21 @@ export function filterAccounts(accounts, usageList, query, filter) {
 
 export function renderAccounts({ onUpdateSort, onOpenUsage, onDelete }) {
   dom.accountRows.innerHTML = "";
+  syncGroupFilterSelect(buildGroupFilterOptions(state.accountList));
+
   const filtered = filterAccounts(
     state.accountList,
     state.usageList,
     state.accountSearch,
     state.accountFilter,
+    state.accountGroupFilter,
   );
+
   if (filtered.length === 0) {
     const emptyRow = document.createElement("tr");
     const emptyCell = document.createElement("td");
-    emptyCell.colSpan = 7;
-    emptyCell.textContent = "暂无账号";
+    emptyCell.colSpan = 6;
+    emptyCell.textContent = state.accountList.length === 0 ? "暂无账号" : "当前筛选条件下无结果";
     emptyRow.appendChild(emptyCell);
     dom.accountRows.appendChild(emptyRow);
     return;
@@ -86,10 +155,7 @@ export function renderAccounts({ onUpdateSort, onOpenUsage, onDelete }) {
     cellAccount.appendChild(accountWrap);
 
     const cellGroup = document.createElement("td");
-    cellGroup.textContent = account.groupName || "-";
-
-    const cellTags = document.createElement("td");
-    cellTags.textContent = account.tags || "-";
+    cellGroup.textContent = normalizeGroupName(account.groupName) || "-";
 
     const cellSort = document.createElement("td");
     const sortInput = document.createElement("input");
@@ -135,7 +201,6 @@ export function renderAccounts({ onUpdateSort, onOpenUsage, onDelete }) {
 
     row.appendChild(cellAccount);
     row.appendChild(cellGroup);
-    row.appendChild(cellTags);
     row.appendChild(cellSort);
     row.appendChild(cellStatus);
     row.appendChild(cellUpdated);

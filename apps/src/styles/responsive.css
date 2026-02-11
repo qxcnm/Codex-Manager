@@ -66,7 +66,8 @@
     width: 100%;
   }
 
-  .search-field input {
+  .search-field input,
+  .search-field select {
     width: 100%;
   }
 
@@ -119,3 +120,5 @@
     padding: 16px;
   }
 }
+
+

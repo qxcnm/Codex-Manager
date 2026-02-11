@@ -154,7 +154,14 @@ export function bindMainEvents({
 
   if (dom.accountSearch) {
     dom.accountSearch.addEventListener("input", (event) => {
-      state.accountSearch = event.target.value;
+      state.accountSearch = event.target.value || "";
+      renderAccountsView();
+    });
+  }
+
+  if (dom.accountGroupFilter) {
+    dom.accountGroupFilter.addEventListener("change", (event) => {
+      state.accountGroupFilter = event.target.value || "all";
       renderAccountsView();
     });
   }
@@ -175,4 +182,5 @@ export function bindMainEvents({
   if (dom.filterActive) dom.filterActive.addEventListener("click", () => setFilter("active"));
   if (dom.filterLow) dom.filterLow.addEventListener("click", () => setFilter("low"));
 }
+
 

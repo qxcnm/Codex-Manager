@@ -96,6 +96,14 @@
   background: #fff;
 }
 
+.search-field select {
+  width: 190px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  padding: 9px 12px;
+  font-size: 13px;
+  background: #fff;
+}
 .segmented {
   display: inline-flex;
   border-radius: 999px;
@@ -200,4 +208,5 @@
   background: rgba(224, 69, 69, 0.2);
   color: var(--danger);
 }
+
 

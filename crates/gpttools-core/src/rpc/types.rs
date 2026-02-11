@@ -25,14 +25,9 @@ pub struct InitializeResult {
 pub struct AccountSummary {
     pub id: String,
     pub label: String,
-    pub status: String,
-    pub workspace_id: Option<String>,
     pub workspace_name: Option<String>,
-    pub note: Option<String>,
-    pub tags: Option<String>,
     pub group_name: Option<String>,
     pub sort: i64,
-    pub updated_at: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -140,4 +135,31 @@ pub struct RequestLogSummary {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RequestLogListResult {
     pub items: Vec<RequestLogSummary>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AccountSummary;
+
+    #[test]
+    fn account_summary_serialization_matches_compact_contract() {
+        let summary = AccountSummary {
+            id: "acc-1".to_string(),
+            label: "主账号".to_string(),
+            workspace_name: Some("Workspace-A".to_string()),
+            group_name: Some("TEAM".to_string()),
+            sort: 10,
+        };
+
+        let value = serde_json::to_value(summary).expect("serialize account summary");
+        let obj = value.as_object().expect("account summary object");
+
+        for key in ["id", "label", "workspaceName", "groupName", "sort"] {
+            assert!(obj.contains_key(key), "missing key: {key}");
+        }
+
+        for key in ["workspaceId", "note", "tags", "status", "updatedAt"] {
+            assert!(!obj.contains_key(key), "unexpected key: {key}");
+        }
+    }
 }

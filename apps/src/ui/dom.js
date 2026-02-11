@@ -33,6 +33,7 @@ export const dom = {
   recommendations: byId("recommendations"),
   accountsToolbar: byId("accountsToolbar"),
   accountSearch: byId("accountSearch"),
+  accountGroupFilter: byId("accountGroupFilter"),
   filterAll: byId("filterAll"),
   filterActive: byId("filterActive"),
   filterLow: byId("filterLow"),

@@ -16,6 +16,7 @@ export const state = {
   requestLogStatusFilter: "all",
   accountSearch: "",
   accountFilter: "all",
+  accountGroupFilter: "all",
   accountView: "list",
   currentUsageAccount: null,
   activeLoginId: null,
