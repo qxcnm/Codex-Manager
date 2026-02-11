@@ -4,9 +4,9 @@ use tiny_http::Request;
 
 fn should_drop_header_for_attempt(name: &str, strip_session_affinity: bool) -> bool {
     if strip_session_affinity {
-        super::should_drop_incoming_header_for_failover(name)
+        super::super::should_drop_incoming_header_for_failover(name)
     } else {
-        super::should_drop_incoming_header(name)
+        super::super::should_drop_incoming_header(name)
     }
 }
 
@@ -59,3 +59,5 @@ pub(super) fn send_upstream_request(
     }
     builder.send()
 }
+
+

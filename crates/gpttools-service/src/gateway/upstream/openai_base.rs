@@ -24,7 +24,7 @@ pub(super) fn handle_openai_base_attempt<F>(
 where
     F: FnMut(Option<&str>, u16, Option<&str>),
 {
-    match super::try_openai_fallback(
+    match super::super::try_openai_fallback(
         client,
         storage,
         method,
@@ -40,9 +40,9 @@ where
         Ok(Some(resp)) => {
             let status = resp.status().as_u16();
             if status < 400 {
-                super::clear_account_cooldown(&account.id);
+                super::super::clear_account_cooldown(&account.id);
             } else {
-                super::mark_account_cooldown_for_status(&account.id, status);
+                super::super::mark_account_cooldown_for_status(&account.id, status);
             }
             log_gateway_result(
                 Some(base),
@@ -56,7 +56,7 @@ where
             OpenAiAttemptResult::Upstream(resp)
         }
         Ok(None) => {
-            super::mark_account_cooldown(&account.id, super::CooldownReason::Network);
+            super::super::mark_account_cooldown(&account.id, super::super::CooldownReason::Network);
             log_gateway_result(Some(base), 502, Some("openai upstream unavailable"));
             // 中文注释：OpenAI 上游不可用时如果还有候选账号就继续 failover，
             // 不这样做会把单账号瞬时抖动放大成整次请求失败。
@@ -70,7 +70,7 @@ where
             }
         }
         Err(err) => {
-            super::mark_account_cooldown(&account.id, super::CooldownReason::Network);
+            super::super::mark_account_cooldown(&account.id, super::super::CooldownReason::Network);
             log_gateway_result(Some(base), 502, Some(err.as_str()));
             // 中文注释：异常分支同样优先切换候选账号，
             // 只有最后一个候选才直接向客户端返回错误，避免过早失败。
@@ -85,3 +85,5 @@ where
         }
     }
 }
+
+

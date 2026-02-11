@@ -1,9 +1,9 @@
 use tiny_http::{Request, Response};
 
-use super::local_validation::LocalValidationResult;
-use super::upstream_candidate_flow::{process_candidate_upstream_flow, CandidateUpstreamDecision};
-use super::upstream_execution_context::GatewayUpstreamExecutionContext;
-use super::upstream_precheck::{prepare_candidates_for_proxy, CandidatePrecheckResult};
+use super::super::local_validation::LocalValidationResult;
+use super::candidate_flow::{process_candidate_upstream_flow, CandidateUpstreamDecision};
+use super::execution_context::GatewayUpstreamExecutionContext;
+use super::precheck::{prepare_candidates_for_proxy, CandidatePrecheckResult};
 
 enum CandidateDecisionDispatch {
     Continue,
@@ -19,7 +19,7 @@ fn respond_terminal(request: Request, status_code: u16, message: String) -> Resu
 fn dispatch_candidate_decision(
     decision: CandidateUpstreamDecision,
     request: &mut Option<Request>,
-    inflight_guard: &mut Option<super::AccountInFlightGuard>,
+    inflight_guard: &mut Option<super::super::AccountInFlightGuard>,
 ) -> CandidateDecisionDispatch {
     match decision {
         CandidateUpstreamDecision::RespondUpstream(resp) => {
@@ -29,10 +29,10 @@ fn dispatch_candidate_decision(
             let guard = inflight_guard
                 .take()
                 .expect("inflight guard should be available before terminal response");
-            CandidateDecisionDispatch::Return(super::respond_with_upstream(request, resp, guard))
+            CandidateDecisionDispatch::Return(super::super::respond_with_upstream(request, resp, guard))
         }
         CandidateUpstreamDecision::Failover => {
-            super::record_gateway_failover_attempt();
+            super::super::record_gateway_failover_attempt();
             CandidateDecisionDispatch::Continue
         }
         CandidateUpstreamDecision::Terminal {
@@ -47,7 +47,7 @@ fn dispatch_candidate_decision(
     }
 }
 
-pub(super) fn proxy_validated_request(
+pub(in super::super) fn proxy_validated_request(
     request: Request,
     validated: LocalValidationResult,
     debug: bool,
@@ -77,16 +77,16 @@ pub(super) fn proxy_validated_request(
     };
     let mut request = Some(request);
 
-    let upstream_base = super::resolve_upstream_base_url();
+    let upstream_base = super::super::resolve_upstream_base_url();
     let base = upstream_base.as_str();
-    let upstream_fallback_base = super::resolve_upstream_fallback_base_url(base);
-    let (url, url_alt) = super::request_rewrite::compute_upstream_url(base, &path);
+    let upstream_fallback_base = super::super::resolve_upstream_fallback_base_url(base);
+    let (url, url_alt) = super::super::request_rewrite::compute_upstream_url(base, &path);
 
-    let client = super::upstream_client();
+    let client = super::super::upstream_client();
     let upstream_cookie = std::env::var("GPTTOOLS_UPSTREAM_COOKIE").ok();
 
     let candidate_count = candidates.len();
-    let account_max_inflight = super::account_max_inflight_limit();
+    let account_max_inflight = super::super::account_max_inflight_limit();
     let context = GatewayUpstreamExecutionContext::new(
         &storage,
         &key_id,
@@ -108,7 +108,7 @@ pub(super) fn proxy_validated_request(
             .as_ref()
             .ok_or_else(|| "request already consumed".to_string())?;
         // 中文注释：把 inflight 计数覆盖到整个响应生命周期，确保下一批请求能看到真实负载。
-        let mut inflight_guard = Some(super::acquire_account_inflight(&account.id));
+        let mut inflight_guard = Some(super::super::acquire_account_inflight(&account.id));
 
         let decision = process_candidate_upstream_flow(
             &client,
@@ -142,3 +142,6 @@ pub(super) fn proxy_validated_request(
         .ok_or_else(|| "request already consumed".to_string())?;
     respond_terminal(request, 503, "no available account".to_string())
 }
+
+
+

@@ -19,11 +19,11 @@ pub(super) fn prepare_candidates_for_proxy(
     model_for_log: Option<&str>,
     reasoning_for_log: Option<&str>,
 ) -> CandidatePrecheckResult {
-    let candidates = match super::prepare_gateway_candidates(storage) {
+    let candidates = match super::super::prepare_gateway_candidates(storage) {
         Ok(v) => v,
         Err(err) => {
             let err_text = format!("candidate resolve failed: {err}");
-            super::write_request_log(
+            super::super::write_request_log(
                 storage,
                 Some(key_id),
                 path,
@@ -41,7 +41,7 @@ pub(super) fn prepare_candidates_for_proxy(
     };
 
     if candidates.is_empty() {
-        super::write_request_log(
+        super::super::write_request_log(
             storage,
             Some(key_id),
             path,
@@ -59,3 +59,5 @@ pub(super) fn prepare_candidates_for_proxy(
 
     CandidatePrecheckResult::Ready { request, candidates }
 }
+
+

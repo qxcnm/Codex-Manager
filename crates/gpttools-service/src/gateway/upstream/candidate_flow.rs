@@ -1,9 +1,9 @@
 use gpttools_core::storage::{Account, Storage, Token};
 use tiny_http::Request;
 
-use super::upstream_openai_base::{handle_openai_base_attempt, OpenAiAttemptResult};
-use super::upstream_postprocess::{process_upstream_post_retry_flow, PostRetryFlowDecision};
-use super::upstream_primary_flow::{run_primary_upstream_flow, PrimaryFlowDecision};
+use super::openai_base::{handle_openai_base_attempt, OpenAiAttemptResult};
+use super::postprocess::{process_upstream_post_retry_flow, PostRetryFlowDecision};
+use super::primary_flow::{run_primary_upstream_flow, PrimaryFlowDecision};
 
 pub(super) enum CandidateUpstreamDecision {
     RespondUpstream(reqwest::blocking::Response),
@@ -34,7 +34,7 @@ pub(super) fn process_candidate_upstream_flow<F>(
 where
     F: FnMut(Option<&str>, u16, Option<&str>),
 {
-    if super::is_openai_api_base(base) {
+    if super::super::is_openai_api_base(base) {
         match handle_openai_base_attempt(
             client,
             storage,
@@ -137,3 +137,5 @@ where
         }
     }
 }
+
+

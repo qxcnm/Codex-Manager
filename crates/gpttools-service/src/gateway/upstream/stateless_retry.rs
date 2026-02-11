@@ -2,7 +2,7 @@ use gpttools_core::storage::Account;
 use reqwest::StatusCode;
 use tiny_http::Request;
 
-use super::upstream_transport::send_upstream_request;
+use super::transport::send_upstream_request;
 
 pub(super) enum StatelessRetryResult {
     NotTriggered,
@@ -84,4 +84,6 @@ pub(super) fn retry_stateless_then_optional_alt(
 
     StatelessRetryResult::Upstream(response)
 }
+
+
 

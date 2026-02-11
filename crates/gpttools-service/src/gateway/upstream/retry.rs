@@ -2,7 +2,7 @@ use gpttools_core::storage::Account;
 use reqwest::StatusCode;
 use tiny_http::Request;
 
-use super::upstream_transport::send_upstream_request;
+use super::transport::send_upstream_request;
 
 pub(super) enum AltPathRetryResult {
     NotTriggered,
@@ -53,7 +53,7 @@ where
         Ok(response) => AltPathRetryResult::Upstream(response),
         Err(err) => {
             let err_msg = err.to_string();
-            super::mark_account_cooldown(&account.id, super::CooldownReason::Network);
+            super::super::mark_account_cooldown(&account.id, super::super::CooldownReason::Network);
             log_gateway_result(Some(alt_url), 502, Some(err_msg.as_str()));
             // 中文注释：alt 路径失败时若还有候选账号必须优先切换，
             // 不这样做会把单账号路径差异放大成整次请求失败。
@@ -68,3 +68,5 @@ where
         }
     }
 }
+
+

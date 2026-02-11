@@ -1,6 +1,6 @@
 use reqwest::header::HeaderValue;
 
-pub(super) fn normalize_upstream_base_url(base: &str) -> String {
+pub(in super::super) fn normalize_upstream_base_url(base: &str) -> String {
     let mut normalized = base.trim().trim_end_matches('/').to_string();
     let lower = normalized.to_ascii_lowercase();
     if (lower.starts_with("https://chatgpt.com")
@@ -13,7 +13,7 @@ pub(super) fn normalize_upstream_base_url(base: &str) -> String {
     normalized
 }
 
-pub(super) fn resolve_upstream_base_url() -> String {
+pub(in super::super) fn resolve_upstream_base_url() -> String {
     let raw = std::env::var("GPTTOOLS_UPSTREAM_BASE_URL")
         .ok()
         .filter(|v| !v.trim().is_empty())
@@ -21,7 +21,7 @@ pub(super) fn resolve_upstream_base_url() -> String {
     normalize_upstream_base_url(&raw)
 }
 
-pub(super) fn resolve_upstream_fallback_base_url(primary_base: &str) -> Option<String> {
+pub(in super::super) fn resolve_upstream_fallback_base_url(primary_base: &str) -> Option<String> {
     std::env::var("GPTTOOLS_UPSTREAM_FALLBACK_BASE_URL")
         .ok()
         .filter(|v| !v.trim().is_empty())
@@ -36,18 +36,18 @@ pub(super) fn resolve_upstream_fallback_base_url(primary_base: &str) -> Option<S
         })
 }
 
-pub(super) fn is_openai_api_base(base: &str) -> bool {
+pub(in super::super) fn is_openai_api_base(base: &str) -> bool {
     let normalized = base.trim().to_ascii_lowercase();
     normalized.contains("api.openai.com/v1")
 }
 
-pub(super) fn is_chatgpt_backend_base(base: &str) -> bool {
+pub(in super::super) fn is_chatgpt_backend_base(base: &str) -> bool {
     let normalized = base.trim().to_ascii_lowercase();
     normalized.contains("chatgpt.com/backend-api")
         || normalized.contains("chat.openai.com/backend-api")
 }
 
-pub(super) fn should_try_openai_fallback(
+pub(in super::super) fn should_try_openai_fallback(
     base: &str,
     request_path: &str,
     content_type: Option<&HeaderValue>,
@@ -66,10 +66,10 @@ pub(super) fn should_try_openai_fallback(
     let Ok(value) = content_type.to_str() else {
         return false;
     };
-    super::is_html_content_type(value)
+    super::super::is_html_content_type(value)
 }
 
-pub(super) fn should_try_openai_fallback_by_status(
+pub(in super::super) fn should_try_openai_fallback_by_status(
     base: &str,
     request_path: &str,
     status_code: u16,
@@ -83,3 +83,6 @@ pub(super) fn should_try_openai_fallback_by_status(
     }
     matches!(status_code, 403 | 429)
 }
+
+
+

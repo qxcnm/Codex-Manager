@@ -40,5 +40,6 @@ pub(crate) fn handle_gateway_request(mut request: Request) -> Result<(), String>
         }
     };
 
-    super::upstream_proxy::proxy_validated_request(request, validated, debug)
+    super::proxy_validated_request(request, validated, debug)
 }
+

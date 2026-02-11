@@ -31,8 +31,8 @@ pub(super) fn handle_openai_fallback_branch<F>(
 where
     F: FnMut(Option<&str>, u16, Option<&str>),
 {
-    let should_fallback = super::should_try_openai_fallback(upstream_base, path, upstream_content_type)
-        || super::should_try_openai_fallback_by_status(upstream_base, path, status.as_u16());
+    let should_fallback = super::super::should_try_openai_fallback(upstream_base, path, upstream_content_type)
+        || super::super::should_try_openai_fallback_by_status(upstream_base, path, status.as_u16());
     if !should_fallback {
         return FallbackBranchResult::NotTriggered;
     }
@@ -44,7 +44,7 @@ where
                 upstream_base, fallback_base
             );
         }
-        match super::try_openai_fallback(
+        match super::super::try_openai_fallback(
             client,
             storage,
             method,
@@ -59,12 +59,12 @@ where
         ) {
             Ok(Some(resp)) => {
                 if resp.status().is_success() {
-                    super::clear_account_cooldown(&account.id);
+                    super::super::clear_account_cooldown(&account.id);
                     log_gateway_result(Some(fallback_base), resp.status().as_u16(), None);
                     return FallbackBranchResult::RespondUpstream(resp);
                 }
                 let fallback_status = resp.status().as_u16();
-                super::mark_account_cooldown_for_status(&account.id, fallback_status);
+                super::super::mark_account_cooldown_for_status(&account.id, fallback_status);
                 log_gateway_result(
                     Some(fallback_base),
                     fallback_status,
@@ -79,7 +79,7 @@ where
                 }
             }
             Ok(None) => {
-                super::mark_account_cooldown(&account.id, super::CooldownReason::Network);
+                super::super::mark_account_cooldown(&account.id, super::super::CooldownReason::Network);
                 log_gateway_result(Some(fallback_base), 502, Some("upstream fallback unavailable"));
                 if has_more_candidates {
                     FallbackBranchResult::Failover
@@ -91,7 +91,7 @@ where
                 }
             }
             Err(err) => {
-                super::mark_account_cooldown(&account.id, super::CooldownReason::Network);
+                super::super::mark_account_cooldown(&account.id, super::super::CooldownReason::Network);
                 log_gateway_result(Some(fallback_base), 502, Some(err.as_str()));
                 if has_more_candidates {
                     FallbackBranchResult::Failover
@@ -104,7 +104,7 @@ where
             }
         }
     } else {
-        super::mark_account_cooldown(&account.id, super::CooldownReason::Challenge);
+        super::super::mark_account_cooldown(&account.id, super::super::CooldownReason::Challenge);
         log_gateway_result(
             Some(upstream_base),
             502,
@@ -120,3 +120,5 @@ where
         }
     }
 }
+
+

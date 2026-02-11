@@ -40,7 +40,7 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
     }
 
     pub(super) fn should_skip_candidate(&self, account_id: &str, idx: usize) -> bool {
-        super::upstream_candidates::should_skip_candidate_for_proxy(
+        super::candidates::should_skip_candidate_for_proxy(
             account_id,
             idx,
             self.candidate_count,
@@ -54,7 +54,7 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
         status_code: u16,
         error: Option<&str>,
     ) {
-        super::write_request_log(
+        super::super::write_request_log(
             self.storage,
             Some(self.key_id),
             self.path,
@@ -67,3 +67,5 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
         );
     }
 }
+
+

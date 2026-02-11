@@ -2,8 +2,8 @@ use gpttools_core::storage::{Account, Storage, Token};
 use reqwest::header::CONTENT_TYPE;
 use tiny_http::Request;
 
-use super::upstream_fallback_branch::{handle_openai_fallback_branch, FallbackBranchResult};
-use super::upstream_primary_attempt::{run_primary_upstream_attempt, PrimaryAttemptResult};
+use super::fallback_branch::{handle_openai_fallback_branch, FallbackBranchResult};
+use super::primary_attempt::{run_primary_upstream_attempt, PrimaryAttemptResult};
 
 pub(super) enum PrimaryFlowDecision {
     Continue {
@@ -106,3 +106,5 @@ where
         },
     }
 }
+
+

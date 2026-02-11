@@ -23,7 +23,7 @@ pub(super) fn run_primary_upstream_attempt<F>(
 where
     F: FnMut(Option<&str>, u16, Option<&str>),
 {
-    match super::upstream_transport::send_upstream_request(
+    match super::transport::send_upstream_request(
         client,
         method,
         url,
@@ -37,7 +37,7 @@ where
         Ok(resp) => PrimaryAttemptResult::Upstream(resp),
         Err(err) => {
             let err_msg = err.to_string();
-            super::mark_account_cooldown(&account.id, super::CooldownReason::Network);
+            super::super::mark_account_cooldown(&account.id, super::super::CooldownReason::Network);
             log_gateway_result(Some(url), 502, Some(err_msg.as_str()));
             // 中文注释：主链路首次请求失败不代表所有候选都失败，
             // 先 failover 才能避免单账号抖动放大成全局不可用。
@@ -52,3 +52,5 @@ where
         }
     }
 }
+
+
