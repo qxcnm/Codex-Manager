@@ -1,10 +1,6 @@
 name: release-multi-platform
 
-on:
-  push:
-    tags:
-      - "v*"
-  workflow_dispatch:
+on:`n  workflow_dispatch:
     inputs:
       tag:
         description: "Release tag (e.g. v0.0.6)"
@@ -207,3 +203,4 @@ jobs:
               gh release create "$TAG" "${FILES[@]}" --repo "$GH_REPO" --title "$TITLE" --target "$REF" --generate-notes
             fi
           fi
+

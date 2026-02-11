@@ -1,0 +1,209 @@
+.hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.status-pill {
+  font-size: 12px;
+  border-radius: 999px;
+  padding: 5px 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: color-mix(in srgb, var(--accent) 75%, #214167);
+  background: color-mix(in srgb, var(--accent) 14%, #ffffff);
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, #d7e5f8);
+}
+
+.top-nav {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 18px;
+  flex-wrap: nowrap;
+  padding: 16px clamp(16px, 2vw, 30px);
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 10;
+  background: var(--top-nav-bg);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(16px);
+}
+
+button {
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent);
+  background: var(--btn-primary-bg);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+  box-shadow: var(--btn-primary-shadow);
+}
+
+button.secondary {
+  background: var(--btn-secondary-bg);
+  color: color-mix(in srgb, var(--accent) 72%, #19365f);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, #d8e6fa);
+  box-shadow: var(--shadow-soft);
+}
+
+button.ghost {
+  background: rgba(35, 59, 92, 0.08);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+
+button.danger {
+  background: linear-gradient(180deg, #fff3f3, #ffe9e9);
+  color: #bd2f2f;
+  border: 1px solid #f7c4c4;
+  box-shadow: none;
+}
+
+button:hover {
+  transform: translateY(-1px);
+  filter: saturate(1.03);
+}
+
+button:active {
+  transform: translateY(0);
+}
+
+button[disabled] {
+  cursor: not-allowed;
+  opacity: 0.6;
+  box-shadow: none;
+  transform: none;
+}
+
+button.is-loading {
+  position: relative;
+  padding-right: 34px;
+}
+
+button.is-loading::after {
+  content: "";
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  margin-top: -6px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  animation: spin 0.8s linear infinite;
+}
+
+button.secondary.is-loading::after {
+  border-color: rgba(15, 23, 42, 0.2);
+  border-top-color: var(--ink);
+}
+
+.icon-btn {
+  border-radius: 999px;
+  padding: 8px 13px;
+  background: linear-gradient(180deg, #fff, #f4f8fd);
+  border: 1px solid var(--border);
+  color: var(--ink);
+  font-weight: 700;
+  box-shadow: var(--shadow-soft);
+}
+
+.pill-nav {
+  display: flex;
+  gap: 8px;
+  flex-wrap: nowrap;
+  flex: 0 1 auto;
+  width: fit-content;
+  max-width: min(680px, calc(100vw - 220px));
+  min-width: 0;
+  padding: 8px;
+  background: var(--pill-nav-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  box-shadow: var(--shadow-soft);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.pill-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.pill-nav button {
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: color-mix(in srgb, var(--accent) 68%, #2a4668);
+  font-weight: 700;
+  box-shadow: none;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.pill-nav button.active {
+  background: var(--pill-active-bg);
+  color: #fff;
+  box-shadow: var(--pill-active-shadow);
+  position: relative;
+}
+
+.pill-nav button.active::after {
+  content: none;
+}
+
+.theme-popover {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.theme-toggle {
+  white-space: nowrap;
+}
+.theme-toggle::after {
+  content: "▾";
+  margin-left: 8px;
+  font-size: 11px;
+  transition: transform 0.18s ease;
+}
+.theme-toggle[aria-expanded="true"]::after {
+  transform: rotate(180deg);
+}
+
+.theme-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  width: min(360px, calc(100vw - 32px));
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--pill-nav-bg);
+  box-shadow: var(--shadow);
+  z-index: 20;
+}
+
+.theme-panel[hidden] {
+  display: none;
+}
+
+.theme-panel button {
+  min-width: 70px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.2;
+  box-shadow: none;
+}

@@ -3,6 +3,8 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::time::Duration;
 
+mod request_log_query;
+
 #[derive(Debug, Clone)]
 pub struct Account {
     pub id: String,
@@ -90,14 +92,6 @@ pub struct ApiKey {
     pub last_used_at: Option<i64>,
 }
 
-#[derive(Debug, Clone)]
-enum RequestLogQuery {
-    All,
-    GlobalLike(String),
-    FieldLike { column: &'static str, pattern: String },
-    StatusExact(i64),
-    StatusRange(i64, i64),
-}
 
 #[derive(Debug)]
 pub struct Storage {
@@ -460,8 +454,8 @@ impl Storage {
         let normalized_limit = if limit <= 0 { 200 } else { limit.min(1000) };
         let mut out = Vec::new();
 
-        match Self::parse_request_log_query(query) {
-            RequestLogQuery::All => {
+        match request_log_query::parse_request_log_query(query) {
+            request_log_query::RequestLogQuery::All => {
                 let mut stmt = self.conn.prepare(
                     "SELECT key_id, request_path, method, model, reasoning_effort, upstream_url, status_code, error, created_at
                      FROM request_logs
@@ -483,7 +477,7 @@ impl Storage {
                     });
                 }
             }
-            RequestLogQuery::FieldLike { column, pattern } => {
+            request_log_query::RequestLogQuery::FieldLike { column, pattern } => {
                 let sql = format!(
                     "SELECT key_id, request_path, method, model, reasoning_effort, upstream_url, status_code, error, created_at
                      FROM request_logs
@@ -507,7 +501,7 @@ impl Storage {
                     });
                 }
             }
-            RequestLogQuery::StatusExact(status) => {
+            request_log_query::RequestLogQuery::StatusExact(status) => {
                 let mut stmt = self.conn.prepare(
                     "SELECT key_id, request_path, method, model, reasoning_effort, upstream_url, status_code, error, created_at
                      FROM request_logs
@@ -530,7 +524,7 @@ impl Storage {
                     });
                 }
             }
-            RequestLogQuery::StatusRange(start, end) => {
+            request_log_query::RequestLogQuery::StatusRange(start, end) => {
                 let mut stmt = self.conn.prepare(
                     "SELECT key_id, request_path, method, model, reasoning_effort, upstream_url, status_code, error, created_at
                      FROM request_logs
@@ -553,7 +547,7 @@ impl Storage {
                     });
                 }
             }
-            RequestLogQuery::GlobalLike(pattern) => {
+            request_log_query::RequestLogQuery::GlobalLike(pattern) => {
                 let mut stmt = self.conn.prepare(
                     "SELECT key_id, request_path, method, model, reasoning_effort, upstream_url, status_code, error, created_at
                      FROM request_logs
@@ -587,76 +581,6 @@ impl Storage {
 
         Ok(out)
     }
-
-    fn parse_request_log_query(query: Option<&str>) -> RequestLogQuery {
-        let Some(raw) = query.map(str::trim).filter(|v| !v.is_empty()) else {
-            return RequestLogQuery::All;
-        };
-
-        // 中文注释：优先解析字段前缀（如 method:/status:），不这样做会把所有搜索都退化为多列 OR LIKE，数据量上来后会明显变慢。
-        if let Some(parsed) = Self::parse_prefixed_request_log_query(raw) {
-            return parsed;
-        }
-
-        RequestLogQuery::GlobalLike(format!("%{}%", raw))
-    }
-
-    fn parse_prefixed_request_log_query(raw: &str) -> Option<RequestLogQuery> {
-        let (prefix, value) = raw.split_once(':')?;
-        let normalized_prefix = prefix.trim().to_ascii_lowercase();
-        let normalized_value = value.trim();
-        if normalized_value.is_empty() {
-            return None;
-        }
-
-        match normalized_prefix.as_str() {
-            "path" | "request_path" => Some(RequestLogQuery::FieldLike {
-                column: "request_path",
-                pattern: format!("%{}%", normalized_value),
-            }),
-            "method" => Some(RequestLogQuery::FieldLike {
-                column: "method",
-                pattern: format!("%{}%", normalized_value),
-            }),
-            "model" => Some(RequestLogQuery::FieldLike {
-                column: "model",
-                pattern: format!("%{}%", normalized_value),
-            }),
-            "reasoning" | "reason" => Some(RequestLogQuery::FieldLike {
-                column: "reasoning_effort",
-                pattern: format!("%{}%", normalized_value),
-            }),
-            "error" => Some(RequestLogQuery::FieldLike {
-                column: "error",
-                pattern: format!("%{}%", normalized_value),
-            }),
-            "key" | "key_id" => Some(RequestLogQuery::FieldLike {
-                column: "key_id",
-                pattern: format!("%{}%", normalized_value),
-            }),
-            "upstream" | "url" => Some(RequestLogQuery::FieldLike {
-                column: "upstream_url",
-                pattern: format!("%{}%", normalized_value),
-            }),
-            "status" => Self::parse_status_query(normalized_value),
-            _ => None,
-        }
-    }
-
-    fn parse_status_query(raw: &str) -> Option<RequestLogQuery> {
-        let normalized = raw.trim().to_ascii_lowercase();
-        if normalized.len() == 3 && normalized.ends_with("xx") {
-            let digit = normalized.chars().next()?.to_digit(10)? as i64;
-            let start = digit * 100;
-            return Some(RequestLogQuery::StatusRange(start, start + 99));
-        }
-
-        normalized
-            .parse::<i64>()
-            .ok()
-            .map(RequestLogQuery::StatusExact)
-    }
-
     pub fn clear_request_logs(&self) -> Result<()> {
         self.conn.execute("DELETE FROM request_logs", [])?;
         Ok(())
@@ -947,163 +871,8 @@ impl Storage {
     }
 
 }
-
 #[cfg(test)]
-mod migration_tests {
-    use super::Storage;
-
-    #[test]
-    fn init_tracks_schema_migrations_and_is_idempotent() {
-        let storage = Storage::open_in_memory().expect("open in memory");
-        storage.init().expect("first init");
-        storage.init().expect("second init");
-
-        let applied_001: i64 = storage
-            .conn
-            .query_row(
-                "SELECT COUNT(1) FROM schema_migrations WHERE version = '001_init'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("count 001 migration");
-        assert_eq!(applied_001, 1);
-
-        let applied_005: i64 = storage
-            .conn
-            .query_row(
-                "SELECT COUNT(1) FROM schema_migrations WHERE version = '005_request_logs'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("count 005 migration");
-        assert_eq!(applied_005, 1);
-
-        let applied_012: i64 = storage
-            .conn
-            .query_row(
-                "SELECT COUNT(1) FROM schema_migrations WHERE version = '012_request_logs_search_indexes'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("count 012 migration");
-        assert_eq!(applied_012, 1);
-    }
-
-    #[test]
-    fn account_meta_sql_migration_coexists_with_legacy_compat_marker() {
-        let storage = Storage::open_in_memory().expect("open in memory");
-        storage
-            .conn
-            .execute_batch(
-                "CREATE TABLE accounts (
-                    id TEXT PRIMARY KEY,
-                    label TEXT NOT NULL,
-                    issuer TEXT NOT NULL,
-                    chatgpt_account_id TEXT,
-                    workspace_id TEXT,
-                    workspace_name TEXT,
-                    note TEXT,
-                    tags TEXT,
-                    group_name TEXT,
-                    sort INTEGER DEFAULT 0,
-                    status TEXT NOT NULL,
-                    created_at INTEGER NOT NULL,
-                    updated_at INTEGER NOT NULL
-                );
-                CREATE TABLE login_sessions (
-                    login_id TEXT PRIMARY KEY,
-                    code_verifier TEXT NOT NULL,
-                    state TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    error TEXT,
-                    note TEXT,
-                    tags TEXT,
-                    group_name TEXT,
-                    created_at INTEGER NOT NULL,
-                    updated_at INTEGER NOT NULL
-                );",
-            )
-            .expect("create tables with account meta columns");
-        storage
-            .ensure_migrations_table()
-            .expect("ensure migration tracker");
-        storage
-            .conn
-            .execute(
-                "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES ('compat_account_meta_columns', 1)",
-                [],
-            )
-            .expect("insert legacy compat marker");
-
-        storage
-            .apply_sql_or_compat_migration(
-                "011_account_meta_columns",
-                include_str!("../../migrations/011_account_meta_columns.sql"),
-                |s| s.ensure_account_meta_columns(),
-            )
-            .expect("apply 011 migration with fallback");
-
-        let applied_011: i64 = storage
-            .conn
-            .query_row(
-                "SELECT COUNT(1) FROM schema_migrations WHERE version = '011_account_meta_columns'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("count 011 migration");
-        assert_eq!(applied_011, 1);
-
-        let legacy_compat_marker: i64 = storage
-            .conn
-            .query_row(
-                "SELECT COUNT(1) FROM schema_migrations WHERE version = 'compat_account_meta_columns'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("count compat marker");
-        assert_eq!(legacy_compat_marker, 1);
-    }
-
-    #[test]
-    fn sql_migration_can_fallback_to_compat_when_schema_already_exists() {
-        let storage = Storage::open_in_memory().expect("open in memory");
-        storage
-            .conn
-            .execute_batch(
-                "CREATE TABLE api_keys (
-                    id TEXT PRIMARY KEY,
-                    name TEXT,
-                    model_slug TEXT,
-                    key_hash TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    created_at INTEGER NOT NULL,
-                    last_used_at INTEGER
-                )",
-            )
-            .expect("create api_keys with model_slug");
-        storage
-            .ensure_migrations_table()
-            .expect("ensure migration tracker");
-
-        storage
-            .apply_sql_or_compat_migration(
-                "004_api_key_model",
-                include_str!("../../migrations/004_api_key_model.sql"),
-                |s| s.ensure_api_key_model_column(),
-            )
-            .expect("apply 004 migration with fallback");
-
-        let applied_004: i64 = storage
-            .conn
-            .query_row(
-                "SELECT COUNT(1) FROM schema_migrations WHERE version = '004_api_key_model'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("count 004 migration");
-        assert_eq!(applied_004, 1);
-    }
-}
+mod migration_tests;
 
 pub fn now_ts() -> i64 {
     SystemTime::now()
@@ -1111,6 +880,11 @@ pub fn now_ts() -> i64 {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
 }
+
+
+
+
+
 
 
 

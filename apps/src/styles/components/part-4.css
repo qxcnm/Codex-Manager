@@ -1,0 +1,207 @@
+.status-unknown {
+  background: rgba(15, 23, 42, 0.12);
+  color: var(--ink-strong);
+}
+
+.mini-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.progress-line {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.progress-line .track {
+  height: 8px;
+  background: rgba(15, 23, 42, 0.08);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-line .fill {
+  height: 100%;
+  background: linear-gradient(90deg, #1d7df2, #48b2ff);
+}
+
+.progress-line.secondary .fill {
+  background: linear-gradient(90deg, #0abf7a, #56e9b4);
+}
+
+.progress-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.progress-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.progress-track {
+  height: 9px;
+  background: rgba(15, 23, 42, 0.08);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #1d7df2, #48b2ff);
+}
+
+.progress-fill.warn {
+  background: linear-gradient(90deg, #f59e0b, #fbbf24);
+}
+
+.progress-fill.danger {
+  background: linear-gradient(90deg, #ef4444, #f87171);
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.52);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 20;
+}
+
+.modal.active {
+  display: flex;
+}
+
+.modal-card {
+  background: linear-gradient(170deg, #ffffff, #f7fbff);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  width: min(520px, 100%);
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.modal-body input,
+.modal-body select {
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  padding: 9px 10px;
+  font-size: 13px;
+  background: #fff;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.confirm-card {
+  width: min(460px, 100%);
+}
+
+.confirm-card .modal-body {
+  min-height: 72px;
+  justify-content: center;
+}
+
+.confirm-card .modal-body p {
+  margin: 0;
+  color: var(--ink-strong);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.app-toast {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-8px);
+  max-width: min(620px, calc(100vw - 24px));
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, #d1e2f7);
+  background: linear-gradient(180deg, #ffffff, color-mix(in srgb, var(--accent) 8%, #ffffff));
+  color: var(--ink-strong);
+  box-shadow: var(--shadow);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 40;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.app-toast.active {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.app-toast.is-error {
+  border-color: #f4b4b4;
+  background: linear-gradient(180deg, #fff5f5, #ffecec);
+  color: #b42323;
+}
+
+.login-url {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.mono {
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+.inline-select {
+  width: 100%;
+  min-width: 180px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  padding: 8px 9px;
+  font-size: 12px;
+  background: #fff;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
