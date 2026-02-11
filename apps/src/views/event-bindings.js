@@ -26,10 +26,7 @@ export function bindMainEvents({
   closeThemePanel,
   setTheme,
   handleServiceToggle,
-  renderAccountsOnly,
-  updateAccountSort,
-  handleOpenUsageModal,
-  deleteAccount,
+  renderAccountsView,
   updateRequestLogFilterButtons,
 }) {
   dom.navDashboard.addEventListener("click", () => switchPage("dashboard"));
@@ -158,11 +155,7 @@ export function bindMainEvents({
   if (dom.accountSearch) {
     dom.accountSearch.addEventListener("input", (event) => {
       state.accountSearch = event.target.value;
-      renderAccountsOnly({
-        onUpdateSort: updateAccountSort,
-        onOpenUsage: handleOpenUsageModal,
-        onDeleteAccount: deleteAccount,
-      });
+      renderAccountsView();
     });
   }
 
@@ -175,14 +168,11 @@ export function bindMainEvents({
   const setFilter = (filter) => {
     state.accountFilter = filter;
     updateFilterButtons();
-    renderAccountsOnly({
-      onUpdateSort: updateAccountSort,
-      onOpenUsage: handleOpenUsageModal,
-      onDeleteAccount: deleteAccount,
-    });
+    renderAccountsView();
   };
 
   if (dom.filterAll) dom.filterAll.addEventListener("click", () => setFilter("all"));
   if (dom.filterActive) dom.filterActive.addEventListener("click", () => setFilter("active"));
   if (dom.filterLow) dom.filterLow.addEventListener("click", () => setFilter("low"));
 }
+

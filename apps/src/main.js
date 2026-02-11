@@ -144,6 +144,10 @@ function buildMainRenderActions() {
   });
 }
 
+function renderAccountsView() {
+  renderAccountsOnly(buildMainRenderActions());
+}
+
 function bindEvents() {
   bindMainEvents({
     dom,
@@ -170,10 +174,7 @@ function bindEvents() {
     closeThemePanel,
     setTheme,
     handleServiceToggle: serviceLifecycle.handleServiceToggle,
-    renderAccountsOnly,
-    updateAccountSort,
-    handleOpenUsageModal,
-    deleteAccount,
+    renderAccountsView,
     updateRequestLogFilterButtons,
   });
 }
@@ -192,6 +193,7 @@ function bootstrap() {
 }
 
 window.addEventListener("DOMContentLoaded", bootstrap);
+
 
 
 
