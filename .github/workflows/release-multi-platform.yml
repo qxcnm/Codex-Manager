@@ -1,6 +1,7 @@
 name: release-multi-platform
 
-on:`n  workflow_dispatch:
+on:
+  workflow_dispatch:
     inputs:
       tag:
         description: "Release tag (e.g. v0.0.6)"
