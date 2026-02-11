@@ -14,6 +14,7 @@ mod upstream_primary_attempt;
 mod upstream_primary_flow;
 mod upstream_candidate_flow;
 mod upstream_postprocess;
+mod upstream_execution_context;
 mod request_helpers;
 mod request_rewrite;
 mod metrics;
@@ -36,57 +37,37 @@ pub(super) use request_helpers::{
 };
 use request_rewrite::{apply_request_overrides, compute_upstream_url};
 use upstream_config::{
-    is_openai_api_base,
-    resolve_upstream_base_url, resolve_upstream_fallback_base_url, should_try_openai_fallback,
-    should_try_openai_fallback_by_status,
+    is_openai_api_base, resolve_upstream_base_url, resolve_upstream_fallback_base_url,
+    should_try_openai_fallback, should_try_openai_fallback_by_status,
 };
 #[cfg(test)]
 use upstream_config::normalize_upstream_base_url;
-pub(crate) use metrics::{
-    AccountInFlightGuard, acquire_account_inflight,
-    begin_gateway_request, gateway_metrics_prometheus,
-    account_inflight_count, record_gateway_cooldown_mark, record_gateway_failover_attempt,
+use metrics::{
+    account_inflight_count, acquire_account_inflight, begin_gateway_request,
+    record_gateway_cooldown_mark, record_gateway_failover_attempt, AccountInFlightGuard,
 };
-pub(crate) use selection::{collect_gateway_candidates, rotate_candidates_for_fairness};
-pub(crate) use upstream_candidates::prepare_gateway_candidates;
-pub(crate) use failover::should_failover_after_refresh;
+pub(crate) use metrics::gateway_metrics_prometheus;
+use selection::{collect_gateway_candidates, rotate_candidates_for_fairness};
+use upstream_candidates::prepare_gateway_candidates;
+use failover::should_failover_after_refresh;
 pub(crate) use model_picker::fetch_models_for_picker;
 use http_bridge::{extract_platform_key, respond_with_upstream};
 use cooldown::{
-    CooldownReason, clear_account_cooldown, is_account_in_cooldown, mark_account_cooldown,
-    mark_account_cooldown_for_status,
+    clear_account_cooldown, is_account_in_cooldown, mark_account_cooldown,
+    mark_account_cooldown_for_status, CooldownReason,
 };
 #[cfg(test)]
 use cooldown::cooldown_reason_for_status;
-use token_exchange::resolve_openai_bearer_token;
 #[cfg(test)]
 use token_exchange::account_token_exchange_lock;
+use token_exchange::resolve_openai_bearer_token;
 use openai_fallback::try_openai_fallback;
 use request_log::write_request_log;
 pub(crate) use request_entry::handle_gateway_request;
-pub(crate) use runtime_config::{
+use runtime_config::{
     account_max_inflight_limit, upstream_client, DEFAULT_GATEWAY_DEBUG,
     DEFAULT_MODELS_CLIENT_VERSION,
 };
 
 #[cfg(test)]
 mod availability_tests;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

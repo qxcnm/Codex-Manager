@@ -1,4 +1,4 @@
-export const DEFAULT_AUTO_REFRESH_INTERVAL_MS = 30000;
+const DEFAULT_AUTO_REFRESH_INTERVAL_MS = 30000;
 
 export async function runRefreshTasks(tasks, onTaskError) {
   const taskList = Array.isArray(tasks) ? tasks : [];
@@ -40,3 +40,4 @@ export function stopAutoRefreshTimer(stateRef) {
   stateRef.autoRefreshTimer = null;
   return true;
 }
+

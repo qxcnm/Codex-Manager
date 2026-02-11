@@ -64,7 +64,7 @@ export function calcAvailability(usage) {
   return { text: "可用", level: "ok" };
 }
 
-export function normalizePercent(value) {
+function normalizePercent(value) {
   if (value == null) return null;
   return Math.max(0, Math.min(100, value));
 }
@@ -108,3 +108,4 @@ export function parseCredits(raw) {
     return null;
   }
 }
+
