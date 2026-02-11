@@ -1,8 +1,11 @@
 use gpttools_core::rpc::types::ModelOption;
 use reqwest::Method;
 
-use super::model_picker_parse::parse_model_options;
-use super::model_picker_request::send_models_request;
+mod parse;
+mod request;
+
+use parse::parse_model_options;
+use request::send_models_request;
 
 pub(crate) fn fetch_models_for_picker() -> Result<Vec<ModelOption>, String> {
     let storage = super::open_storage().ok_or_else(|| "storage unavailable".to_string())?;

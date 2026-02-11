@@ -2,7 +2,7 @@ use gpttools_core::storage::{ApiKey, Storage};
 use reqwest::Method;
 use tiny_http::Request;
 
-use super::local_validation::{LocalValidationError, LocalValidationResult};
+use super::{LocalValidationError, LocalValidationResult};
 
 pub(super) fn build_local_validation_result(
     request: &Request,
@@ -11,8 +11,8 @@ pub(super) fn build_local_validation_result(
     api_key: ApiKey,
 ) -> Result<LocalValidationResult, LocalValidationError> {
     // 按当前策略取消每次请求都更新 api_keys.last_used_at，减少并发写入冲突。
-    let path = super::normalize_models_path(request.url());
-    body = super::apply_request_overrides(
+    let path = super::super::normalize_models_path(request.url());
+    body = super::super::apply_request_overrides(
         &path,
         body,
         api_key.model_slug.as_deref(),
@@ -23,9 +23,9 @@ pub(super) fn build_local_validation_result(
     let method = Method::from_bytes(request_method.as_bytes())
         .map_err(|_| LocalValidationError::new(405, "unsupported method"))?;
 
-    let model_for_log = super::extract_request_model(&body).or(api_key.model_slug.clone());
+    let model_for_log = super::super::extract_request_model(&body).or(api_key.model_slug.clone());
     let reasoning_for_log =
-        super::extract_request_reasoning_effort(&body).or(api_key.reasoning_effort.clone());
+        super::super::extract_request_reasoning_effort(&body).or(api_key.reasoning_effort.clone());
 
     Ok(LocalValidationResult {
         storage,

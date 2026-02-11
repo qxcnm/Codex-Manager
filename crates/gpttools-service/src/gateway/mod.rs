@@ -1,9 +1,6 @@
 use crate::storage_helpers::open_storage;
 
 mod local_validation;
-mod local_validation_auth;
-mod local_validation_io;
-mod local_validation_request;
 mod upstream_proxy;
 mod upstream_transport;
 mod upstream_retry;
@@ -24,8 +21,6 @@ mod metrics;
 mod selection;
 mod failover;
 mod model_picker;
-mod model_picker_parse;
-mod model_picker_request;
 mod upstream_config;
 mod runtime_config;
 mod http_bridge;
@@ -76,3 +71,4 @@ use runtime_config::{
 
 #[cfg(test)]
 mod availability_tests;
+

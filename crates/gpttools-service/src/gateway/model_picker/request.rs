@@ -13,7 +13,7 @@ pub(super) fn send_models_request(
     token: &mut Token,
     upstream_cookie: Option<&str>,
 ) -> Result<Vec<u8>, String> {
-    let (url, _url_alt) = super::compute_upstream_url(upstream_base, path);
+    let (url, _url_alt) = super::super::compute_upstream_url(upstream_base, path);
     let mut builder = client.request(method.clone(), &url);
     builder = builder.header("User-Agent", "codex-cli");
     if let Some(cookie) = upstream_cookie {
@@ -24,8 +24,8 @@ pub(super) fn send_models_request(
 
     // 中文注释：OpenAI 基线要求 api_key_access_token，
     // 不这样区分会导致模型列表请求在 OpenAI 上游稳定 401。
-    let bearer = if super::is_openai_api_base(upstream_base) {
-        super::resolve_openai_bearer_token(storage, account, token)?
+    let bearer = if super::super::is_openai_api_base(upstream_base) {
+        super::super::resolve_openai_bearer_token(storage, account, token)?
     } else {
         token.access_token.clone()
     };
@@ -49,7 +49,7 @@ pub(super) fn send_models_request(
         .get(CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if super::is_html_content_type(content_type) {
+    if super::super::is_html_content_type(content_type) {
         return Err("models upstream returned text/html (cloudflare challenge)".to_string());
     }
 

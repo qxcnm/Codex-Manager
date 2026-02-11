@@ -10,8 +10,8 @@ pub(super) fn read_request_body(request: &mut Request) -> Vec<u8> {
 pub(super) fn extract_platform_key_or_error(
     request: &Request,
     debug: bool,
-) -> Result<String, super::local_validation::LocalValidationError> {
-    if let Some(platform_key) = super::extract_platform_key(request) {
+) -> Result<String, super::LocalValidationError> {
+    if let Some(platform_key) = super::super::extract_platform_key(request) {
         return Ok(platform_key);
     }
 
@@ -46,8 +46,5 @@ pub(super) fn extract_platform_key_or_error(
         );
     }
 
-    Err(super::local_validation::LocalValidationError::new(
-        401,
-        "missing api key",
-    ))
+    Err(super::LocalValidationError::new(401, "missing api key"))
 }
