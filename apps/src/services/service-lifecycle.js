@@ -9,7 +9,13 @@ export function createServiceLifecycle({
   refreshAll,
   ensureAutoRefreshTimer,
   stopAutoRefreshTimer,
+  onStartupState,
 }) {
+  function notifyStartupState(loading, message) {
+    if (typeof onStartupState !== "function") return;
+    onStartupState(loading, message);
+  }
+
   function updateServiceToggle() {
     if (!dom.serviceToggleBtn) return;
     if (state.serviceBusy) return;
@@ -51,7 +57,11 @@ export function createServiceLifecycle({
     syncServiceAddrFromInput();
   }
 
-  async function handleStartService() {
+  async function handleStartService(options = {}) {
+    const { fromBootstrap = false } = options;
+    if (fromBootstrap) {
+      notifyStartupState(true, "正在启动本地服务...");
+    }
     setServiceBusy(true, "start");
     const started = await startService(dom.serviceAddrInput.value, {
       skipInitialize: true,
@@ -61,24 +71,34 @@ export function createServiceLifecycle({
     if (!started) {
       setServiceBusy(false);
       updateServiceToggle();
-      return;
+      if (fromBootstrap) notifyStartupState(false);
+      return false;
     }
     const probeId = state.serviceProbeId + 1;
     state.serviceProbeId = probeId;
-    void waitForConnection({ retries: 12, delayMs: 400, silent: true }).then(
-      (ok) => {
-        if (state.serviceProbeId !== probeId) return;
-        setServiceBusy(false);
-        updateServiceToggle();
-        if (!ok) {
-          const reason = state.serviceLastError ? `：${state.serviceLastError}` : "";
-          setServiceHint(`连接失败${reason}，请检查端口或 service 状态`, true);
-          return;
-        }
-        void refreshAll();
-        ensureAutoRefreshTimer(state, refreshAll);
-      },
-    );
+    if (fromBootstrap) {
+      notifyStartupState(true, "正在等待服务响应...");
+    }
+    const ok = await waitForConnection({ retries: 12, delayMs: 400, silent: true });
+    if (state.serviceProbeId !== probeId) {
+      if (fromBootstrap) notifyStartupState(false);
+      return false;
+    }
+    setServiceBusy(false);
+    updateServiceToggle();
+    if (!ok) {
+      const reason = state.serviceLastError ? `：${state.serviceLastError}` : "";
+      setServiceHint(`连接失败${reason}，请检查端口或 service 状态`, true);
+      if (fromBootstrap) notifyStartupState(false);
+      return false;
+    }
+    if (fromBootstrap) {
+      notifyStartupState(true, "正在加载账号与用量数据...");
+    }
+    await refreshAll();
+    ensureAutoRefreshTimer(state, refreshAll);
+    if (fromBootstrap) notifyStartupState(false);
+    return true;
   }
 
   async function handleStopService() {
@@ -101,6 +121,7 @@ export function createServiceLifecycle({
 
   async function autoStartService() {
     if (!dom.serviceAddrInput) return;
+    notifyStartupState(true, "正在检查服务连接...");
     syncServiceAddrFromInput();
     const probeId = state.serviceProbeId + 1;
     state.serviceProbeId = probeId;
@@ -109,15 +130,20 @@ export function createServiceLifecycle({
       delayMs: 200,
       silent: true,
     });
-    if (state.serviceProbeId !== probeId) return;
+    if (state.serviceProbeId !== probeId) {
+      notifyStartupState(false);
+      return false;
+    }
     if (ok) {
       updateServiceToggle();
-      void refreshAll();
+      notifyStartupState(true, "正在加载账号与用量数据...");
+      await refreshAll();
       // 中文注释：探活成功后立即复用统一定时器入口，避免“已连通但未启动自动刷新”的状态分叉。
       ensureAutoRefreshTimer(state, refreshAll);
-      return;
+      notifyStartupState(false);
+      return true;
     }
-    await handleStartService();
+    return handleStartService({ fromBootstrap: true });
   }
 
   return {

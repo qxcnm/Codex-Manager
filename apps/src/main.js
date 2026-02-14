@@ -56,6 +56,15 @@ const { switchPage, updateRequestLogFilterButtons } = createNavigationHandlers({
   closeThemePanel,
 });
 
+function setStartupMask(active, message) {
+  if (!dom.startupMask) return;
+  dom.startupMask.classList.toggle("active", active);
+  dom.startupMask.setAttribute("aria-hidden", active ? "false" : "true");
+  if (dom.startupMaskText && message) {
+    dom.startupMaskText.textContent = message;
+  }
+}
+
 async function refreshAll() {
   const ok = await ensureConnected();
   serviceLifecycle.updateServiceToggle();
@@ -91,6 +100,7 @@ const serviceLifecycle = createServiceLifecycle({
   refreshAll,
   ensureAutoRefreshTimer,
   stopAutoRefreshTimer,
+  onStartupState: (loading, message) => setStartupMask(loading, message),
 });
 
 const loginFlow = createLoginFlow({
@@ -180,16 +190,19 @@ function bindEvents() {
 }
 
 function bootstrap() {
+  setStartupMask(true, "正在初始化界面...");
   setStatus("", false);
   setServiceHint("请输入端口并点击启动", false);
   renderThemeButtons();
   restoreTheme();
   serviceLifecycle.restoreServiceAddr();
   serviceLifecycle.updateServiceToggle();
-  void serviceLifecycle.autoStartService();
   bindEvents();
   renderAllViews(buildMainRenderActions());
   updateRequestLogFilterButtons();
+  void serviceLifecycle.autoStartService().finally(() => {
+    setStartupMask(false);
+  });
 }
 
 window.addEventListener("DOMContentLoaded", bootstrap);

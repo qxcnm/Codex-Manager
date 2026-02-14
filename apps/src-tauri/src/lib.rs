@@ -9,8 +9,10 @@ use tauri::Manager;
 use std::thread;
 
 #[tauri::command]
-fn service_initialize(addr: Option<String>) -> Result<serde_json::Value, String> {
-  let v = rpc_call("initialize", addr, None)?;
+async fn service_initialize(addr: Option<String>) -> Result<serde_json::Value, String> {
+  let v = tauri::async_runtime::spawn_blocking(move || rpc_call("initialize", addr, None))
+    .await
+    .map_err(|err| format!("initialize task failed: {err}"))??;
   // 连接探测必须确认对端确实是 gpttools-service，避免端口被其他服务占用时误判“已连接”。
   let server_name = v
     .get("result")

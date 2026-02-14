@@ -189,6 +189,54 @@
   background: #fff;
 }
 
+.startup-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg) 86%, rgba(255, 255, 255, 0.6));
+  backdrop-filter: blur(6px);
+}
+
+.startup-mask.active {
+  display: flex;
+}
+
+.startup-mask-card {
+  min-width: min(460px, calc(100vw - 32px));
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background: linear-gradient(170deg, #ffffff, #eef7ff);
+  box-shadow: var(--shadow);
+  padding: 18px 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.startup-spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--accent) 25%, #ffffff);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+
+.startup-mask-card strong {
+  font-size: 14px;
+  color: var(--ink-strong);
+}
+
+.startup-mask-card .hint {
+  font-size: 12px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
 @keyframes rise {
   from {
     opacity: 0;
