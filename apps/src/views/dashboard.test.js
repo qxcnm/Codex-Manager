@@ -5,7 +5,7 @@ import { buildUsageRows } from "./usage-table.js";
 
 test("buildUsageRows maps account usage into row data", () => {
   const accountList = [
-    { id: "acc-1", label: "main", workspaceName: "Workspace A" },
+    { id: "acc-1", label: "main" },
     { id: "acc-2", label: "secondary" },
   ];
   const usageList = [
@@ -21,7 +21,7 @@ test("buildUsageRows maps account usage into row data", () => {
   const rows = buildUsageRows(accountList, usageList);
   assert.equal(rows.length, 2);
   assert.equal(rows[0].accountLabel, "main");
-  assert.equal(rows[0].accountSub, "Workspace A");
+  assert.equal(rows[0].accountSub, "acc-1");
   assert.equal(rows[0].primaryRemain, 90);
   assert.equal(rows[0].secondaryRemain, 80);
   assert.equal(rows[0].primaryResetsAt, 111);
@@ -30,3 +30,4 @@ test("buildUsageRows maps account usage into row data", () => {
   assert.equal(rows[1].primaryRemain, null);
   assert.equal(rows[1].secondaryRemain, null);
 });
+

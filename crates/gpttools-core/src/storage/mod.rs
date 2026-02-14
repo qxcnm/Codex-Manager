@@ -12,9 +12,6 @@ pub struct Account {
     pub issuer: String,
     pub chatgpt_account_id: Option<String>,
     pub workspace_id: Option<String>,
-    pub workspace_name: Option<String>,
-    pub note: Option<String>,
-    pub tags: Option<String>,
     pub group_name: Option<String>,
     pub sort: i64,
     pub status: String,
@@ -168,21 +165,26 @@ impl Storage {
         self.apply_sql_migration(
             "012_request_logs_search_indexes",
             include_str!("../../migrations/012_request_logs_search_indexes.sql"),
+        )?;
+        self.apply_sql_migration(
+            "013_drop_accounts_note_tags",
+            include_str!("../../migrations/013_drop_accounts_note_tags.sql"),
+        )?;
+        self.apply_sql_migration(
+            "014_drop_accounts_workspace_name",
+            include_str!("../../migrations/014_drop_accounts_workspace_name.sql"),
         )
     }
 
     pub fn insert_account(&self, account: &Account) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO accounts (id, label, issuer, chatgpt_account_id, workspace_id, workspace_name, note, tags, group_name, sort, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT OR REPLACE INTO accounts (id, label, issuer, chatgpt_account_id, workspace_id, group_name, sort, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             (
                 &account.id,
                 &account.label,
                 &account.issuer,
                 &account.chatgpt_account_id,
                 &account.workspace_id,
-                &account.workspace_name,
-                &account.note,
-                &account.tags,
                 &account.group_name,
                 account.sort,
                 &account.status,
@@ -258,7 +260,7 @@ impl Storage {
 
     pub fn list_accounts(&self) -> Result<Vec<Account>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, label, issuer, chatgpt_account_id, workspace_id, workspace_name, note, tags, group_name, sort, status, created_at, updated_at FROM accounts ORDER BY sort ASC, updated_at DESC",
+            "SELECT id, label, issuer, chatgpt_account_id, workspace_id, group_name, sort, status, created_at, updated_at FROM accounts ORDER BY sort ASC, updated_at DESC",
         )?;
         let mut rows = stmt.query([])?;
         let mut out = Vec::new();
@@ -269,14 +271,11 @@ impl Storage {
                 issuer: row.get(2)?,
                 chatgpt_account_id: row.get(3)?,
                 workspace_id: row.get(4)?,
-                workspace_name: row.get(5)?,
-                note: row.get(6)?,
-                tags: row.get(7)?,
-                group_name: row.get(8)?,
-                sort: row.get(9)?,
-                status: row.get(10)?,
-                created_at: row.get(11)?,
-                updated_at: row.get(12)?,
+                group_name: row.get(5)?,
+                sort: row.get(6)?,
+                status: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
             });
         }
         Ok(out)
@@ -725,10 +724,7 @@ impl Storage {
 
     fn ensure_account_meta_columns(&self) -> Result<()> {
         self.ensure_column("accounts", "chatgpt_account_id", "TEXT")?;
-        self.ensure_column("accounts", "note", "TEXT")?;
-        self.ensure_column("accounts", "tags", "TEXT")?;
         self.ensure_column("accounts", "group_name", "TEXT")?;
-        self.ensure_column("accounts", "workspace_name", "TEXT")?;
         self.ensure_column("accounts", "sort", "INTEGER DEFAULT 0")?;
         self.ensure_column("login_sessions", "note", "TEXT")?;
         self.ensure_column("login_sessions", "tags", "TEXT")?;
@@ -881,15 +877,4 @@ pub fn now_ts() -> i64 {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
 }
-
-
-
-
-
-
-
-
-
-
-
 

@@ -130,9 +130,6 @@ export function renderAccounts({ onUpdateSort, onOpenUsage, onDelete }) {
     const cellAccount = document.createElement("td");
     const accountWrap = document.createElement("div");
     accountWrap.className = "cell-stack";
-    const workspaceLabel = account.workspaceName
-      ? ` · ${account.workspaceName}`
-      : "";
     const primaryRemain = remainingPercent(usage ? usage.usedPercent : null);
     const secondaryRemain = remainingPercent(
       usage ? usage.secondaryUsedPercent : null,
@@ -140,7 +137,7 @@ export function renderAccounts({ onUpdateSort, onOpenUsage, onDelete }) {
     const accountTitle = document.createElement("strong");
     accountTitle.textContent = account.label || "-";
     const accountMeta = document.createElement("small");
-    accountMeta.textContent = `${account.id || "-"}${workspaceLabel}`;
+    accountMeta.textContent = `${account.id || "-"}`;
     accountWrap.appendChild(accountTitle);
     accountWrap.appendChild(accountMeta);
     const mini = document.createElement("div");
@@ -243,3 +240,4 @@ export function openAccountModal() {
 export function closeAccountModal() {
   dom.modalAccount.classList.remove("active");
 }
+

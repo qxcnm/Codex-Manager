@@ -1,5 +1,5 @@
 use gpttools_core::auth::{
-    extract_chatgpt_account_id, extract_workspace_id, extract_workspace_name, parse_id_token_claims,
+    extract_chatgpt_account_id, extract_workspace_id, parse_id_token_claims,
     DEFAULT_CLIENT_ID, DEFAULT_ISSUER,
 };
 use gpttools_core::storage::{now_ts, Account, Token};
@@ -87,10 +87,6 @@ pub(crate) fn complete_login_with_redirect(
             .or_else(|| extract_workspace_id(&tokens.access_token))
             .or_else(|| chatgpt_account_id.clone()),
     );
-    let workspace_name = clean_value(
-        extract_workspace_name(&tokens.id_token)
-            .or_else(|| extract_workspace_name(&tokens.access_token)),
-    );
     let account_key = account_key(&account_id, session.tags.as_deref());
     let account = Account {
         id: account_key.clone(),
@@ -98,9 +94,6 @@ pub(crate) fn complete_login_with_redirect(
         issuer: issuer.clone(),
         chatgpt_account_id,
         workspace_id,
-        workspace_name,
-        note: session.note.clone(),
-        tags: session.tags.clone(),
         group_name: session.group_name.clone(),
         sort: 0,
         status: "active".to_string(),
@@ -192,3 +185,4 @@ pub(crate) fn obtain_api_key(issuer: &str, client_id: &str, id_token: &str) -> R
     let body: ExchangeResp = resp.json().map_err(|e| e.to_string())?;
     Ok(body.access_token)
 }
+

@@ -35,6 +35,29 @@ fn init_tracks_schema_migrations_and_is_idempotent() {
         )
         .expect("count 012 migration");
     assert_eq!(applied_012, 1);
+
+    let applied_013: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM schema_migrations WHERE version = '013_drop_accounts_note_tags'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count 013 migration");
+    assert_eq!(applied_013, 1);
+    let applied_014: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM schema_migrations WHERE version = '014_drop_accounts_workspace_name'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count 014 migration");
+    assert_eq!(applied_014, 1);
+
+    assert!(!storage.has_column("accounts", "note").expect("check accounts.note"));
+    assert!(!storage.has_column("accounts", "tags").expect("check accounts.tags"));
+    assert!(!storage.has_column("accounts", "workspace_name").expect("check accounts.workspace_name"));
 }
 
 #[test]
@@ -151,3 +174,4 @@ fn sql_migration_can_fallback_to_compat_when_schema_already_exists() {
         .expect("count 004 migration");
     assert_eq!(applied_004, 1);
 }
+

@@ -129,7 +129,7 @@ fn refresh_usage_for_token(
 
     let mut current = token.clone();
     let mut resolved_workspace_id = workspace_id.map(|v| v.to_string());
-    let (derived_chatgpt_id, derived_workspace_id, derived_workspace_name) =
+    let (derived_chatgpt_id, derived_workspace_id) =
         derive_account_meta(&current);
 
     if resolved_workspace_id.is_none() {
@@ -143,7 +143,6 @@ fn refresh_usage_for_token(
         &current.account_id,
         derived_chatgpt_id,
         derived_workspace_id,
-        derived_workspace_name,
     );
 
     let resolved_workspace_id = clean_header_value(resolved_workspace_id);
@@ -174,9 +173,4 @@ fn refresh_usage_for_token(
 #[cfg(test)]
 #[path = "../../tests/usage/usage_refresh_status_tests.rs"]
 mod status_tests;
-
-
-
-
-
 

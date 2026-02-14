@@ -1,5 +1,5 @@
 use gpttools_core::auth::{
-    extract_chatgpt_account_id, extract_workspace_id, extract_workspace_name, parse_id_token_claims,
+    extract_chatgpt_account_id, extract_workspace_id, parse_id_token_claims,
 };
 use gpttools_core::storage::{now_ts, Account, Storage, Token};
 use std::collections::HashMap;
@@ -26,10 +26,7 @@ fn resolve_workspace_header(
 }
 
 pub(crate) fn workspace_header_for_account(account: &Account) -> Option<String> {
-    resolve_workspace_header(
-        account.workspace_id.clone(),
-        account.chatgpt_account_id.clone(),
-    )
+    resolve_workspace_header(account.workspace_id.clone(), account.chatgpt_account_id.clone())
 }
 
 pub(crate) fn build_workspace_map(storage: &Storage) -> HashMap<String, Option<String>> {
@@ -44,23 +41,17 @@ pub(crate) fn build_workspace_map(storage: &Storage) -> HashMap<String, Option<S
 }
 
 pub(crate) fn resolve_workspace_id_for_account(storage: &Storage, account_id: &str) -> Option<String> {
-    storage
-        .list_accounts()
-        .ok()
-        .and_then(|accounts| {
-            accounts
-                .into_iter()
-                .find(|account| account.id == account_id)
-                .and_then(|account| workspace_header_for_account(&account))
-        })
+    storage.list_accounts().ok().and_then(|accounts| {
+        accounts
+            .into_iter()
+            .find(|account| account.id == account_id)
+            .and_then(|account| workspace_header_for_account(&account))
+    })
 }
 
-pub(crate) fn derive_account_meta(
-    token: &Token,
-) -> (Option<String>, Option<String>, Option<String>) {
+pub(crate) fn derive_account_meta(token: &Token) -> (Option<String>, Option<String>) {
     let mut chatgpt_account_id = None;
     let mut workspace_id = None;
-    let mut workspace_name = None;
 
     if let Ok(claims) = parse_id_token_claims(&token.id_token) {
         if let Some(auth) = claims.auth {
@@ -75,8 +66,7 @@ pub(crate) fn derive_account_meta(
 
     if workspace_id.is_none() {
         workspace_id = clean_header_value(
-            extract_workspace_id(&token.id_token)
-                .or_else(|| extract_workspace_id(&token.access_token)),
+            extract_workspace_id(&token.id_token).or_else(|| extract_workspace_id(&token.access_token)),
         );
     }
     if chatgpt_account_id.is_none() {
@@ -88,14 +78,8 @@ pub(crate) fn derive_account_meta(
     if workspace_id.is_none() {
         workspace_id = chatgpt_account_id.clone();
     }
-    if workspace_name.is_none() {
-        workspace_name = clean_header_value(
-            extract_workspace_name(&token.id_token)
-                .or_else(|| extract_workspace_name(&token.access_token)),
-        );
-    }
 
-    (chatgpt_account_id, workspace_id, workspace_name)
+    (chatgpt_account_id, workspace_id)
 }
 
 pub(crate) fn patch_account_meta(
@@ -103,7 +87,6 @@ pub(crate) fn patch_account_meta(
     account_id: &str,
     chatgpt_account_id: Option<String>,
     workspace_id: Option<String>,
-    workspace_name: Option<String>,
 ) {
     let Ok(accounts) = storage.list_accounts() else {
         return;
@@ -121,12 +104,6 @@ pub(crate) fn patch_account_meta(
     }
     if account.workspace_id.as_deref().unwrap_or("").trim().is_empty() && workspace_id.is_some() {
         account.workspace_id = workspace_id;
-        changed = true;
-    }
-    if account.workspace_name.as_deref().unwrap_or("").trim().is_empty()
-        && workspace_name.is_some()
-    {
-        account.workspace_name = workspace_name;
         changed = true;
     }
 
@@ -148,9 +125,6 @@ mod tests {
             issuer: "issuer".to_string(),
             chatgpt_account_id: chatgpt_account_id.map(|value| value.to_string()),
             workspace_id: workspace_id.map(|value| value.to_string()),
-            workspace_name: None,
-            note: None,
-            tags: None,
             group_name: None,
             sort: 0,
             status: "active".to_string(),
@@ -189,3 +163,4 @@ mod tests {
         assert_eq!(workspace_map.get("acc-2").cloned(), Some(Some("chatgpt-2".to_string())));
     }
 }
+

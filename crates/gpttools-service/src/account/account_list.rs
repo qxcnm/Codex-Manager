@@ -17,7 +17,6 @@ pub(crate) fn read_accounts() -> Vec<AccountSummary> {
         .map(|acc| AccountSummary {
             id: acc.id,
             label: acc.label,
-            workspace_name: acc.workspace_name,
             group_name: acc.group_name,
             sort: acc.sort,
         })

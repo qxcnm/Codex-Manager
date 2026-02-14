@@ -10,9 +10,6 @@ fn resolve_openai_bearer_token_uses_cached_storage_value() {
         issuer: "".to_string(),
         chatgpt_account_id: None,
         workspace_id: None,
-        workspace_name: None,
-        note: None,
-        tags: None,
         group_name: None,
         sort: 0,
         status: "active".to_string(),
@@ -65,3 +62,4 @@ fn drop_incoming_header_for_failover_strips_session_affinity() {
     assert!(should_drop_incoming_header_for_failover("x-codex-turn-state"));
     assert!(!should_drop_incoming_header_for_failover("Content-Type"));
 }
+

@@ -10,9 +10,6 @@ fn failover_on_missing_usage() {
         issuer: "issuer".to_string(),
         chatgpt_account_id: None,
         workspace_id: None,
-        workspace_name: None,
-        note: None,
-        tags: None,
         group_name: None,
         sort: 0,
         status: "active".to_string(),
@@ -109,3 +106,4 @@ fn models_path_does_not_try_openai_fallback() {
         content_type.as_ref()
     ));
 }
+

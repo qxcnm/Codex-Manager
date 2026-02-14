@@ -63,11 +63,10 @@ function renderCurrentAccount(accounts, usageMap) {
 
   const summary = document.createElement("div");
   summary.className = "cell";
-  const workspaceLabel = account.workspaceName ? ` · ${account.workspaceName}` : "";
   const summaryTitle = document.createElement("strong");
   summaryTitle.textContent = account.label || "-";
   const summaryMeta = document.createElement("small");
-  summaryMeta.textContent = `${account.id || "-"}${workspaceLabel}`;
+  summaryMeta.textContent = `${account.id || "-"}`;
   summary.appendChild(summaryTitle);
   summary.appendChild(summaryMeta);
   dom.currentAccountCard.appendChild(summary);
@@ -94,3 +93,4 @@ function renderCurrentAccount(accounts, usageMap) {
     : "暂无刷新记录";
   dom.currentAccountCard.appendChild(updated);
 }
+

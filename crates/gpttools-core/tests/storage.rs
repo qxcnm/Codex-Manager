@@ -11,9 +11,6 @@ fn storage_can_insert_account_and_token() {
         issuer: "https://auth.openai.com".to_string(),
         chatgpt_account_id: Some("acct_123".to_string()),
         workspace_id: Some("org_123".to_string()),
-        workspace_name: None,
-        note: None,
-        tags: None,
         group_name: None,
         sort: 0,
         status: "healthy".to_string(),
@@ -74,9 +71,6 @@ fn storage_can_update_account_status() {
         issuer: "https://auth.openai.com".to_string(),
         chatgpt_account_id: Some("acct_123".to_string()),
         workspace_id: Some("org_123".to_string()),
-        workspace_name: None,
-        note: None,
-        tags: None,
         group_name: None,
         sort: 0,
         status: "active".to_string(),
@@ -219,3 +213,4 @@ fn request_logs_support_prefixed_query_filters() {
     assert_eq!(fallback_filtered.len(), 1);
     assert_eq!(fallback_filtered[0].error.as_deref(), Some("upstream timeout"));
 }
+

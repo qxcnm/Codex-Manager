@@ -13,9 +13,6 @@ fn apply_status_marks_inactive_on_missing() {
         issuer: "issuer".to_string(),
         chatgpt_account_id: None,
         workspace_id: None,
-        workspace_name: None,
-        note: None,
-        tags: None,
         group_name: None,
         sort: 0,
         status: "active".to_string(),
@@ -57,9 +54,6 @@ fn mark_usage_unreachable_only_for_usage_status_error() {
         issuer: "issuer".to_string(),
         chatgpt_account_id: None,
         workspace_id: None,
-        workspace_name: None,
-        note: None,
-        tags: None,
         group_name: None,
         sort: 0,
         status: "active".to_string(),
@@ -97,3 +91,4 @@ fn refresh_retry_filter_matches_auth_failures() {
     assert!(should_retry_with_refresh("usage endpoint status 403"));
     assert!(!should_retry_with_refresh("usage endpoint status 429"));
 }
+

@@ -5,7 +5,7 @@ export function buildUsageRows(accountList, usageList) {
     const usage = usageList.find((item) => item.accountId === account.id);
     return {
       accountLabel: account.label,
-      accountSub: account.workspaceName ? account.workspaceName : account.id,
+      accountSub: account.id,
       primaryRemain: remainingPercent(usage ? usage.usedPercent : null),
       secondaryRemain: remainingPercent(usage ? usage.secondaryUsedPercent : null),
       primaryResetsAt: usage ? usage.resetsAt : null,
@@ -13,3 +13,4 @@ export function buildUsageRows(accountList, usageList) {
     };
   });
 }
+
