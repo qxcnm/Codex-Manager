@@ -172,6 +172,36 @@ fn start_mock_upstream_once(response_json: &str) -> (String, Receiver<CapturedUp
     (addr.to_string(), rx, join)
 }
 
+fn start_mock_upstream_sequence(
+    responses: Vec<(u16, String)>,
+) -> (String, Receiver<CapturedUpstreamRequest>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+    let addr = listener.local_addr().expect("mock upstream addr");
+    let (tx, rx) = mpsc::channel();
+
+    let join = thread::spawn(move || {
+        for (status, body) in responses {
+            let (mut stream, _) = listener.accept().expect("accept upstream");
+            let captured = read_http_request_once(&mut stream);
+            let _ = tx.send(captured);
+
+            let body_bytes = body.as_bytes().to_vec();
+            let header = format!(
+                "HTTP/1.1 {} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                status,
+                body_bytes.len()
+            );
+            stream.write_all(header.as_bytes()).expect("write upstream status");
+            stream
+                .write_all(&body_bytes)
+                .expect("write upstream response body");
+            let _ = stream.flush();
+        }
+    });
+
+    (addr.to_string(), rx, join)
+}
+
 struct TestServer {
     addr: String,
     join: Option<thread::JoinHandle<()>>,
@@ -467,4 +497,144 @@ fn gateway_claude_protocol_end_to_end_uses_codex_headers() {
     assert_eq!(upstream_payload["stream"], true);
     assert_eq!(upstream_payload["input"][0]["role"], "user");
     assert_eq!(upstream_payload["input"][0]["content"][0]["text"], "你好");
+}
+
+#[test]
+fn gateway_request_log_keeps_only_final_result_for_multi_attempt_flow() {
+    let _lock = ENV_LOCK.lock().expect("lock env");
+    let mut dir = std::env::temp_dir();
+    dir.push(format!(
+        "gpttools-gateway-final-log-{}",
+        std::process::id()
+    ));
+    let _ = fs::create_dir_all(&dir);
+    let db_path: PathBuf = dir.join("gpttools.db");
+    let trace_log_path: PathBuf = dir.join("gateway-trace.log");
+    let _ = fs::remove_file(&trace_log_path);
+
+    let _db_guard = EnvGuard::set("GPTTOOLS_DB_PATH", db_path.to_string_lossy().as_ref());
+
+    let first_response = serde_json::json!({
+        "error": {
+            "message": "not found for this account",
+            "type": "invalid_request_error"
+        }
+    });
+    let second_response = serde_json::json!({
+        "id": "resp_final_ok",
+        "model": "gpt-5.3-codex",
+        "output": [{
+            "type": "message",
+            "role": "assistant",
+            "content": [{ "type": "output_text", "text": "ok" }]
+        }],
+        "usage": { "input_tokens": 8, "output_tokens": 4 }
+    });
+    let (upstream_addr, upstream_rx, upstream_join) = start_mock_upstream_sequence(vec![
+        (
+            404,
+            serde_json::to_string(&first_response).expect("serialize first response"),
+        ),
+        (
+            200,
+            serde_json::to_string(&second_response).expect("serialize second response"),
+        ),
+    ]);
+    let upstream_base = format!("http://{upstream_addr}/backend-api/codex");
+    let _upstream_guard = EnvGuard::set("GPTTOOLS_UPSTREAM_BASE_URL", &upstream_base);
+
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init db");
+    let now = now_ts();
+
+    for index in 1..=2 {
+        storage
+            .insert_account(&Account {
+                id: format!("acc_final_{index}"),
+                label: format!("final-{index}"),
+                issuer: "https://auth.openai.com".to_string(),
+                chatgpt_account_id: Some(format!("chatgpt_acc_final_{index}")),
+                workspace_id: None,
+                group_name: None,
+                sort: index,
+                status: "active".to_string(),
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("insert account");
+        storage
+            .insert_token(&Token {
+                account_id: format!("acc_final_{index}"),
+                id_token: String::new(),
+                access_token: format!("access_token_{index}"),
+                refresh_token: String::new(),
+                api_key_access_token: Some(format!("api_access_token_{index}")),
+                last_refresh: now,
+            })
+            .expect("insert token");
+    }
+
+    let platform_key = "pk_final_result_only";
+    storage
+        .insert_api_key(&ApiKey {
+            id: "gk_final_result_only".to_string(),
+            name: Some("final-result-only".to_string()),
+            model_slug: Some("gpt-5.3-codex".to_string()),
+            reasoning_effort: Some("high".to_string()),
+            client_type: "codex".to_string(),
+            protocol_type: "anthropic_native".to_string(),
+            auth_scheme: "x_api_key".to_string(),
+            upstream_base_url: None,
+            static_headers_json: None,
+            key_hash: hash_platform_key_for_test(platform_key),
+            status: "active".to_string(),
+            created_at: now,
+            last_used_at: None,
+        })
+        .expect("insert api key");
+
+    let server = gpttools_service::start_one_shot_server().expect("start server");
+    let body = serde_json::json!({
+        "model": "gpt-5.3-codex",
+        "messages": [{ "role": "user", "content": "hello" }],
+        "stream": false
+    });
+    let body = serde_json::to_string(&body).expect("serialize request");
+    let (status, response_body) = post_http_raw(
+        &server.addr,
+        "/v1/messages",
+        &body,
+        &[
+            ("Content-Type", "application/json"),
+            ("x-api-key", platform_key),
+            ("anthropic-version", "2023-06-01"),
+            ("x-stainless-lang", "js"),
+        ],
+    );
+    server.join();
+    assert_eq!(status, 200, "gateway response: {response_body}");
+
+    let _ = upstream_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("receive first upstream request");
+    let _ = upstream_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("receive second upstream request");
+    upstream_join.join().expect("join upstream");
+
+    let logs = storage.list_request_logs(Some("key:gk_final_result_only"), 20).expect("list logs");
+    let final_logs = logs
+        .iter()
+        .filter(|item| {
+            item.request_path == "/v1/responses"
+                && item.method == "POST"
+                && item.key_id.as_deref() == Some("gk_final_result_only")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(final_logs.len(), 1, "logs: {final_logs:#?}");
+    assert_eq!(final_logs[0].status_code, Some(200));
+
+    let trace_text = fs::read_to_string(&trace_log_path).expect("read trace log");
+    assert!(trace_text.contains("event=ATTEMPT_RESULT"));
+    assert!(trace_text.contains("event=REQUEST_FINAL"));
 }

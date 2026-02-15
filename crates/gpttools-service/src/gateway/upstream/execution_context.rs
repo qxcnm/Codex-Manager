@@ -1,6 +1,7 @@
 use gpttools_core::storage::Storage;
 
 pub(super) struct GatewayUpstreamExecutionContext<'a> {
+    trace_id: &'a str,
     storage: &'a Storage,
     key_id: &'a str,
     path: &'a str,
@@ -14,6 +15,7 @@ pub(super) struct GatewayUpstreamExecutionContext<'a> {
 impl<'a> GatewayUpstreamExecutionContext<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
+        trace_id: &'a str,
         storage: &'a Storage,
         key_id: &'a str,
         path: &'a str,
@@ -24,6 +26,7 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
         account_max_inflight: usize,
     ) -> Self {
         Self {
+            trace_id,
             storage,
             key_id,
             path,
@@ -39,8 +42,12 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
         idx + 1 < self.candidate_count
     }
 
-    pub(super) fn should_skip_candidate(&self, account_id: &str, idx: usize) -> bool {
-        super::candidates::should_skip_candidate_for_proxy(
+    pub(super) fn should_skip_candidate(
+        &self,
+        account_id: &str,
+        idx: usize,
+    ) -> Option<super::candidates::CandidateSkipReason> {
+        super::candidates::candidate_skip_reason_for_proxy(
             account_id,
             idx,
             self.candidate_count,
@@ -48,11 +55,63 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
         )
     }
 
-    pub(super) fn log_result(
+    pub(super) fn log_candidate_start(
         &self,
+        account_id: &str,
+        idx: usize,
+        strip_session_affinity: bool,
+    ) {
+        super::super::trace_log::log_candidate_start(
+            self.trace_id,
+            idx,
+            self.candidate_count,
+            account_id,
+            strip_session_affinity,
+        );
+    }
+
+    pub(super) fn log_candidate_skip(
+        &self,
+        account_id: &str,
+        idx: usize,
+        reason: super::candidates::CandidateSkipReason,
+    ) {
+        let reason_text = match reason {
+            super::candidates::CandidateSkipReason::Cooldown => "cooldown",
+            super::candidates::CandidateSkipReason::Inflight => "inflight",
+        };
+        super::super::trace_log::log_candidate_skip(
+            self.trace_id,
+            idx,
+            self.candidate_count,
+            account_id,
+            reason_text,
+        );
+    }
+
+    pub(super) fn log_attempt_result(
+        &self,
+        account_id: &str,
         upstream_url: Option<&str>,
         status_code: u16,
         error: Option<&str>,
+    ) {
+        super::super::trace_log::log_attempt_result(
+            self.trace_id,
+            account_id,
+            upstream_url,
+            status_code,
+            error,
+        );
+    }
+
+    pub(super) fn log_final_result(
+        &self,
+        final_account_id: Option<&str>,
+        upstream_url: Option<&str>,
+        status_code: u16,
+        error: Option<&str>,
+        elapsed_ms: u128,
     ) {
         super::super::write_request_log(
             self.storage,
@@ -64,6 +123,23 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
             upstream_url,
             Some(status_code),
             error,
+        );
+        super::super::trace_log::log_request_final(
+            self.trace_id,
+            status_code,
+            final_account_id,
+            upstream_url,
+            error,
+            elapsed_ms,
+        );
+    }
+
+    pub(super) fn remember_success_account(&self, account_id: &str) {
+        super::super::remember_success_route_account(
+            self.key_id,
+            self.path,
+            self.model_for_log,
+            account_id,
         );
     }
 }

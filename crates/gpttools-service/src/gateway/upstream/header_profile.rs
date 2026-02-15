@@ -1,4 +1,5 @@
 use rand::RngCore;
+use sha2::{Digest, Sha256};
 use tiny_http::Request;
 
 pub(super) const CODEX_CLIENT_VERSION: &str = "0.101.0";
@@ -12,8 +13,10 @@ pub(crate) struct CodexUpstreamHeaderInput<'a> {
     pub(crate) account_id: Option<&'a str>,
     pub(crate) upstream_cookie: Option<&'a str>,
     pub(crate) incoming_session_id: Option<&'a str>,
+    pub(crate) fallback_session_id: Option<&'a str>,
     pub(crate) incoming_turn_state: Option<&'a str>,
     pub(crate) incoming_conversation_id: Option<&'a str>,
+    pub(crate) fallback_conversation_id: Option<&'a str>,
     pub(crate) strip_session_affinity: bool,
     pub(crate) is_stream: bool,
     pub(crate) has_body: bool,
@@ -26,6 +29,14 @@ pub(crate) fn find_incoming_header<'a>(request: &'a Request, name: &str) -> Opti
         .find(|header| header.field.as_str().as_str().eq_ignore_ascii_case(name))
         .map(|header| header.value.as_str().trim())
         .filter(|value| !value.is_empty())
+}
+
+pub(crate) fn derive_sticky_session_id(request: &Request) -> Option<String> {
+    derive_sticky_id_from_request(request, "session")
+}
+
+pub(crate) fn derive_sticky_conversation_id(request: &Request) -> Option<String> {
+    derive_sticky_id_from_request(request, "conversation")
 }
 
 pub(crate) fn build_codex_upstream_headers(
@@ -55,14 +66,21 @@ pub(crate) fn build_codex_upstream_headers(
     headers.push(("Originator".to_string(), CODEX_ORIGINATOR.to_string()));
     headers.push((
         "Session_id".to_string(),
-        resolve_session_id(input.incoming_session_id, input.strip_session_affinity),
+        resolve_session_id(
+            input.incoming_session_id,
+            input.fallback_session_id,
+            input.strip_session_affinity,
+        ),
     ));
 
     if !input.strip_session_affinity {
         if let Some(turn_state) = input.incoming_turn_state {
             headers.push(("x-codex-turn-state".to_string(), turn_state.to_string()));
         }
-        if let Some(conversation_id) = input.incoming_conversation_id {
+        if let Some(conversation_id) = input
+            .incoming_conversation_id
+            .or(input.fallback_conversation_id)
+        {
             headers.push(("Conversation_id".to_string(), conversation_id.to_string()));
         }
     }
@@ -76,7 +94,11 @@ pub(crate) fn build_codex_upstream_headers(
     headers
 }
 
-fn resolve_session_id(incoming: Option<&str>, strip_session_affinity: bool) -> String {
+fn resolve_session_id(
+    incoming: Option<&str>,
+    fallback_session_id: Option<&str>,
+    strip_session_affinity: bool,
+) -> String {
     if strip_session_affinity {
         return random_session_id();
     }
@@ -86,7 +108,45 @@ fn resolve_session_id(incoming: Option<&str>, strip_session_affinity: bool) -> S
             return trimmed.to_string();
         }
     }
+    if let Some(value) = fallback_session_id {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
     random_session_id()
+}
+
+fn stable_session_id_from_material(value: &str) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3],
+        bytes[4], bytes[5],
+        bytes[6], bytes[7],
+        bytes[8], bytes[9],
+        bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+    )
+}
+
+fn derive_sticky_id_from_request(request: &Request, salt: &str) -> Option<String> {
+    let key_material = find_incoming_header(request, "x-api-key")
+        .or_else(|| {
+            find_incoming_header(request, "authorization").and_then(|value| {
+                let trimmed = value.trim();
+                let (scheme, token) = trimmed.split_once(' ')?;
+                if !scheme.eq_ignore_ascii_case("bearer") {
+                    return None;
+                }
+                let token = token.trim();
+                if token.is_empty() { None } else { Some(token) }
+            })
+        })?;
+    Some(stable_session_id_from_material(&format!("{salt}:{key_material}")))
 }
 
 fn random_session_id() -> String {

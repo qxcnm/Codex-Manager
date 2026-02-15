@@ -26,10 +26,32 @@ fn anthropic_messages_request_maps_to_responses() {
     let value: serde_json::Value = serde_json::from_slice(&adapted.body).expect("adapted json");
     assert_eq!(value["model"], "claude-sonnet-4");
     assert_eq!(value["instructions"], "你是一个助手");
+    assert_eq!(value["text"]["format"]["type"], "text");
     assert_eq!(value["input"][0]["role"], "user");
     assert_eq!(value["input"][0]["content"][0]["text"], "你好");
     assert!(value.get("max_output_tokens").is_none());
     assert_eq!(value["stream"], true);
+}
+
+#[test]
+fn anthropic_messages_request_sets_prompt_cache_key() {
+    let body = serde_json::json!({
+        "model": "gpt-5.3-codex",
+        "messages": [
+            { "role": "user", "content": "hello" }
+        ],
+        "metadata": {
+            "user_id": "usr_123"
+        }
+    });
+    let body = serde_json::to_vec(&body).expect("serialize request");
+
+    let adapted = adapt_request_for_protocol("anthropic_native", "/v1/messages", body)
+        .expect("adapt request");
+    let value: serde_json::Value = serde_json::from_slice(&adapted.body).expect("adapted json");
+    let key = value["prompt_cache_key"].as_str().unwrap_or_default();
+    assert_eq!(key.len(), 36);
+    assert!(key.contains('-'));
 }
 
 #[test]
@@ -262,6 +284,46 @@ fn anthropic_json_response_maps_openai_tool_calls() {
 }
 
 #[test]
+fn anthropic_json_response_maps_responses_function_call_input_field() {
+    let upstream = serde_json::json!({
+        "id": "resp_tool_input_1",
+        "model": "gpt-5.3-codex",
+        "status": "completed",
+        "output": [
+            {
+                "type": "function_call",
+                "call_id": "call_write_1",
+                "name": "Write",
+                "input": {
+                    "file_path": "new.txt",
+                    "content": "hello"
+                }
+            }
+        ],
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 8
+        }
+    });
+    let upstream = serde_json::to_vec(&upstream).expect("serialize upstream");
+    let (body, content_type) = adapt_upstream_response(
+        ResponseAdapter::AnthropicJson,
+        Some("application/json"),
+        &upstream,
+    )
+    .expect("adapt response");
+    assert_eq!(content_type, "application/json");
+
+    let value: serde_json::Value = serde_json::from_slice(&body).expect("anthropic response");
+    assert_eq!(value["stop_reason"], "tool_use");
+    assert_eq!(value["content"][0]["type"], "tool_use");
+    assert_eq!(value["content"][0]["id"], "call_write_1");
+    assert_eq!(value["content"][0]["name"], "Write");
+    assert_eq!(value["content"][0]["input"]["file_path"], "new.txt");
+    assert_eq!(value["content"][0]["input"]["content"], "hello");
+}
+
+#[test]
 fn anthropic_json_response_maps_openai_error_body() {
     let upstream = serde_json::json!({
         "error": {
@@ -372,5 +434,28 @@ fn anthropic_sse_response_maps_openai_tool_call_deltas() {
     let text = String::from_utf8(body).expect("utf8");
     assert!(text.contains("\"type\":\"tool_use\""));
     assert!(text.contains("\"name\":\"read_file\""));
+    assert!(text.contains("\"type\":\"input_json_delta\""));
+    assert!(text.contains("event: message_stop"));
+}
+
+#[test]
+fn anthropic_sse_response_uses_output_item_done_when_completed_output_empty() {
+    let upstream = concat!(
+        "data: {\"id\":\"resp_1\",\"model\":\"gpt-5.3-codex\",\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call_write_1\",\"name\":\"Write\",\"input\":{\"file_path\":\"new.txt\",\"content\":\"hello\"}}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-5.3-codex\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (body, content_type) = adapt_upstream_response(
+        ResponseAdapter::AnthropicSse,
+        Some("text/event-stream"),
+        upstream.as_bytes(),
+    )
+    .expect("adapt stream");
+    assert_eq!(content_type, "text/event-stream");
+    let text = String::from_utf8(body).expect("utf8");
+    assert!(text.contains("\"type\":\"tool_use\""));
+    assert!(text.contains("\"name\":\"Write\""));
+    assert!(text.contains("\"type\":\"input_json_delta\""));
+    assert!(text.contains("new.txt"));
     assert!(text.contains("event: message_stop"));
 }

@@ -1,5 +1,6 @@
 use reqwest::header::HeaderValue;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 pub(crate) fn extract_request_model(body: &[u8]) -> Option<String> {
     if body.is_empty() {
@@ -44,6 +45,60 @@ pub(crate) fn extract_request_stream(body: &[u8]) -> Option<bool> {
     }
     let value = serde_json::from_slice::<Value>(body).ok()?;
     value.get("stream").and_then(Value::as_bool)
+}
+
+pub(crate) fn summarize_request_shape(body: &[u8]) -> Option<String> {
+    if body.is_empty() {
+        return None;
+    }
+    let value = serde_json::from_slice::<Value>(body).ok()?;
+    let object = value.as_object()?;
+
+    let mut keys = object.keys().cloned().collect::<Vec<_>>();
+    keys.sort_unstable();
+    let keys_joined = if keys.is_empty() {
+        "-".to_string()
+    } else {
+        keys.join("+")
+    };
+
+    let input_count = object
+        .get("input")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let messages_count = object
+        .get("messages")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let tools_count = object
+        .get("tools")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let stream_flag = match object.get("stream").and_then(Value::as_bool) {
+        Some(true) => "1",
+        Some(false) => "0",
+        None => "-",
+    };
+    let has_reasoning = if object.get("reasoning").is_some() { 1 } else { 0 };
+    let has_instructions = if object
+        .get("instructions")
+        .and_then(Value::as_str)
+        .is_some_and(|text| !text.trim().is_empty())
+    {
+        1
+    } else {
+        0
+    };
+
+    let shape = format!(
+        "k={keys_joined};i={input_count};m={messages_count};t={tools_count};s={stream_flag};r={has_reasoning};ins={has_instructions}"
+    );
+    let digest = Sha256::digest(shape.as_bytes());
+    let fingerprint = digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Some(format!("fp={fingerprint};{shape}"))
 }
 
 #[cfg(test)]

@@ -11,7 +11,7 @@ pub(super) fn write_request_log(
     status_code: Option<u16>,
     error: Option<&str>,
 ) {
-    // 记录每次网关转发结果，便于在 UI 里按模型/错误检索问题。
+    // 记录请求最终结果（而非内部重试明细），保证 UI 一次请求只展示一条记录。
     let _ = storage.insert_request_log(&RequestLog {
         key_id: key_id.map(|v| v.to_string()),
         request_path: request_path.to_string(),

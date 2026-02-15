@@ -14,8 +14,10 @@ fn codex_header_profile_sets_required_headers_for_stream() {
         account_id: Some("acc-1"),
         upstream_cookie: Some("cf_clearance=test"),
         incoming_session_id: None,
+        fallback_session_id: None,
         incoming_turn_state: Some("turn-state"),
         incoming_conversation_id: Some("conversation"),
+        fallback_conversation_id: None,
         strip_session_affinity: false,
         is_stream: true,
         has_body: true,
@@ -71,8 +73,10 @@ fn codex_header_profile_uses_json_accept_for_non_stream() {
         account_id: None,
         upstream_cookie: None,
         incoming_session_id: None,
+        fallback_session_id: None,
         incoming_turn_state: None,
         incoming_conversation_id: None,
+        fallback_conversation_id: None,
         strip_session_affinity: false,
         is_stream: false,
         has_body: false,
@@ -92,8 +96,10 @@ fn codex_header_profile_regenerates_session_on_failover() {
         account_id: None,
         upstream_cookie: None,
         incoming_session_id: Some("sticky-session"),
+        fallback_session_id: Some("fallback-session"),
         incoming_turn_state: Some("sticky-turn"),
         incoming_conversation_id: Some("sticky-conversation"),
+        fallback_conversation_id: Some("fallback-conversation"),
         strip_session_affinity: true,
         is_stream: true,
         has_body: true,
@@ -107,3 +113,46 @@ fn codex_header_profile_regenerates_session_on_failover() {
     assert!(find_header(&headers, "Conversation_id").is_none());
 }
 
+#[test]
+fn codex_header_profile_uses_fallback_session_when_incoming_missing() {
+    let headers = build_codex_upstream_headers(CodexUpstreamHeaderInput {
+        auth_token: "token-fallback",
+        account_id: None,
+        upstream_cookie: None,
+        incoming_session_id: None,
+        fallback_session_id: Some("fallback-session"),
+        incoming_turn_state: None,
+        incoming_conversation_id: None,
+        fallback_conversation_id: None,
+        strip_session_affinity: false,
+        is_stream: true,
+        has_body: true,
+    });
+
+    assert_eq!(
+        find_header(&headers, "Session_id").as_deref(),
+        Some("fallback-session")
+    );
+}
+
+#[test]
+fn codex_header_profile_uses_fallback_conversation_when_incoming_missing() {
+    let headers = build_codex_upstream_headers(CodexUpstreamHeaderInput {
+        auth_token: "token-fallback-conv",
+        account_id: None,
+        upstream_cookie: None,
+        incoming_session_id: None,
+        fallback_session_id: Some("fallback-session"),
+        incoming_turn_state: None,
+        incoming_conversation_id: None,
+        fallback_conversation_id: Some("fallback-conversation"),
+        strip_session_affinity: false,
+        is_stream: true,
+        has_body: true,
+    });
+
+    assert_eq!(
+        find_header(&headers, "Conversation_id").as_deref(),
+        Some("fallback-conversation")
+    );
+}

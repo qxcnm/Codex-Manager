@@ -16,10 +16,15 @@ mod token_exchange;
 mod openai_fallback;
 mod request_log;
 mod request_entry;
+mod trace_log;
+mod route_hint;
+mod local_count_tokens;
+mod route_quality;
 
 pub(super) use request_helpers::{
     extract_request_model, extract_request_reasoning_effort, extract_request_stream,
     is_html_content_type, is_upstream_challenge_response, normalize_models_path,
+    summarize_request_shape,
 };
 #[cfg(test)]
 use request_helpers::{should_drop_incoming_header, should_drop_incoming_header_for_failover};
@@ -55,6 +60,9 @@ use token_exchange::resolve_openai_bearer_token;
 use openai_fallback::try_openai_fallback;
 use request_log::write_request_log;
 pub(crate) use request_entry::handle_gateway_request;
+use route_hint::{preferred_route_account, remember_success_route_account};
+use local_count_tokens::maybe_respond_local_count_tokens;
+use route_quality::{record_route_quality, route_quality_penalty};
 use runtime_config::{
     account_max_inflight_limit, upstream_client, DEFAULT_GATEWAY_DEBUG,
     DEFAULT_MODELS_CLIENT_VERSION,

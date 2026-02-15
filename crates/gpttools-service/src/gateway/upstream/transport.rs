@@ -1,6 +1,21 @@
 use gpttools_core::storage::Account;
 use tiny_http::Request;
 
+fn extract_prompt_cache_key(body: &[u8]) -> Option<String> {
+    if body.is_empty() || body.len() > 64 * 1024 {
+        return None;
+    }
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return None;
+    };
+    value
+        .get("prompt_cache_key")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
 pub(super) fn send_upstream_request(
     client: &reqwest::blocking::Client,
     method: &reqwest::Method,
@@ -14,6 +29,28 @@ pub(super) fn send_upstream_request(
     strip_session_affinity: bool,
 ) -> Result<reqwest::blocking::Response, reqwest::Error> {
     let mut builder = client.request(method.clone(), target_url);
+    let incoming_session_id = super::header_profile::find_incoming_header(request, "session_id");
+    let mut derived_session_id = if !strip_session_affinity && incoming_session_id.is_none() {
+        super::header_profile::derive_sticky_session_id(request)
+    } else {
+        None
+    };
+    let incoming_conversation_id =
+        super::header_profile::find_incoming_header(request, "conversation_id");
+    let mut derived_conversation_id = if !strip_session_affinity && incoming_conversation_id.is_none() {
+        super::header_profile::derive_sticky_conversation_id(request)
+    } else {
+        None
+    };
+
+    // 中文注释：参考 CLIProxyAPI 的 claude 兼容逻辑：当 prompt_cache_key 存在时，
+    // 需要将 Session_id/Conversation_id 与其对齐，否则更容易触发 upstream challenge。
+    if !strip_session_affinity && incoming_session_id.is_none() && incoming_conversation_id.is_none() {
+        if let Some(cache_key) = extract_prompt_cache_key(body) {
+            derived_session_id = Some(cache_key.clone());
+            derived_conversation_id = Some(cache_key);
+        }
+    }
     let account_id = account
         .chatgpt_account_id
         .as_deref()
@@ -22,9 +59,11 @@ pub(super) fn send_upstream_request(
         auth_token,
         account_id,
         upstream_cookie,
-        incoming_session_id: super::header_profile::find_incoming_header(request, "session_id"),
+        incoming_session_id,
+        fallback_session_id: derived_session_id.as_deref(),
         incoming_turn_state: super::header_profile::find_incoming_header(request, "x-codex-turn-state"),
-        incoming_conversation_id: super::header_profile::find_incoming_header(request, "conversation_id"),
+        incoming_conversation_id,
+        fallback_conversation_id: derived_conversation_id.as_deref(),
         strip_session_affinity,
         is_stream,
         has_body: !body.is_empty(),

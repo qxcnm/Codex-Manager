@@ -28,6 +28,7 @@ pub(super) fn process_upstream_post_retry_flow<F>(
     account: &Account,
     strip_session_affinity: bool,
     debug: bool,
+    disable_challenge_stateless_retry: bool,
     has_more_candidates: bool,
     mut upstream: reqwest::blocking::Response,
     mut log_gateway_result: F,
@@ -95,6 +96,7 @@ where
         strip_session_affinity,
         status,
         debug,
+        disable_challenge_stateless_retry,
     ) {
         StatelessRetryResult::NotTriggered => {}
         StatelessRetryResult::Upstream(resp) => {

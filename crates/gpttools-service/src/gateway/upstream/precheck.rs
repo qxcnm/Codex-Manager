@@ -13,6 +13,7 @@ pub(super) enum CandidatePrecheckResult {
 pub(super) fn prepare_candidates_for_proxy(
     request: Request,
     storage: &Storage,
+    trace_id: &str,
     key_id: &str,
     path: &str,
     request_method: &str,
@@ -34,8 +35,16 @@ pub(super) fn prepare_candidates_for_proxy(
                 Some(500),
                 Some(err_text.as_str()),
             );
-            let response = Response::from_string(err_text).with_status_code(500);
+            let response = Response::from_string(err_text.clone()).with_status_code(500);
             let _ = request.respond(response);
+            super::super::trace_log::log_request_final(
+                trace_id,
+                500,
+                None,
+                None,
+                Some(err_text.as_str()),
+                0,
+            );
             return CandidatePrecheckResult::Responded;
         }
     };
@@ -54,6 +63,14 @@ pub(super) fn prepare_candidates_for_proxy(
         );
         let response = Response::from_string("no available account").with_status_code(503);
         let _ = request.respond(response);
+        super::super::trace_log::log_request_final(
+            trace_id,
+            503,
+            None,
+            None,
+            Some("no available account"),
+            0,
+        );
         return CandidatePrecheckResult::Responded;
     }
 

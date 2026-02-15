@@ -1,9 +1,28 @@
 use serde_json::{json, Value};
+use rand::RngCore;
+use std::collections::HashMap;
 use std::collections::BTreeMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use crate::gateway::request_helpers::is_html_content_type;
 
 use crate::apikey_profile::PROTOCOL_ANTHROPIC_NATIVE;
+
+const DEFAULT_ANTHROPIC_MODEL: &str = "gpt-5.3-codex";
+const DEFAULT_ANTHROPIC_REASONING: &str = "high";
+const DEFAULT_ANTHROPIC_INSTRUCTIONS: &str =
+    "You are Codex, a coding assistant that responds clearly and safely.";
+const MAX_ANTHROPIC_TOOLS: usize = 16;
+
+const PROMPT_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+static PROMPT_CACHE: OnceLock<Mutex<HashMap<String, PromptCacheEntry>>> = OnceLock::new();
+
+#[derive(Clone)]
+struct PromptCacheEntry {
+    id: String,
+    expires_at: Instant,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ResponseAdapter {
@@ -99,34 +118,71 @@ fn convert_anthropic_messages_request(body: &[u8]) -> Result<(Vec<u8>, bool), St
 
     let (instructions, input_items) = convert_chat_messages_to_responses_input(&messages)?;
     let mut out = serde_json::Map::new();
-    if let Some(model) = obj.get("model").and_then(Value::as_str) {
-        out.insert("model".to_string(), Value::String(model.to_string()));
-    }
+    let upstream_model = obj
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let resolved_model = upstream_model
+        .as_deref()
+        .unwrap_or(DEFAULT_ANTHROPIC_MODEL)
+        .to_string();
+    out.insert("model".to_string(), Value::String(resolved_model));
+    let resolved_instructions = instructions
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_ANTHROPIC_INSTRUCTIONS);
     out.insert(
         "instructions".to_string(),
-        Value::String(instructions.unwrap_or_default()),
+        Value::String(resolved_instructions.to_string()),
+    );
+    out.insert(
+        "text".to_string(),
+        json!({
+            "format": {
+                "type": "text",
+            }
+        }),
+    );
+    let resolved_reasoning = obj
+        .get("reasoning")
+        .and_then(Value::as_object)
+        .and_then(|value| value.get("effort"))
+        .and_then(Value::as_str)
+        .and_then(crate::reasoning_effort::normalize_reasoning_effort)
+        .unwrap_or(DEFAULT_ANTHROPIC_REASONING)
+        .to_string();
+    out.insert(
+        "reasoning".to_string(),
+        json!({
+            "effort": resolved_reasoning,
+        }),
     );
     out.insert("input".to_string(), Value::Array(input_items));
-    if let Some(temperature) = obj.get("temperature").and_then(Value::as_f64) {
-        if let Some(number) = serde_json::Number::from_f64(temperature) {
-            out.insert("temperature".to_string(), Value::Number(number));
-        }
+
+    // 中文注释：参考 CLIProxyAPI 的行为：Claude 入口需要一个稳定的 prompt_cache_key，
+    // 并在上游请求头把 Session_id/Conversation_id 与之对齐，才能显著降低 challenge 命中率。
+    if let Some(prompt_cache_key) = resolve_prompt_cache_key(obj, out.get("model")) {
+        out.insert(
+            "prompt_cache_key".to_string(),
+            Value::String(prompt_cache_key),
+        );
     }
-    if let Some(top_p) = obj.get("top_p").and_then(Value::as_f64) {
-        if let Some(number) = serde_json::Number::from_f64(top_p) {
-            out.insert("top_p".to_string(), Value::Number(number));
-        }
-    }
-    if let Some(stop_sequences) = obj.get("stop_sequences") {
-        out.insert("stop".to_string(), stop_sequences.clone());
-    }
+    // 中文注释：上游 codex responses 对低体积请求携带采样参数时更容易触发 challenge，
+    // 这里对 anthropic 入口统一不透传 temperature/top_p，优先稳定性。
     if let Some(tools) = obj.get("tools").and_then(Value::as_array) {
         let mapped_tools = tools
             .iter()
             .filter_map(map_anthropic_tool_definition)
+            .take(MAX_ANTHROPIC_TOOLS)
             .collect::<Vec<_>>();
         if !mapped_tools.is_empty() {
             out.insert("tools".to_string(), Value::Array(mapped_tools));
+            if !obj.contains_key("tool_choice") {
+                out.insert("tool_choice".to_string(), Value::String("auto".to_string()));
+            }
         }
     }
     if let Some(tool_choice) = obj.get("tool_choice") {
@@ -136,7 +192,6 @@ fn convert_anthropic_messages_request(body: &[u8]) -> Result<(Vec<u8>, bool), St
             }
         }
     }
-
     let request_stream = obj.get("stream").and_then(Value::as_bool).unwrap_or(true);
     // 说明：即使 Claude 请求 stream=false，也统一以 stream=true 请求 upstream，
     // 再在网关侧将 SSE 聚合为 Anthropic JSON，降低 upstream challenge 命中率。
@@ -147,16 +202,71 @@ fn convert_anthropic_messages_request(body: &[u8]) -> Result<(Vec<u8>, bool), St
         "include".to_string(),
         Value::Array(vec![Value::String("reasoning.encrypted_content".to_string())]),
     );
-    out.insert(
-        "reasoning".to_string(),
-        json!({
-            "summary": "auto"
-        }),
-    );
 
     serde_json::to_vec(&Value::Object(out))
         .map(|bytes| (bytes, request_stream))
         .map_err(|err| format!("convert claude request failed: {err}"))
+}
+
+fn resolve_prompt_cache_key(source: &serde_json::Map<String, Value>, model: Option<&Value>) -> Option<String> {
+    let model = model.and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty())?;
+    let user_id = source
+        .get("metadata")
+        .and_then(Value::as_object)
+        .and_then(|meta| meta.get("user_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or("unknown");
+
+    let cache_key = format!("{model}:{user_id}");
+    Some(get_or_create_prompt_cache_id(&cache_key))
+}
+
+fn get_or_create_prompt_cache_id(key: &str) -> String {
+    let cache = PROMPT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let now = Instant::now();
+    let mut guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.retain(|_, entry| entry.expires_at > now);
+    if let Some(entry) = guard.get(key) {
+        return entry.id.clone();
+    }
+
+    let id = random_uuid_v4();
+    guard.insert(
+        key.to_string(),
+        PromptCacheEntry {
+            id: id.clone(),
+            expires_at: now + PROMPT_CACHE_TTL,
+        },
+    );
+    id
+}
+
+fn random_uuid_v4() -> String {
+    let mut bytes = [0u8; 16];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    )
 }
 
 fn append_assistant_messages(messages: &mut Vec<Value>, content: &Value) -> Result<(), String> {
@@ -869,17 +979,7 @@ fn build_anthropic_message_from_responses(value: &Value) -> Result<Value, String
                     else {
                         continue;
                     };
-                    let arguments_raw = item_obj
-                        .get("arguments")
-                        .map(|arguments| {
-                            if let Some(text) = arguments.as_str() {
-                                text.to_string()
-                            } else {
-                                serde_json::to_string(arguments).unwrap_or_else(|_| "{}".to_string())
-                            }
-                        })
-                        .unwrap_or_else(|| "{}".to_string());
-                    let input = parse_tool_arguments_as_object(&arguments_raw);
+                    let input = extract_function_call_input_object(item_obj);
                     content_blocks.push(json!({
                         "type": "tool_use",
                         "id": tool_use_id,
@@ -1044,6 +1144,7 @@ fn convert_anthropic_json_to_sse(body: &[u8]) -> Result<(Vec<u8>, &'static str),
                 content_block_index += 1;
             }
             "tool_use" => {
+                let tool_input = block_obj.get("input").cloned().unwrap_or_else(|| json!({}));
                 append_sse_event(
                     &mut out,
                     "content_block_start",
@@ -1054,10 +1155,24 @@ fn convert_anthropic_json_to_sse(body: &[u8]) -> Result<(Vec<u8>, &'static str),
                             "type": "tool_use",
                             "id": block_obj.get("id").cloned().unwrap_or_else(|| Value::String(format!("toolu_{}", content_block_index))),
                             "name": block_obj.get("name").cloned().unwrap_or_else(|| Value::String("tool".to_string())),
-                            "input": block_obj.get("input").cloned().unwrap_or_else(|| json!({}))
+                            "input": json!({})
                         }
                     }),
                 );
+                if let Some(partial_json) = to_tool_input_partial_json(&tool_input) {
+                    append_sse_event(
+                        &mut out,
+                        "content_block_delta",
+                        &json!({
+                            "type": "content_block_delta",
+                            "index": content_block_index,
+                            "delta": {
+                                "type": "input_json_delta",
+                                "partial_json": partial_json,
+                            }
+                        }),
+                    );
+                }
                 append_sse_event(
                     &mut out,
                     "content_block_stop",
@@ -1159,11 +1274,77 @@ fn convert_openai_sse_to_anthropic(body: &[u8]) -> Result<(Vec<u8>, &'static str
             continue;
         };
         if let Some(event_type) = value.get("type").and_then(Value::as_str) {
-            if event_type == "response.completed" {
-                if let Some(response) = value.get("response") {
-                    completed_response = Some(response.clone());
+            match event_type {
+                "response.output_text.delta" => {
+                    if let Some(fragment) = value.get("delta").and_then(Value::as_str) {
+                        content_text.push_str(fragment);
+                    }
+                    continue;
                 }
-                continue;
+                "response.output_item.done" => {
+                    let Some(item_obj) = value.get("item").and_then(Value::as_object) else {
+                        continue;
+                    };
+                    if item_obj
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .map_or(true, |kind| kind != "function_call")
+                    {
+                        continue;
+                    }
+                    let index = value
+                        .get("output_index")
+                        .or_else(|| item_obj.get("index"))
+                        .and_then(Value::as_u64)
+                        .map(|v| v as usize)
+                        .unwrap_or(tool_calls.len());
+                    let entry = tool_calls.entry(index).or_default();
+                    if let Some(id) = item_obj
+                        .get("call_id")
+                        .or_else(|| item_obj.get("id"))
+                        .and_then(Value::as_str)
+                    {
+                        entry.id = Some(id.to_string());
+                    }
+                    if let Some(name) = item_obj.get("name").and_then(Value::as_str) {
+                        entry.name = Some(name.to_string());
+                    }
+                    if let Some(arguments_raw) = extract_function_call_arguments_raw(item_obj) {
+                        entry.arguments = arguments_raw;
+                    }
+                    continue;
+                }
+                "response.completed" => {
+                    if let Some(response) = value.get("response") {
+                        completed_response = Some(response.clone());
+                        if response_id.is_none() {
+                            response_id = response
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .map(str::to_string);
+                        }
+                        if model.is_none() {
+                            model = response
+                                .get("model")
+                                .and_then(Value::as_str)
+                                .map(str::to_string);
+                        }
+                        if let Some(usage) = response.get("usage").and_then(Value::as_object) {
+                            input_tokens = usage
+                                .get("prompt_tokens")
+                                .and_then(Value::as_i64)
+                                .or_else(|| usage.get("input_tokens").and_then(Value::as_i64))
+                                .unwrap_or(input_tokens);
+                            output_tokens = usage
+                                .get("completion_tokens")
+                                .and_then(Value::as_i64)
+                                .or_else(|| usage.get("output_tokens").and_then(Value::as_i64))
+                                .unwrap_or(output_tokens);
+                        }
+                    }
+                    continue;
+                }
+                _ => {}
             }
         }
 
@@ -1237,10 +1418,20 @@ fn convert_openai_sse_to_anthropic(body: &[u8]) -> Result<(Vec<u8>, &'static str
         }
     }
     if let Some(response) = completed_response {
+        let completed_has_effective_output = response
+            .get("output_text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.trim().is_empty())
+            || response
+                .get("output")
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty());
         let response_bytes = serde_json::to_vec(&response)
             .map_err(|err| format!("serialize completed response failed: {err}"))?;
         let (anthropic_json, _) = convert_openai_json_to_anthropic(&response_bytes)?;
-        return convert_anthropic_json_to_sse(&anthropic_json);
+        if completed_has_effective_output || (content_text.is_empty() && tool_calls.is_empty()) {
+            return convert_anthropic_json_to_sse(&anthropic_json);
+        }
     }
 
     let mapped_stop_reason = if tool_calls.is_empty() {
@@ -1330,10 +1521,24 @@ fn convert_openai_sse_to_anthropic(body: &[u8]) -> Result<(Vec<u8>, &'static str
                     "type": "tool_use",
                     "id": tool_use_id,
                     "name": tool_name,
-                    "input": input,
+                    "input": json!({}),
                 }
             }),
         );
+        if let Some(partial_json) = to_tool_input_partial_json(&input) {
+            append_sse_event(
+                &mut out,
+                "content_block_delta",
+                &json!({
+                    "type": "content_block_delta",
+                    "index": content_block_index,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": partial_json,
+                    }
+                }),
+            );
+        }
         append_sse_event(
             &mut out,
             "content_block_stop",
@@ -1450,22 +1655,45 @@ fn convert_anthropic_sse_to_json(body: &[u8]) -> Result<(Vec<u8>, &'static str),
                     .and_then(Value::as_u64)
                     .map(|v| v as usize)
                     .unwrap_or(0);
-                let fragment = value
+                let delta_type = value
                     .get("delta")
-                    .and_then(|delta| delta.get("text"))
+                    .and_then(|delta| delta.get("type"))
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                let entry = content_blocks.entry(index).or_insert_with(|| {
-                    json!({
-                        "type": "text",
-                        "text": "",
-                    })
-                });
-                if let Some(existing) = entry.get("text").and_then(Value::as_str) {
-                    let mut merged = existing.to_string();
-                    merged.push_str(fragment);
+                if delta_type == "input_json_delta" {
+                    let partial_json = value
+                        .get("delta")
+                        .and_then(|delta| delta.get("partial_json"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let input_value = parse_tool_arguments_as_object(partial_json);
+                    let entry = content_blocks.entry(index).or_insert_with(|| {
+                        json!({
+                            "type": "tool_use",
+                            "input": {},
+                        })
+                    });
                     if let Some(obj) = entry.as_object_mut() {
-                        obj.insert("text".to_string(), Value::String(merged));
+                        obj.insert("input".to_string(), input_value);
+                    }
+                } else {
+                    let fragment = value
+                        .get("delta")
+                        .and_then(|delta| delta.get("text"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let entry = content_blocks.entry(index).or_insert_with(|| {
+                        json!({
+                            "type": "text",
+                            "text": "",
+                        })
+                    });
+                    if let Some(existing) = entry.get("text").and_then(Value::as_str) {
+                        let mut merged = existing.to_string();
+                        merged.push_str(fragment);
+                        if let Some(obj) = entry.as_object_mut() {
+                            obj.insert("text".to_string(), Value::String(merged));
+                        }
                     }
                 }
             }
@@ -1531,9 +1759,59 @@ fn parse_tool_arguments_as_object(raw: &str) -> Value {
     let parsed = serde_json::from_str::<Value>(trimmed).ok();
     match parsed {
         Some(Value::Object(obj)) => Value::Object(obj),
+        Some(Value::String(inner)) => {
+            let nested = serde_json::from_str::<Value>(inner.trim()).ok();
+            if let Some(Value::Object(obj)) = nested {
+                Value::Object(obj)
+            } else {
+                json!({ "value": inner })
+            }
+        }
         Some(other) => json!({ "value": other }),
         None => json!({}),
     }
+}
+
+fn to_tool_input_partial_json(value: &Value) -> Option<String> {
+    let serialized = serde_json::to_string(value).ok()?;
+    let trimmed = serialized.trim();
+    if trimmed.is_empty() || trimmed == "{}" {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn extract_function_call_input_object(item_obj: &serde_json::Map<String, Value>) -> Value {
+    let Some(arguments_raw) = extract_function_call_arguments_raw(item_obj) else {
+        return json!({});
+    };
+    parse_tool_arguments_as_object(&arguments_raw)
+}
+
+fn extract_function_call_arguments_raw(item_obj: &serde_json::Map<String, Value>) -> Option<String> {
+    const ARGUMENT_KEYS: [&str; 5] = ["arguments", "input", "arguments_json", "parsed_arguments", "args"];
+    for key in ARGUMENT_KEYS {
+        let Some(value) = item_obj.get(key) else {
+            continue;
+        };
+        if value.is_null() {
+            continue;
+        }
+        if let Some(text) = value.as_str() {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+            continue;
+        }
+        if let Ok(serialized) = serde_json::to_string(value) {
+            let trimmed = serialized.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn append_sse_event(buffer: &mut String, event_name: &str, payload: &Value) {

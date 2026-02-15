@@ -30,6 +30,7 @@ pub(super) fn process_candidate_upstream_flow<F>(
     strip_session_affinity: bool,
     debug: bool,
     allow_openai_fallback: bool,
+    disable_challenge_stateless_retry: bool,
     has_more_candidates: bool,
     mut log_gateway_result: F,
 ) -> CandidateUpstreamDecision
@@ -127,6 +128,7 @@ where
         account,
         strip_session_affinity,
         debug,
+        disable_challenge_stateless_retry,
         has_more_candidates,
         upstream,
         &mut log_gateway_result,

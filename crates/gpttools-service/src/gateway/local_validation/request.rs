@@ -2,14 +2,13 @@ use gpttools_core::storage::{ApiKey, Storage};
 use reqwest::Method;
 use tiny_http::Request;
 
-use crate::apikey_profile::PROTOCOL_ANTHROPIC_NATIVE;
-
 use super::{LocalValidationError, LocalValidationResult};
 
-const DEFAULT_ANTHROPIC_MODEL: &str = "gpt-5.3-codex";
-const DEFAULT_ANTHROPIC_REASONING: &str = "high";
-
 fn resolve_effective_request_overrides(api_key: &ApiKey) -> (Option<String>, Option<String>) {
+    if api_key.protocol_type == crate::apikey_profile::PROTOCOL_ANTHROPIC_NATIVE {
+        return (None, None);
+    }
+
     let normalized_model = api_key
         .model_slug
         .as_deref()
@@ -22,18 +21,12 @@ fn resolve_effective_request_overrides(api_key: &ApiKey) -> (Option<String>, Opt
         .and_then(crate::reasoning_effort::normalize_reasoning_effort)
         .map(str::to_string);
 
-    if api_key.protocol_type == PROTOCOL_ANTHROPIC_NATIVE {
-        return (
-            normalized_model.or_else(|| Some(DEFAULT_ANTHROPIC_MODEL.to_string())),
-            normalized_reasoning.or_else(|| Some(DEFAULT_ANTHROPIC_REASONING.to_string())),
-        );
-    }
-
     (normalized_model, normalized_reasoning)
 }
 
 pub(super) fn build_local_validation_result(
     request: &Request,
+    trace_id: String,
     storage: Storage,
     mut body: Vec<u8>,
     api_key: ApiKey,
@@ -66,10 +59,12 @@ pub(super) fn build_local_validation_result(
     let is_stream = super::super::extract_request_stream(&body).unwrap_or(false);
 
     Ok(LocalValidationResult {
+        trace_id,
         storage,
         path,
         body,
         is_stream,
+        protocol_type: api_key.protocol_type,
         response_adapter: adapted.response_adapter,
         request_method,
         key_id: api_key.id,
@@ -82,6 +77,7 @@ pub(super) fn build_local_validation_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::apikey_profile::PROTOCOL_ANTHROPIC_NATIVE;
 
     fn sample_api_key(protocol_type: &str, model_slug: Option<&str>, reasoning: Option<&str>) -> ApiKey {
         ApiKey {
@@ -102,19 +98,19 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_key_uses_default_model_and_reasoning() {
+    fn anthropic_key_does_not_apply_key_level_overrides() {
         let api_key = sample_api_key(PROTOCOL_ANTHROPIC_NATIVE, None, None);
         let (model, reasoning) = resolve_effective_request_overrides(&api_key);
-        assert_eq!(model.as_deref(), Some(DEFAULT_ANTHROPIC_MODEL));
-        assert_eq!(reasoning.as_deref(), Some(DEFAULT_ANTHROPIC_REASONING));
+        assert_eq!(model, None);
+        assert_eq!(reasoning, None);
     }
 
     #[test]
-    fn anthropic_key_keeps_custom_model_and_normalized_reasoning() {
+    fn anthropic_key_ignores_custom_model_and_reasoning() {
         let api_key = sample_api_key(PROTOCOL_ANTHROPIC_NATIVE, Some("gpt-5.3-codex"), Some("extra_high"));
         let (model, reasoning) = resolve_effective_request_overrides(&api_key);
-        assert_eq!(model.as_deref(), Some("gpt-5.3-codex"));
-        assert_eq!(reasoning.as_deref(), Some("xhigh"));
+        assert_eq!(model, None);
+        assert_eq!(reasoning, None);
     }
 
     #[test]

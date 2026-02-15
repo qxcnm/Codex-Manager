@@ -7,10 +7,12 @@ mod io;
 mod request;
 
 pub(super) struct LocalValidationResult {
+    pub(super) trace_id: String,
     pub(super) storage: Storage,
     pub(super) path: String,
     pub(super) body: Vec<u8>,
     pub(super) is_stream: bool,
+    pub(super) protocol_type: String,
     pub(super) response_adapter: super::ResponseAdapter,
     pub(super) request_method: String,
     pub(super) key_id: String,
@@ -35,6 +37,7 @@ impl LocalValidationError {
 
 pub(super) fn prepare_local_request(
     request: &mut Request,
+    trace_id: String,
     debug: bool,
 ) -> Result<LocalValidationResult, LocalValidationError> {
     let body = io::read_request_body(request);
@@ -43,5 +46,5 @@ pub(super) fn prepare_local_request(
     let storage = auth::open_storage_or_error()?;
     let api_key = auth::load_active_api_key(&storage, &platform_key, request.url(), debug)?;
 
-    request::build_local_validation_result(request, storage, body, api_key)
+    request::build_local_validation_result(request, trace_id, storage, body, api_key)
 }
