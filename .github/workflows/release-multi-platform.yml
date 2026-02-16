@@ -12,12 +12,67 @@ on:
         required: false
         default: "main"
         type: string
+      run_verify:
+        description: "Run quality gate before building artifacts"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
 
 jobs:
+  verify:
+    if: ${{ github.event.inputs.run_verify != 'false' }}
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || 'main' }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: apps/pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install frontend dependencies
+        working-directory: apps
+        run: pnpm install --frozen-lockfile
+
+      - name: Rust tests
+        run: cargo test --workspace
+
+      - name: Frontend unit tests
+        working-directory: apps
+        run: pnpm run test
+
+      - name: Frontend structure tests
+        working-directory: apps
+        run: pnpm run test:ui
+
+      - name: Frontend build
+        working-directory: apps
+        run: pnpm run build
+
   build:
+    needs: verify
+    if: ${{ always() && (needs.verify.result == 'success' || needs.verify.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -43,7 +98,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+          ref: ${{ github.event.inputs.ref || 'main' }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -146,24 +201,44 @@ jobs:
         id: meta
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
-            REF="${{ inputs.ref }}"
-          else
-            TAG="${{ github.ref_name }}"
-            REF="${{ github.sha }}"
+          TAG="${{ github.event.inputs.tag }}"
+          REF="${{ github.event.inputs.ref || 'main' }}"
+
+          if [[ -z "$TAG" ]]; then
+            echo "release tag is required"
+            exit 1
           fi
           if [[ "$TAG" != v* ]]; then
             TAG="v$TAG"
           fi
+
+          TARGET_SHA="$(git rev-parse --verify "${REF}^{commit}")"
+          if [[ -z "$TARGET_SHA" ]]; then
+            echo "failed to resolve ref to commit: $REF"
+            exit 1
+          fi
+
           if [[ "$TAG" == *-* ]]; then
             PRERELEASE="true"
           else
             PRERELEASE="false"
           fi
+
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "target_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+      - name: Create release metadata file
+        shell: bash
+        run: |
+          cat > release-assets/RELEASE-META.txt <<EOF
+          tag=${{ steps.meta.outputs.tag }}
+          ref=${{ steps.meta.outputs.ref }}
+          target_sha=${{ steps.meta.outputs.target_sha }}
+          workflow_run=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          generated_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          EOF
 
       - name: Publish GitHub Release
         env:
@@ -173,10 +248,11 @@ jobs:
         run: |
           TAG="${{ steps.meta.outputs.tag }}"
           REF="${{ steps.meta.outputs.ref }}"
+          TARGET_SHA="${{ steps.meta.outputs.target_sha }}"
           TITLE="CodexManager $TAG"
 
           mapfile -t FILES < <(find release-assets -type f \( \
-            -name '*.exe' -o -name '*.msi' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.zip' \
+            -name '*.exe' -o -name '*.msi' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.zip' -o -name 'RELEASE-META.txt' \
           \) | sort)
           if [ "${#FILES[@]}" -eq 0 ]; then
             echo "No release assets found."
@@ -184,12 +260,12 @@ jobs:
           fi
 
           if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GH_REPO" --title "$TITLE" --target "$TARGET_SHA"
             gh release upload "$TAG" "${FILES[@]}" --repo "$GH_REPO" --clobber
           else
             if [ "${{ steps.meta.outputs.prerelease }}" = "true" ]; then
-              gh release create "$TAG" "${FILES[@]}" --repo "$GH_REPO" --title "$TITLE" --target "$REF" --generate-notes --prerelease
+              gh release create "$TAG" "${FILES[@]}" --repo "$GH_REPO" --title "$TITLE" --target "$TARGET_SHA" --generate-notes --prerelease
             else
-              gh release create "$TAG" "${FILES[@]}" --repo "$GH_REPO" --title "$TITLE" --target "$REF" --generate-notes
+              gh release create "$TAG" "${FILES[@]}" --repo "$GH_REPO" --title "$TITLE" --target "$TARGET_SHA" --generate-notes
             fi
           fi
-

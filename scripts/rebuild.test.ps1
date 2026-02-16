@@ -28,7 +28,12 @@ if ($output -notmatch "portable") {
 
 Write-Host "rebuild.ps1 dry-run output looks ok"
 
-$multiOutput = & $scriptPath -DryRun -AllPlatforms -GitRef "master" -GithubToken "dummy" 2>&1 | Out-String
+$currentRef = (& git branch --show-current 2>$null) -join ""
+if ([string]::IsNullOrWhiteSpace($currentRef) -or $currentRef -eq "HEAD") {
+  $currentRef = "main"
+}
+
+$multiOutput = & $scriptPath -DryRun -AllPlatforms -GitRef $currentRef -ReleaseTag "v0.0.0-test" -GithubToken "dummy" 2>&1 | Out-String
 if (-not $?) {
   throw "rebuild.ps1 -AllPlatforms dry-run failed to run"
 }
@@ -37,6 +42,16 @@ if ($multiOutput -notlike "*dispatch workflow release-multi-platform.yml*") {
 }
 if ($multiOutput -notlike "*repos/*/actions/workflows/release-multi-platform.yml/dispatches*") {
   throw "expected github dispatch url in dry-run output"
+}
+if ($multiOutput -notmatch '"tag":"v0.0.0-test"') {
+  throw "expected release tag in workflow dispatch payload"
+}
+if ($multiOutput -notmatch '"run_verify":"true"') {
+  throw "expected run_verify=true in workflow dispatch payload"
+}
+$escapedRef = [regex]::Escape($currentRef)
+if ($multiOutput -notmatch ('"ref":"' + $escapedRef + '"')) {
+  throw "expected git ref in workflow dispatch payload"
 }
 
 Write-Host "rebuild.ps1 all-platform dry-run output looks ok"

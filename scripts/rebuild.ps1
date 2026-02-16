@@ -10,6 +10,8 @@ param(
   [string]$GithubToken,
   [string]$WorkflowFile = "release-multi-platform.yml",
   [string]$GitRef,
+  [string]$ReleaseTag,
+  [switch]$NoVerify,
   [bool]$DownloadArtifacts = $true,
   [string]$ArtifactsDir,
   [ValidateRange(5, 300)]
@@ -174,25 +176,48 @@ function Invoke-AllPlatformBuild {
     $GitRef = (& git branch --show-current 2>$null) -join ""
   }
   if ([string]::IsNullOrWhiteSpace($GitRef)) {
-    throw "cannot resolve git branch. Pass -GitRef explicitly."
+    $GitRef = (& git describe --tags --exact-match 2>$null) -join ""
+  }
+  if ([string]::IsNullOrWhiteSpace($GitRef)) {
+    throw "cannot resolve git ref. Pass -GitRef explicitly."
+  }
+
+  if ([string]::IsNullOrWhiteSpace($ReleaseTag)) {
+    $ReleaseTag = (& git describe --tags --exact-match 2>$null) -join ""
+  }
+  if ([string]::IsNullOrWhiteSpace($ReleaseTag)) {
+    throw "release tag required for -AllPlatforms. Pass -ReleaseTag (e.g. v0.0.6)."
+  }
+
+  $resolvedSha = (& git rev-parse --verify "$GitRef^{commit}" 2>$null) -join ""
+  if ([string]::IsNullOrWhiteSpace($resolvedSha)) {
+    throw "cannot resolve git ref to commit: $GitRef"
   }
 
   $dispatchUri = "https://api.github.com/repos/$($repo.owner)/$($repo.repo)/actions/workflows/$WorkflowFile/dispatches"
-  $runsUri = "https://api.github.com/repos/$($repo.owner)/$($repo.repo)/actions/workflows/$WorkflowFile/runs?event=workflow_dispatch&branch=$GitRef&per_page=20"
+  $runsUri = "https://api.github.com/repos/$($repo.owner)/$($repo.repo)/actions/workflows/$WorkflowFile/runs?event=workflow_dispatch&per_page=50"
+  $runVerifyInput = if ($NoVerify) { "false" } else { "true" }
   $dispatchBody = @{
     ref = $GitRef
+    inputs = @{
+      tag        = $ReleaseTag
+      ref        = $GitRef
+      run_verify = $runVerifyInput
+    }
   }
 
   if ($DryRun) {
-    Write-Step "DRY RUN: dispatch workflow $WorkflowFile on $GitRef"
+    Write-Step "DRY RUN: dispatch workflow $WorkflowFile on ref=$GitRef tag=$ReleaseTag run_verify=$runVerifyInput"
+    Write-Step "DRY RUN: resolved target sha $resolvedSha"
     Write-Step "DRY RUN: POST $dispatchUri"
+    Write-Step "DRY RUN: payload $($dispatchBody | ConvertTo-Json -Depth 10 -Compress)"
     if ($DownloadArtifacts) {
       Write-Step "DRY RUN: download artifacts -> $artifactsRoot"
     }
     return
   }
 
-  Write-Step "dispatching workflow: $WorkflowFile (ref=$GitRef)"
+  Write-Step "dispatching workflow: $WorkflowFile (ref=$GitRef tag=$ReleaseTag run_verify=$runVerifyInput)"
   Invoke-GitHubApi -Method POST -Uri $dispatchUri -Token $token -Body $dispatchBody | Out-Null
 
   $deadline = (Get-Date).ToUniversalTime().AddMinutes($TimeoutMin)
@@ -206,13 +231,18 @@ function Invoke-AllPlatformBuild {
       continue
     }
     $run = $runs.workflow_runs |
-      Where-Object { [DateTime]::Parse($_.created_at).ToUniversalTime() -ge $dispatchedAt } |
+      Where-Object {
+        [DateTime]::Parse($_.created_at).ToUniversalTime() -ge $dispatchedAt -and
+        $_.head_sha -eq $resolvedSha
+      } |
+      Sort-Object { [DateTime]::Parse($_.created_at).ToUniversalTime() } -Descending |
       Select-Object -First 1
     if ($null -eq $run) {
+      Write-Step "waiting workflow run: ref=$GitRef sha=$resolvedSha"
       continue
     }
 
-    Write-Step ("workflow run: id={0} status={1} conclusion={2}" -f $run.id, $run.status, $run.conclusion)
+    Write-Step ("workflow run: id={0} status={1} conclusion={2} head_sha={3}" -f $run.id, $run.status, $run.conclusion, $run.head_sha)
     if ($run.status -eq "completed") {
       break
     }
