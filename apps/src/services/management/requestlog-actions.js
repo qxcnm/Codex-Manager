@@ -20,14 +20,20 @@ export function createRequestLogActions({
     await withButtonBusy(dom.clearRequestLogs, "清空中...", async () => {
       const ok = await ensureConnected();
       if (!ok) return;
-      const res = await clearRequestLogs();
-      if (res && res.ok === false) {
-        showToast(res.error || "清空日志失败", "error");
-        return;
+      try {
+        const res = await clearRequestLogs();
+        if (res && res.ok === false) {
+          showToast(res.error || "清空日志失败", "error");
+          return;
+        }
+        const applied = await refreshRequestLogs(state.requestLogQuery, { latestOnly: true });
+        if (applied !== false) {
+          renderRequestLogs();
+        }
+        showToast("请求日志已清空");
+      } catch (err) {
+        showToast(`清空日志失败：${err instanceof Error ? err.message : String(err)}`, "error");
       }
-      await refreshRequestLogs(state.requestLogQuery);
-      renderRequestLogs();
-      showToast("请求日志已清空");
     });
   }
 

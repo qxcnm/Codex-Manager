@@ -7,11 +7,9 @@ use crate::{
 
 pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
     let result = match req.method.as_str() {
-        "apikey/list" => {
-            super::as_json(ApiKeyListResult {
-                items: apikey_list::read_api_keys(),
-            })
-        }
+        "apikey/list" => super::value_or_error(
+            apikey_list::read_api_keys().map(|items| ApiKeyListResult { items }),
+        ),
         "apikey/create" => {
             let name = super::string_param(req, "name");
             let model_slug = super::string_param(req, "modelSlug");

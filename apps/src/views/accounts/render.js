@@ -1,7 +1,6 @@
 import { state } from "../../state.js";
 import { dom } from "../../ui/dom.js";
 import { calcAvailability, formatTs, remainingPercent } from "../../utils/format.js";
-import { findUsage } from "../usage.js";
 import {
   buildGroupFilterOptions,
   filterAccounts,
@@ -145,9 +144,9 @@ function renderEmptyRow(message) {
   dom.accountRows.appendChild(emptyRow);
 }
 
-function renderAccountRow(account, { onUpdateSort, onOpenUsage, onDelete }) {
+function renderAccountRow(account, usageMap, { onUpdateSort, onOpenUsage, onDelete }) {
   const row = document.createElement("tr");
-  const usage = findUsage(account.id);
+  const usage = usageMap.get(account.id);
   const status = calcAvailability(usage);
 
   row.appendChild(createAccountCell(account, usage));
@@ -167,6 +166,7 @@ function renderAccountRow(account, { onUpdateSort, onOpenUsage, onDelete }) {
 export function renderAccounts({ onUpdateSort, onOpenUsage, onDelete }) {
   dom.accountRows.innerHTML = "";
   syncGroupFilterSelect(buildGroupFilterOptions(state.accountList));
+  const usageMap = new Map((state.usageList || []).map((item) => [item.accountId, item]));
 
   const filtered = filterAccounts(
     state.accountList,
@@ -183,6 +183,6 @@ export function renderAccounts({ onUpdateSort, onOpenUsage, onDelete }) {
   }
 
   filtered.forEach((account) => {
-    renderAccountRow(account, { onUpdateSort, onOpenUsage, onDelete });
+    renderAccountRow(account, usageMap, { onUpdateSort, onOpenUsage, onDelete });
   });
 }

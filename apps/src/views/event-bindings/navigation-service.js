@@ -1,3 +1,5 @@
+let navigationEventsBound = false;
+
 export function bindNavigationAndServiceEvents({
   dom,
   switchPage,
@@ -7,10 +9,15 @@ export function bindNavigationAndServiceEvents({
   setTheme,
   handleServiceToggle,
 }) {
-  dom.navDashboard.addEventListener("click", () => switchPage("dashboard"));
-  dom.navAccounts.addEventListener("click", () => switchPage("accounts"));
-  dom.navApiKeys.addEventListener("click", () => switchPage("apikeys"));
-  dom.navRequestLogs.addEventListener("click", () => switchPage("requestlogs"));
+  if (navigationEventsBound) {
+    return;
+  }
+  navigationEventsBound = true;
+
+  if (dom.navDashboard) dom.navDashboard.addEventListener("click", () => switchPage("dashboard"));
+  if (dom.navAccounts) dom.navAccounts.addEventListener("click", () => switchPage("accounts"));
+  if (dom.navApiKeys) dom.navApiKeys.addEventListener("click", () => switchPage("apikeys"));
+  if (dom.navRequestLogs) dom.navRequestLogs.addEventListener("click", () => switchPage("requestlogs"));
 
   if (dom.refreshAll) {
     dom.refreshAll.addEventListener("click", refreshAll);
@@ -40,5 +47,7 @@ export function bindNavigationAndServiceEvents({
     if (event.key === "Escape") closeThemePanel();
   });
 
-  dom.serviceToggleBtn.addEventListener("click", handleServiceToggle);
+  if (dom.serviceToggleBtn) {
+    dom.serviceToggleBtn.addEventListener("click", handleServiceToggle);
+  }
 }

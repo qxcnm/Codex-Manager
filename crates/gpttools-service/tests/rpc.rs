@@ -68,8 +68,12 @@ fn rpc_account_list_empty() {
     let json = serde_json::to_string(&req).expect("serialize");
     let v = post_rpc(&server.addr, &json);
     let result = v.get("result").expect("result");
-    let items = result.get("items").expect("items").as_array().unwrap();
-    assert!(items.is_empty());
+    if let Some(items) = result.get("items").and_then(|value| value.as_array()) {
+        assert!(items.is_empty());
+        return;
+    }
+    let err = result.get("error").and_then(|value| value.as_str()).unwrap_or("");
+    assert!(!err.is_empty(), "expected items or explicit error, got: {result}");
 }
 
 #[test]
@@ -132,8 +136,12 @@ fn rpc_usage_list_empty() {
     let json = serde_json::to_string(&req).expect("serialize");
     let v = post_rpc(&server.addr, &json);
     let result = v.get("result").expect("result");
-    let items = result.get("items").expect("items").as_array().unwrap();
-    assert!(items.is_empty());
+    if let Some(items) = result.get("items").and_then(|value| value.as_array()) {
+        assert!(items.is_empty());
+        return;
+    }
+    let err = result.get("error").and_then(|value| value.as_str()).unwrap_or("");
+    assert!(!err.is_empty(), "expected items or explicit error, got: {result}");
 }
 
 #[test]

@@ -4,6 +4,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 static ACCOUNT_INFLIGHT: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+static GATEWAY_REQUEST_LABELS: OnceLock<Mutex<HashMap<GatewayRequestLabelKey, usize>>> =
+    OnceLock::new();
 static GATEWAY_TOTAL_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 static GATEWAY_ACTIVE_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 static GATEWAY_FAILOVER_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
@@ -15,6 +17,13 @@ static USAGE_REFRESH_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
 static USAGE_REFRESH_SUCCESSES: AtomicUsize = AtomicUsize::new(0);
 static USAGE_REFRESH_FAILURES: AtomicUsize = AtomicUsize::new(0);
 static USAGE_REFRESH_DURATION_MS_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct GatewayRequestLabelKey {
+    route: &'static str,
+    status_class: &'static str,
+    protocol: &'static str,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct GatewayMetricsSnapshot {
@@ -92,6 +101,23 @@ pub(crate) fn record_usage_refresh_outcome(success: bool, duration_ms: u64) {
     USAGE_REFRESH_DURATION_MS_TOTAL.fetch_add(duration_ms, Ordering::Relaxed);
 }
 
+pub(crate) fn record_gateway_request_outcome(
+    path: &str,
+    status_code: u16,
+    protocol_type: Option<&str>,
+) {
+    let key = GatewayRequestLabelKey {
+        route: classify_gateway_route(path),
+        status_class: classify_status_class(status_code),
+        protocol: classify_protocol(protocol_type),
+    };
+    let lock = GATEWAY_REQUEST_LABELS.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut map) = lock.lock() {
+        let entry = map.entry(key).or_insert(0);
+        *entry += 1;
+    }
+}
+
 pub(crate) fn duration_to_millis(duration: Duration) -> u64 {
     duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
@@ -123,6 +149,7 @@ pub(crate) fn gateway_metrics_snapshot() -> GatewayMetricsSnapshot {
 
 pub(crate) fn gateway_metrics_prometheus() -> String {
     let m = gateway_metrics_snapshot();
+    let labeled = gateway_labeled_metrics_prometheus();
     format!(
         "gpttools_gateway_requests_total {}\n\
 gpttools_gateway_requests_active {}\n\
@@ -137,7 +164,8 @@ gpttools_usage_refresh_attempts_total {}\n\
 gpttools_usage_refresh_success_total {}\n\
 gpttools_usage_refresh_failures_total {}\n\
 gpttools_usage_refresh_duration_milliseconds_total {}\n\
-gpttools_usage_refresh_duration_milliseconds_count {}\n",
+gpttools_usage_refresh_duration_milliseconds_count {}\n\
+{}",
         m.total_requests,
         m.active_requests,
         m.account_inflight_total,
@@ -152,7 +180,80 @@ gpttools_usage_refresh_duration_milliseconds_count {}\n",
         m.usage_refresh_failures,
         m.usage_refresh_duration_ms_total,
         m.usage_refresh_attempts,
+        labeled,
     )
+}
+
+fn gateway_labeled_metrics_prometheus() -> String {
+    let lock = GATEWAY_REQUEST_LABELS.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(map) = lock.lock() else {
+        return String::new();
+    };
+    let mut entries = map.iter().map(|(k, v)| (*k, *v)).collect::<Vec<_>>();
+    entries.sort_by_key(|(k, _)| (k.route, k.status_class, k.protocol));
+    let mut text = String::new();
+    for (key, value) in entries {
+        let line = format!(
+            "gpttools_gateway_requests_labeled_total{{route=\"{}\",status_class=\"{}\",protocol=\"{}\"}} {}\n",
+            key.route, key.status_class, key.protocol, value
+        );
+        text.push_str(&line);
+    }
+    text
+}
+
+fn classify_gateway_route(path: &str) -> &'static str {
+    let path = path.split('?').next().unwrap_or(path);
+    if path.starts_with("/v1/responses") {
+        return "responses";
+    }
+    if path.starts_with("/v1/chat/completions") {
+        return "chat_completions";
+    }
+    if path.starts_with("/v1/messages/count_tokens") {
+        return "messages_count_tokens";
+    }
+    if path.starts_with("/v1/messages") {
+        return "messages";
+    }
+    if path.starts_with("/v1/models") {
+        return "models";
+    }
+    if path.starts_with("/v1/embeddings") {
+        return "embeddings";
+    }
+    if path == "/health" {
+        return "health";
+    }
+    "other"
+}
+
+fn classify_status_class(status_code: u16) -> &'static str {
+    match status_code {
+        100..=199 => "1xx",
+        200..=299 => "2xx",
+        300..=399 => "3xx",
+        400..=499 => "4xx",
+        500..=599 => "5xx",
+        _ => "other",
+    }
+}
+
+fn classify_protocol(protocol_type: Option<&str>) -> &'static str {
+    let Some(protocol_type) = protocol_type.map(str::trim).filter(|v| !v.is_empty()) else {
+        return "unknown";
+    };
+    if protocol_type.eq_ignore_ascii_case("openai_compat")
+        || protocol_type.eq_ignore_ascii_case("openai")
+    {
+        return "openai_compat";
+    }
+    if protocol_type.eq_ignore_ascii_case("anthropic_native")
+        || protocol_type.eq_ignore_ascii_case("anthropic")
+    {
+        return "anthropic_native";
+    }
+    "other"
 }
 
 pub(crate) fn account_inflight_count(account_id: &str) -> usize {

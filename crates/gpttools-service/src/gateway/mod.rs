@@ -20,6 +20,7 @@ mod trace_log;
 mod route_hint;
 mod local_count_tokens;
 mod route_quality;
+mod request_gate;
 
 pub(super) use request_helpers::{
     extract_request_model, extract_request_reasoning_effort, extract_request_stream,
@@ -43,7 +44,8 @@ use upstream::config::normalize_upstream_base_url;
 use upstream::header_profile::{build_codex_upstream_headers, CodexUpstreamHeaderInput};
 use metrics::{
     account_inflight_count, acquire_account_inflight, begin_gateway_request,
-    record_gateway_cooldown_mark, record_gateway_failover_attempt, AccountInFlightGuard,
+    record_gateway_cooldown_mark, record_gateway_failover_attempt,
+    record_gateway_request_outcome, AccountInFlightGuard,
 };
 pub(crate) use metrics::{
     begin_rpc_request, duration_to_millis, gateway_metrics_prometheus,
@@ -69,10 +71,12 @@ pub(crate) use request_entry::handle_gateway_request;
 use route_hint::{preferred_route_account, remember_success_route_account};
 use local_count_tokens::maybe_respond_local_count_tokens;
 use route_quality::{record_route_quality, route_quality_penalty};
+use request_gate::request_gate_lock;
 use runtime_config::{
-    account_max_inflight_limit, upstream_client, DEFAULT_GATEWAY_DEBUG,
-    DEFAULT_MODELS_CLIENT_VERSION,
+    account_max_inflight_limit, request_gate_wait_timeout, trace_body_preview_max_bytes,
+    upstream_client, DEFAULT_GATEWAY_DEBUG, DEFAULT_MODELS_CLIENT_VERSION,
 };
+pub(crate) use runtime_config::front_proxy_max_body_bytes;
 use upstream::proxy::proxy_validated_request;
 
 #[cfg(test)]

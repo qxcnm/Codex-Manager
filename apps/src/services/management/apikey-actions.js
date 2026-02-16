@@ -21,6 +21,17 @@ export function createApiKeyActions({
     });
   };
 
+  const refreshApiKeyList = async () => {
+    try {
+      await refreshApiKeys();
+      renderApiKeyList();
+      return true;
+    } catch (err) {
+      showToast(`平台 Key 刷新失败：${err instanceof Error ? err.message : String(err)}`, "error");
+      return false;
+    }
+  };
+
   async function createApiKey() {
     await withButtonBusy(dom.submitApiKey, "创建中...", async () => {
       const ok = await ensureConnected();
@@ -41,11 +52,17 @@ export function createApiKeyActions({
         return;
       }
       dom.apiKeyValue.value = res && res.key ? res.key : "";
-      await refreshApiModels();
-      await refreshApiKeys();
-      populateApiKeyModelSelect();
-      renderApiKeyList();
-      showToast("平台 Key 创建成功");
+      try {
+        await refreshApiModels();
+        populateApiKeyModelSelect();
+      } catch (err) {
+        showToast(`模型列表刷新失败：${err instanceof Error ? err.message : String(err)}`, "error");
+      }
+      if (await refreshApiKeyList()) {
+        showToast("平台 Key 创建成功");
+      } else {
+        showToast("平台 Key 已创建，但列表刷新失败", "error");
+      }
     });
   }
 
@@ -60,10 +77,14 @@ export function createApiKeyActions({
     if (!confirmed) return;
     const ok = await ensureConnected();
     if (!ok) return;
-    await api.serviceApiKeyDelete(item.id);
-    await refreshApiKeys();
-    renderApiKeyList();
-    showToast("平台 Key 已删除");
+    const res = await api.serviceApiKeyDelete(item.id);
+    if (res && res.ok === false) {
+      showToast(res.error || "平台 Key 删除失败", "error");
+      return;
+    }
+    if (await refreshApiKeyList()) {
+      showToast("平台 Key 已删除");
+    }
   }
 
   async function toggleApiKeyStatus(item) {
@@ -71,14 +92,19 @@ export function createApiKeyActions({
     const ok = await ensureConnected();
     if (!ok) return;
     const isDisabled = String(item.status || "").toLowerCase() === "disabled";
+    let result;
     if (isDisabled) {
-      await api.serviceApiKeyEnable(item.id);
+      result = await api.serviceApiKeyEnable(item.id);
     } else {
-      await api.serviceApiKeyDisable(item.id);
+      result = await api.serviceApiKeyDisable(item.id);
     }
-    await refreshApiKeys();
-    renderApiKeyList();
-    showToast(isDisabled ? "平台 Key 已启用" : "平台 Key 已禁用");
+    if (result && result.ok === false) {
+      showToast(result.error || "平台 Key 状态更新失败", "error");
+      return;
+    }
+    if (await refreshApiKeyList()) {
+      showToast(isDisabled ? "平台 Key 已启用" : "平台 Key 已禁用");
+    }
   }
 
   async function updateApiKeyModel(item, modelSlug, reasoningEffort) {
@@ -92,8 +118,7 @@ export function createApiKeyActions({
       showToast(res.error || "模型配置保存失败", "error");
       return;
     }
-    await refreshApiKeys();
-    renderApiKeyList();
+    await refreshApiKeyList();
   }
 
   actions = { createApiKey, deleteApiKey, toggleApiKeyStatus, updateApiKeyModel };

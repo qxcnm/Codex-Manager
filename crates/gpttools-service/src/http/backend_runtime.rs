@@ -12,6 +12,10 @@ const HTTP_WORKER_FACTOR: usize = 4;
 const HTTP_WORKER_MIN: usize = 8;
 const HTTP_QUEUE_FACTOR: usize = 4;
 const HTTP_QUEUE_MIN: usize = 32;
+const ENV_HTTP_WORKER_FACTOR: &str = "GPTTOOLS_HTTP_WORKER_FACTOR";
+const ENV_HTTP_WORKER_MIN: &str = "GPTTOOLS_HTTP_WORKER_MIN";
+const ENV_HTTP_QUEUE_FACTOR: &str = "GPTTOOLS_HTTP_QUEUE_FACTOR";
+const ENV_HTTP_QUEUE_MIN: &str = "GPTTOOLS_HTTP_QUEUE_MIN";
 
 pub(crate) struct BackendServer {
     pub(crate) addr: String,
@@ -21,12 +25,25 @@ pub(crate) struct BackendServer {
 fn http_worker_count() -> usize {
     // 中文注释：长流请求会占用处理线程；这里固定 worker 上限，避免并发时无限 spawn 拖垮进程。
     let cpus = thread::available_parallelism().map(|value| value.get()).unwrap_or(4);
-    (cpus * HTTP_WORKER_FACTOR).max(HTTP_WORKER_MIN)
+    let factor = env_usize_or(ENV_HTTP_WORKER_FACTOR, HTTP_WORKER_FACTOR).max(1);
+    let min = env_usize_or(ENV_HTTP_WORKER_MIN, HTTP_WORKER_MIN).max(1);
+    (cpus.saturating_mul(factor)).max(min)
 }
 
 fn http_queue_size(worker_count: usize) -> usize {
     // 中文注释：使用有界队列给入口施加背压；不这样做会在峰值流量下无限堆积请求并放大内存抖动。
-    worker_count.saturating_mul(HTTP_QUEUE_FACTOR).max(HTTP_QUEUE_MIN)
+    let factor = env_usize_or(ENV_HTTP_QUEUE_FACTOR, HTTP_QUEUE_FACTOR).max(1);
+    let min = env_usize_or(ENV_HTTP_QUEUE_MIN, HTTP_QUEUE_MIN).max(1);
+    worker_count.saturating_mul(factor).max(min)
+}
+
+fn env_usize_or(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(default)
 }
 
 fn spawn_request_workers(worker_count: usize, rx: mpsc::Receiver<Request>) {

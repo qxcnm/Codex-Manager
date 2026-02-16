@@ -2,16 +2,16 @@ use gpttools_core::rpc::types::RequestLogSummary;
 
 use crate::storage_helpers::open_storage;
 
-pub(crate) fn read_request_logs(query: Option<String>, limit: Option<i64>) -> Vec<RequestLogSummary> {
-    let storage = match open_storage() {
-        Some(storage) => storage,
-        None => return Vec::new(),
-    };
-    let logs = match storage.list_request_logs(query.as_deref(), limit.unwrap_or(200)) {
-        Ok(items) => items,
-        Err(_) => return Vec::new(),
-    };
-    logs.into_iter()
+pub(crate) fn read_request_logs(
+    query: Option<String>,
+    limit: Option<i64>,
+) -> Result<Vec<RequestLogSummary>, String> {
+    let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let logs = storage
+        .list_request_logs(query.as_deref(), limit.unwrap_or(200))
+        .map_err(|err| format!("list request logs failed: {err}"))?;
+    Ok(logs
+        .into_iter()
         .map(|item| RequestLogSummary {
             key_id: item.key_id,
             request_path: item.request_path,
@@ -23,5 +23,5 @@ pub(crate) fn read_request_logs(query: Option<String>, limit: Option<i64>) -> Ve
             error: item.error,
             created_at: item.created_at,
         })
-        .collect()
+        .collect())
 }

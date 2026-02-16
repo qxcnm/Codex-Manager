@@ -100,20 +100,29 @@ pub(crate) fn log_request_start(
 
 pub(crate) fn log_request_body_preview(trace_id: &str, body: &[u8]) {
     let ts = now_ts();
-    let raw = String::from_utf8_lossy(body).to_string();
-    let compact = raw
+    let preview_max_bytes = super::trace_body_preview_max_bytes();
+    if preview_max_bytes == 0 {
+        let line = format!(
+            "ts={ts} event=REQUEST_BODY trace_id={} len={} preview_bytes=0",
+            sanitize_text(trace_id),
+            body.len(),
+        );
+        append_trace_line(&line);
+        return;
+    }
+
+    let preview_len = preview_max_bytes.min(body.len());
+    let preview_raw = String::from_utf8_lossy(&body[..preview_len]);
+    let preview = preview_raw
         .chars()
         .filter(|ch| *ch != '\r' && *ch != '\n' && *ch != '\t')
         .collect::<String>();
-    let preview = if compact.len() > 900 {
-        format!("{}...", &compact[..900])
-    } else {
-        compact
-    };
     let line = format!(
-        "ts={ts} event=REQUEST_BODY trace_id={} len={} preview={}",
+        "ts={ts} event=REQUEST_BODY trace_id={} len={} preview_bytes={} truncated={} preview={}",
         sanitize_text(trace_id),
         body.len(),
+        preview_len,
+        body.len() > preview_len,
         sanitize_text(preview.as_str()),
     );
     append_trace_line(&line);

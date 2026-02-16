@@ -6,6 +6,7 @@ pub(super) struct GatewayUpstreamExecutionContext<'a> {
     key_id: &'a str,
     path: &'a str,
     request_method: &'a str,
+    protocol_type: &'a str,
     model_for_log: Option<&'a str>,
     reasoning_for_log: Option<&'a str>,
     candidate_count: usize,
@@ -20,6 +21,7 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
         key_id: &'a str,
         path: &'a str,
         request_method: &'a str,
+        protocol_type: &'a str,
         model_for_log: Option<&'a str>,
         reasoning_for_log: Option<&'a str>,
         candidate_count: usize,
@@ -31,6 +33,7 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
             key_id,
             path,
             request_method,
+            protocol_type,
             model_for_log,
             reasoning_for_log,
             candidate_count,
@@ -131,6 +134,11 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
             upstream_url,
             error,
             elapsed_ms,
+        );
+        super::super::record_gateway_request_outcome(
+            self.path,
+            status_code,
+            Some(self.protocol_type),
         );
     }
 

@@ -13,7 +13,8 @@ export function createManagementActions({
   clearRequestLogs,
   refreshRequestLogs,
   renderRequestLogs,
-  refreshAll,
+  refreshAccountsAndUsage,
+  renderAccountsView,
   openUsageModal,
   renderUsageSnapshot,
   refreshApiModels,
@@ -35,7 +36,8 @@ export function createManagementActions({
 
   const accountActions = createAccountActions({
     ensureConnected,
-    refreshAll,
+    refreshAccountsAndUsage,
+    renderAccountsView,
     showToast,
     showConfirmDialog,
   });

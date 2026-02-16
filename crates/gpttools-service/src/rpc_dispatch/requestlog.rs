@@ -7,9 +7,10 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
         "requestlog/list" => {
             let query = super::string_param(req, "query");
             let limit = super::i64_param(req, "limit");
-            super::as_json(RequestLogListResult {
-                items: requestlog_list::read_request_logs(query, limit),
-            })
+            super::value_or_error(
+                requestlog_list::read_request_logs(query, limit)
+                    .map(|items| RequestLogListResult { items }),
+            )
         }
         "requestlog/clear" => super::ok_or_error(requestlog_clear::clear_request_logs()),
         _ => return None,

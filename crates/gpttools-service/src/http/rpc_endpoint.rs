@@ -35,16 +35,6 @@ fn is_loopback_origin(origin: &str) -> bool {
     matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
 }
 
-fn allow_unauthenticated_rpc() -> bool {
-    matches!(
-        std::env::var("GPTTOOLS_RPC_ALLOW_UNAUTH")
-            .ok()
-            .as_deref()
-            .map(str::trim),
-        Some("1" | "true" | "TRUE" | "yes" | "YES")
-    )
-}
-
 pub fn handle_rpc(mut request: Request) {
     let mut rpc_metrics_guard = crate::gateway::begin_rpc_request();
     if request.method().as_str() != "POST" {
@@ -64,10 +54,8 @@ pub fn handle_rpc(mut request: Request) {
             }
         }
         None => {
-            if !allow_unauthenticated_rpc() {
-                let _ = request.respond(Response::from_string("{}").with_status_code(401));
-                return;
-            }
+            let _ = request.respond(Response::from_string("{}").with_status_code(401));
+            return;
         }
     }
 

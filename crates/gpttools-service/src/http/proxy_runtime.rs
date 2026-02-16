@@ -10,8 +10,6 @@ use crate::http::proxy_bridge::run_proxy_server;
 use crate::http::proxy_request::{build_target_url, filter_request_headers};
 use crate::http::proxy_response::{merge_upstream_headers, text_response};
 
-const FRONT_PROXY_MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
-
 #[derive(Clone)]
 struct ProxyState {
     backend_base_url: String,
@@ -25,8 +23,9 @@ fn build_backend_base_url(backend_addr: &str) -> String {
 async fn proxy_handler(State(state): State<ProxyState>, request: HttpRequest<Body>) -> Response<Body> {
     let (parts, body) = request.into_parts();
     let target_url = build_target_url(&state.backend_base_url, &parts.uri);
+    let max_body_bytes = crate::gateway::front_proxy_max_body_bytes();
 
-    let body_bytes = match to_bytes(body, FRONT_PROXY_MAX_BODY_BYTES).await {
+    let body_bytes = match to_bytes(body, max_body_bytes).await {
         Ok(bytes) => bytes,
         Err(err) => {
             return text_response(
@@ -41,7 +40,7 @@ async fn proxy_handler(State(state): State<ProxyState>, request: HttpRequest<Bod
     let mut builder = state.client.request(parts.method, target_url);
     builder = builder.headers(outbound_headers);
     if !body_bytes.is_empty() {
-        builder = builder.body(body_bytes.to_vec());
+        builder = builder.body(body_bytes);
     }
 
     let upstream = match builder.send().await {

@@ -1,5 +1,5 @@
 use crate::apikey_profile::PROTOCOL_ANTHROPIC_NATIVE;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tiny_http::{Request, Response};
 
 use super::super::local_validation::LocalValidationResult;
@@ -106,6 +106,7 @@ pub(in super::super) fn proxy_validated_request(
         &key_id,
         &path,
         &request_method,
+        protocol_type.as_str(),
         model_for_log.as_deref(),
         reasoning_for_log.as_deref(),
         candidate_count,
@@ -114,39 +115,71 @@ pub(in super::super) fn proxy_validated_request(
     let allow_openai_fallback = true;
     let disable_challenge_stateless_retry =
         !(protocol_type == PROTOCOL_ANTHROPIC_NATIVE && body.len() <= 2 * 1024);
-    let request_gate_lock: Option<std::sync::Arc<std::sync::Mutex<()>>> = None;
-    let _request_gate_guard = if let Some(lock) = request_gate_lock.as_ref() {
-        super::super::trace_log::log_request_gate_wait(
-            trace_id.as_str(),
-            key_id.as_str(),
-            path.as_str(),
-            model_for_log.as_deref(),
-        );
-        match lock.try_lock() {
-            Ok(guard) => {
+    let request_gate_lock =
+        super::super::request_gate_lock(&key_id, &path, model_for_log.as_deref());
+    let request_gate_wait_timeout = super::super::request_gate_wait_timeout();
+    super::super::trace_log::log_request_gate_wait(
+        trace_id.as_str(),
+        key_id.as_str(),
+        path.as_str(),
+        model_for_log.as_deref(),
+    );
+    let gate_wait_started_at = Instant::now();
+    let _request_gate_guard = match request_gate_lock.try_lock() {
+        Ok(guard) => {
+            super::super::trace_log::log_request_gate_acquired(
+                trace_id.as_str(),
+                key_id.as_str(),
+                path.as_str(),
+                model_for_log.as_deref(),
+                0,
+            );
+            Some(guard)
+        }
+        Err(std::sync::TryLockError::WouldBlock) => {
+            let mut acquired_guard = None;
+            let mut lock_poisoned = false;
+            while gate_wait_started_at.elapsed() < request_gate_wait_timeout {
+                std::thread::sleep(Duration::from_millis(10));
+                match request_gate_lock.try_lock() {
+                    Ok(guard) => {
+                        acquired_guard = Some(guard);
+                        break;
+                    }
+                    Err(std::sync::TryLockError::WouldBlock) => continue,
+                    Err(std::sync::TryLockError::Poisoned(_)) => {
+                        lock_poisoned = true;
+                        super::super::trace_log::log_request_gate_skip(
+                            trace_id.as_str(),
+                            "lock_poisoned",
+                        );
+                        break;
+                    }
+                }
+            }
+            if let Some(guard) = acquired_guard {
                 super::super::trace_log::log_request_gate_acquired(
                     trace_id.as_str(),
                     key_id.as_str(),
                     path.as_str(),
                     model_for_log.as_deref(),
-                    0,
+                    gate_wait_started_at.elapsed().as_millis(),
                 );
                 Some(guard)
-            }
-            Err(std::sync::TryLockError::WouldBlock) => {
-                super::super::trace_log::log_request_gate_skip(trace_id.as_str(), "gate_busy");
-                None
-            }
-            Err(std::sync::TryLockError::Poisoned(_)) => {
-                super::super::trace_log::log_request_gate_skip(
-                    trace_id.as_str(),
-                    "lock_poisoned",
-                );
+            } else {
+                if !lock_poisoned {
+                    super::super::trace_log::log_request_gate_skip(
+                        trace_id.as_str(),
+                        "gate_wait_timeout",
+                    );
+                }
                 None
             }
         }
-    } else {
-        None
+        Err(std::sync::TryLockError::Poisoned(_)) => {
+            super::super::trace_log::log_request_gate_skip(trace_id.as_str(), "lock_poisoned");
+            None
+        }
     };
     let request_shape = super::super::summarize_request_shape(&body);
     let has_sticky_fallback_session = request

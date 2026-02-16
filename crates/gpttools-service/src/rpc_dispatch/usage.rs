@@ -10,9 +10,9 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                 snapshot: usage_read::read_usage_snapshot(account_id),
             })
         }
-        "account/usage/list" => super::as_json(UsageListResult {
-            items: usage_list::read_usage_snapshots(),
-        }),
+        "account/usage/list" => super::value_or_error(
+            usage_list::read_usage_snapshots().map(|items| UsageListResult { items }),
+        ),
         "account/usage/refresh" => {
             let account_id = super::str_param(req, "accountId");
             let result = match account_id {

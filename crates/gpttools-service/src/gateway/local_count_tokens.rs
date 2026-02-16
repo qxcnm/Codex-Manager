@@ -71,6 +71,7 @@ pub(super) fn maybe_respond_local_count_tokens(
             let output = json!({ "input_tokens": input_tokens }).to_string();
             super::trace_log::log_attempt_result(trace_id, "-", None, 200, None);
             super::trace_log::log_request_final(trace_id, 200, None, None, None, 0);
+            super::record_gateway_request_outcome(path, 200, Some(protocol_type));
             super::write_request_log(
                 storage,
                 Some(key_id),
@@ -97,6 +98,7 @@ pub(super) fn maybe_respond_local_count_tokens(
         Err(err) => {
             super::trace_log::log_attempt_result(trace_id, "-", None, 400, Some(err.as_str()));
             super::trace_log::log_request_final(trace_id, 400, None, None, Some(err.as_str()), 0);
+            super::record_gateway_request_outcome(path, 400, Some(protocol_type));
             super::write_request_log(
                 storage,
                 Some(key_id),

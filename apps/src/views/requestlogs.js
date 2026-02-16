@@ -1,5 +1,6 @@
 import { dom } from "../ui/dom";
 import { state } from "../state";
+import { copyText } from "../utils/clipboard.js";
 
 function formatTs(ts) {
   if (!ts) return "-";
@@ -58,18 +59,15 @@ export function renderRequestLogs() {
     copyBtn.title = "复制请求路径";
     copyBtn.addEventListener("click", async () => {
       if (!item.requestPath) return;
-      try {
-        await navigator.clipboard.writeText(item.requestPath);
+      const ok = await copyText(item.requestPath);
+      if (ok) {
         copyBtn.textContent = "已复制";
-        setTimeout(() => {
-          copyBtn.textContent = "复制";
-        }, 900);
-      } catch (_err) {
+      } else {
         copyBtn.textContent = "失败";
-        setTimeout(() => {
-          copyBtn.textContent = "复制";
-        }, 900);
       }
+      setTimeout(() => {
+        copyBtn.textContent = "复制";
+      }, 900);
     });
     pathWrap.appendChild(pathText);
     pathWrap.appendChild(copyBtn);

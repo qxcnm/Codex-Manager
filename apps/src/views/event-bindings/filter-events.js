@@ -1,4 +1,6 @@
 let requestLogSearchTimer = null;
+let filterEventsBound = false;
+let requestLogInputSeq = 0;
 
 export function bindFilterEvents({
   dom,
@@ -9,10 +11,25 @@ export function bindFilterEvents({
   renderAccountsView,
   updateRequestLogFilterButtons,
 }) {
+  if (filterEventsBound) {
+    return;
+  }
+  filterEventsBound = true;
+
+  const runRequestLogRefresh = async (query) => {
+    try {
+      const applied = await refreshRequestLogs(query, { latestOnly: true });
+      if (applied !== false) {
+        renderRequestLogs();
+      }
+    } catch (err) {
+      console.error("[requestlogs] refresh failed", err);
+    }
+  };
+
   if (dom.refreshRequestLogs) {
     dom.refreshRequestLogs.addEventListener("click", async () => {
-      await refreshRequestLogs(state.requestLogQuery);
-      renderRequestLogs();
+      await runRequestLogRefresh(state.requestLogQuery);
     });
   }
   if (dom.clearRequestLogs) {
@@ -20,13 +37,17 @@ export function bindFilterEvents({
   }
   if (dom.requestLogSearch) {
     dom.requestLogSearch.addEventListener("input", (event) => {
-      state.requestLogQuery = event.target.value || "";
+      const query = event.target.value || "";
+      state.requestLogQuery = query;
+      const currentSeq = ++requestLogInputSeq;
       if (requestLogSearchTimer) {
         clearTimeout(requestLogSearchTimer);
       }
       requestLogSearchTimer = setTimeout(async () => {
-        await refreshRequestLogs(state.requestLogQuery);
-        renderRequestLogs();
+        if (currentSeq !== requestLogInputSeq) {
+          return;
+        }
+        await runRequestLogRefresh(query);
       }, 220);
     });
   }

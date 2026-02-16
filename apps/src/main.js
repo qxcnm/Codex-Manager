@@ -83,6 +83,23 @@ async function refreshAll() {
   renderAllViews(buildMainRenderActions());
 }
 
+async function refreshAccountsAndUsage() {
+  const ok = await ensureConnected();
+  serviceLifecycle.updateServiceToggle();
+  if (!ok) return false;
+
+  const results = await runRefreshTasks(
+    [
+      { name: "accounts", run: refreshAccounts },
+      { name: "usage", run: refreshUsageList },
+    ],
+    (taskName, err) => {
+      console.error(`[refreshAccountsAndUsage] ${taskName} failed`, err);
+    },
+  );
+  return !results.some((item) => item.status === "rejected");
+}
+
 const serviceLifecycle = createServiceLifecycle({
   state,
   dom,
@@ -116,7 +133,8 @@ const managementActions = createManagementActions({
   clearRequestLogs,
   refreshRequestLogs,
   renderRequestLogs,
-  refreshAll,
+  refreshAccountsAndUsage,
+  renderAccountsView,
   openUsageModal,
   renderUsageSnapshot,
   refreshApiModels,

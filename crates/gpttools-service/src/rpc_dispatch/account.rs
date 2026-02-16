@@ -4,10 +4,9 @@ use crate::{account_delete, account_list, account_update, auth_login, auth_token
 
 pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
     let result = match req.method.as_str() {
-        "account/list" => {
-            let items = account_list::read_accounts();
-            super::as_json(AccountListResult { items })
-        }
+        "account/list" => super::value_or_error(
+            account_list::read_accounts().map(|items| AccountListResult { items }),
+        ),
         "account/delete" => {
             let account_id = super::str_param(req, "accountId").unwrap_or("");
             super::ok_or_error(account_delete::delete_account(account_id))

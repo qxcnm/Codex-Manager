@@ -42,6 +42,11 @@ pub(crate) fn handle_gateway_request(mut request: Request) -> Result<(), String>
                 Some(err.message.as_str()),
                 0,
             );
+            super::record_gateway_request_outcome(
+                request_path_for_log.as_str(),
+                err.status_code,
+                None,
+            );
             if let Some(storage) = super::open_storage() {
                 super::write_request_log(
                     &storage,
