@@ -6,8 +6,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/**/*.test.js",
-    "test:ui": "node --test tests/*.test.mjs",
+    "test": "node scripts/run-tests.mjs src .test.js",
+    "test:ui": "node scripts/run-tests.mjs tests .test.mjs",
     "check": "pnpm run test && pnpm run build && pnpm run test:ui"
   },
   "devDependencies": {
