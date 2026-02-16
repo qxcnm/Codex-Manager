@@ -4,7 +4,7 @@ A local desktop + service toolkit for managing a Codex-compatible ChatGPT accoun
 
 [中文](README.md)
 
-## Recent Changes (Since v0.0.8, release-note ready)
+## Recent Changes
 - Gateway protocol adapter was further modularized: request mapping and response conversion were split, and response conversion is now separated into JSON/SSE modules.
 - Backend routing boundaries were unified to reduce duplicated gateway/proxy dispatch logic.
 - Stability hardening: frontend refresh flow and request-log race handling were improved; clipboard fallback behavior was unified (clipboard API + execCommand fallback).

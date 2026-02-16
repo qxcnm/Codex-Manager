@@ -4,7 +4,7 @@
 
 [English](README.en.md)
 
-## 最近变更（v0.0.8 之后，可直接用于发版说明）
+## 最近变更
 - 网关协议适配继续拆分：`protocol_adapter` 的请求映射与响应转换进一步模块化，响应转换按 JSON/SSE 分离，维护边界更清晰。
 - 后端路由边界收敛：统一 backend router 分发路径，减少网关/代理双栈逻辑重复。
 - 稳定性增强：前端刷新与请求日志竞态治理、复制能力统一降级（clipboard API + execCommand fallback）、关键事件绑定幂等化。
