@@ -61,7 +61,7 @@ fn spawn_request_workers(worker_count: usize, rx: mpsc::Receiver<Request>) {
                         Err(_) => break,
                     }
                 };
-                crate::http::request_dispatch::dispatch_backend_request(request);
+                crate::http::backend_router::handle_backend_request(request);
             }
         });
     }

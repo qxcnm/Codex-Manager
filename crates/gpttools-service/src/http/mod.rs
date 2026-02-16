@@ -4,9 +4,8 @@ pub mod callback_endpoint;
 pub mod gateway_endpoint;
 
 pub(crate) mod backend_runtime;
+pub(crate) mod backend_router;
 pub(crate) mod proxy_bridge;
-pub(crate) mod route_dispatch;
-pub(crate) mod request_dispatch;
 
 pub(crate) mod header_filter;
 pub(crate) mod proxy_request;

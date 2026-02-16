@@ -98,7 +98,7 @@ pub fn start_one_shot_server() -> std::io::Result<ServerHandle> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "server addr missing"))?;
     let join = thread::spawn(move || {
         if let Some(request) = server.incoming_requests().next() {
-            crate::http::request_dispatch::dispatch_backend_request(request);
+            crate::http::backend_router::handle_backend_request(request);
         }
     });
     Ok(ServerHandle { addr, join })
