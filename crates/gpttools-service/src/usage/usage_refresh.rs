@@ -1,7 +1,7 @@
 use gpttools_core::auth::{DEFAULT_CLIENT_ID, DEFAULT_ISSUER};
 use gpttools_core::storage::{Storage, Token};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::storage_helpers::open_storage;
 use crate::usage_account_meta::{
@@ -90,8 +90,12 @@ pub(crate) fn refresh_usage_for_all_accounts() -> Result<(), String> {
         let workspace_id = workspace_map
             .get(&token.account_id)
             .and_then(|value| value.as_deref());
+        let started_at = Instant::now();
         if let Err(err) = refresh_usage_for_token(&storage, &token, workspace_id) {
+            record_usage_refresh_metrics(false, started_at);
             record_usage_refresh_failure(&storage, &token.account_id, &err);
+        } else {
+            record_usage_refresh_metrics(true, started_at);
         }
     }
     Ok(())
@@ -108,11 +112,21 @@ pub(crate) fn refresh_usage_for_account(account_id: &str) -> Result<(), String> 
 
     let workspace_id = resolve_workspace_id_for_account(&storage, account_id);
 
+    let started_at = Instant::now();
     if let Err(err) = refresh_usage_for_token(&storage, &token, workspace_id.as_deref()) {
+        record_usage_refresh_metrics(false, started_at);
         record_usage_refresh_failure(&storage, &token.account_id, &err);
         return Err(err);
     }
+    record_usage_refresh_metrics(true, started_at);
     Ok(())
+}
+
+fn record_usage_refresh_metrics(success: bool, started_at: Instant) {
+    crate::gateway::record_usage_refresh_outcome(
+        success,
+        crate::gateway::duration_to_millis(started_at.elapsed()),
+    );
 }
 
 fn refresh_usage_for_token(

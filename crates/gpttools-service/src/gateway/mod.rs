@@ -45,7 +45,10 @@ use metrics::{
     account_inflight_count, acquire_account_inflight, begin_gateway_request,
     record_gateway_cooldown_mark, record_gateway_failover_attempt, AccountInFlightGuard,
 };
-pub(crate) use metrics::gateway_metrics_prometheus;
+pub(crate) use metrics::{
+    begin_rpc_request, duration_to_millis, gateway_metrics_prometheus,
+    record_usage_refresh_outcome,
+};
 use selection::{collect_gateway_candidates, rotate_candidates_for_fairness};
 use upstream::candidates::prepare_gateway_candidates;
 use failover::should_failover_after_refresh;

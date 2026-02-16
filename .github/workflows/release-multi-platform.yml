@@ -25,12 +25,18 @@ jobs:
           - os: windows-latest
             artifact_name: windows
             bundles: nsis
+            portable_source: CodexManager.exe
+            portable_filename: CodexManager.exe
           - os: ubuntu-22.04
             artifact_name: linux
             bundles: appimage,deb
+            portable_source: CodexManager
+            portable_filename: CodexManager
           - os: macos-14
             artifact_name: macos
             bundles: dmg
+            portable_source: CodexManager
+            portable_filename: CodexManager
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -87,30 +93,12 @@ jobs:
           New-Item -ItemType Directory -Force $portableDir | Out-Null
 
           $artifact = "${{ matrix.artifact_name }}"
-          $source = $null
-          if ($artifact -eq "windows") {
-            $preferred = Join-Path $releaseDir "CodexManager.exe"
-            if (Test-Path $preferred) { $source = $preferred }
-            if (-not $source) {
-              $source = Get-ChildItem $releaseDir -Filter "*.exe" -File |
-                Where-Object { $_.Name -notmatch "uninstall|setup|crash" } |
-                Select-Object -First 1 -ExpandProperty FullName
-            }
-          } else {
-            $preferred = Join-Path $releaseDir "CodexManager"
-            if (Test-Path $preferred) { $source = $preferred }
-            if (-not $source) {
-              $source = Get-ChildItem $releaseDir -File |
-                Where-Object { $_.Extension -eq "" -and $_.Name -notmatch "build-script|deps" } |
-                Select-Object -First 1 -ExpandProperty FullName
-            }
+          $source = Join-Path $releaseDir "${{ matrix.portable_source }}"
+          if (-not (Test-Path $source -PathType Leaf)) {
+            throw "portable source binary not found: $source"
           }
 
-          if (-not $source) {
-            throw "portable source binary not found in $releaseDir"
-          }
-
-          $portableName = if ($artifact -eq "windows") { "CodexManager.exe" } else { "CodexManager" }
+          $portableName = "${{ matrix.portable_filename }}"
           $portableBinary = Join-Path $portableDir $portableName
           Copy-Item -Force $source $portableBinary
 

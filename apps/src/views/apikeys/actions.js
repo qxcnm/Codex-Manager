@@ -1,0 +1,59 @@
+import { state } from "../../state.js";
+import { dom } from "../../ui/dom.js";
+import { REASONING_OPTIONS } from "./state.js";
+
+function populateReasoningSelect() {
+  if (!dom.inputApiKeyReasoning) return;
+  dom.inputApiKeyReasoning.innerHTML = "";
+  REASONING_OPTIONS.forEach((item) => {
+    const option = document.createElement("option");
+    option.value = item.value;
+    option.textContent = item.label;
+    dom.inputApiKeyReasoning.appendChild(option);
+  });
+}
+
+export function populateApiKeyModelSelect() {
+  if (!dom.inputApiKeyModel) return;
+  dom.inputApiKeyModel.innerHTML = "";
+
+  const followOption = document.createElement("option");
+  followOption.value = "";
+  followOption.textContent = "跟随请求模型（不覆盖）";
+  dom.inputApiKeyModel.appendChild(followOption);
+
+  state.apiModelOptions.forEach((model) => {
+    const option = document.createElement("option");
+    option.value = model.slug;
+    option.textContent = model.displayName || model.slug;
+    dom.inputApiKeyModel.appendChild(option);
+  });
+
+  populateReasoningSelect();
+}
+
+// 打开 API Key 弹窗
+export function openApiKeyModal() {
+  dom.modalApiKey.classList.add("active");
+  dom.inputApiKeyName.value = "";
+  if (dom.inputApiKeyProtocol) {
+    dom.inputApiKeyProtocol.value = "openai_compat";
+  }
+  populateApiKeyModelSelect();
+  if (dom.inputApiKeyModel) {
+    dom.inputApiKeyModel.value = "";
+  }
+  if (dom.inputApiKeyReasoning) {
+    dom.inputApiKeyReasoning.value = "";
+    dom.inputApiKeyReasoning.disabled = true;
+  }
+  dom.apiKeyValue.value = "";
+}
+
+// 关闭 API Key 弹窗
+export function closeApiKeyModal() {
+  dom.modalApiKey.classList.remove("active");
+  if (dom.inputApiKeyModel) {
+    dom.inputApiKeyModel.disabled = false;
+  }
+}

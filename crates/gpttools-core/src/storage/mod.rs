@@ -1,11 +1,15 @@
 use rusqlite::{Connection, Result};
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-mod request_log_query;
+mod accounts;
 mod api_keys;
+mod events;
+mod request_log_query;
 mod request_logs;
+mod tokens;
+mod usage;
 
 #[derive(Debug, Clone)]
 pub struct Account {
@@ -95,7 +99,6 @@ pub struct ApiKey {
     pub created_at: i64,
     pub last_used_at: Option<i64>,
 }
-
 
 #[derive(Debug)]
 pub struct Storage {
@@ -188,260 +191,6 @@ impl Storage {
         )
     }
 
-    pub fn insert_account(&self, account: &Account) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO accounts (id, label, issuer, chatgpt_account_id, workspace_id, group_name, sort, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            (
-                &account.id,
-                &account.label,
-                &account.issuer,
-                &account.chatgpt_account_id,
-                &account.workspace_id,
-                &account.group_name,
-                account.sort,
-                &account.status,
-                account.created_at,
-                account.updated_at,
-            ),
-        )?;
-        Ok(())
-    }
-
-    pub fn insert_token(&self, token: &Token) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO tokens (account_id, id_token, access_token, refresh_token, api_key_access_token, last_refresh) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            (
-                &token.account_id,
-                &token.id_token,
-                &token.access_token,
-                &token.refresh_token,
-                &token.api_key_access_token,
-                token.last_refresh,
-            ),
-        )?;
-        Ok(())
-    }
-
-    pub fn account_count(&self) -> Result<i64> {
-        self.conn.query_row("SELECT COUNT(1) FROM accounts", [], |row| row.get(0))
-    }
-
-    pub fn token_count(&self) -> Result<i64> {
-        self.conn.query_row("SELECT COUNT(1) FROM tokens", [], |row| row.get(0))
-    }
-
-    pub fn insert_usage_snapshot(&self, snap: &UsageSnapshotRecord) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO usage_snapshots (account_id, used_percent, window_minutes, resets_at, secondary_used_percent, secondary_window_minutes, secondary_resets_at, credits_json, captured_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            (
-                &snap.account_id,
-                snap.used_percent,
-                snap.window_minutes,
-                snap.resets_at,
-                snap.secondary_used_percent,
-                snap.secondary_window_minutes,
-                snap.secondary_resets_at,
-                &snap.credits_json,
-                snap.captured_at,
-            ),
-        )?;
-        Ok(())
-    }
-
-    pub fn latest_usage_snapshot(&self) -> Result<Option<UsageSnapshotRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT account_id, used_percent, window_minutes, resets_at, secondary_used_percent, secondary_window_minutes, secondary_resets_at, credits_json, captured_at FROM usage_snapshots ORDER BY captured_at DESC, id DESC LIMIT 1",
-        )?;
-        let mut rows = stmt.query([])?;
-        if let Some(row) = rows.next()? {
-            Ok(Some(UsageSnapshotRecord {
-                account_id: row.get(0)?,
-                used_percent: row.get(1)?,
-                window_minutes: row.get(2)?,
-                resets_at: row.get(3)?,
-                secondary_used_percent: row.get(4)?,
-                secondary_window_minutes: row.get(5)?,
-                secondary_resets_at: row.get(6)?,
-                credits_json: row.get(7)?,
-                captured_at: row.get(8)?,
-            }))
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub fn list_accounts(&self) -> Result<Vec<Account>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, label, issuer, chatgpt_account_id, workspace_id, group_name, sort, status, created_at, updated_at FROM accounts ORDER BY sort ASC, updated_at DESC",
-        )?;
-        let mut rows = stmt.query([])?;
-        let mut out = Vec::new();
-        while let Some(row) = rows.next()? {
-            out.push(Account {
-                id: row.get(0)?,
-                label: row.get(1)?,
-                issuer: row.get(2)?,
-                chatgpt_account_id: row.get(3)?,
-                workspace_id: row.get(4)?,
-                group_name: row.get(5)?,
-                sort: row.get(6)?,
-                status: row.get(7)?,
-                created_at: row.get(8)?,
-                updated_at: row.get(9)?,
-            });
-        }
-        Ok(out)
-    }
-
-    pub fn list_tokens(&self) -> Result<Vec<Token>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT account_id, id_token, access_token, refresh_token, api_key_access_token, last_refresh FROM tokens",
-        )?;
-        let mut rows = stmt.query([])?;
-        let mut out = Vec::new();
-        while let Some(row) = rows.next()? {
-            out.push(Token {
-                account_id: row.get(0)?,
-                id_token: row.get(1)?,
-                access_token: row.get(2)?,
-                refresh_token: row.get(3)?,
-                api_key_access_token: row.get(4)?,
-                last_refresh: row.get(5)?,
-            });
-        }
-        Ok(out)
-    }
-
-    pub fn update_account_sort(&self, account_id: &str, sort: i64) -> Result<()> {
-        self.conn.execute(
-            "UPDATE accounts SET sort = ?1, updated_at = ?2 WHERE id = ?3",
-            (sort, now_ts(), account_id),
-        )?;
-        Ok(())
-    }
-
-    pub fn update_account_status(&self, account_id: &str, status: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE accounts SET status = ?1, updated_at = ?2 WHERE id = ?3",
-            (status, now_ts(), account_id),
-        )?;
-        Ok(())
-    }
-
-
-    pub fn latest_usage_snapshot_for_account(
-        &self,
-        account_id: &str,
-    ) -> Result<Option<UsageSnapshotRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT account_id, used_percent, window_minutes, resets_at, secondary_used_percent, secondary_window_minutes, secondary_resets_at, credits_json, captured_at
-             FROM usage_snapshots
-             WHERE account_id = ?1
-             ORDER BY captured_at DESC, id DESC
-             LIMIT 1",
-        )?;
-        let mut rows = stmt.query([account_id])?;
-        if let Some(row) = rows.next()? {
-            Ok(Some(UsageSnapshotRecord {
-                account_id: row.get(0)?,
-                used_percent: row.get(1)?,
-                window_minutes: row.get(2)?,
-                resets_at: row.get(3)?,
-                secondary_used_percent: row.get(4)?,
-                secondary_window_minutes: row.get(5)?,
-                secondary_resets_at: row.get(6)?,
-                credits_json: row.get(7)?,
-                captured_at: row.get(8)?,
-            }))
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub fn insert_event(&self, event: &Event) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO events (account_id, type, message, created_at) VALUES (?1, ?2, ?3, ?4)",
-            (
-                &event.account_id,
-                &event.event_type,
-                &event.message,
-                event.created_at,
-            ),
-        )?;
-        Ok(())
-    }
-
-    pub fn event_count(&self) -> Result<i64> {
-        self.conn.query_row("SELECT COUNT(1) FROM events", [], |row| row.get(0))
-    }
-
-    pub fn delete_account(&mut self, account_id: &str) -> Result<()> {
-        let tx = self.conn.transaction()?;
-        tx.execute("DELETE FROM tokens WHERE account_id = ?1", [account_id])?;
-        tx.execute(
-            "DELETE FROM usage_snapshots WHERE account_id = ?1",
-            [account_id],
-        )?;
-        tx.execute("DELETE FROM events WHERE account_id = ?1", [account_id])?;
-        tx.execute("DELETE FROM accounts WHERE id = ?1", [account_id])?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    pub fn latest_usage_snapshots_by_account(&self) -> Result<Vec<UsageSnapshotRecord>> {
-        // 中文注释：窗口函数 + 复合索引可稳定处理“同 captured_at 并发写入”场景；
-        // 不这样做会依赖复杂子查询拼接，后续维护和优化都更难。
-        let mut stmt = self.conn.prepare(
-            "WITH ranked AS (
-                SELECT
-                    id,
-                    account_id,
-                    used_percent,
-                    window_minutes,
-                    resets_at,
-                    secondary_used_percent,
-                    secondary_window_minutes,
-                    secondary_resets_at,
-                    credits_json,
-                    captured_at,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY account_id
-                        ORDER BY captured_at DESC, id DESC
-                    ) AS rn
-                FROM usage_snapshots
-            )
-            SELECT
-                account_id,
-                used_percent,
-                window_minutes,
-                resets_at,
-                secondary_used_percent,
-                secondary_window_minutes,
-                secondary_resets_at,
-                credits_json,
-                captured_at
-            FROM ranked
-            WHERE rn = 1
-            ORDER BY captured_at DESC, id DESC",
-        )?;
-        let mut rows = stmt.query([])?;
-        let mut out = Vec::new();
-        while let Some(row) = rows.next()? {
-            out.push(UsageSnapshotRecord {
-                account_id: row.get(0)?,
-                used_percent: row.get(1)?,
-                window_minutes: row.get(2)?,
-                resets_at: row.get(3)?,
-                secondary_used_percent: row.get(4)?,
-                secondary_window_minutes: row.get(5)?,
-                secondary_resets_at: row.get(6)?,
-                credits_json: row.get(7)?,
-                captured_at: row.get(8)?,
-            });
-        }
-        Ok(out)
-    }
-
     pub fn insert_login_session(&self, session: &LoginSession) -> Result<()> {
         self.conn.execute(
             "INSERT INTO login_sessions (login_id, code_verifier, state, status, error, note, tags, group_name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -496,35 +245,6 @@ impl Storage {
         )?;
         Ok(())
     }
-
-    fn ensure_token_api_key_column(&self) -> Result<()> {
-        if self.has_column("tokens", "api_key_access_token")? {
-            return Ok(());
-        }
-        self.conn.execute(
-            "ALTER TABLE tokens ADD COLUMN api_key_access_token TEXT",
-            [],
-        )?;
-        Ok(())
-    }
-
-    fn ensure_account_meta_columns(&self) -> Result<()> {
-        self.ensure_column("accounts", "chatgpt_account_id", "TEXT")?;
-        self.ensure_column("accounts", "group_name", "TEXT")?;
-        self.ensure_column("accounts", "sort", "INTEGER DEFAULT 0")?;
-        self.ensure_column("login_sessions", "note", "TEXT")?;
-        self.ensure_column("login_sessions", "tags", "TEXT")?;
-        self.ensure_column("login_sessions", "group_name", "TEXT")?;
-        Ok(())
-    }
-
-    fn ensure_usage_secondary_columns(&self) -> Result<()> {
-        self.ensure_column("usage_snapshots", "secondary_used_percent", "REAL")?;
-        self.ensure_column("usage_snapshots", "secondary_window_minutes", "INTEGER")?;
-        self.ensure_column("usage_snapshots", "secondary_resets_at", "INTEGER")?;
-        Ok(())
-    }
-
 
     fn ensure_column(&self, table: &str, column: &str, column_type: &str) -> Result<()> {
         if self.has_column(table, column)? {
@@ -614,8 +334,8 @@ impl Storage {
             _ => false,
         }
     }
-
 }
+
 #[cfg(test)]
 #[path = "../../tests/storage/migration_tests.rs"]
 mod migration_tests;
@@ -626,4 +346,3 @@ pub fn now_ts() -> i64 {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
 }
-

@@ -2,6 +2,13 @@ use tiny_http::Request;
 use tiny_http::Response;
 use url::Url;
 
+fn rpc_response_failed(resp: &gpttools_core::rpc::types::JsonRpcResponse) -> bool {
+    if resp.result.get("error").is_some() {
+        return true;
+    }
+    matches!(resp.result.get("ok").and_then(|value| value.as_bool()), Some(false))
+}
+
 fn get_header_value<'a>(request: &'a Request, name: &str) -> Option<&'a str> {
     request
         .headers()
@@ -39,6 +46,7 @@ fn allow_unauthenticated_rpc() -> bool {
 }
 
 pub fn handle_rpc(mut request: Request) {
+    let mut rpc_metrics_guard = crate::gateway::begin_rpc_request();
     if request.method().as_str() != "POST" {
         let _ = request.respond(Response::from_string("{}").with_status_code(405));
         return;
@@ -94,6 +102,9 @@ pub fn handle_rpc(mut request: Request) {
         }
     };
     let resp = crate::handle_request(req);
+    if !rpc_response_failed(&resp) {
+        rpc_metrics_guard.mark_success();
+    }
     let json = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string());
     let _ = request.respond(Response::from_string(json));
 }

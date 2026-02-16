@@ -4,11 +4,11 @@ pub(super) use super::protocol_adapter::{
 };
 pub(super) use super::should_failover_after_refresh;
 pub(super) use super::{
-    account_token_exchange_lock,
+    account_token_exchange_lock, begin_rpc_request,
     build_codex_upstream_headers, CodexUpstreamHeaderInput,
     cooldown_reason_for_status, gateway_metrics_prometheus, is_html_content_type,
     is_upstream_challenge_response, normalize_models_path, normalize_upstream_base_url,
-    resolve_openai_bearer_token, should_drop_incoming_header,
+    record_usage_refresh_outcome, resolve_openai_bearer_token, should_drop_incoming_header,
     should_drop_incoming_header_for_failover, should_try_openai_fallback,
     should_try_openai_fallback_by_status, CooldownReason,
 };
