@@ -470,6 +470,103 @@ fn gateway_logs_invalid_api_key_error() {
 }
 
 #[test]
+fn gateway_rejects_non_openai_protocol_after_compat_slimming() {
+    let _lock = lock_env();
+    let dir = new_test_dir("codexmanager-gateway-reject-non-openai-protocol");
+    let db_path: PathBuf = dir.join("codexmanager.db");
+
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init db");
+    let now = now_ts();
+
+    let platform_key = "pk_reject_non_openai";
+    storage
+        .insert_api_key(&ApiKey {
+            id: "gk_reject_non_openai".to_string(),
+            name: Some("reject-non-openai".to_string()),
+            model_slug: None,
+            reasoning_effort: None,
+            client_type: "codex".to_string(),
+            protocol_type: "anthropic_native".to_string(),
+            auth_scheme: "x_api_key".to_string(),
+            upstream_base_url: None,
+            static_headers_json: None,
+            key_hash: hash_platform_key_for_test(platform_key),
+            status: "active".to_string(),
+            created_at: now,
+            last_used_at: None,
+        })
+        .expect("insert api key");
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let req_body = r#"{"model":"gpt-5.3-codex","messages":[{"role":"user","content":"hi"}]}"#;
+    let (status, body) = post_http_raw(
+        &server.addr,
+        "/v1/messages",
+        req_body,
+        &[
+            ("Content-Type", "application/json"),
+            ("x-api-key", platform_key),
+        ],
+    );
+    server.join();
+
+    assert_eq!(status, 400, "gateway response: {body}");
+    assert!(
+        body.contains("only openai_compat is enabled"),
+        "unexpected body: {body}"
+    );
+}
+
+#[test]
+fn gateway_rejects_models_endpoint_after_compat_slimming() {
+    let _lock = lock_env();
+    let dir = new_test_dir("codexmanager-gateway-reject-models-endpoint");
+    let db_path: PathBuf = dir.join("codexmanager.db");
+
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init db");
+    let now = now_ts();
+
+    let platform_key = "pk_reject_models";
+    storage
+        .insert_api_key(&ApiKey {
+            id: "gk_reject_models".to_string(),
+            name: Some("reject-models".to_string()),
+            model_slug: None,
+            reasoning_effort: None,
+            client_type: "codex".to_string(),
+            protocol_type: "openai_compat".to_string(),
+            auth_scheme: "authorization_bearer".to_string(),
+            upstream_base_url: None,
+            static_headers_json: None,
+            key_hash: hash_platform_key_for_test(platform_key),
+            status: "active".to_string(),
+            created_at: now,
+            last_used_at: None,
+        })
+        .expect("insert api key");
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let (status, body) = get_http_raw(
+        &server.addr,
+        "/v1/models",
+        &[("Authorization", &format!("Bearer {platform_key}"))],
+    );
+    server.join();
+
+    assert_eq!(status, 404, "gateway response: {body}");
+    assert!(
+        body.contains("only /v1/chat/completions and /v1/responses are enabled"),
+        "unexpected body: {body}"
+    );
+}
+
+#[test]
 fn gateway_tolerates_non_ascii_turn_metadata_header() {
     let _lock = lock_env();
     let dir = new_test_dir("codexmanager-gateway-logs-nonascii");
@@ -494,6 +591,7 @@ fn gateway_tolerates_non_ascii_turn_metadata_header() {
 }
 
 #[test]
+#[ignore = "compat removed: only /v1/chat/completions and /v1/responses are enabled"]
 fn gateway_claude_protocol_end_to_end_uses_codex_headers() {
     let _lock = lock_env();
     let dir = new_test_dir("codexmanager-gateway-claude-e2e");
@@ -1009,6 +1107,7 @@ fn gateway_openai_non_stream_without_usage_keeps_tokens_null() {
 }
 
 #[test]
+#[ignore = "compat removed: only /v1/chat/completions and /v1/responses are enabled"]
 fn gateway_models_returns_cached_without_upstream() {
     let _lock = lock_env();
     let dir = new_test_dir("codexmanager-gateway-models-cache");
@@ -1661,11 +1760,9 @@ fn gateway_stateless_retry_strips_encrypted_content_on_invalid_encrypted_content
     assert!(first.headers.contains_key("conversation_id"));
     let first_body: serde_json::Value =
         serde_json::from_slice(&first.body).expect("parse first request body");
-    assert_eq!(
-        first_body
-            .get("encrypted_content")
-            .and_then(|v| v.as_str()),
-        Some("gAAA_test_payload")
+    assert!(
+        first_body.get("encrypted_content").is_none(),
+        "OpenAI v1 strict allowlist must drop non-official encrypted_content field"
     );
 
     assert!(!second.headers.contains_key("x-codex-turn-state"));
@@ -1679,6 +1776,7 @@ fn gateway_stateless_retry_strips_encrypted_content_on_invalid_encrypted_content
 }
 
 #[test]
+#[ignore = "compat removed: only /v1/chat/completions and /v1/responses are enabled"]
 fn gateway_claude_failover_cross_workspace_strips_session_affinity_headers() {
     let _lock = lock_env();
     let dir = new_test_dir("codexmanager-gateway-claude-strip-cross-workspace");
@@ -1878,6 +1976,7 @@ fn gateway_claude_failover_cross_workspace_strips_session_affinity_headers() {
 }
 
 #[test]
+#[ignore = "compat removed: only /v1/chat/completions and /v1/responses are enabled"]
 fn gateway_claude_failover_same_workspace_preserves_session_affinity_headers() {
     let _lock = lock_env();
     let dir = new_test_dir("codexmanager-gateway-claude-strip-same-workspace");
@@ -2033,6 +2132,7 @@ fn gateway_claude_failover_same_workspace_preserves_session_affinity_headers() {
 }
 
 #[test]
+#[ignore = "compat removed: only /v1/chat/completions and /v1/responses are enabled"]
 fn gateway_request_log_keeps_only_final_result_for_multi_attempt_flow() {
     let _lock = lock_env();
     let dir = new_test_dir("codexmanager-gateway-final-log");

@@ -1,5 +1,15 @@
 use serde_json::Value;
 
+mod request_rewrite_chat_completions;
+mod request_rewrite_responses;
+mod request_rewrite_shared;
+
+use request_rewrite_chat_completions as chat_completions;
+use request_rewrite_responses as responses;
+
+type RetainFn = fn(&str, &mut serde_json::Map<String, Value>) -> Vec<String>;
+const RETAIN_FN_PROBE_KEY: &str = "__codexmanager_allowlist_probe__";
+
 pub(super) fn compute_upstream_url(base: &str, path: &str) -> (String, Option<String>) {
     let base = base.trim_end_matches('/');
     let url = if base.contains("/backend-api/codex") && path.starts_with("/v1/") {
@@ -18,16 +28,12 @@ pub(super) fn compute_upstream_url(base: &str, path: &str) -> (String, Option<St
     (url, url_alt)
 }
 
-fn path_supports_reasoning_override(path: &str) -> bool {
-    path.starts_with("/v1/responses") || path.starts_with("/v1/chat/completions")
-}
-
 fn is_codex_backend_base(base: &str) -> bool {
     base.to_ascii_lowercase().contains("/backend-api/codex")
 }
 
 fn should_apply_codex_responses_compat(path: &str, explicit_upstream_base: Option<&str>) -> bool {
-    if !path.starts_with("/v1/responses") {
+    if !responses::is_responses_path(path) {
         return false;
     }
     let resolved_base = explicit_upstream_base
@@ -37,144 +43,194 @@ fn should_apply_codex_responses_compat(path: &str, explicit_upstream_base: Optio
     is_codex_backend_base(&normalized_base)
 }
 
-fn is_stream_request(obj: &serde_json::Map<String, Value>) -> bool {
-    obj.get("stream").and_then(Value::as_bool).unwrap_or(false)
+fn path_matches_retain_fn(path: &str, retain_fn: RetainFn) -> bool {
+    let mut probe = serde_json::Map::new();
+    probe.insert(RETAIN_FN_PROBE_KEY.to_string(), Value::Null);
+    retain_fn(path, &mut probe);
+    !probe.contains_key(RETAIN_FN_PROBE_KEY)
 }
 
-fn ensure_chat_completions_stream_usage_override(
+fn resolve_retain_fn(path: &str, use_codex_responses_compat: bool) -> Option<RetainFn> {
+    if path_matches_retain_fn(path, chat_completions::retain_official_fields) {
+        return Some(chat_completions::retain_official_fields);
+    }
+    if use_codex_responses_compat {
+        if path_matches_retain_fn(path, responses::retain_codex_fields) {
+            return Some(responses::retain_codex_fields);
+        }
+    } else if path_matches_retain_fn(path, responses::retain_official_fields) {
+        return Some(responses::retain_official_fields);
+    }
+    None
+}
+
+fn is_allowed_field(path: &str, key: &str, retain_fn: RetainFn) -> bool {
+    let mut one = serde_json::Map::new();
+    one.insert(key.to_string(), Value::Null);
+    retain_fn(path, &mut one);
+    one.contains_key(key)
+}
+
+fn find_subsequence(haystack: &[u8], needle: &[u8], start: usize) -> Option<usize> {
+    if needle.is_empty() || start >= haystack.len() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack[start..]
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|idx| idx + start)
+}
+
+fn extract_multipart_part_name(headers: &[u8]) -> Option<String> {
+    let headers_str = std::str::from_utf8(headers).ok()?;
+    for line in headers_str.split("\r\n") {
+        let (name, value) = line.split_once(':')?;
+        if !name.trim().eq_ignore_ascii_case("content-disposition") {
+            continue;
+        }
+        for token in value.split(';') {
+            let token = token.trim();
+            if token
+                .get(..5)
+                .map(|prefix| prefix.eq_ignore_ascii_case("name="))
+                .unwrap_or(false)
+            {
+                let mut field_name = token[5..].trim().to_string();
+                if field_name.starts_with('"') && field_name.ends_with('"') && field_name.len() >= 2
+                {
+                    field_name = field_name[1..field_name.len() - 1].to_string();
+                }
+                if !field_name.is_empty() {
+                    return Some(field_name);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn filter_form_urlencoded_body(
     path: &str,
-    obj: &mut serde_json::Map<String, Value>,
-) -> bool {
-    if !path.starts_with("/v1/chat/completions") {
-        return false;
+    body: &[u8],
+    retain_fn: RetainFn,
+) -> Option<(Vec<u8>, Vec<String>)> {
+    if !body.contains(&b'=') {
+        return None;
     }
-    if !is_stream_request(obj) {
-        return false;
+    let pairs = url::form_urlencoded::parse(body)
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect::<Vec<_>>();
+    if pairs.is_empty() {
+        return None;
     }
-    let mut changed = false;
-    let stream_options = obj
-        .entry("stream_options".to_string())
-        .or_insert_with(|| Value::Object(serde_json::Map::new()));
-    if !stream_options.is_object() {
-        *stream_options = Value::Object(serde_json::Map::new());
-        changed = true;
-    }
-    if let Some(stream_options_obj) = stream_options.as_object_mut() {
-        let has_include_usage = stream_options_obj
-            .get("include_usage")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        if !has_include_usage {
-            stream_options_obj.insert("include_usage".to_string(), Value::Bool(true));
-            changed = true;
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    let mut dropped_keys = Vec::new();
+    for (key, value) in pairs {
+        if is_allowed_field(path, &key, retain_fn) {
+            serializer.append_pair(&key, &value);
+        } else {
+            dropped_keys.push(key);
         }
     }
-    changed
+    if dropped_keys.is_empty() {
+        return None;
+    }
+    Some((serializer.finish().into_bytes(), dropped_keys))
 }
 
-fn ensure_responses_instructions(path: &str, obj: &mut serde_json::Map<String, Value>) -> bool {
-    if !path.starts_with("/v1/responses") {
-        return false;
+fn filter_multipart_form_data_body(
+    path: &str,
+    body: &[u8],
+    retain_fn: RetainFn,
+) -> Option<(Vec<u8>, Vec<String>)> {
+    if !body.starts_with(b"--") {
+        return None;
     }
-    if obj.contains_key("instructions") {
-        return false;
+    let boundary_line_end = find_subsequence(body, b"\r\n", 0)?;
+    if boundary_line_end <= 2 {
+        return None;
     }
-    // 中文注释：对齐 CPA 的 Codex 请求构造：缺失 instructions 时补空字符串，
-    // 避免部分上游对字段存在性更严格导致的 400。
-    obj.insert("instructions".to_string(), Value::String(String::new()));
-    true
-}
+    let boundary = &body[2..boundary_line_end];
+    if boundary.is_empty() {
+        return None;
+    }
+    let mut boundary_marker = Vec::with_capacity(boundary.len() + 2);
+    boundary_marker.extend_from_slice(b"--");
+    boundary_marker.extend_from_slice(boundary);
+    if !body.starts_with(&boundary_marker) {
+        return None;
+    }
 
-fn ensure_responses_input_list(path: &str, obj: &mut serde_json::Map<String, Value>) -> bool {
-    if !path.starts_with("/v1/responses") {
-        return false;
-    }
-    let Some(input) = obj.get_mut("input") else {
-        return false;
-    };
-    match input {
-        Value::String(text) => {
-            let mut content_part = serde_json::Map::new();
-            content_part.insert("type".to_string(), Value::String("input_text".to_string()));
-            content_part.insert("text".to_string(), Value::String(text.clone()));
+    let mut delimiter_with_crlf = Vec::with_capacity(boundary_marker.len() + 2);
+    delimiter_with_crlf.extend_from_slice(b"\r\n");
+    delimiter_with_crlf.extend_from_slice(&boundary_marker);
 
-            let mut message_item = serde_json::Map::new();
-            message_item.insert("type".to_string(), Value::String("message".to_string()));
-            message_item.insert("role".to_string(), Value::String("user".to_string()));
-            message_item.insert(
-                "content".to_string(),
-                Value::Array(vec![Value::Object(content_part)]),
-            );
-            *input = Value::Array(vec![Value::Object(message_item)]);
-            true
+    let mut cursor = boundary_marker.len();
+    if body.get(cursor..cursor + 2) == Some(b"--") {
+        return None;
+    }
+    if body.get(cursor..cursor + 2) != Some(b"\r\n") {
+        return None;
+    }
+    cursor += 2;
+
+    let mut kept_parts: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut dropped_keys = Vec::new();
+
+    loop {
+        let headers_end = find_subsequence(body, b"\r\n\r\n", cursor)?;
+        let headers = &body[cursor..headers_end];
+        let part_body_start = headers_end + 4;
+        let next_boundary = find_subsequence(body, &delimiter_with_crlf, part_body_start)?;
+        let part_body = &body[part_body_start..next_boundary];
+
+        let keep = match extract_multipart_part_name(headers) {
+            Some(name) => {
+                if is_allowed_field(path, &name, retain_fn) {
+                    true
+                } else {
+                    dropped_keys.push(name);
+                    false
+                }
+            }
+            None => true,
+        };
+        if keep {
+            kept_parts.push((headers.to_vec(), part_body.to_vec()));
         }
-        Value::Object(_) => {
-            *input = Value::Array(vec![input.clone()]);
-            true
+
+        cursor = next_boundary + delimiter_with_crlf.len();
+        if body.get(cursor..cursor + 2) == Some(b"--") {
+            break;
         }
-        _ => false,
+        if body.get(cursor..cursor + 2) != Some(b"\r\n") {
+            return None;
+        }
+        cursor += 2;
     }
-}
 
-fn ensure_responses_stream_true(path: &str, obj: &mut serde_json::Map<String, Value>) -> bool {
-    if !path.starts_with("/v1/responses") {
-        return false;
+    if dropped_keys.is_empty() {
+        return None;
     }
-    let stream = obj
-        .entry("stream".to_string())
-        .or_insert(Value::Bool(false));
-    if stream.as_bool() == Some(true) {
-        return false;
-    }
-    // 中文注释：对齐 CPA 的 Codex executor：/responses 固定走上游 SSE，
-    // 后续由网关按下游协议再聚合/透传，避免 backend-api/codex 在非流式形态返回 400。
-    *stream = Value::Bool(true);
-    true
-}
 
-fn ensure_responses_store_false(path: &str, obj: &mut serde_json::Map<String, Value>) -> bool {
-    if !path.starts_with("/v1/responses") {
-        return false;
+    let mut rebuilt = Vec::new();
+    for (idx, (headers, part_body)) in kept_parts.iter().enumerate() {
+        if idx > 0 {
+            rebuilt.extend_from_slice(b"\r\n");
+        }
+        rebuilt.extend_from_slice(&boundary_marker);
+        rebuilt.extend_from_slice(b"\r\n");
+        rebuilt.extend_from_slice(headers);
+        rebuilt.extend_from_slice(b"\r\n\r\n");
+        rebuilt.extend_from_slice(part_body);
     }
-    let store = obj
-        .entry("store".to_string())
-        .or_insert(Value::Bool(false));
-    if store.as_bool() == Some(false) {
-        return false;
+    if !kept_parts.is_empty() {
+        rebuilt.extend_from_slice(b"\r\n");
     }
-    // 中文注释：Codex upstream 对 /responses 要求 store=false；
-    // 用户端若显式传 true，这里统一改写避免上游 400。
-    *store = Value::Bool(false);
-    true
-}
+    rebuilt.extend_from_slice(&boundary_marker);
+    rebuilt.extend_from_slice(b"--\r\n");
 
-fn is_supported_codex_responses_key(key: &str) -> bool {
-    matches!(
-        key,
-        "model"
-            | "instructions"
-            | "input"
-            | "tools"
-            | "tool_choice"
-            | "parallel_tool_calls"
-            | "reasoning"
-            | "store"
-            | "stream"
-            | "include"
-            | "prompt_cache_key"
-            | "text"
-    )
-}
-
-fn retain_codex_responses_fields(path: &str, obj: &mut serde_json::Map<String, Value>) -> bool {
-    if !path.starts_with("/v1/responses") {
-        return false;
-    }
-    // 中文注释：仅保留 Codex CLI /responses 固定字段集合，其他字段全部丢弃，
-    // 防止不同客户端夹带参数触发 Codex upstream 的 400。
-    let before = obj.len();
-    obj.retain(|key, _| is_supported_codex_responses_key(key.as_str()));
-    obj.len() != before
+    Some((rebuilt, dropped_keys))
 }
 
 pub(super) fn apply_request_overrides(
@@ -184,437 +240,104 @@ pub(super) fn apply_request_overrides(
     reasoning_effort: Option<&str>,
     upstream_base_url: Option<&str>,
 ) -> Vec<u8> {
+    let use_codex_responses_compat = should_apply_codex_responses_compat(path, upstream_base_url);
     let normalized_model = model_slug.map(str::trim).filter(|v| !v.is_empty());
     let normalized_reasoning = reasoning_effort
         .and_then(crate::reasoning_effort::normalize_reasoning_effort)
         .map(str::to_string);
-    if path == "/v1/models" || path.starts_with("/v1/models?") {
-        return body;
-    }
     if body.is_empty() {
         return body;
     }
-    let Ok(mut payload) = serde_json::from_slice::<Value>(&body) else {
-        return body;
-    };
-    let Some(obj) = payload.as_object_mut() else {
-        return body;
-    };
-    let use_codex_responses_compat = should_apply_codex_responses_compat(path, upstream_base_url);
-    let mut changed = false;
-    if let Some(model) = normalized_model {
-        obj.insert("model".to_string(), Value::String(model.to_string()));
-        changed = true;
-    }
-    if let Some(level) = normalized_reasoning {
-        if path_supports_reasoning_override(path) {
-            let reasoning = obj
-                .entry("reasoning".to_string())
-                .or_insert_with(|| Value::Object(serde_json::Map::new()));
-            if !reasoning.is_object() {
-                // 中文注释：某些客户端会把 reasoning 误传成字符串；不矫正为对象会导致 effort 覆盖失效。
-                *reasoning = Value::Object(serde_json::Map::new());
+    if let Ok(mut payload) = serde_json::from_slice::<Value>(&body) {
+        if let Some(obj) = payload.as_object_mut() {
+            let mut changed = false;
+            let mut dropped_keys = Vec::new();
+
+            if let Some(model) = normalized_model {
+                obj.insert("model".to_string(), Value::String(model.to_string()));
                 changed = true;
             }
-            if let Some(reasoning_obj) = reasoning.as_object_mut() {
-                reasoning_obj.insert("effort".to_string(), Value::String(level));
+
+            if let Some(level) = normalized_reasoning.as_deref() {
+                if responses::apply_reasoning_override(path, obj, Some(level)) {
+                    changed = true;
+                }
+                if chat_completions::apply_reasoning_override(path, obj, Some(level)) {
+                    changed = true;
+                }
+            }
+
+            if chat_completions::ensure_reasoning_effort(path, obj) {
                 changed = true;
             }
+            if chat_completions::ensure_stream_usage_override(path, obj) {
+                changed = true;
+            }
+
+            if super::strict_request_param_allowlist_enabled() {
+                dropped_keys.extend(chat_completions::retain_official_fields(path, obj));
+                if !use_codex_responses_compat {
+                    dropped_keys.extend(responses::retain_official_fields(path, obj));
+                }
+            }
+
+            if use_codex_responses_compat {
+                if responses::ensure_input_list(path, obj) {
+                    changed = true;
+                }
+                if responses::ensure_stream_true(path, obj) {
+                    changed = true;
+                }
+                if responses::ensure_store_false(path, obj) {
+                    changed = true;
+                }
+                if responses::ensure_instructions(path, obj) {
+                    changed = true;
+                }
+                dropped_keys.extend(responses::retain_codex_fields(path, obj));
+            }
+
+            if !dropped_keys.is_empty() {
+                dropped_keys.sort_unstable();
+                dropped_keys.dedup();
+                changed = true;
+                log::debug!(
+                    "event=gateway_request_param_filtered path={} dropped_keys={}",
+                    path,
+                    dropped_keys.join(",")
+                );
+            }
+
+            if !changed {
+                return body;
+            }
+            return serde_json::to_vec(&payload).unwrap_or(body);
         }
     }
-    if ensure_chat_completions_stream_usage_override(path, obj) {
-        changed = true;
-    }
-    if use_codex_responses_compat {
-        if ensure_responses_input_list(path, obj) {
-            changed = true;
-        }
-        if ensure_responses_stream_true(path, obj) {
-            changed = true;
-        }
-        if ensure_responses_store_false(path, obj) {
-            changed = true;
-        }
-        if ensure_responses_instructions(path, obj) {
-            changed = true;
-        }
-        if retain_codex_responses_fields(path, obj) {
-            changed = true;
-        }
-    }
-    if !changed {
+
+    if !super::strict_request_param_allowlist_enabled() {
         return body;
     }
-    serde_json::to_vec(&payload).unwrap_or(body)
+    let Some(retain_fn) = resolve_retain_fn(path, use_codex_responses_compat) else {
+        return body;
+    };
+
+    let filtered = filter_multipart_form_data_body(path, &body, retain_fn)
+        .or_else(|| filter_form_urlencoded_body(path, &body, retain_fn));
+    let Some((filtered_body, mut dropped_keys)) = filtered else {
+        return body;
+    };
+
+    dropped_keys.sort_unstable();
+    dropped_keys.dedup();
+    log::debug!(
+        "event=gateway_request_param_filtered path={} dropped_keys={}",
+        path,
+        dropped_keys.join(",")
+    );
+    filtered_body
 }
 
 #[cfg(test)]
-mod tests {
-    use super::apply_request_overrides;
-    use serde_json::json;
-
-    #[test]
-    fn chat_completions_stream_enforces_include_usage() {
-        let body = json!({
-            "model": "gpt-4o",
-            "stream": true,
-            "messages": [{ "role": "user", "content": "hi" }]
-        });
-        let out = apply_request_overrides(
-            "/v1/chat/completions",
-            serde_json::to_vec(&body).expect("serialize request body"),
-            None,
-            None,
-            None,
-        );
-        let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
-        assert_eq!(
-            value
-                .get("stream_options")
-                .and_then(|v| v.get("include_usage"))
-                .and_then(serde_json::Value::as_bool),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn chat_completions_stream_preserves_options_while_enabling_usage() {
-        let body = json!({
-            "model": "gpt-4o",
-            "stream": true,
-            "stream_options": { "include_usage": false, "foo": "bar" },
-            "messages": [{ "role": "user", "content": "hi" }]
-        });
-        let out = apply_request_overrides(
-            "/v1/chat/completions",
-            serde_json::to_vec(&body).expect("serialize request body"),
-            None,
-            None,
-            None,
-        );
-        let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
-        assert_eq!(
-            value
-                .get("stream_options")
-                .and_then(|v| v.get("include_usage"))
-                .and_then(serde_json::Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            value
-                .get("stream_options")
-                .and_then(|v| v.get("foo"))
-                .and_then(serde_json::Value::as_str),
-            Some("bar")
-        );
-    }
-
-    #[test]
-    fn responses_overrides_model_and_reasoning_effort() {
-        let body = json!({
-            "model": "gpt-5.3-codex",
-            "reasoning": { "effort": "high" },
-            "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "hi" }] }]
-        });
-        let out = apply_request_overrides(
-            "/v1/responses",
-            serde_json::to_vec(&body).expect("serialize request body"),
-            Some("gpt-5.3-codex"),
-            Some("medium"),
-            Some("https://chatgpt.com/backend-api/codex"),
-        );
-        let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
-        assert_eq!(
-            value.get("model").and_then(serde_json::Value::as_str),
-            Some("gpt-5.3-codex")
-        );
-        assert_eq!(
-            value
-                .get("reasoning")
-                .and_then(|v| v.get("effort"))
-                .and_then(serde_json::Value::as_str),
-            Some("medium")
-        );
-        assert_eq!(
-            value
-                .get("instructions")
-                .and_then(serde_json::Value::as_str),
-            Some("")
-        );
-    }
-
-    #[test]
-    fn responses_keeps_existing_instructions() {
-        let body = json!({
-            "model": "gpt-5.3-codex",
-            "instructions": "already-set",
-            "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "hi" }] }]
-        });
-        let out = apply_request_overrides(
-            "/v1/responses",
-            serde_json::to_vec(&body).expect("serialize request body"),
-            None,
-            None,
-            Some("https://chatgpt.com/backend-api/codex"),
-        );
-        let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
-        assert_eq!(
-            value
-                .get("instructions")
-                .and_then(serde_json::Value::as_str),
-            Some("already-set")
-        );
-    }
-
-    #[test]
-    fn responses_input_string_normalized_to_list() {
-        let body = json!({
-            "model": "gpt-5.3-codex",
-            "input": "hello"
-        });
-        let out = apply_request_overrides(
-            "/v1/responses",
-            serde_json::to_vec(&body).expect("serialize request body"),
-            None,
-            None,
-            Some("https://chatgpt.com/backend-api/codex"),
-        );
-        let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
-        assert_eq!(
-            value
-                .get("input")
-                .and_then(|v| v.get(0))
-                .and_then(|v| v.get("type"))
-                .and_then(serde_json::Value::as_str),
-            Some("message")
-        );
-        assert_eq!(
-            value
-                .get("input")
-                .and_then(|v| v.get(0))
-                .and_then(|v| v.get("role"))
-                .and_then(serde_json::Value::as_str),
-            Some("user")
-        );
-        assert_eq!(
-            value
-                .get("input")
-                .and_then(|v| v.get(0))
-                .and_then(|v| v.get("content"))
-                .and_then(|v| v.get(0))
-                .and_then(|v| v.get("type"))
-                .and_then(serde_json::Value::as_str),
-            Some("input_text")
-        );
-        assert_eq!(
-            value
-                .get("input")
-                .and_then(|v| v.get(0))
-                .and_then(|v| v.get("content"))
-                .and_then(|v| v.get(0))
-                .and_then(|v| v.get("text"))
-                .and_then(serde_json::Value::as_str),
-            Some("hello")
-        );
-    }
-
-    #[test]
-    fn responses_input_object_wrapped_to_list() {
-        let body = json!({
-            "model": "gpt-5.3-codex",
-            "input": { "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "hello" }] }
-        });
-        let out = apply_request_overrides(
-            "/v1/responses",
-            serde_json::to_vec(&body).expect("serialize request body"),
-            None,
-            None,
-            Some("https://chatgpt.com/backend-api/codex"),
-        );
-        let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
-        assert_eq!(
-            value
-                .get("input")
-                .and_then(|v| v.as_array())
-                .map(std::vec::Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            value
-                .get("input")
-                .and_then(|v| v.get(0))
-                .and_then(|v| v.get("type"))
-                .and_then(serde_json::Value::as_str),
-            Some("message")
-        );
-    }
-
-    #[test]
-    fn responses_stream_is_forced_to_true() {
-        let body = json!({
-            "model": "gpt-5.3-codex",
-            "input": "hello",
-            "stream": false
-        });
-        let out = apply_request_overrides(
-            "/v1/responses",
-            serde_json::to_vec(&body).expect("serialize request body"),
-            None,
-            None,
-            Some("https://chatgpt.com/backend-api/codex"),
-        );
-        let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
-        assert_eq!(
-            value.get("stream").and_then(serde_json::Value::as_bool),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn responses_store_is_forced_to_false() {
-        let body = json!({
-            "model": "gpt-5.3-codex",
-            "input": "hello",
-            "store": true
-        });
-        let out = apply_request_overrides(
-            "/v1/responses",
-            serde_json::to_vec(&body).expect("serialize request body"),
-            None,
-            None,
-            Some("https://chatgpt.com/backend-api/codex"),
-        );
-        let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
-        assert_eq!(
-            value.get("store").and_then(serde_json::Value::as_bool),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn responses_retains_only_codex_supported_fields() {
-        let body = json!({
-            "model": "gpt-5.3-codex",
-            "instructions": "stay",
-            "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "hello" }] }],
-            "tools": [{ "type": "function", "name": "ping", "parameters": { "type": "object", "properties": {} } }],
-            "tool_choice": "auto",
-            "parallel_tool_calls": true,
-            "reasoning": { "effort": "high" },
-            "stream": true,
-            "store": false,
-            "include": ["reasoning.encrypted_content"],
-            "prompt_cache_key": "pc_1",
-            "text": { "format": { "type": "text" } },
-            "service_tier": "default",
-            "max_output_tokens": 8192,
-            "max_completion_tokens": 8192,
-            "temperature": 0.7,
-            "top_p": 0.95,
-            "truncation": "auto",
-            "context_management": { "type": "auto" },
-            "user": "cherry-studio",
-            "metadata": { "from": "client" }
-        });
-        let out = apply_request_overrides(
-            "/v1/responses",
-            serde_json::to_vec(&body).expect("serialize request body"),
-            None,
-            None,
-            Some("https://chatgpt.com/backend-api/codex"),
-        );
-        let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
-        assert_eq!(
-            value.get("model").and_then(serde_json::Value::as_str),
-            Some("gpt-5.3-codex")
-        );
-        assert_eq!(
-            value.get("instructions").and_then(serde_json::Value::as_str),
-            Some("stay")
-        );
-        assert!(value.get("input").is_some());
-        assert!(value.get("tools").is_some());
-        assert_eq!(
-            value
-                .get("tool_choice")
-                .and_then(serde_json::Value::as_str),
-            Some("auto")
-        );
-        assert_eq!(
-            value
-                .get("parallel_tool_calls")
-                .and_then(serde_json::Value::as_bool),
-            Some(true)
-        );
-        assert!(value.get("reasoning").is_some());
-        assert_eq!(
-            value.get("stream").and_then(serde_json::Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            value.get("store").and_then(serde_json::Value::as_bool),
-            Some(false)
-        );
-        assert!(value.get("include").is_some());
-        assert_eq!(
-            value
-                .get("prompt_cache_key")
-                .and_then(serde_json::Value::as_str),
-            Some("pc_1")
-        );
-        assert!(value.get("text").is_some());
-        assert!(value.get("service_tier").is_none());
-        assert!(value.get("max_output_tokens").is_none());
-        assert!(value.get("max_completion_tokens").is_none());
-        assert!(value.get("temperature").is_none());
-        assert!(value.get("top_p").is_none());
-        assert!(value.get("truncation").is_none());
-        assert!(value.get("context_management").is_none());
-        assert!(value.get("user").is_none());
-        assert!(value.get("metadata").is_none());
-    }
-
-    #[test]
-    fn responses_passthrough_for_non_codex_upstream() {
-        let body = json!({
-            "model": "gpt-4.1",
-            "input": "hello",
-            "stream": false,
-            "store": true,
-            "service_tier": "default",
-            "user": "cherry-studio"
-        });
-        let out = apply_request_overrides(
-            "/v1/responses",
-            serde_json::to_vec(&body).expect("serialize request body"),
-            None,
-            None,
-            Some("https://api.openai.com/v1"),
-        );
-        let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
-        assert_eq!(
-            value.get("stream").and_then(serde_json::Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            value.get("store").and_then(serde_json::Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            value.get("input").and_then(serde_json::Value::as_str),
-            Some("hello")
-        );
-        assert_eq!(
-            value
-                .get("service_tier")
-                .and_then(serde_json::Value::as_str),
-            Some("default")
-        );
-        assert_eq!(
-            value.get("user").and_then(serde_json::Value::as_str),
-            Some("cherry-studio")
-        );
-        assert!(value.get("instructions").is_none());
-    }
-
-}
+#[path = "tests/request_rewrite_tests.rs"]
+mod tests;

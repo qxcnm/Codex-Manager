@@ -1,5 +1,6 @@
-use codexmanager_core::storage::ApiKey;
+use crate::apikey_profile::{PROTOCOL_ANTHROPIC_NATIVE, PROTOCOL_OPENAI_COMPAT};
 use bytes::Bytes;
+use codexmanager_core::storage::ApiKey;
 use reqwest::Method;
 use tiny_http::Request;
 
@@ -21,6 +22,21 @@ fn resolve_effective_request_overrides(api_key: &ApiKey) -> (Option<String>, Opt
     (normalized_model, normalized_reasoning)
 }
 
+fn is_supported_gateway_protocol(protocol_type: &str) -> bool {
+    protocol_type == PROTOCOL_OPENAI_COMPAT
+}
+
+fn is_supported_gateway_path(path: &str) -> bool {
+    let path_no_query = path.split('?').next().unwrap_or(path);
+    matches!(
+        path_no_query,
+        "/v1/chat/completions"
+            | "/v1/chat/completions/"
+            | "/v1/responses"
+            | "/v1/responses/"
+    )
+}
+
 pub(super) fn build_local_validation_result(
     request: &Request,
     trace_id: String,
@@ -31,14 +47,47 @@ pub(super) fn build_local_validation_result(
 ) -> Result<LocalValidationResult, LocalValidationError> {
     // 按当前策略取消每次请求都更新 api_keys.last_used_at，减少并发写入冲突。
     let normalized_path = super::super::normalize_models_path(request.url());
+    if !is_supported_gateway_protocol(api_key.protocol_type.as_str()) {
+        return Err(LocalValidationError::new(
+            400,
+            format!(
+                "unsupported protocol type: {} (only openai_compat is enabled)",
+                api_key.protocol_type
+            ),
+        ));
+    }
+    if !is_supported_gateway_path(normalized_path.as_str()) {
+        return Err(LocalValidationError::new(
+            404,
+            "unsupported endpoint: only /v1/chat/completions and /v1/responses are enabled",
+        ));
+    }
+    let original_body = body.clone();
     let adapted = super::super::adapt_request_for_protocol(
         api_key.protocol_type.as_str(),
         &normalized_path,
         body,
     )
     .map_err(|err| LocalValidationError::new(400, err))?;
-    let path = adapted.path;
+    let mut path = adapted.path;
+    let mut response_adapter = adapted.response_adapter;
     body = adapted.body;
+    if api_key.protocol_type != PROTOCOL_ANTHROPIC_NATIVE
+        && !normalized_path.starts_with("/v1/responses")
+        && path.starts_with("/v1/responses")
+    {
+        // 中文注释：防回归保护：仅 anthropic_native 的 /v1/messages 允许改写到 /v1/responses；
+        // 其余协议和路径一律保持原路径透传，避免客户端按 chat/completions 语义却拿到 responses 流格式。
+        log::warn!(
+            "event=gateway_protocol_adapt_guard protocol_type={} from_path={} to_path={} action=force_passthrough",
+            api_key.protocol_type,
+            normalized_path,
+            path
+        );
+        path = normalized_path.clone();
+        body = original_body;
+        response_adapter = super::super::ResponseAdapter::Passthrough;
+    }
     // 中文注释：下游调用方的 stream 语义应在请求改写前确定；
     // 否则上游兼容改写（例如 /responses 强制 stream=true）会污染下游响应模式判断。
     let client_request_meta = super::super::parse_request_metadata(&body);
@@ -76,7 +125,7 @@ pub(super) fn build_local_validation_result(
         protocol_type: api_key.protocol_type,
         upstream_base_url: api_key.upstream_base_url,
         static_headers_json: api_key.static_headers_json,
-        response_adapter: adapted.response_adapter,
+        response_adapter,
         request_method,
         key_id: api_key.id,
         model_for_log,
@@ -86,56 +135,5 @@ pub(super) fn build_local_validation_result(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn sample_api_key(protocol_type: &str, model_slug: Option<&str>, reasoning: Option<&str>) -> ApiKey {
-        ApiKey {
-            id: "gk_test".to_string(),
-            name: Some("test".to_string()),
-            model_slug: model_slug.map(|value| value.to_string()),
-            reasoning_effort: reasoning.map(|value| value.to_string()),
-            client_type: "codex".to_string(),
-            protocol_type: protocol_type.to_string(),
-            auth_scheme: "authorization_bearer".to_string(),
-            upstream_base_url: None,
-            static_headers_json: None,
-            key_hash: "hash".to_string(),
-            status: "active".to_string(),
-            created_at: 0,
-            last_used_at: None,
-        }
-    }
-
-    #[test]
-    fn anthropic_key_keeps_empty_overrides() {
-        let api_key = sample_api_key(
-            crate::apikey_profile::PROTOCOL_ANTHROPIC_NATIVE,
-            None,
-            None,
-        );
-        let (model, reasoning) = resolve_effective_request_overrides(&api_key);
-        assert_eq!(model, None);
-        assert_eq!(reasoning, None);
-    }
-
-    #[test]
-    fn anthropic_key_applies_custom_model_and_reasoning() {
-        let api_key = sample_api_key(
-            crate::apikey_profile::PROTOCOL_ANTHROPIC_NATIVE,
-            Some("gpt-5.3-codex"),
-            Some("extra_high"),
-        );
-        let (model, reasoning) = resolve_effective_request_overrides(&api_key);
-        assert_eq!(model.as_deref(), Some("gpt-5.3-codex"));
-        assert_eq!(reasoning.as_deref(), Some("xhigh"));
-    }
-
-    #[test]
-    fn openai_key_keeps_empty_overrides() {
-        let api_key = sample_api_key("openai_compat", None, None);
-        let (model, reasoning) = resolve_effective_request_overrides(&api_key);
-        assert_eq!(model, None);
-        assert_eq!(reasoning, None);
-    }
-}
+#[path = "tests/request_tests.rs"]
+mod tests;
