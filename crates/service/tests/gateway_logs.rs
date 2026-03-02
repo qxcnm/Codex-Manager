@@ -489,7 +489,7 @@ fn gateway_rejects_non_openai_protocol_after_compat_slimming() {
             model_slug: None,
             reasoning_effort: None,
             client_type: "codex".to_string(),
-            protocol_type: "anthropic_native".to_string(),
+            protocol_type: "azure_openai".to_string(),
             auth_scheme: "x_api_key".to_string(),
             upstream_base_url: None,
             static_headers_json: None,
@@ -515,7 +515,7 @@ fn gateway_rejects_non_openai_protocol_after_compat_slimming() {
 
     assert_eq!(status, 400, "gateway response: {body}");
     assert!(
-        body.contains("only openai_compat is enabled"),
+        body.contains("only openai_compat and anthropic_native are enabled"),
         "unexpected body: {body}"
     );
 }

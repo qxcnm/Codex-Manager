@@ -51,9 +51,9 @@ fn openai_key_keeps_empty_overrides() {
 }
 
 #[test]
-fn gateway_protocol_is_restricted_to_openai_compat() {
+fn gateway_protocol_is_restricted_to_openai_and_anthropic() {
     assert!(is_supported_gateway_protocol("openai_compat"));
-    assert!(!is_supported_gateway_protocol(
+    assert!(is_supported_gateway_protocol(
         crate::apikey_profile::PROTOCOL_ANTHROPIC_NATIVE
     ));
     assert!(!is_supported_gateway_protocol(

@@ -23,7 +23,10 @@ fn resolve_effective_request_overrides(api_key: &ApiKey) -> (Option<String>, Opt
 }
 
 fn is_supported_gateway_protocol(protocol_type: &str) -> bool {
-    protocol_type == PROTOCOL_OPENAI_COMPAT
+    matches!(
+        protocol_type,
+        PROTOCOL_OPENAI_COMPAT | PROTOCOL_ANTHROPIC_NATIVE
+    )
 }
 
 fn is_supported_gateway_path(path: &str) -> bool {
@@ -51,7 +54,7 @@ pub(super) fn build_local_validation_result(
         return Err(LocalValidationError::new(
             400,
             format!(
-                "unsupported protocol type: {} (only openai_compat is enabled)",
+                "unsupported protocol type: {} (only openai_compat and anthropic_native are enabled)",
                 api_key.protocol_type
             ),
         ));
