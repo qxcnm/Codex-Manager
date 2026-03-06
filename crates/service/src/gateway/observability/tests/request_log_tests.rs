@@ -28,6 +28,45 @@ fn estimate_cost_matches_openai_gpt5_family_prices() {
 }
 
 #[test]
+fn estimate_cost_matches_openai_gpt54_prices() {
+    // gpt-5.4：输入 2.5/M，缓存 0.25/M，输出 15/M
+    // 样本：输入 1000，缓存 200，输出 500
+    // => 非缓存输入 800*0.0025/1000 + 缓存 200*0.00025/1000 + 输出 500*0.015/1000
+    // => 0.00955
+    let actual = estimate_cost_usd(Some("gpt-5.4"), Some(1000), Some(200), Some(500));
+    assert_close(actual, 0.00955);
+}
+
+#[test]
+fn estimate_cost_matches_openai_gpt54_large_context_prices() {
+    // gpt-5.4：输入超过 272K 时，输入 5/M，缓存 0.5/M，输出 22.5/M
+    // 样本：输入 300000，缓存 50000，输出 100000
+    // => 非缓存输入 250000*0.005/1000 + 缓存 50000*0.0005/1000 + 输出 100000*0.0225/1000
+    // => 3.525
+    let actual = estimate_cost_usd(Some("gpt-5.4"), Some(300_000), Some(50_000), Some(100_000));
+    assert_close(actual, 3.525);
+}
+
+#[test]
+fn estimate_cost_matches_openai_gpt54_pro_prices() {
+    // gpt-5.4-pro：输入 30/M，输出 180/M；无缓存折扣时按输入同价处理。
+    let actual = estimate_cost_usd(Some("gpt-5.4-pro"), Some(1000), Some(200), Some(500));
+    assert_close(actual, 0.12);
+}
+
+#[test]
+fn estimate_cost_matches_openai_gpt54_pro_large_context_prices() {
+    // gpt-5.4-pro：输入超过 272K 时，输入 60/M，输出 270/M。
+    let actual = estimate_cost_usd(
+        Some("gpt-5.4-pro"),
+        Some(300_000),
+        Some(50_000),
+        Some(100_000),
+    );
+    assert_close(actual, 45.0);
+}
+
+#[test]
 fn estimate_cost_matches_openai_gpt5_mini_and_52_prices() {
     // mini：输入 0.25/M，缓存 0.025/M，输出 2/M
     // 样本同上 => 0.001205

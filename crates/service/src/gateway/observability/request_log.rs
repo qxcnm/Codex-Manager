@@ -38,6 +38,27 @@ const MODEL_PRICE_PER_1K_TOKENS: &[(&str, f64, f64, f64)] = &[
     ("claude-3", 0.003, 0.003, 0.015),
 ];
 
+fn resolve_model_price_per_1k(normalized: &str, input_tokens_total: i64) -> Option<(f64, f64, f64)> {
+    // OpenAI 官方定价：gpt-5.4 / gpt-5.4-pro 在输入超过 272K 时切换到更高档位。
+    // gpt-5.4-pro 官方未提供 cached input 单价，这里按普通输入价计算，避免低估费用。
+    if normalized.starts_with("gpt-5.4-pro") {
+        if input_tokens_total > 272_000 {
+            return Some((0.06, 0.06, 0.27));
+        }
+        return Some((0.03, 0.03, 0.18));
+    }
+    if normalized.starts_with("gpt-5.4") {
+        if input_tokens_total > 272_000 {
+            return Some((0.005, 0.0005, 0.0225));
+        }
+        return Some((0.0025, 0.00025, 0.015));
+    }
+    MODEL_PRICE_PER_1K_TOKENS
+        .iter()
+        .find(|(prefix, _, _, _)| normalized.starts_with(prefix))
+        .map(|(_, input, cached_input, output)| (*input, *cached_input, *output))
+}
+
 fn estimate_cost_usd(
     model: Option<&str>,
     input_tokens: Option<i64>,
@@ -51,13 +72,13 @@ fn estimate_cost_usd(
     let Some(normalized) = normalized else {
         return 0.0;
     };
-    let Some((_, in_per_1k, cached_in_per_1k, out_per_1k)) = MODEL_PRICE_PER_1K_TOKENS
-        .iter()
-        .find(|(prefix, _, _, _)| normalized.starts_with(prefix))
+    let input_tokens_total = input_tokens.unwrap_or(0).max(0);
+    let Some((in_per_1k, cached_in_per_1k, out_per_1k)) =
+        resolve_model_price_per_1k(&normalized, input_tokens_total)
     else {
         return 0.0;
     };
-    let in_tokens_total = input_tokens.unwrap_or(0).max(0) as f64;
+    let in_tokens_total = input_tokens_total as f64;
     let cached_in_tokens = (cached_input_tokens.unwrap_or(0).max(0) as f64).min(in_tokens_total);
     let billable_in_tokens = (in_tokens_total - cached_in_tokens).max(0.0);
     let out_tokens = output_tokens.unwrap_or(0).max(0) as f64;
