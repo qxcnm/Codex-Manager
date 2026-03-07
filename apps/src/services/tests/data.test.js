@@ -127,3 +127,65 @@ test("refreshAccountsPage falls back to local mode when backend does not return 
     globalThis.window = oldWindow;
   }
 });
+
+test("refreshAccountsPage stores remote page state when backend pagination is available", async () => {
+  const oldWindow = globalThis.window;
+
+  try {
+    globalThis.window = {
+      __TAURI__: {
+        core: {
+          invoke: async (method, params) => {
+            if (method === "service_account_list") {
+              assert.equal(params.page, 3);
+              assert.equal(params.pageSize, 10);
+              assert.equal(params.query, "team");
+              assert.equal(params.filter, "active");
+              assert.equal(params.groupFilter, "A组");
+              return {
+                result: {
+                  items: [
+                    { id: "acc-21", label: "账号21", groupName: "A组", sort: 21 },
+                    { id: "acc-22", label: "账号22", groupName: "A组", sort: 22 },
+                  ],
+                  total: 28,
+                  page: 3,
+                  pageSize: 10,
+                },
+              };
+            }
+            throw new Error(`unexpected invoke: ${method}`);
+          },
+        },
+      },
+    };
+
+    state.accountList = [{ id: "legacy-1", label: "旧账号" }];
+    state.accountPage = 3;
+    state.accountPageSize = 10;
+    state.accountSearch = "team";
+    state.accountFilter = "active";
+    state.accountGroupFilter = "A组";
+    state.accountPageItems = [];
+    state.accountPageTotal = 0;
+    state.accountPageLoaded = false;
+
+    const applied = await refreshAccountsPage({ latestOnly: true });
+
+    assert.equal(applied, true);
+    assert.equal(state.accountPageLoaded, true);
+    assert.equal(state.accountPageTotal, 28);
+    assert.equal(state.accountPage, 3);
+    assert.equal(state.accountPageSize, 10);
+    assert.deepEqual(
+      state.accountPageItems.map((item) => item.id),
+      ["acc-21", "acc-22"],
+    );
+    assert.deepEqual(
+      state.accountList.map((item) => item.id),
+      ["legacy-1"],
+    );
+  } finally {
+    globalThis.window = oldWindow;
+  }
+});

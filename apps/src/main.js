@@ -58,6 +58,7 @@ import { createLoginFlow } from "./services/login-flow";
 import { createManagementActions } from "./services/management-actions";
 import { openAccountModal, closeAccountModal } from "./views/accounts";
 import { renderAccountsRefreshProgress } from "./views/accounts/render";
+import { activateAccountsPage } from "./views/accounts/page-activation";
 import {
   clearRefreshAllProgress,
   setRefreshAllProgress,
@@ -116,10 +117,15 @@ const { switchPage, updateRequestLogFilterButtons } = createNavigationHandlers({
   dom,
   closeThemePanel,
   onPageActivated: (page) => {
-    renderCurrentPageView(page);
     if (page === "accounts") {
-      void reloadAccountsPage({ silent: true, latestOnly: true });
+      void activateAccountsPage({
+        accountPageLoaded: state.accountPageLoaded === true,
+        renderCurrentPageView,
+        reloadAccountsPage,
+      });
+      return;
     }
+    renderCurrentPageView(page);
   },
 });
 
@@ -1745,7 +1751,16 @@ async function refreshAll(options = {}) {
         );
       }
     }
-    renderCurrentPageView();
+    if (state.currentPage === "accounts") {
+      await activateAccountsPage({
+        accountPageLoaded: state.accountPageLoaded === true,
+        renderCurrentPageView,
+        reloadAccountsPage,
+        reloadOptions: { ensureConnection: false },
+      });
+    } else {
+      renderCurrentPageView();
+    }
   })();
   try {
     return await refreshAllInFlight;
@@ -2133,7 +2148,6 @@ function bootstrap() {
 }
 
 window.addEventListener("DOMContentLoaded", bootstrap);
-
 
 
 
