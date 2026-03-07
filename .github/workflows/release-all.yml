@@ -415,9 +415,54 @@ jobs:
           $config.build.PSObject.Properties.Remove("beforeBuildCommand")
           $config | ConvertTo-Json -Depth 100 | Set-Content $configPath
 
-      - name: Build macOS app bundle (app,dmg)
+      - name: Build macOS app bundle
         working-directory: apps
-        run: pnpm dlx @tauri-apps/cli@${{ env.TAURI_CLI_VERSION }} build --bundles app,dmg --target ${{ matrix.rust_target }}
+        run: pnpm dlx @tauri-apps/cli@${{ env.TAURI_CLI_VERSION }} build --bundles app --target ${{ matrix.rust_target }}
+
+      - name: Rebuild macOS dmg with first-launch helper
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_dir="apps/src-tauri/target/${{ matrix.rust_target }}/release"
+          bundle_root="${release_dir}/bundle"
+          test -d "$bundle_root" || { echo "macOS bundle root not found: $bundle_root"; exit 1; }
+
+          bundle_dir="$(find "$bundle_root" -type d -path '*/CodexManager.app' | head -n 1)"
+          test -n "$bundle_dir" || { echo "macOS app bundle not found under: $bundle_root"; exit 1; }
+
+          dmg_dir="${bundle_root}/dmg"
+          mkdir -p "$dmg_dir"
+          find "$dmg_dir" -type f -name '*.dmg' -delete
+
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            dmg_arch="aarch64"
+          else
+            dmg_arch="x64"
+          fi
+
+          version="$(python3 - <<'PY'
+import json
+from pathlib import Path
+config = json.loads(Path("apps/src-tauri/tauri.conf.json").read_text(encoding="utf-8"))
+print(config["version"])
+PY
+)"
+
+          stage_dir="$(mktemp -d)"
+          trap 'rm -rf "$stage_dir"' EXIT
+
+          ditto "$bundle_dir" "$stage_dir/CodexManager.app"
+          ln -s /Applications "$stage_dir/Applications"
+          install -m 0755 "assets/macos/Open CodexManager.command" "$stage_dir/Open CodexManager.command"
+          install -m 0644 "assets/macos/README-macOS-first-launch.txt" "$stage_dir/README-macOS-first-launch.txt"
+
+          codesign --force --deep --sign - "$stage_dir/CodexManager.app"
+          codesign --verify --deep --strict "$stage_dir/CodexManager.app"
+
+          dmg_path="${dmg_dir}/CodexManager_${version}_${dmg_arch}.dmg"
+          hdiutil create -volname "CodexManager" -srcfolder "$stage_dir" -ov -format UDZO "$dmg_path"
+          test -f "$dmg_path" || { echo "macOS dmg not created: $dmg_path"; exit 1; }
 
       - name: Stage legacy macOS portable package
         if: ${{ matrix.arch == 'x64' }}

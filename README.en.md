@@ -145,6 +145,17 @@ pwsh -NoLogo -NoProfile -File scripts/rebuild.ps1 -Bundle nsis -CleanDist -Porta
 ./scripts/rebuild-macos.sh --bundles "dmg" --clean-dist
 ```
 
+## macOS First Launch
+- Current macOS release builds are not notarized with an Apple Developer account yet, so Gatekeeper may mark the downloaded app as damaged or block it on first launch.
+- The macOS `dmg` now includes `Open CodexManager.command` and `README-macOS-first-launch.txt`. Recommended flow: drag `CodexManager.app` into Applications first, then double-click the helper script once.
+- Manual command:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/CodexManager.app
+```
+
+- If macOS still blocks it, right-click `CodexManager.app` and choose `Open` once.
+
 ## GitHub Actions (Manual Only)
 All workflows are `workflow_dispatch` only.
 
@@ -160,7 +171,7 @@ All workflows are `workflow_dispatch` only.
 ## Release Asset List (`release-all.yml`)
 ### Desktop
 - Windows: `CodexManager_<version>_x64-setup.exe`, `CodexManager-portable.exe`
-- macOS: `CodexManager_<version>_aarch64.dmg`, `CodexManager_<version>_x64.dmg`
+- macOS: `CodexManager_<version>_aarch64.dmg`, `CodexManager_<version>_x64.dmg` (the dmg includes `Open CodexManager.command` and a first-launch note)
 - Linux: `CodexManager_<version>_amd64.AppImage`, `CodexManager_<version>_amd64.deb`, `CodexManager-linux-portable.zip`
 
 ### Service

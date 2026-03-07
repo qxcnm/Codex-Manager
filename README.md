@@ -145,6 +145,17 @@ pwsh -NoLogo -NoProfile -File scripts/rebuild.ps1 -Bundle nsis -CleanDist -Porta
 ./scripts/rebuild-macos.sh --bundles "dmg" --clean-dist
 ```
 
+## macOS 首次启动
+- 当前 macOS Release 产物未使用 Apple Developer 账号完成公证，因此首次从浏览器下载后，Gatekeeper 可能提示“已损坏”或拒绝打开。
+- Release 中的 macOS `dmg` 现已内置 `Open CodexManager.command` 与 `README-macOS-first-launch.txt`，推荐先把 `CodexManager.app` 拖到“应用程序”，再双击该脚本完成首次放行。
+- 也可以直接执行：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/CodexManager.app
+```
+
+- 如果仍被拦截，再对 `CodexManager.app` 执行一次“右键 -> 打开”。
+
 ## GitHub Actions（全部手动触发）
 当前 workflow 均为 `workflow_dispatch`，不会自动触发。
 
@@ -160,7 +171,7 @@ pwsh -NoLogo -NoProfile -File scripts/rebuild.ps1 -Bundle nsis -CleanDist -Porta
 ## Release 产物清单（`release-all.yml`）
 ### Desktop
 - Windows：`CodexManager_<version>_x64-setup.exe`、`CodexManager-portable.exe`
-- macOS：`CodexManager_<version>_aarch64.dmg`、`CodexManager_<version>_x64.dmg`
+- macOS：`CodexManager_<version>_aarch64.dmg`、`CodexManager_<version>_x64.dmg`（dmg 内含 `Open CodexManager.command` 与首次启动说明）
 - Linux：`CodexManager_<version>_amd64.AppImage`、`CodexManager_<version>_amd64.deb`、`CodexManager-linux-portable.zip`
 
 ### Service
