@@ -1,0 +1,65 @@
+name: setup-release-env
+description: Setup pnpm, Node.js, Rust toolchain, and Rust cache for release jobs.
+
+inputs:
+  node-version:
+    description: Node.js version to install.
+    required: false
+    default: "20"
+  pnpm-version:
+    description: pnpm version to install.
+    required: false
+    default: "9"
+  pnpm-lock-path:
+    description: Lockfile path used for pnpm cache.
+    required: false
+    default: apps/pnpm-lock.yaml
+  rust-toolchain:
+    description: Rust toolchain channel.
+    required: false
+    default: stable
+  rust-target:
+    description: Optional Rust target triple.
+    required: false
+    default: ""
+  rust-cache-shared-key:
+    description: Shared rust-cache key.
+    required: false
+    default: release-all-platforms-rust-stable-v1
+
+runs:
+  using: composite
+  steps:
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: ${{ inputs.pnpm-version }}
+        run_install: false
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: pnpm
+        cache-dependency-path: ${{ inputs.pnpm-lock-path }}
+
+    - name: Setup Rust
+      if: ${{ inputs.rust-target == '' }}
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: ${{ inputs.rust-toolchain }}
+
+    - name: Setup Rust target
+      if: ${{ inputs.rust-target != '' }}
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: ${{ inputs.rust-toolchain }}
+        targets: ${{ inputs.rust-target }}
+
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: ${{ inputs.rust-cache-shared-key }}
+        workspaces: |
+          . -> target
+          apps/src-tauri -> target

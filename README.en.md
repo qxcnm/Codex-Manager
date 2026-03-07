@@ -234,6 +234,22 @@ It updates:
 - `apps/src-tauri/Cargo.toml`
 - `apps/src-tauri/tauri.conf.json`
 
+### Protocol Regression Probes
+Unified entry:
+
+```powershell
+pwsh -NoLogo -NoProfile -File scripts/tests/gateway_regression_suite.ps1 `
+  -Base http://localhost:48760 -ApiKey <key> -Model gpt-5.3-codex
+```
+
+It runs, in order:
+- `chat_tools_hit_probe.ps1` non-stream
+- `chat_tools_hit_probe.ps1 -Stream`
+- `codex_stream_probe.ps1` (covers both chat and responses streaming)
+
+Troubleshooting guide:
+- [docs/report/20260307234235414_最小排障手册.md](docs/report/20260307234235414_最小排障手册.md)
+
 ## Environment Variables
 ### Load Rules and Precedence
 - Desktop / `codexmanager-service` / `codexmanager-web` load env files from executable directory in this order:

@@ -1,0 +1,65 @@
+name: prepare-frontend-dist
+description: Restore verified frontend dist artifact or build it locally when verify job is skipped.
+
+inputs:
+  verify-result:
+    description: needs.verify.result from the workflow job.
+    required: true
+  artifact-name:
+    description: Frontend dist artifact name.
+    required: false
+    default: codexmanager-frontend-dist
+  apps-dir:
+    description: Frontend application directory.
+    required: false
+    default: apps
+  artifact-file:
+    description: Downloaded tarball filename.
+    required: false
+    default: frontend-dist.tar.gz
+
+runs:
+  using: composite
+  steps:
+    - name: Download prebuilt frontend dist
+      if: ${{ inputs.verify-result == 'success' }}
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: .
+
+    - name: Restore prebuilt frontend dist
+      if: ${{ inputs.verify-result == 'success' }}
+      shell: pwsh
+      run: |
+        $appsDir = '${{ inputs.apps-dir }}'
+        $artifactFile = '${{ inputs.artifact-file }}'
+        if (Test-Path (Join-Path $appsDir 'dist')) {
+          Remove-Item -Recurse -Force (Join-Path $appsDir 'dist')
+        }
+        tar -xzf $artifactFile -C $appsDir
+        if (-not (Test-Path (Join-Path $appsDir 'dist/index.html') -PathType Leaf)) {
+          throw "prebuilt frontend dist restore failed: $appsDir/dist/index.html not found"
+        }
+
+    - name: Install frontend dependencies (fallback local build)
+      if: ${{ inputs.verify-result == 'skipped' }}
+      shell: pwsh
+      run: |
+        Push-Location '${{ inputs.apps-dir }}'
+        try {
+          pnpm install --frozen-lockfile
+        } finally {
+          Pop-Location
+        }
+
+    - name: Build frontend locally (fallback)
+      if: ${{ inputs.verify-result == 'skipped' }}
+      shell: pwsh
+      run: |
+        Push-Location '${{ inputs.apps-dir }}'
+        try {
+          pnpm run build
+        } finally {
+          Pop-Location
+        }

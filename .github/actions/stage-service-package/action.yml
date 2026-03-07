@@ -1,0 +1,88 @@
+name: stage-service-package
+description: Stage service/web/start binaries into a zip archive on PowerShell or Bash shells.
+
+inputs:
+  platform:
+    description: windows, macos, or linux
+    required: true
+  arch:
+    description: Output arch slug
+    required: true
+  stage-root:
+    description: Stage root directory
+    required: false
+    default: stage
+  release-dir:
+    description: Release directory containing compiled binaries
+    required: true
+  binary-extension:
+    description: Binary extension, e.g. .exe
+    required: false
+    default: ""
+  shell-type:
+    description: pwsh or bash
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Stage service package (pwsh)
+      if: ${{ inputs.shell-type == 'pwsh' }}
+      shell: pwsh
+      run: |
+        $platform = "${{ inputs.platform }}"
+        $arch = "${{ inputs.arch }}"
+        $stageRoot = "${{ inputs.stage-root }}"
+        $releaseDir = "${{ inputs.release-dir }}"
+        $ext = "${{ inputs.binary-extension }}"
+
+        $pkgName = "CodexManager-service-$platform-$arch"
+        $pkgDir = Join-Path $stageRoot $pkgName
+        Remove-Item -Recurse -Force $pkgDir -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force $pkgDir | Out-Null
+
+        foreach ($name in @('codexmanager-service', 'codexmanager-web', 'codexmanager-start')) {
+          $source = Join-Path $releaseDir ($name + $ext)
+          if (-not (Test-Path $source -PathType Leaf)) {
+            throw "binary not found: $source"
+          }
+          Copy-Item -Force $source (Join-Path $pkgDir ($name + $ext))
+        }
+
+        $zipPath = Join-Path $stageRoot "$pkgName.zip"
+        if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
+        Compress-Archive -Path $pkgDir -DestinationPath $zipPath
+        Write-Host "service package: $zipPath"
+
+    - name: Stage service package (bash)
+      if: ${{ inputs.shell-type == 'bash' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        platform="${{ inputs.platform }}"
+        arch="${{ inputs.arch }}"
+        stage_root="${{ inputs.stage-root }}"
+        release_dir="${{ inputs.release-dir }}"
+        ext="${{ inputs.binary-extension }}"
+
+        pkg_name="CodexManager-service-${platform}-${arch}"
+        pkg_dir="${stage_root}/${pkg_name}"
+        rm -rf "$pkg_dir"
+        mkdir -p "$pkg_dir"
+
+        for name in codexmanager-service codexmanager-web codexmanager-start; do
+          source="${release_dir}/${name}${ext}"
+          test -f "$source" || { echo "binary not found: $source"; exit 1; }
+          cp -f "$source" "${pkg_dir}/${name}${ext}"
+          chmod +x "${pkg_dir}/${name}${ext}" || true
+        done
+
+        zip_path="${stage_root}/${pkg_name}.zip"
+        rm -f "$zip_path"
+        if [ "$platform" = "macos" ]; then
+          ditto -c -k --sequesterRsrc --keepParent "$pkg_dir" "$zip_path"
+        else
+          mkdir -p "$stage_root"
+          (cd "$stage_root" && zip -q -r "${pkg_name}.zip" "${pkg_name}")
+        fi
+        echo "service package: $zip_path"

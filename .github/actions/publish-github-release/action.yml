@@ -1,0 +1,103 @@
+name: publish-github-release
+description: Create or update a GitHub release and upload release assets.
+
+inputs:
+  tag:
+    description: Release tag
+    required: true
+  ref:
+    description: Git ref or branch
+    required: true
+  prerelease-input:
+    description: auto, true, or false
+    required: true
+  assets-dir:
+    description: Directory containing staged release assets
+    required: false
+    default: release-assets
+
+runs:
+  using: composite
+  steps:
+    - name: Publish GitHub Release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+
+        TAG="${{ inputs.tag }}"
+        REF="${{ inputs.ref }}"
+        PRERELEASE_INPUT="${{ inputs.prerelease-input }}"
+        ASSETS_DIR="${{ inputs.assets-dir }}"
+
+        if [[ -z "$TAG" ]]; then
+          echo "release tag is required"
+          exit 1
+        fi
+        if [[ "$TAG" != v* ]]; then
+          TAG="v$TAG"
+        fi
+
+        TARGET_SHA="$(gh api "repos/$GH_REPO/commits/$REF" --jq .sha)"
+        if [[ -z "$TARGET_SHA" ]]; then
+          echo "failed to resolve ref to commit: $REF"
+          exit 1
+        fi
+
+        case "$PRERELEASE_INPUT" in
+          true|false)
+            PRERELEASE="$PRERELEASE_INPUT"
+            ;;
+          auto)
+            if [[ "$TAG" == *-* ]]; then
+              PRERELEASE="true"
+            else
+              PRERELEASE="false"
+            fi
+            ;;
+          *)
+            echo "invalid prerelease input: $PRERELEASE_INPUT"
+            exit 1
+            ;;
+        esac
+
+        TITLE="CodexManager $TAG"
+        mapfile -t FILES < <(find "$ASSETS_DIR" -type f \( \
+          -name '*.exe' -o -name '*.zip' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' \
+        \) | sort)
+        if [ "${#FILES[@]}" -eq 0 ]; then
+          echo "No release assets found."
+          exit 1
+        fi
+
+        sync_release_meta() {
+          local release_id payload
+          release_id="$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq .id)"
+          if [[ -z "$release_id" ]]; then
+            echo "failed to resolve release id for tag: $TAG"
+            exit 1
+          fi
+          payload="$(jq -n \
+            --arg name "$TITLE" \
+            --arg target_commitish "$TARGET_SHA" \
+            --argjson prerelease "$PRERELEASE" \
+            '{name: $name, target_commitish: $target_commitish, prerelease: $prerelease}')"
+          printf '%s' "$payload" | gh api "repos/$GH_REPO/releases/$release_id" --method PATCH --input -
+        }
+
+        if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+          sync_release_meta
+          gh release upload "$TAG" "${FILES[@]}" --repo "$GH_REPO" --clobber
+        else
+          CREATE_ARGS=(--repo "$GH_REPO" --title "$TITLE" --target "$TARGET_SHA" --generate-notes)
+          if [ "$PRERELEASE" = "true" ]; then
+            CREATE_ARGS+=(--prerelease)
+          fi
+          if ! gh release create "$TAG" "${FILES[@]}" "${CREATE_ARGS[@]}"; then
+            echo "release create failed, retrying as edit+upload..."
+            sync_release_meta
+            gh release upload "$TAG" "${FILES[@]}" --repo "$GH_REPO" --clobber
+          fi
+        fi

@@ -234,6 +234,22 @@ pwsh -NoLogo -NoProfile -File scripts/bump-version.ps1 -Version 0.1.6
 - `apps/src-tauri/Cargo.toml`
 - `apps/src-tauri/tauri.conf.json`
 
+### 协议回归探针
+统一入口：
+
+```powershell
+pwsh -NoLogo -NoProfile -File scripts/tests/gateway_regression_suite.ps1 `
+  -Base http://localhost:48760 -ApiKey <key> -Model gpt-5.3-codex
+```
+
+它会串行执行：
+- `chat_tools_hit_probe.ps1` 非流式
+- `chat_tools_hit_probe.ps1 -Stream`
+- `codex_stream_probe.ps1`（同时覆盖 chat / responses 流式）
+
+排障手册：
+- [docs/report/20260307234235414_最小排障手册.md](docs/report/20260307234235414_最小排障手册.md)
+
 ## 环境变量说明
 ### 加载与优先级
 - 桌面端 / `codexmanager-service` / `codexmanager-web` 均会在可执行文件同目录按顺序查找环境文件：`codexmanager.env` -> `CodexManager.env` -> `.env`（命中第一个即停止）。

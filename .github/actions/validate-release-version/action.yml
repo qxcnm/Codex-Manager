@@ -1,0 +1,14 @@
+name: Validate Release Version
+description: Validate tag, workspace version, Tauri package version, and release config version consistency.
+
+inputs:
+  tag:
+    description: Release tag
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Validate tag/version consistency
+      shell: pwsh
+      run: ./scripts/release/assert-release-version.ps1 -Tag "${{ inputs.tag }}"

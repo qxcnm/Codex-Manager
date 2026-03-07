@@ -1,0 +1,85 @@
+name: build-tauri-with-retry
+description: Build Tauri bundles with bounded retry on PowerShell or Bash shells.
+
+inputs:
+  working-directory:
+    description: Working directory that contains the Tauri app
+    required: false
+    default: apps
+  tauri-cli-version:
+    description: Tauri CLI version
+    required: true
+  bundles:
+    description: Comma-separated bundle targets
+    required: true
+  target:
+    description: Optional rust target triple
+    required: false
+    default: ""
+  shell-type:
+    description: pwsh or bash
+    required: true
+  max-attempts:
+    description: Maximum build attempts
+    required: false
+    default: "3"
+
+runs:
+  using: composite
+  steps:
+    - name: Build with retry (pwsh)
+      if: ${{ inputs.shell-type == 'pwsh' }}
+      shell: pwsh
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        $maxAttempts = [int]"${{ inputs.max-attempts }}"
+        $attempt = 0
+        $succeeded = $false
+        while ($attempt -lt $maxAttempts -and -not $succeeded) {
+          $attempt++
+          Write-Host "Build attempt $attempt/$maxAttempts ..."
+          $args = @('dlx', "@tauri-apps/cli@${{ inputs.tauri-cli-version }}", 'build', '--bundles', '${{ inputs.bundles }}')
+          if ("${{ inputs.target }}".Trim().Length -gt 0) {
+            $args += @('--target', '${{ inputs.target }}')
+          }
+          pnpm @args
+          if ($LASTEXITCODE -eq 0) {
+            $succeeded = $true
+            break
+          }
+          if ($attempt -lt $maxAttempts) {
+            $delay = 20 * $attempt
+            Write-Warning "Build failed on attempt $attempt, retrying in $delay seconds..."
+            Start-Sleep -Seconds $delay
+          }
+        }
+        if (-not $succeeded) {
+          throw "Build failed after $maxAttempts attempts."
+        }
+
+    - name: Build with retry (bash)
+      if: ${{ inputs.shell-type == 'bash' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        max_attempts="${{ inputs.max-attempts }}"
+        attempt=1
+        while [ "$attempt" -le "$max_attempts" ]; do
+          echo "Build attempt $attempt/$max_attempts ..."
+          args=(dlx "@tauri-apps/cli@${{ inputs.tauri-cli-version }}" build --bundles "${{ inputs.bundles }}")
+          if [ -n "${{ inputs.target }}" ]; then
+            args+=(--target "${{ inputs.target }}")
+          fi
+          if pnpm "${args[@]}"; then
+            exit 0
+          fi
+          if [ "$attempt" -lt "$max_attempts" ]; then
+            delay=$((20 * attempt))
+            echo "Build failed on attempt $attempt, retry in ${delay}s..."
+            sleep "$delay"
+          fi
+          attempt=$((attempt + 1))
+        done
+        echo "Build failed after $max_attempts attempts."
+        exit 1

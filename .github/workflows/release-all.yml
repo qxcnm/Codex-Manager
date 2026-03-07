@@ -48,29 +48,13 @@ jobs:
         with:
           ref: ${{ github.event.inputs.ref || 'main' }}
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - name: Validate tag/version consistency
+        uses: ./.github/actions/validate-release-version
         with:
-          version: 9
-          run_install: false
+          tag: ${{ github.event.inputs.tag }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-          cache-dependency-path: apps/pnpm-lock.yaml
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-all-platforms-rust-stable-v1
-          workspaces: |
-            . -> target
-            apps/src-tauri -> target
+      - name: Setup release environment
+        uses: ./.github/actions/setup-release-env
 
       - name: Install frontend dependencies
         working-directory: apps
@@ -119,92 +103,29 @@ jobs:
           ref: ${{ github.event.inputs.ref || 'main' }}
 
       - name: Validate tag/version consistency
-        shell: pwsh
-        run: ./scripts/release/assert-release-version.ps1 -Tag "${{ github.event.inputs.tag }}"
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: ./.github/actions/validate-release-version
         with:
-          version: 9
-          run_install: false
+          tag: ${{ github.event.inputs.tag }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup release environment
+        uses: ./.github/actions/setup-release-env
+
+      - name: Prepare frontend dist
+        uses: ./.github/actions/prepare-frontend-dist
         with:
-          node-version: 20
-          cache: pnpm
-          cache-dependency-path: apps/pnpm-lock.yaml
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-all-platforms-rust-stable-v1
-          workspaces: |
-            . -> target
-            apps/src-tauri -> target
-
-      - name: Download prebuilt frontend dist
-        if: ${{ needs.verify.result == 'success' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: codexmanager-frontend-dist
-          path: .
-
-      - name: Restore prebuilt frontend dist
-        if: ${{ needs.verify.result == 'success' }}
-        shell: pwsh
-        run: |
-          if (Test-Path "apps/dist") {
-            Remove-Item -Recurse -Force "apps/dist"
-          }
-          tar -xzf frontend-dist.tar.gz -C apps
-          if (-not (Test-Path "apps/dist/index.html" -PathType Leaf)) {
-            throw "prebuilt frontend dist restore failed: apps/dist/index.html not found"
-          }
-
-      - name: Install frontend dependencies (fallback local build)
-        if: ${{ needs.verify.result == 'skipped' }}
-        working-directory: apps
-        shell: pwsh
-        run: pnpm install --frozen-lockfile
-
-      - name: Build frontend locally (fallback)
-        if: ${{ needs.verify.result == 'skipped' }}
-        working-directory: apps
-        shell: pwsh
-        run: pnpm run build
+          verify-result: ${{ needs.verify.result }}
 
       - name: Disable redundant frontend rebuild for Tauri bundle
         shell: pwsh
         run: ./scripts/release/disable-tauri-before-build.ps1
 
       - name: Build Tauri bundle (with retry)
-        working-directory: apps
-        shell: pwsh
-        run: |
-          $maxAttempts = 3
-          $attempt = 0
-          $succeeded = $false
-          while ($attempt -lt $maxAttempts -and -not $succeeded) {
-            $attempt++
-            Write-Host "Build attempt $attempt/$maxAttempts ..."
-            pnpm dlx @tauri-apps/cli@${{ env.TAURI_CLI_VERSION }} build --bundles nsis
-            if ($LASTEXITCODE -eq 0) {
-              $succeeded = $true
-              break
-            }
-            if ($attempt -lt $maxAttempts) {
-              $delay = 20 * $attempt
-              Write-Warning "Build failed on attempt $attempt, retrying in $delay seconds..."
-              Start-Sleep -Seconds $delay
-            }
-          }
-          if (-not $succeeded) {
-            throw "Build failed after $maxAttempts attempts."
-          }
+        uses: ./.github/actions/build-tauri-with-retry
+        with:
+          working-directory: apps
+          tauri-cli-version: ${{ env.TAURI_CLI_VERSION }}
+          bundles: nsis
+          shell-type: pwsh
 
       - name: Stage portable package
         shell: pwsh
@@ -230,38 +151,14 @@ jobs:
           cargo build -p codexmanager-start --release
 
       - name: Stage service package
-        shell: pwsh
-        run: |
-          $arch = "${{ runner.arch }}"
-          $archSlug = switch ($arch) {
-            "X64" { "x86_64" }
-            "ARM64" { "arm64" }
-            Default { $arch.ToLowerInvariant() }
-          }
-
-          $stageRoot = "stage"
-          $pkgName = "CodexManager-service-windows-$archSlug"
-          $pkgDir = Join-Path $stageRoot $pkgName
-
-          Remove-Item -Recurse -Force $pkgDir -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force $pkgDir | Out-Null
-
-          $serviceBin = "target/release/codexmanager-service.exe"
-          if (-not (Test-Path $serviceBin -PathType Leaf)) { throw "service binary not found: $serviceBin" }
-          Copy-Item -Force $serviceBin (Join-Path $pkgDir "codexmanager-service.exe")
-
-          $webBin = "target/release/codexmanager-web.exe"
-          if (-not (Test-Path $webBin -PathType Leaf)) { throw "web binary not found: $webBin" }
-          Copy-Item -Force $webBin (Join-Path $pkgDir "codexmanager-web.exe")
-
-          $startBin = "target/release/codexmanager-start.exe"
-          if (-not (Test-Path $startBin -PathType Leaf)) { throw "start binary not found: $startBin" }
-          Copy-Item -Force $startBin (Join-Path $pkgDir "codexmanager-start.exe")
-
-          $zipPath = Join-Path $stageRoot "$pkgName.zip"
-          if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
-          Compress-Archive -Path $pkgDir -DestinationPath $zipPath
-          Write-Host "service package: $zipPath"
+        uses: ./.github/actions/stage-service-package
+        with:
+          platform: windows
+          arch: ${{ runner.arch == 'X64' && 'x86_64' || runner.arch == 'ARM64' && 'arm64' || runner.arch }}
+          stage-root: stage
+          release-dir: target/release
+          binary-extension: .exe
+          shell-type: pwsh
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -301,73 +198,32 @@ jobs:
           ref: ${{ github.event.inputs.ref || 'main' }}
 
       - name: Validate tag/version consistency
-        shell: pwsh
-        run: ./scripts/release/assert-release-version.ps1 -Tag "${{ github.event.inputs.tag }}"
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: ./.github/actions/validate-release-version
         with:
-          version: 9
-          run_install: false
+          tag: ${{ github.event.inputs.tag }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup release environment
+        uses: ./.github/actions/setup-release-env
         with:
-          node-version: 20
-          cache: pnpm
-          cache-dependency-path: apps/pnpm-lock.yaml
+          rust-target: ${{ matrix.rust_target }}
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Prepare frontend dist
+        uses: ./.github/actions/prepare-frontend-dist
         with:
-          targets: ${{ matrix.rust_target }}
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-all-platforms-rust-stable-v1
-          workspaces: |
-            . -> target
-            apps/src-tauri -> target
-
-      - name: Download prebuilt frontend dist
-        if: ${{ needs.verify.result == 'success' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: codexmanager-frontend-dist
-          path: .
-
-      - name: Restore prebuilt frontend dist
-        if: ${{ needs.verify.result == 'success' }}
-        shell: pwsh
-        run: |
-          if (Test-Path "apps/dist") {
-            Remove-Item -Recurse -Force "apps/dist"
-          }
-          tar -xzf frontend-dist.tar.gz -C apps
-          if (-not (Test-Path "apps/dist/index.html" -PathType Leaf)) {
-            throw "prebuilt frontend dist restore failed: apps/dist/index.html not found"
-          }
-
-      - name: Install frontend dependencies (fallback local build)
-        if: ${{ needs.verify.result == 'skipped' }}
-        working-directory: apps
-        shell: pwsh
-        run: pnpm install --frozen-lockfile
-
-      - name: Build frontend locally (fallback)
-        if: ${{ needs.verify.result == 'skipped' }}
-        working-directory: apps
-        shell: pwsh
-        run: pnpm run build
+          verify-result: ${{ needs.verify.result }}
 
       - name: Disable redundant frontend rebuild for Tauri bundle
         shell: pwsh
         run: ./scripts/release/disable-tauri-before-build.ps1
 
       - name: Build macOS app bundle
-        working-directory: apps
-        run: pnpm dlx @tauri-apps/cli@${{ env.TAURI_CLI_VERSION }} build --bundles app --target ${{ matrix.rust_target }}
+        uses: ./.github/actions/build-tauri-with-retry
+        with:
+          working-directory: apps
+          tauri-cli-version: ${{ env.TAURI_CLI_VERSION }}
+          bundles: app
+          target: ${{ matrix.rust_target }}
+          shell-type: bash
 
       - name: Rebuild macOS dmg with first-launch helper
         shell: bash
@@ -437,34 +293,13 @@ jobs:
           cargo build -p codexmanager-start --release --target ${{ matrix.rust_target }}
 
       - name: Stage service package
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          stage_root="stage"
-          pkg_name="CodexManager-service-macos-${{ matrix.arch }}"
-          pkg_dir="${stage_root}/${pkg_name}"
-
-          rm -rf "$pkg_dir"
-          mkdir -p "$pkg_dir"
-
-          release_dir="target/${{ matrix.rust_target }}/release"
-          service_bin="$release_dir/codexmanager-service"
-          web_bin="$release_dir/codexmanager-web"
-          start_bin="$release_dir/codexmanager-start"
-          test -f "$service_bin" || { echo "service binary not found: $service_bin"; exit 1; }
-          test -f "$web_bin" || { echo "web binary not found: $web_bin"; exit 1; }
-          test -f "$start_bin" || { echo "start binary not found: $start_bin"; exit 1; }
-
-          cp -f "$service_bin" "$pkg_dir/codexmanager-service"
-          cp -f "$web_bin" "$pkg_dir/codexmanager-web"
-          cp -f "$start_bin" "$pkg_dir/codexmanager-start"
-          chmod +x "$pkg_dir/codexmanager-service" "$pkg_dir/codexmanager-web" "$pkg_dir/codexmanager-start"
-
-          zip_path="${stage_root}/${pkg_name}.zip"
-          rm -f "$zip_path"
-          ditto -c -k --sequesterRsrc --keepParent "$pkg_dir" "$zip_path"
-          echo "service package: $zip_path"
+        uses: ./.github/actions/stage-service-package
+        with:
+          platform: macos
+          arch: ${{ matrix.arch }}
+          stage-root: stage
+          release-dir: target/${{ matrix.rust_target }}/release
+          shell-type: bash
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -496,32 +331,12 @@ jobs:
           ref: ${{ github.event.inputs.ref || 'main' }}
 
       - name: Validate tag/version consistency
-        shell: pwsh
-        run: ./scripts/release/assert-release-version.ps1 -Tag "${{ github.event.inputs.tag }}"
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: ./.github/actions/validate-release-version
         with:
-          version: 9
-          run_install: false
+          tag: ${{ github.event.inputs.tag }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-          cache-dependency-path: apps/pnpm-lock.yaml
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-all-platforms-rust-stable-v1
-          workspaces: |
-            . -> target
-            apps/src-tauri -> target
+      - name: Setup release environment
+        uses: ./.github/actions/setup-release-env
 
       - name: Cache apt packages
         uses: actions/cache@v4
@@ -529,7 +344,7 @@ jobs:
           path: |
             /var/cache/apt/archives
             /var/lib/apt/lists
-          key: ${{ runner.os }}-apt-jammy-tauri-${{ hashFiles('.github/workflows/release-all.yml') }}
+          key: ${{ runner.os }}-apt-jammy-tauri-${{ hashFiles('.github/workflows/release-all.yml', '.github/actions/**') }}
           restore-keys: |
             ${{ runner.os }}-apt-jammy-tauri-
 
@@ -538,59 +353,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf libsoup-3.0-dev zip
 
-      - name: Download prebuilt frontend dist
-        if: ${{ needs.verify.result == 'success' }}
-        uses: actions/download-artifact@v4
+      - name: Prepare frontend dist
+        uses: ./.github/actions/prepare-frontend-dist
         with:
-          name: codexmanager-frontend-dist
-          path: .
-
-      - name: Restore prebuilt frontend dist
-        if: ${{ needs.verify.result == 'success' }}
-        shell: pwsh
-        run: |
-          if (Test-Path "apps/dist") {
-            Remove-Item -Recurse -Force "apps/dist"
-          }
-          tar -xzf frontend-dist.tar.gz -C apps
-          if (-not (Test-Path "apps/dist/index.html" -PathType Leaf)) {
-            throw "prebuilt frontend dist restore failed: apps/dist/index.html not found"
-          }
-
-      - name: Install frontend dependencies (fallback local build)
-        if: ${{ needs.verify.result == 'skipped' }}
-        working-directory: apps
-        run: pnpm install --frozen-lockfile
-
-      - name: Build frontend locally (fallback)
-        if: ${{ needs.verify.result == 'skipped' }}
-        working-directory: apps
-        run: pnpm run build
+          verify-result: ${{ needs.verify.result }}
 
       - name: Disable redundant frontend rebuild for Tauri bundle
         shell: pwsh
         run: ./scripts/release/disable-tauri-before-build.ps1
 
       - name: Build Tauri bundle (with retry)
-        working-directory: apps
-        shell: bash
-        run: |
-          max_attempts=3
-          attempt=1
-          while [ "$attempt" -le "$max_attempts" ]; do
-            echo "Build attempt $attempt/$max_attempts ..."
-            if pnpm dlx @tauri-apps/cli@${{ env.TAURI_CLI_VERSION }} build --bundles appimage,deb; then
-              exit 0
-            fi
-            if [ "$attempt" -lt "$max_attempts" ]; then
-              delay=$((20 * attempt))
-              echo "Build failed on attempt $attempt, retry in ${delay}s..."
-              sleep "$delay"
-            fi
-            attempt=$((attempt + 1))
-          done
-          echo "Build failed after $max_attempts attempts."
-          exit 1
+        uses: ./.github/actions/build-tauri-with-retry
+        with:
+          working-directory: apps
+          tauri-cli-version: ${{ env.TAURI_CLI_VERSION }}
+          bundles: appimage,deb
+          shell-type: bash
 
       - name: Stage portable package
         shell: bash
@@ -624,39 +402,13 @@ jobs:
           cargo build -p codexmanager-start --release
 
       - name: Stage service package
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          arch="$(uname -m)"
-          case "$arch" in
-            x86_64) arch_slug="x86_64" ;;
-            aarch64|arm64) arch_slug="arm64" ;;
-            *) arch_slug="$arch" ;;
-          esac
-
-          stage_root="stage"
-          pkg_name="CodexManager-service-linux-${arch_slug}"
-          pkg_dir="${stage_root}/${pkg_name}"
-
-          rm -rf "$pkg_dir"
-          mkdir -p "$pkg_dir"
-
-          service_bin="target/release/codexmanager-service"
-          web_bin="target/release/codexmanager-web"
-          start_bin="target/release/codexmanager-start"
-          test -f "$service_bin" || { echo "service binary not found: $service_bin"; exit 1; }
-          test -f "$web_bin" || { echo "web binary not found: $web_bin"; exit 1; }
-          test -f "$start_bin" || { echo "start binary not found: $start_bin"; exit 1; }
-
-          cp -f "$service_bin" "$pkg_dir/codexmanager-service"
-          cp -f "$web_bin" "$pkg_dir/codexmanager-web"
-          cp -f "$start_bin" "$pkg_dir/codexmanager-start"
-          chmod +x "$pkg_dir/codexmanager-service" "$pkg_dir/codexmanager-web" "$pkg_dir/codexmanager-start"
-
-          mkdir -p "$stage_root"
-          (cd "$stage_root" && zip -q -r "${pkg_name}.zip" "${pkg_name}")
-          echo "service package: ${stage_root}/${pkg_name}.zip"
+        uses: ./.github/actions/stage-service-package
+        with:
+          platform: linux
+          arch: x86_64
+          stage-root: stage
+          release-dir: target/release
+          shell-type: bash
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -693,101 +445,11 @@ jobs:
       - name: List release assets
         run: find release-assets -type f | sort
 
-      - name: Resolve release meta
-        id: meta
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          TAG="${{ github.event.inputs.tag }}"
-          REF="${{ github.event.inputs.ref || 'main' }}"
-          PRERELEASE_INPUT="${{ github.event.inputs.prerelease || 'auto' }}"
-
-          if [[ -z "$TAG" ]]; then
-            echo "release tag is required"
-            exit 1
-          fi
-          if [[ "$TAG" != v* ]]; then
-            TAG="v$TAG"
-          fi
-
-          TARGET_SHA="$(gh api "repos/$GH_REPO/commits/$REF" --jq .sha)"
-          if [[ -z "$TARGET_SHA" ]]; then
-            echo "failed to resolve ref to commit: $REF"
-            exit 1
-          fi
-
-          # Manual override wins; "auto" falls back to prerelease tags.
-          case "$PRERELEASE_INPUT" in
-            true|false)
-              PRERELEASE="$PRERELEASE_INPUT"
-              ;;
-            auto)
-              if [[ "$TAG" == *-* ]]; then
-                PRERELEASE="true"
-              else
-                PRERELEASE="false"
-              fi
-              ;;
-            *)
-              echo "invalid prerelease input: $PRERELEASE_INPUT"
-              exit 1
-              ;;
-          esac
-
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "ref=$REF" >> "$GITHUB_OUTPUT"
-          echo "target_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
-
       - name: Publish GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        shell: bash
-        run: |
-          TAG="${{ steps.meta.outputs.tag }}"
-          TARGET_SHA="${{ steps.meta.outputs.target_sha }}"
-          PRERELEASE="${{ steps.meta.outputs.prerelease }}"
-          TITLE="CodexManager $TAG"
-
-          mapfile -t FILES < <(find release-assets -type f \( \
-            -name '*.exe' -o -name '*.zip' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' \
-          \) | sort)
-          if [ "${#FILES[@]}" -eq 0 ]; then
-            echo "No release assets found."
-            exit 1
-          fi
-
-          sync_release_meta() {
-            local release_id payload
-            release_id="$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq .id)"
-            if [[ -z "$release_id" ]]; then
-              echo "failed to resolve release id for tag: $TAG"
-              exit 1
-            fi
-            payload="$(jq -n \
-              --arg name "$TITLE" \
-              --arg target_commitish "$TARGET_SHA" \
-              --argjson prerelease "$PRERELEASE" \
-              '{name: $name, target_commitish: $target_commitish, prerelease: $prerelease}')"
-            printf '%s' "$payload" | gh api "repos/$GH_REPO/releases/$release_id" --method PATCH --input -
-          }
-
-          if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
-            sync_release_meta
-            gh release upload "$TAG" "${FILES[@]}" --repo "$GH_REPO" --clobber
-          else
-            CREATE_ARGS=(--repo "$GH_REPO" --title "$TITLE" --target "$TARGET_SHA" --generate-notes)
-            if [ "$PRERELEASE" = "true" ]; then
-              CREATE_ARGS+=(--prerelease)
-            fi
-            # Multi-platform runs can race on the same tag; fallback to edit+upload when create fails.
-            if ! gh release create "$TAG" "${FILES[@]}" "${CREATE_ARGS[@]}"; then
-              echo "release create failed, retrying as edit+upload..."
-              sync_release_meta
-              gh release upload "$TAG" "${FILES[@]}" --repo "$GH_REPO" --clobber
-            fi
-          fi
+        uses: ./.github/actions/publish-github-release
+        with:
+          tag: ${{ github.event.inputs.tag }}
+          ref: ${{ github.event.inputs.ref || 'main' }}
+          prerelease-input: ${{ github.event.inputs.prerelease || 'auto' }}
+          assets-dir: release-assets
 
