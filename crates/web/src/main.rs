@@ -677,7 +677,7 @@ async fn main() {
     let app = Router::new()
         .route("/__login", get(login_page).post(login_submit))
         .route("/__logout", get(logout))
-        .nest("/", protected_app)
+        .merge(protected_app)
         .with_state(state);
 
     println!("codexmanager-web listening on {web_addr} (service={service_addr})");
