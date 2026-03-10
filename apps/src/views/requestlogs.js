@@ -22,6 +22,7 @@ import {
   isNearBottom,
 } from "./requestlogs/virtual-list.js";
 import { createRequestLogBindings } from "./requestlogs/events.js";
+import { renderRequestLogsView } from "./requestlogs/render-requestlogs.js";
 
 const REQUEST_LOG_BATCH_SIZE = 80;
 const REQUEST_LOG_DOM_LIMIT = 240;
@@ -86,84 +87,27 @@ const requestLogBindings = createRequestLogBindings({
 });
 
 export function renderRequestLogs() {
-  if (!dom.requestLogRows) {
-    return;
-  }
-  requestLogBindings.ensureRequestLogBindings();
-  ensureAccountLabelMap(state.accountList, requestLogWindowState);
-  const filter = state.requestLogStatusFilter || "all";
-  const { filtered, filteredKeys } = collectFilteredRequestLogs(
-    state.requestLogList,
-    filter,
-  );
-  const sameFilter = filter === requestLogWindowState.filter;
-  const appendOnly = sameFilter && isAppendOnlyResult(
-    requestLogWindowState.filteredKeys,
-    filteredKeys,
-  );
-  const unchanged = appendOnly && filteredKeys.length === requestLogWindowState.filteredKeys.length;
-  const canReuseRenderedDom = filtered.length > 0
-    ? Boolean(
-      requestLogWindowState.topSpacerRow &&
-      dom.requestLogRows.contains(requestLogWindowState.topSpacerRow),
-    )
-    : dom.requestLogRows.children.length > 0;
-
-  if (requestLogWindowState.hasRendered && canReuseRenderedDom && unchanged) {
-    requestLogWindowState.filtered = filtered;
-    requestLogWindowState.filteredKeys = filteredKeys;
-    return;
-  }
-
-  if (
-    requestLogWindowState.hasRendered &&
-    appendOnly &&
-    requestLogWindowState.topSpacerRow &&
-    dom.requestLogRows.contains(requestLogWindowState.topSpacerRow)
-  ) {
-    const previousLength = requestLogWindowState.filtered.length;
-    requestLogWindowState.filtered = filtered;
-    requestLogWindowState.filteredKeys = filteredKeys;
-    requestLogWindowState.filter = filter;
-    if (
-      requestLogWindowState.nextIndex >= previousLength ||
-      isNearBottom(requestLogWindowState.boundScrollerEl, REQUEST_LOG_SCROLL_BUFFER)
-    ) {
+  renderRequestLogsView({
+    dom,
+    state,
+    windowState: requestLogWindowState,
+    ensureBindings: requestLogBindings.ensureRequestLogBindings,
+    ensureAccountLabelMap,
+    collectFilteredRequestLogs,
+    isAppendOnlyResult,
+    isNearBottom,
+    appendAtLeastOneBatch: ({ scroller, extraMaxBatches, scrollBuffer, nearBottomMaxBatches }) =>
       appendAtLeastOneBatch({
-        scroller: requestLogWindowState.boundScrollerEl,
-        scrollBuffer: REQUEST_LOG_SCROLL_BUFFER,
-        nearBottomMaxBatches: REQUEST_LOG_NEAR_BOTTOM_MAX_BATCHES,
+        scroller,
+        extraMaxBatches,
+        scrollBuffer,
+        nearBottomMaxBatches,
         appendRequestLogBatch: appendRequestLogBatchLocal,
-      });
-    }
-    return;
-  }
-
-  dom.requestLogRows.innerHTML = "";
-  requestLogWindowState.filtered = filtered;
-  requestLogWindowState.filteredKeys = filteredKeys;
-  requestLogWindowState.filter = filter;
-  requestLogWindowState.nextIndex = 0;
-  requestLogWindowState.topSpacerHeight = 0;
-  requestLogWindowState.recycledRowHeight = REQUEST_LOG_FALLBACK_ROW_HEIGHT;
-  requestLogWindowState.topSpacerRow = null;
-  requestLogWindowState.topSpacerCell = null;
-  requestLogWindowState.hasRendered = true;
-  if (!filtered.length) {
-    renderEmptyRequestLogs(dom.requestLogRows, REQUEST_LOG_COLUMN_COUNT);
-    return;
-  }
-  dom.requestLogRows.appendChild(
-    createTopSpacerRow({
-      columnCount: REQUEST_LOG_COLUMN_COUNT,
-      windowState: requestLogWindowState,
-    }),
-  );
-  appendAtLeastOneBatch({
-    scroller: requestLogWindowState.boundScrollerEl,
-    extraMaxBatches: 1,
+      }),
+    renderEmptyRequestLogs,
+    createTopSpacerRow,
+    columnCount: REQUEST_LOG_COLUMN_COUNT,
     scrollBuffer: REQUEST_LOG_SCROLL_BUFFER,
     nearBottomMaxBatches: REQUEST_LOG_NEAR_BOTTOM_MAX_BATCHES,
-    appendRequestLogBatch: appendRequestLogBatchLocal,
   });
 }
