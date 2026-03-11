@@ -18,7 +18,7 @@ export function normalizeAddr(raw) {
     value = value.slice("https://".length);
   }
   value = value.split("/")[0];
-  if (/^\d+$/.test(value)) {
+  if (!value.includes(":")) {
     value = `localhost:${value}`;
   }
   const [host, port] = value.split(":");

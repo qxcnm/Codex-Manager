@@ -58,10 +58,10 @@ fn normalize_addr(raw: &str) -> Option<String> {
     if value.is_empty() {
         return None;
     }
-    if value.parse::<u16>().is_ok() {
-        return Some(format!("localhost:{value}"));
+    if value.contains(':') {
+        return Some(value.to_string());
     }
-    Some(value.to_string())
+    Some(format!("localhost:{value}"))
 }
 
 fn resolve_service_addr() -> String {

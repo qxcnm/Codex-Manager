@@ -13,16 +13,10 @@ pub(crate) fn normalize_addr(raw: &str) -> Result<String, String> {
         value = rest;
     }
     let value = value.split('/').next().unwrap_or(value);
-    if value.is_empty() {
-        return Err("addr is empty".to_string());
-    }
-
     if value.contains(':') {
         Ok(normalize_host(value))
-    } else if value.parse::<u16>().is_ok() {
-        Ok(format!("localhost:{value}"))
     } else {
-        Ok(normalize_host(value))
+        Ok(format!("localhost:{value}"))
     }
 }
 
