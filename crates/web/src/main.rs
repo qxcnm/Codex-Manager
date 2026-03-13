@@ -43,6 +43,37 @@ fn read_env_trim(name: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+fn capture_explicit_env(keys: &[&str]) -> Vec<(String, String)> {
+    keys.iter()
+        .filter_map(|key| read_env_trim(key).map(|value| (key.to_string(), value)))
+        .collect()
+}
+
+fn restore_env(items: Vec<(String, String)>) {
+    for (key, value) in items {
+        std::env::set_var(key, value);
+    }
+}
+
+fn is_running_in_container() -> bool {
+    if cfg!(target_os = "linux") {
+        if Path::new("/.dockerenv").is_file() || Path::new("/run/.containerenv").is_file() {
+            return true;
+        }
+        if let Ok(cgroup) = std::fs::read_to_string("/proc/1/cgroup") {
+            let cgroup = cgroup.to_lowercase();
+            if cgroup.contains("docker")
+                || cgroup.contains("containerd")
+                || cgroup.contains("kubepods")
+                || cgroup.contains("podman")
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn normalize_addr(raw: &str) -> Option<String> {
     let mut value = raw.trim();
     if value.is_empty() {
@@ -73,7 +104,13 @@ fn resolve_service_addr() -> String {
 fn resolve_web_addr() -> String {
     read_env_trim("CODEXMANAGER_WEB_ADDR")
         .and_then(|v| normalize_addr(&v))
-        .unwrap_or_else(|| DEFAULT_WEB_ADDR.to_string())
+        .unwrap_or_else(|| {
+            if is_running_in_container() {
+                "0.0.0.0:48761".to_string()
+            } else {
+                DEFAULT_WEB_ADDR.to_string()
+            }
+        })
 }
 
 fn resolve_web_root() -> PathBuf {
@@ -251,9 +288,24 @@ async fn async_main() {
 }
 
 fn main() {
+    let preserved_env = if is_running_in_container() {
+        capture_explicit_env(&[
+            "CODEXMANAGER_WEB_ADDR",
+            "CODEXMANAGER_WEB_ROOT",
+            "CODEXMANAGER_WEB_NO_OPEN",
+            "CODEXMANAGER_WEB_NO_SPAWN_SERVICE",
+            "CODEXMANAGER_SERVICE_ADDR",
+        ])
+    } else {
+        Vec::new()
+    };
+
     codexmanager_service::portable::bootstrap_current_process();
     let _ = codexmanager_service::initialize_storage_if_needed();
     codexmanager_service::sync_runtime_settings_from_storage();
+    if !preserved_env.is_empty() {
+        restore_env(preserved_env);
+    }
 
     let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
     runtime.block_on(async_main());
