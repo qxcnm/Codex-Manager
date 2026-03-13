@@ -9,7 +9,7 @@ mod ui;
 
 pub use api::{app_settings_get, app_settings_get_with_overrides, app_settings_set};
 pub(crate) use env_overrides::{
-    apply_env_overrides_to_process, persisted_env_overrides_only,
+    apply_env_overrides_to_process, persisted_env_overrides_missing_process_env,
     reload_runtime_after_env_override_apply,
 };
 pub use gateway::{

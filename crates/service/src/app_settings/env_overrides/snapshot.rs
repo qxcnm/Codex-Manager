@@ -49,8 +49,21 @@ pub(crate) fn persisted_env_overrides_only() -> BTreeMap<String, String> {
     persisted_env_overrides(BTreeMap::new())
 }
 
+pub(crate) fn persisted_env_overrides_missing_process_env() -> BTreeMap<String, String> {
+    persisted_env_overrides_only()
+        .into_iter()
+        .filter(|(key, _)| std::env::var_os(key).is_none())
+        .collect()
+}
+
 pub(crate) fn current_env_overrides() -> BTreeMap<String, String> {
-    persisted_env_overrides(env_override_default_snapshot())
+    let mut current = env_override_default_snapshot();
+    for (key, value) in persisted_env_overrides_only() {
+        if std::env::var_os(&key).is_none() {
+            current.insert(key, value);
+        }
+    }
+    current
 }
 
 pub(crate) fn save_env_overrides_value(overrides: &BTreeMap<String, String>) -> Result<(), String> {

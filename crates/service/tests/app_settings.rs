@@ -133,6 +133,33 @@ fn sync_runtime_settings_from_storage_preserves_process_env_when_override_not_pe
 }
 
 #[test]
+fn sync_runtime_settings_from_storage_preserves_explicit_process_env_over_persisted_override() {
+    with_temp_db(|db_path| {
+        let storage = Storage::open(db_path).expect("open storage");
+        storage
+            .set_app_setting(
+                codexmanager_service::APP_SETTING_ENV_OVERRIDES_KEY,
+                &serde_json::to_string(&json!({
+                    "CODEXMANAGER_WEB_ADDR": "localhost:48761"
+                }))
+                .expect("serialize env overrides"),
+                now_ts(),
+            )
+            .expect("save env overrides");
+        drop(storage);
+
+        let _env = override_env_vars(&[("CODEXMANAGER_WEB_ADDR", Some("0.0.0.0:48761"))]);
+
+        codexmanager_service::sync_runtime_settings_from_storage();
+
+        assert_eq!(
+            std::env::var("CODEXMANAGER_WEB_ADDR").ok().as_deref(),
+            Some("0.0.0.0:48761")
+        );
+    });
+}
+
+#[test]
 fn app_settings_set_persists_snapshot_and_password_hash() {
     with_temp_db(|db_path| {
         let snapshot = codexmanager_service::app_settings_set(Some(&json!({
