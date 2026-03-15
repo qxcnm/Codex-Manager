@@ -188,7 +188,11 @@ export default function DashboardPage() {
               total={stats.total}
               icon={XCircle}
               color="text-red-500"
-              sub="额度耗尽或授权失效"
+              sub={
+                stats.expired > 0
+                  ? `额度耗尽 ${stats.unavailable}，已失效 ${stats.expired}`
+                  : "当前额度耗尽的账号"
+              }
             />
 
             <Card className="overflow-hidden border-none bg-primary/10 shadow-md backdrop-blur-md transition-all hover:scale-[1.02]">

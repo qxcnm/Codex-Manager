@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { WebPasswordModal } from "../modals/web-password-modal";
 import { serviceClient } from "@/lib/api/service-client";
 import { appClient } from "@/lib/api/app-client";
+import { normalizeAppPath } from "@/lib/utils/navigation";
 import {
   formatServiceError,
   isExpectedInitializeResult,
@@ -22,7 +23,7 @@ const DEFAULT_SERVICE_ADDR = "localhost:48760";
 
 export function Header() {
   const { serviceStatus, setServiceStatus, setAppSettings } = useAppStore();
-  const pathname = usePathname();
+  const pathname = normalizeAppPath(usePathname());
   const [webPasswordModalOpen, setWebPasswordModalOpen] = useState(false);
   const [isToggling, setIsToggling] = useState(false);
   const [portInput, setPortInput] = useState("48760");

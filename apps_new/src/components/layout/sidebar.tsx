@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { 
   LayoutDashboard, 
@@ -12,6 +11,7 @@ import {
   ChevronRight
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { normalizeAppPath, toStaticRouteHref } from "@/lib/utils/navigation";
 import { Button } from "@/components/ui/button";
 import { useAppStore } from "@/lib/store/useAppStore";
 import { memo, useMemo } from "react";
@@ -25,9 +25,8 @@ const NAV_ITEMS = [
 ];
 
 const NavItem = memo(({ item, isActive, isSidebarOpen }: { item: typeof NAV_ITEMS[0], isActive: boolean, isSidebarOpen: boolean }) => (
-  <Link
-    href={item.href}
-    prefetch={true}
+  <a
+    href={toStaticRouteHref(item.href)}
     className={cn(
       "flex items-center gap-3 rounded-lg px-3 py-2 transition-all duration-200 hover:bg-accent hover:text-accent-foreground",
       isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground"
@@ -35,13 +34,13 @@ const NavItem = memo(({ item, isActive, isSidebarOpen }: { item: typeof NAV_ITEM
   >
     <item.icon className="h-4 w-4 shrink-0" />
     {isSidebarOpen && <span className="text-sm truncate">{item.name}</span>}
-  </Link>
+  </a>
 ));
 
 NavItem.displayName = "NavItem";
 
 export function Sidebar() {
-  const pathname = usePathname();
+  const pathname = normalizeAppPath(usePathname());
   const { isSidebarOpen, toggleSidebar } = useAppStore();
 
   const renderedItems = useMemo(() => 

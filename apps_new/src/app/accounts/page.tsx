@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import {
   BarChart3,
   ExternalLink,
@@ -15,6 +14,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { AddAccountModal } from "@/components/modals/add-account-modal";
+import { AccountConfirmDialog } from "@/components/accounts/account-confirm-dialog";
+import { AccountRowActionsMenu } from "@/components/accounts/account-row-actions-menu";
 import UsageModal from "@/components/modals/usage-modal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -47,10 +48,15 @@ import {
 } from "@/components/ui/table";
 import { useAccounts } from "@/hooks/useAccounts";
 import { cn } from "@/lib/utils";
+import { toStaticRouteHref } from "@/lib/utils/navigation";
 import { formatTsFromSeconds } from "@/lib/utils/usage";
 import { Account } from "@/types";
 
 type StatusFilter = "all" | "available" | "low_quota";
+type PendingAccountAction =
+  | { type: "delete-selected"; accountIds: string[] }
+  | { type: "delete-unavailable-free" }
+  | null;
 
 interface QuotaProgressProps {
   label: string;
@@ -76,7 +82,6 @@ function QuotaProgress({ label, remainPercent, icon: Icon }: QuotaProgressProps)
 }
 
 export default function AccountsPage() {
-  const router = useRouter();
   const {
     accounts,
     groups,
@@ -88,7 +93,9 @@ export default function AccountsPage() {
     deleteUnavailableFree,
     importByDirectory,
     isRefreshing,
+    isDeleting,
     isDeletingMany,
+    isDeletingUnavailableFree,
   } = useAccounts();
 
   const [search, setSearch] = useState("");
@@ -100,6 +107,7 @@ export default function AccountsPage() {
   const [addAccountModalOpen, setAddAccountModalOpen] = useState(false);
   const [usageModalOpen, setUsageModalOpen] = useState(false);
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingAccountAction>(null);
 
   const filteredAccounts = useMemo(() => {
     return accounts.filter((account) => {
@@ -177,18 +185,29 @@ export default function AccountsPage() {
       toast.error("请先选择要删除的账号");
       return;
     }
-    if (!window.confirm(`确定删除选中的 ${effectiveSelectedIds.length} 个账号吗？`)) {
-      return;
-    }
-    deleteManyAccounts(effectiveSelectedIds);
-    setSelectedIds([]);
+    setPendingAction({
+      type: "delete-selected",
+      accountIds: effectiveSelectedIds,
+    });
   };
 
   const handleDeleteSingle = (account: Account) => {
-    if (!window.confirm(`确定删除账号 ${account.name} 吗？`)) {
+    deleteAccount(account.id);
+  };
+
+  const handleConfirmPendingAction = () => {
+    if (!pendingAction) return;
+    if (pendingAction.type === "delete-selected") {
+      deleteManyAccounts(pendingAction.accountIds);
+      setSelectedIds((current) =>
+        current.filter((id) => !pendingAction.accountIds.includes(id))
+      );
+      setPendingAction(null);
       return;
     }
-    deleteAccount(account.id);
+
+    deleteUnavailableFree();
+    setPendingAction(null);
   };
 
   return (
@@ -242,16 +261,19 @@ export default function AccountsPage() {
 
           <div className="flex items-center gap-2">
             <DropdownMenu>
-              <DropdownMenuTrigger>
-                <Button
-                  variant="outline"
-                  className="h-10 gap-2"
-                  render={<span />}
-                  nativeButton={false}
-                >
-                  账号操作 <MoreVertical className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    className="h-10 gap-2"
+                    render={<span />}
+                    nativeButton={false}
+                  >
+                    账号操作 <MoreVertical className="h-4 w-4" />
+                  </Button>
+                }
+                nativeButton={false}
+              />
               <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuItem onClick={() => setAddAccountModalOpen(true)}>
                   <Plus className="mr-2 h-4 w-4" /> 添加账号
@@ -272,7 +294,7 @@ export default function AccountsPage() {
                   <Trash2 className="mr-2 h-4 w-4" /> 删除选中账号
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onClick={() => deleteUnavailableFree()}
+                  onClick={() => setPendingAction({ type: "delete-unavailable-free" })}
                   className="text-destructive"
                 >
                   <Trash2 className="mr-2 h-4 w-4" /> 一键清理不可用免费
@@ -387,15 +409,21 @@ export default function AccountsPage() {
                         <div
                           className={cn(
                             "h-1.5 w-1.5 rounded-full",
-                            account.isAvailable ? "bg-green-500" : "bg-red-500"
+                            account.availabilityKind === "available"
+                              ? "bg-green-500"
+                              : account.availabilityKind === "expired"
+                                ? "bg-amber-500"
+                                : "bg-red-500"
                           )}
                         />
                         <span
                           className={cn(
                             "text-[11px] font-medium",
-                            account.isAvailable
+                            account.availabilityKind === "available"
                               ? "text-green-600 dark:text-green-400"
-                              : "text-red-600 dark:text-red-400"
+                              : account.availabilityKind === "expired"
+                                ? "text-amber-600 dark:text-amber-400"
+                                : "text-red-600 dark:text-red-400"
                           )}
                         >
                           {account.availabilityText}
@@ -422,35 +450,16 @@ export default function AccountsPage() {
                         >
                           <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
                         </Button>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8"
-                              render={<span />}
-                              nativeButton={false}
-                            >
-                              <MoreVertical className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem
-                              className="gap-2"
-                              onClick={() =>
-                                router.push(`/logs?query=${encodeURIComponent(account.id)}`)
-                              }
-                            >
-                              <ExternalLink className="h-4 w-4" /> 详情与日志
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              className="gap-2 text-red-500"
-                              onClick={() => handleDeleteSingle(account)}
-                            >
-                              <Trash2 className="h-4 w-4" /> 删除
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                        <AccountRowActionsMenu
+                          account={account}
+                          onOpenDetails={(current) => {
+                            const searchParams = new URLSearchParams({
+                              query: current.id,
+                            });
+                            window.location.assign(toStaticRouteHref("/logs", searchParams));
+                          }}
+                          onDelete={handleDeleteSingle}
+                        />
                       </div>
                     </TableCell>
                   </TableRow>
@@ -517,6 +526,27 @@ export default function AccountsPage() {
         onOpenChange={setUsageModalOpen}
         onRefresh={refreshAccount}
         isRefreshing={isRefreshing}
+      />
+      <AccountConfirmDialog
+        open={pendingAction !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingAction(null);
+          }
+        }}
+        title={
+          pendingAction?.type === "delete-selected"
+            ? `确定删除选中的 ${pendingAction.accountIds.length} 个账号吗？`
+            : "确定清理不可用免费账号吗？"
+        }
+        description={
+          pendingAction?.type === "delete-selected"
+            ? "删除后不可恢复。"
+            : "将删除当前不可用且识别为免费计划的账号，此操作不可恢复。"
+        }
+        confirmLabel={pendingAction?.type === "delete-selected" ? "确认删除" : "确认清理"}
+        onConfirm={handleConfirmPendingAction}
+        isPending={isDeleting || isDeletingMany || isDeletingUnavailableFree}
       />
     </div>
   );

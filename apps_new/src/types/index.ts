@@ -1,4 +1,5 @@
 export type AvailabilityLevel = "ok" | "warn" | "bad" | "unknown";
+export type AvailabilityKind = "available" | "unavailable" | "expired" | "unknown";
 
 export interface ServiceStatus {
   connected: boolean;
@@ -30,6 +31,7 @@ export interface Account {
   sort: number;
   status: string;
   isAvailable: boolean;
+  availabilityKind: AvailabilityKind;
   isLowQuota: boolean;
   lastRefreshAt: number | null;
   availabilityText: string;

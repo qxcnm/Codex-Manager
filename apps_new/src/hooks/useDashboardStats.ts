@@ -1,7 +1,9 @@
 "use client";
 
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { serviceClient } from "@/lib/api/service-client";
+import { computeAvailablePoolRemain } from "@/lib/utils/pool-remain";
 import { pickBestRecommendations, pickCurrentAccount } from "@/lib/utils/usage";
 
 export function useDashboardStats() {
@@ -13,9 +15,11 @@ export function useDashboardStats() {
 
   const data = snapshotQuery.data;
   const accounts = data?.accounts || [];
+  const poolRemain = useMemo(() => computeAvailablePoolRemain(accounts), [accounts]);
   const totalAccounts = accounts.length;
-  const availableAccounts = accounts.filter((item) => item.isAvailable).length;
-  const unavailableAccounts = totalAccounts - availableAccounts;
+  const availableAccounts = accounts.filter((item) => item.availabilityKind === "available").length;
+  const unavailableAccounts = accounts.filter((item) => item.availabilityKind === "unavailable").length;
+  const expiredAccounts = accounts.filter((item) => item.availabilityKind === "expired").length;
   const currentAccount = pickCurrentAccount(
     accounts,
     data?.requestLogs || [],
@@ -28,17 +32,18 @@ export function useDashboardStats() {
       total: totalAccounts,
       available: availableAccounts,
       unavailable: unavailableAccounts,
+      expired: expiredAccounts,
       todayTokens: data?.requestLogTodaySummary.todayTokens || 0,
       cachedTokens: data?.requestLogTodaySummary.cachedInputTokens || 0,
       reasoningTokens: data?.requestLogTodaySummary.reasoningOutputTokens || 0,
       todayCost: data?.requestLogTodaySummary.estimatedCost || 0,
       poolRemain: {
-        primary: data?.usageAggregateSummary.primaryRemainPercent ?? null,
-        secondary: data?.usageAggregateSummary.secondaryRemainPercent ?? null,
-        primaryKnownCount: data?.usageAggregateSummary.primaryKnownCount ?? 0,
-        primaryBucketCount: data?.usageAggregateSummary.primaryBucketCount ?? 0,
-        secondaryKnownCount: data?.usageAggregateSummary.secondaryKnownCount ?? 0,
-        secondaryBucketCount: data?.usageAggregateSummary.secondaryBucketCount ?? 0,
+        primary: poolRemain.primaryRemainPercent,
+        secondary: poolRemain.secondaryRemainPercent,
+        primaryKnownCount: poolRemain.primaryKnownCount,
+        primaryBucketCount: poolRemain.primaryBucketCount,
+        secondaryKnownCount: poolRemain.secondaryKnownCount,
+        secondaryBucketCount: poolRemain.secondaryBucketCount,
       },
     },
     currentAccount,

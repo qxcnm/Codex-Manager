@@ -1,6 +1,6 @@
 "use client";
 
-import { Account, AccountUsage, AvailabilityLevel, RequestLog } from "@/types";
+import { Account, AccountUsage, AvailabilityKind, AvailabilityLevel, RequestLog } from "@/types";
 
 const dateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   year: "numeric",
@@ -83,28 +83,23 @@ export function remainingPercent(value: number | null | undefined): number | nul
 export function calcAvailability(
   usage?: Partial<AccountUsage> | null,
   account?: { status?: string } | null
-): { text: string; level: AvailabilityLevel } {
-  if (isInactiveAccount(account)) {
-    return { text: "不可用", level: "bad" };
-  }
-  if (!usage) {
-    return { text: "未知", level: "unknown" };
-  }
-
-  const normalizedStatus = String(usage.availabilityStatus || "")
+): { text: string; level: AvailabilityLevel; kind: AvailabilityKind } {
+  const inactive = isInactiveAccount(account);
+  const normalizedStatus = String(usage?.availabilityStatus || "")
     .trim()
     .toLowerCase();
-  if (normalizedStatus === "available") {
-    return { text: "可用", level: "ok" };
-  }
-  if (normalizedStatus === "primary_window_available_only") {
-    return { text: "单窗口可用", level: "ok" };
-  }
   if (normalizedStatus === "unavailable") {
-    return { text: "不可用", level: "bad" };
+    return { text: "不可用", level: "bad", kind: "unavailable" };
+  }
+  if (!usage) {
+    return inactive
+      ? { text: "已失效", level: "bad", kind: "expired" }
+      : { text: "未知", level: "unknown", kind: "unknown" };
   }
   if (normalizedStatus === "unknown") {
-    return { text: "未知", level: "unknown" };
+    return inactive
+      ? { text: "已失效", level: "bad", kind: "expired" }
+      : { text: "未知", level: "unknown", kind: "unknown" };
   }
 
   const primaryMissing =
@@ -117,20 +112,41 @@ export function calcAvailability(
     toNullableNumber(usage.secondaryUsedPercent) == null ||
     toNullableNumber(usage.secondaryWindowMinutes) == null;
 
-  if (primaryMissing) return { text: "用量缺失", level: "bad" };
+  if (primaryMissing) {
+    return inactive
+      ? { text: "已失效", level: "bad", kind: "expired" }
+      : { text: "用量缺失", level: "bad", kind: "unknown" };
+  }
   if ((usage.usedPercent ?? 0) >= 100) {
-    return { text: "5小时已用尽", level: "warn" };
+    return { text: "不可用", level: "warn", kind: "unavailable" };
   }
   if (!secondaryPresent) {
-    return { text: "单窗口可用", level: "ok" };
+    if (inactive) {
+      return { text: "已失效", level: "bad", kind: "expired" };
+    }
+    if (normalizedStatus === "primary_window_available_only") {
+      return { text: "单窗口可用", level: "ok", kind: "available" };
+    }
+    return { text: "单窗口可用", level: "ok", kind: "available" };
   }
   if (secondaryMissing) {
-    return { text: "用量缺失", level: "bad" };
+    return inactive
+      ? { text: "已失效", level: "bad", kind: "expired" }
+      : { text: "用量缺失", level: "bad", kind: "unknown" };
   }
   if ((usage.secondaryUsedPercent ?? 0) >= 100) {
-    return { text: "7日已用尽", level: "bad" };
+    return { text: "不可用", level: "bad", kind: "unavailable" };
   }
-  return { text: "可用", level: "ok" };
+  if (inactive) {
+    return { text: "已失效", level: "bad", kind: "expired" };
+  }
+  if (normalizedStatus === "available") {
+    return { text: "可用", level: "ok", kind: "available" };
+  }
+  if (normalizedStatus === "primary_window_available_only") {
+    return { text: "单窗口可用", level: "ok", kind: "available" };
+  }
+  return { text: "可用", level: "ok", kind: "available" };
 }
 
 export function isLowQuotaUsage(usage?: Partial<AccountUsage> | null): boolean {
@@ -144,6 +160,10 @@ export function isLowQuotaUsage(usage?: Partial<AccountUsage> | null): boolean {
 
 export function canParticipateInRouting(level: AvailabilityLevel): boolean {
   return level !== "warn" && level !== "bad";
+}
+
+export function countsTowardPoolRemain(kind: AvailabilityKind): boolean {
+  return kind === "available" || kind === "unavailable";
 }
 
 export function pickCurrentAccount(
