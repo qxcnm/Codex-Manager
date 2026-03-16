@@ -405,10 +405,10 @@ function LogsPageContent() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState(() => searchParams.get("query") || "");
   const [filter, setFilter] = useState<StatusFilter>("all");
-  const [pageSize, setPageSize] = useState("20");
+  const [pageSize, setPageSize] = useState("10");
   const [page, setPage] = useState(1);
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
-  const pageSizeNumber = Number(pageSize) || 20;
+  const pageSizeNumber = Number(pageSize) || 10;
 
   const { data: accountsResult } = useQuery({
     queryKey: ["accounts", "lookup"],

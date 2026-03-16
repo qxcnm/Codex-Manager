@@ -23,7 +23,7 @@ pub(in super::super) fn prepare_candidates_for_proxy(
     reasoning_for_log: Option<&str>,
 ) -> CandidatePrecheckResult {
     let candidates: Vec<(Account, Token)> =
-        match super::candidates::prepare_gateway_candidates(storage) {
+        match super::candidates::prepare_gateway_candidates(storage, model_for_log) {
             Ok(v) => v,
             Err(err) => {
                 let err_text = format!("candidate resolve failed: {err}");

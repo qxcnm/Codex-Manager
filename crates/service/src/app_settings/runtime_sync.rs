@@ -6,9 +6,9 @@ use super::{
     parse_bool_with_default, persisted_env_overrides_missing_process_env,
     reload_runtime_after_env_override_apply, set_service_bind_mode, BackgroundTasksInput,
     APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY, APP_SETTING_GATEWAY_CPA_NO_COOKIE_HEADER_MODE_KEY,
-    APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY, APP_SETTING_GATEWAY_SSE_KEEPALIVE_INTERVAL_MS_KEY,
-    APP_SETTING_GATEWAY_UPSTREAM_PROXY_URL_KEY, APP_SETTING_GATEWAY_UPSTREAM_STREAM_TIMEOUT_MS_KEY,
-    SERVICE_BIND_MODE_SETTING_KEY,
+    APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY, APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY,
+    APP_SETTING_GATEWAY_SSE_KEEPALIVE_INTERVAL_MS_KEY, APP_SETTING_GATEWAY_UPSTREAM_PROXY_URL_KEY,
+    APP_SETTING_GATEWAY_UPSTREAM_STREAM_TIMEOUT_MS_KEY, SERVICE_BIND_MODE_SETTING_KEY,
 };
 
 pub fn sync_runtime_settings_from_storage() {
@@ -26,6 +26,13 @@ pub fn sync_runtime_settings_from_storage() {
         if let Some(strategy) = normalize_optional_text(Some(strategy)) {
             if let Err(err) = gateway::set_route_strategy(&strategy) {
                 log::warn!("sync persisted route strategy failed: {err}");
+            }
+        }
+    }
+    if let Some(model) = settings.get(APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY) {
+        if let Some(model) = normalize_optional_text(Some(model)) {
+            if let Err(err) = gateway::set_free_account_max_model(&model) {
+                log::warn!("sync persisted free account max model failed: {err}");
             }
         }
     }

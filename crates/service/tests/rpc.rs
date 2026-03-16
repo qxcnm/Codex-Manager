@@ -362,6 +362,45 @@ fn rpc_app_settings_set_invalid_payload_returns_structured_error() {
 }
 
 #[test]
+fn rpc_app_settings_can_roundtrip_free_account_max_model() {
+    let _ctx = RpcTestContext::new("rpc-app-settings-free-max-model");
+    let set_server = codexmanager_service::start_one_shot_server().expect("start server");
+
+    let set_req = JsonRpcRequest {
+        id: 31,
+        method: "appSettings/set".to_string(),
+        params: Some(serde_json::json!({
+            "freeAccountMaxModel": "gpt-5.3-codex"
+        })),
+    };
+    let set_json = serde_json::to_string(&set_req).expect("serialize");
+    let set_resp = post_rpc(&set_server.addr, &set_json);
+    let set_result = set_resp.get("result").expect("result");
+    assert_eq!(
+        set_result
+            .get("freeAccountMaxModel")
+            .and_then(|value| value.as_str()),
+        Some("gpt-5.3-codex")
+    );
+
+    let get_server = codexmanager_service::start_one_shot_server().expect("start server");
+    let get_req = JsonRpcRequest {
+        id: 32,
+        method: "appSettings/get".to_string(),
+        params: None,
+    };
+    let get_json = serde_json::to_string(&get_req).expect("serialize");
+    let get_resp = post_rpc(&get_server.addr, &get_json);
+    let get_result = get_resp.get("result").expect("result");
+    assert_eq!(
+        get_result
+            .get("freeAccountMaxModel")
+            .and_then(|value| value.as_str()),
+        Some("gpt-5.3-codex")
+    );
+}
+
+#[test]
 fn rpc_account_list_active_filter_uses_backend_filtered_pagination() {
     let ctx = RpcTestContext::new("rpc-account-list-active-filter");
     let storage = Storage::open(ctx.db_path()).expect("open db");

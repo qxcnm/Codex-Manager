@@ -24,6 +24,7 @@ static STRICT_REQUEST_PARAM_ALLOWLIST: AtomicBool =
     AtomicBool::new(DEFAULT_STRICT_REQUEST_PARAM_ALLOWLIST);
 static UPSTREAM_COOKIE: OnceLock<RwLock<Option<String>>> = OnceLock::new();
 static UPSTREAM_PROXY_URL: OnceLock<RwLock<Option<String>>> = OnceLock::new();
+static FREE_ACCOUNT_MAX_MODEL: OnceLock<RwLock<String>> = OnceLock::new();
 static TOKEN_EXCHANGE_CLIENT_ID: OnceLock<RwLock<String>> = OnceLock::new();
 static TOKEN_EXCHANGE_ISSUER: OnceLock<RwLock<String>> = OnceLock::new();
 
@@ -31,12 +32,14 @@ pub(crate) const DEFAULT_GATEWAY_DEBUG: bool = false;
 const DEFAULT_UPSTREAM_CONNECT_TIMEOUT_SECS: u64 = 15;
 const DEFAULT_UPSTREAM_TOTAL_TIMEOUT_MS: u64 = 120_000;
 const DEFAULT_UPSTREAM_STREAM_TIMEOUT_MS: u64 = 1_800_000;
-const DEFAULT_ACCOUNT_MAX_INFLIGHT: usize = 0;
+// 中文注释：默认把单账号并发收紧到 1，避免多个长连接 Codex 会话同时压到同一账号上。
+const DEFAULT_ACCOUNT_MAX_INFLIGHT: usize = 1;
 const DEFAULT_CPA_NO_COOKIE_HEADER_MODE: bool = false;
 const DEFAULT_STRICT_REQUEST_PARAM_ALLOWLIST: bool = true;
 const DEFAULT_REQUEST_GATE_WAIT_TIMEOUT_MS: u64 = 300;
 const DEFAULT_TRACE_BODY_PREVIEW_MAX_BYTES: usize = 0;
 const DEFAULT_FRONT_PROXY_MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
+const DEFAULT_FREE_ACCOUNT_MAX_MODEL: &str = "gpt-5.2";
 const MAX_UPSTREAM_PROXY_POOL_SIZE: usize = 5;
 
 const ENV_REQUEST_GATE_WAIT_TIMEOUT_MS: &str = "CODEXMANAGER_REQUEST_GATE_WAIT_TIMEOUT_MS";
@@ -52,6 +55,7 @@ const ENV_TOKEN_EXCHANGE_CLIENT_ID: &str = "CODEXMANAGER_CLIENT_ID";
 const ENV_TOKEN_EXCHANGE_ISSUER: &str = "CODEXMANAGER_ISSUER";
 const ENV_PROXY_LIST: &str = "CODEXMANAGER_PROXY_LIST";
 const ENV_UPSTREAM_PROXY_URL: &str = "CODEXMANAGER_UPSTREAM_PROXY_URL";
+const ENV_FREE_ACCOUNT_MAX_MODEL: &str = "CODEXMANAGER_FREE_ACCOUNT_MAX_MODEL";
 
 #[derive(Default, Clone)]
 struct UpstreamClientPool {
@@ -207,6 +211,21 @@ pub(super) fn upstream_proxy_url() -> Option<String> {
     current_upstream_proxy_url()
 }
 
+pub(crate) fn current_free_account_max_model() -> String {
+    ensure_runtime_config_loaded();
+    crate::lock_utils::read_recover(free_account_max_model_cell(), "free_account_max_model").clone()
+}
+
+pub(crate) fn set_free_account_max_model(model: &str) -> Result<String, String> {
+    ensure_runtime_config_loaded();
+    let normalized = normalize_model_slug(model)?;
+    std::env::set_var(ENV_FREE_ACCOUNT_MAX_MODEL, normalized.as_str());
+    let mut cached =
+        crate::lock_utils::write_recover(free_account_max_model_cell(), "free_account_max_model");
+    *cached = normalized.clone();
+    Ok(normalized)
+}
+
 pub(super) fn set_upstream_proxy_url(proxy_url: Option<&str>) -> Result<Option<String>, String> {
     ensure_runtime_config_loaded();
     let normalized = normalize_upstream_proxy_url(proxy_url)?;
@@ -341,6 +360,14 @@ pub(super) fn reload_from_env() {
     *cached_proxy_url = converted_proxy;
     drop(cached_proxy_url);
 
+    let free_account_max_model = env_non_empty(ENV_FREE_ACCOUNT_MAX_MODEL)
+        .and_then(|value| normalize_model_slug(value.as_str()).ok())
+        .unwrap_or_else(|| DEFAULT_FREE_ACCOUNT_MAX_MODEL.to_string());
+    let mut cached_free_account_max_model =
+        crate::lock_utils::write_recover(free_account_max_model_cell(), "free_account_max_model");
+    *cached_free_account_max_model = free_account_max_model;
+    drop(cached_free_account_max_model);
+
     refresh_upstream_clients_from_runtime_config();
 }
 
@@ -413,6 +440,10 @@ fn upstream_proxy_url_cell() -> &'static RwLock<Option<String>> {
     UPSTREAM_PROXY_URL.get_or_init(|| RwLock::new(None))
 }
 
+fn free_account_max_model_cell() -> &'static RwLock<String> {
+    FREE_ACCOUNT_MAX_MODEL.get_or_init(|| RwLock::new(DEFAULT_FREE_ACCOUNT_MAX_MODEL.to_string()))
+}
+
 fn current_upstream_proxy_url() -> Option<String> {
     crate::lock_utils::read_recover(upstream_proxy_url_cell(), "upstream_proxy_url").clone()
 }
@@ -453,6 +484,23 @@ fn env_bool_or(name: &str, default: bool) -> bool {
         "0" | "false" | "no" | "off" => false,
         _ => default,
     }
+}
+
+fn normalize_model_slug(raw: &str) -> Result<String, String> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Err("freeAccountMaxModel is required".to_string());
+    }
+    if normalized == "gpt-5.4-pro" {
+        return Ok("gpt-5.4".to_string());
+    }
+    if normalized
+        .chars()
+        .any(|ch| !(ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | ':')))
+    {
+        return Err("freeAccountMaxModel contains unsupported characters".to_string());
+    }
+    Ok(normalized)
 }
 
 fn rewrite_socks_proxy_url(proxy_url: &str) -> String {

@@ -490,6 +490,10 @@ export function normalizeAppSettings(payload: unknown): AppSettings {
     routeStrategyOptions: asArray(source.routeStrategyOptions).map((item) =>
       asString(item)
     ),
+    freeAccountMaxModel: asString(source.freeAccountMaxModel) || "gpt-5.2",
+    freeAccountMaxModelOptions: asArray(source.freeAccountMaxModelOptions).map((item) =>
+      asString(item)
+    ),
     cpaNoCookieHeaderModeEnabled: asBoolean(
       source.cpaNoCookieHeaderModeEnabled,
       false

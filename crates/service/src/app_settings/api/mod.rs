@@ -9,9 +9,10 @@ pub(super) use super::env_overrides::{
     env_override_unsupported_keys, save_env_overrides_value, set_env_overrides,
 };
 pub(super) use super::gateway::{
-    current_background_tasks_snapshot_value, current_gateway_sse_keepalive_interval_ms,
-    current_gateway_upstream_stream_timeout_ms, set_gateway_background_tasks,
-    set_gateway_cpa_no_cookie_header_mode, set_gateway_route_strategy,
+    current_background_tasks_snapshot_value, current_gateway_free_account_max_model,
+    current_gateway_sse_keepalive_interval_ms, current_gateway_upstream_stream_timeout_ms,
+    set_gateway_background_tasks, set_gateway_cpa_no_cookie_header_mode,
+    set_gateway_free_account_max_model, set_gateway_route_strategy,
     set_gateway_sse_keepalive_interval_ms, set_gateway_upstream_proxy_url,
     set_gateway_upstream_stream_timeout_ms, BackgroundTasksInput,
 };
@@ -30,7 +31,8 @@ pub(super) use super::ui::{
 };
 pub(super) use super::{
     APP_SETTING_CLOSE_TO_TRAY_ON_CLOSE_KEY, APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY,
-    APP_SETTING_GATEWAY_CPA_NO_COOKIE_HEADER_MODE_KEY, APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY,
+    APP_SETTING_GATEWAY_CPA_NO_COOKIE_HEADER_MODE_KEY,
+    APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY, APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY,
     APP_SETTING_GATEWAY_SSE_KEEPALIVE_INTERVAL_MS_KEY, APP_SETTING_GATEWAY_UPSTREAM_PROXY_URL_KEY,
     APP_SETTING_GATEWAY_UPSTREAM_STREAM_TIMEOUT_MS_KEY,
     APP_SETTING_LIGHTWEIGHT_MODE_ON_CLOSE_TO_TRAY_KEY, APP_SETTING_SERVICE_ADDR_KEY,

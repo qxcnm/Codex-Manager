@@ -18,6 +18,12 @@ impl EnvGuard {
         std::env::set_var(key, value);
         Self { key, original }
     }
+
+    fn clear(key: &'static str) -> Self {
+        let original = std::env::var_os(key);
+        std::env::remove_var(key);
+        Self { key, original }
+    }
 }
 
 impl Drop for EnvGuard {
@@ -35,6 +41,7 @@ fn reload_from_env_updates_timeout_and_cookie() {
     let _guard = test_guard();
     let _timeout_guard = EnvGuard::set(ENV_UPSTREAM_TOTAL_TIMEOUT_MS, "777");
     let _stream_timeout_guard = EnvGuard::set(ENV_UPSTREAM_STREAM_TIMEOUT_MS, "888");
+    let _inflight_guard = EnvGuard::set(ENV_ACCOUNT_MAX_INFLIGHT, "4");
     let _cookie_guard = EnvGuard::set(ENV_UPSTREAM_COOKIE, "cookie=abc");
     let _cpa_mode_guard = EnvGuard::set(ENV_CPA_NO_COOKIE_HEADER_MODE, "1");
     let _strict_allowlist_guard = EnvGuard::set(ENV_STRICT_REQUEST_PARAM_ALLOWLIST, "0");
@@ -46,6 +53,7 @@ fn reload_from_env_updates_timeout_and_cookie() {
 
     assert_eq!(upstream_total_timeout(), Some(Duration::from_millis(777)));
     assert_eq!(upstream_stream_timeout(), Some(Duration::from_millis(888)));
+    assert_eq!(account_max_inflight_limit(), 4);
     assert_eq!(upstream_cookie().as_deref(), Some("cookie=abc"));
     assert!(cpa_no_cookie_header_mode_enabled());
     assert!(!strict_request_param_allowlist_enabled());
@@ -58,6 +66,16 @@ fn reload_from_env_updates_timeout_and_cookie() {
         upstream_proxy_url().as_deref(),
         Some("socks5h://127.0.0.1:7890")
     );
+}
+
+#[test]
+fn reload_from_env_defaults_account_max_inflight_to_one() {
+    let _guard = test_guard();
+    let _guard = EnvGuard::clear(ENV_ACCOUNT_MAX_INFLIGHT);
+
+    reload_from_env();
+
+    assert_eq!(account_max_inflight_limit(), 1);
 }
 
 #[test]
@@ -154,4 +172,13 @@ fn set_upstream_stream_timeout_ms_updates_env_and_cache() {
             .as_deref(),
         Some("432100")
     );
+}
+
+#[test]
+fn normalize_model_slug_maps_legacy_gpt_5_4_pro_to_gpt_5_4() {
+    let _guard = test_guard();
+
+    let actual = normalize_model_slug("gpt-5.4-pro").expect("normalize model");
+
+    assert_eq!(actual, "gpt-5.4");
 }

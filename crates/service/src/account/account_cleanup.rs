@@ -1,10 +1,11 @@
-use codexmanager_core::auth::parse_id_token_claims;
 use codexmanager_core::storage::{now_ts, Event, UsageSnapshotRecord};
 use serde::Serialize;
-use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::account_availability::{evaluate_snapshot, Availability};
+use crate::account_plan::{
+    extract_plan_type_from_id_token, is_free_plan_from_credits_json, is_free_plan_type,
+};
 use crate::storage_helpers::open_storage;
 
 #[derive(Debug, Serialize)]
@@ -94,79 +95,6 @@ pub(crate) fn delete_unavailable_free_accounts() -> Result<DeleteUnavailableFree
 
     Ok(result)
 }
-
-fn extract_plan_type_from_id_token(id_token: &str) -> Option<String> {
-    parse_id_token_claims(id_token)
-        .ok()
-        .and_then(|claims| claims.auth)
-        .and_then(|auth| auth.chatgpt_plan_type)
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| !value.is_empty())
-}
-
-fn is_free_plan_type(plan_type: Option<&str>) -> bool {
-    let Some(plan_type) = plan_type else {
-        return false;
-    };
-    let normalized = plan_type.trim().to_ascii_lowercase();
-    if normalized.is_empty() {
-        return false;
-    }
-    normalized.contains("free")
-}
-
-fn is_free_plan_from_credits_json(raw_credits_json: Option<&str>) -> bool {
-    let Some(raw_credits_json) = raw_credits_json else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_str::<Value>(raw_credits_json) else {
-        return false;
-    };
-    let keys = [
-        "plan_type",
-        "planType",
-        "subscription_tier",
-        "subscriptionTier",
-        "tier",
-        "account_type",
-        "accountType",
-        "type",
-    ];
-    let extracted = extract_string_by_keys_recursive(&value, &keys);
-    is_free_plan_type(extracted.as_deref())
-}
-
-fn extract_string_by_keys_recursive(value: &Value, keys: &[&str]) -> Option<String> {
-    if let Some(object) = value.as_object() {
-        for key in keys {
-            let candidate = object
-                .get(*key)
-                .and_then(Value::as_str)
-                .map(|text| text.trim().to_ascii_lowercase())
-                .filter(|text| !text.is_empty());
-            if candidate.is_some() {
-                return candidate;
-            }
-        }
-        for child in object.values() {
-            let nested = extract_string_by_keys_recursive(child, keys);
-            if nested.is_some() {
-                return nested;
-            }
-        }
-        return None;
-    }
-    if let Some(array) = value.as_array() {
-        for child in array {
-            let nested = extract_string_by_keys_recursive(child, keys);
-            if nested.is_some() {
-                return nested;
-            }
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::{is_free_plan_from_credits_json, is_free_plan_type};

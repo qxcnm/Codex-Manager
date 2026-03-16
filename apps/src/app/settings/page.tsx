@@ -68,6 +68,20 @@ const ROUTE_STRATEGY_LABELS: Record<string, string> = {
   balanced: "均衡轮询 (Balanced)",
 };
 
+const DEFAULT_FREE_ACCOUNT_MAX_MODEL_OPTIONS = [
+  "gpt-5",
+  "gpt-5-codex",
+  "gpt-5-codex-mini",
+  "gpt-5.1",
+  "gpt-5.1-codex",
+  "gpt-5.1-codex-max",
+  "gpt-5.1-codex-mini",
+  "gpt-5.2",
+  "gpt-5.2-codex",
+  "gpt-5.3-codex",
+  "gpt-5.4",
+] as const;
+
 const SETTINGS_TABS = ["general", "appearance", "gateway", "tasks", "env"] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
 const SETTINGS_ACTIVE_TAB_KEY = "codexmanager.settings.active-tab";
@@ -507,6 +521,33 @@ export default function SettingsPage() {
                 <p className="text-[10px] text-muted-foreground">
                   顺序优先：按账号候选顺序优先尝试，默认只会在头部小窗口内按健康度做轻微换头；
                   均衡轮询：按“平台密钥 + 模型”维度严格轮询可用账号，默认不做健康度换头。
+                </p>
+              </div>
+
+              <div className="grid gap-2">
+                <Label>Free 账号最高模型</Label>
+                <Select
+                  value={snapshot.freeAccountMaxModel || "gpt-5.2"}
+                  onValueChange={(value) =>
+                    updateSettings.mutate({ freeAccountMaxModel: value || "gpt-5.2" })
+                  }
+                >
+                  <SelectTrigger className="w-full md:w-[300px]">
+                    <SelectValue placeholder="选择最高模型" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(snapshot.freeAccountMaxModelOptions?.length
+                      ? snapshot.freeAccountMaxModelOptions
+                      : DEFAULT_FREE_ACCOUNT_MAX_MODEL_OPTIONS
+                    ).map((model) => (
+                      <SelectItem key={model} value={model}>
+                        {model}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] text-muted-foreground">
+                  当请求模型高于这个上限时，free 账号不会进入候选池，避免自动切换后被上游拒绝。
                 </p>
               </div>
 

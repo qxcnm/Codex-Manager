@@ -27,35 +27,8 @@ const DEFAULT_SERVICE_ADDR = "localhost:48760";
 const PRIMARY_PAGE_WARMUP_STALE_TIME = 30_000;
 const PRIMARY_PAGE_WARMUP_PAGE_SIZE = 20;
 const PRIMARY_PAGE_ROUTES = ["/", "/accounts", "/apikeys", "/logs", "/settings"] as const;
+const DEV_ROUTE_WARMUP_TIMEOUT_MS = 12_000;
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
-
-function routeChunkPath(route: (typeof PRIMARY_PAGE_ROUTES)[number]) {
-  if (route === "/") {
-    return "/_next/static/chunks/app/page.js";
-  }
-  return `/_next/static/chunks/app${route}/page.js`;
-}
-
-function warmRouteChunkScript(route: (typeof PRIMARY_PAGE_ROUTES)[number]) {
-  return new Promise<void>((resolve) => {
-    const src = routeChunkPath(route);
-    const existing = document.querySelector<HTMLScriptElement>(
-      `script[data-codexmanager-route-chunk="${src}"]`
-    );
-    if (existing) {
-      resolve();
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = src;
-    script.async = true;
-    script.dataset.codexmanagerRouteChunk = src;
-    script.onload = () => resolve();
-    script.onerror = () => resolve();
-    document.head.append(script);
-  });
-}
 
 export function AppBootstrap({ children }: { children: React.ReactNode }) {
   const { setServiceStatus, setAppSettings, serviceStatus } = useAppStore();
@@ -229,30 +202,43 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
     const currentPath = window.location.pathname;
     const routes = PRIMARY_PAGE_ROUTES.filter((route) => route !== currentPath);
     const controllers: AbortController[] = [];
+    let disposed = false;
+
+    const warmRouteDocument = async (route: (typeof PRIMARY_PAGE_ROUTES)[number]) => {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), DEV_ROUTE_WARMUP_TIMEOUT_MS);
+      controllers.push(controller);
+      try {
+        await fetch(route, {
+          method: "GET",
+          credentials: "same-origin",
+          cache: "no-store",
+          signal: controller.signal,
+          headers: {
+            "x-codexmanager-route-warmup": "1",
+          },
+        });
+      } catch {
+        // 中文注释：dev 预热只用于减少首次切页编译等待，失败时静默回退到正常导航。
+      } finally {
+        window.clearTimeout(timeoutId);
+        const index = controllers.indexOf(controller);
+        if (index >= 0) {
+          controllers.splice(index, 1);
+        }
+      }
+    };
 
     const runWarmup = () => {
-      for (const route of routes) {
-        router.prefetch(route);
-      }
-
-      void Promise.allSettled(
-        routes.flatMap((route) => {
-          const controller = new AbortController();
-          controllers.push(controller);
-          return [
-            fetch(route, {
-              method: "GET",
-              credentials: "same-origin",
-              cache: "default",
-              signal: controller.signal,
-              headers: {
-                "x-codexmanager-route-warmup": "1",
-              },
-            }),
-            warmRouteChunkScript(route),
-          ];
-        })
-      );
+      void (async () => {
+        for (const route of routes) {
+          if (disposed) {
+            return;
+          }
+          router.prefetch(route);
+          await warmRouteDocument(route);
+        }
+      })();
     };
 
     if (runtime.requestIdleCallback) {
@@ -260,6 +246,7 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
         timeout: 800,
       });
       return () => {
+        disposed = true;
         runtime.cancelIdleCallback?.(idleId);
         for (const controller of controllers) {
           controller.abort();
@@ -269,6 +256,7 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
 
     const timer = window.setTimeout(runWarmup, 120);
     return () => {
+      disposed = true;
       window.clearTimeout(timer);
       for (const controller of controllers) {
         controller.abort();

@@ -218,6 +218,8 @@ export interface AppSettings {
   serviceListenModeOptions: string[];
   routeStrategy: string;
   routeStrategyOptions: string[];
+  freeAccountMaxModel: string;
+  freeAccountMaxModelOptions: string[];
   cpaNoCookieHeaderModeEnabled: boolean;
   upstreamProxyUrl: string;
   upstreamStreamTimeoutMs: number;

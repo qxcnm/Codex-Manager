@@ -12,6 +12,8 @@ pub(crate) mod export;
 pub(crate) mod import;
 #[path = "account_list.rs"]
 pub(crate) mod list;
+#[path = "account_plan.rs"]
+pub(crate) mod plan;
 #[path = "account_status.rs"]
 pub(crate) mod status;
 #[path = "account_update.rs"]

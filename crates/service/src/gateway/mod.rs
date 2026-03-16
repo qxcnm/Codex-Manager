@@ -149,6 +149,14 @@ pub(crate) fn set_route_strategy(strategy: &str) -> Result<&'static str, String>
     Ok(applied)
 }
 
+pub(crate) fn current_free_account_max_model() -> String {
+    runtime_config::current_free_account_max_model()
+}
+
+pub(crate) fn set_free_account_max_model(model: &str) -> Result<String, String> {
+    runtime_config::set_free_account_max_model(model)
+}
+
 pub(crate) fn cpa_no_cookie_header_mode_enabled() -> bool {
     runtime_config::cpa_no_cookie_header_mode_enabled()
 }
