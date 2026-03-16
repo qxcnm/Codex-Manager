@@ -1,8 +1,8 @@
 services:
   codexmanager-service:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.service
+      context: ../..
+      dockerfile: crates/docker/Dockerfile.service
     environment:
       CODEXMANAGER_SERVICE_ADDR: 0.0.0.0:48760
       CODEXMANAGER_DB_PATH: /data/codexmanager.db
@@ -14,8 +14,8 @@ services:
 
   codexmanager-web:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.web
+      context: ../..
+      dockerfile: crates/docker/Dockerfile.web
     depends_on:
       - codexmanager-service
     environment:
