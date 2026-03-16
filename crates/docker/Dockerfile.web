@@ -4,13 +4,13 @@ WORKDIR /src/apps
 
 RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 
-COPY apps/package.json apps/pnpm-lock.yaml apps/vite.config.js apps/index.html ./
+COPY apps/package.json apps/pnpm-lock.yaml ./
+COPY apps/next.config.ts apps/tsconfig.json apps/postcss.config.mjs apps/components.json ./
+COPY apps/public ./public
 COPY apps/src ./src
-COPY apps/tests ./tests
-COPY apps/scripts ./scripts
 
 RUN pnpm install --frozen-lockfile
-RUN pnpm run build
+RUN pnpm run build:desktop
 
 FROM rust:1-bookworm AS builder
 
@@ -19,7 +19,7 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
-COPY --from=ui /src/apps/dist ./apps/dist
+COPY --from=ui /src/apps/out ./apps/out
 
 RUN cargo build -p codexmanager-web --release --features embedded-ui
 

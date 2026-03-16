@@ -123,6 +123,10 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
 
   const warmupPrimaryPages = useCallback(
     async (addr: string) => {
+      if (!isTauriRuntime()) {
+        return;
+      }
+
       for (const route of PRIMARY_PAGE_ROUTES) {
         router.prefetch(route);
       }
@@ -204,6 +208,9 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
   );
 
   const warmupDevRouteTransitions = useCallback(() => {
+    if (!isTauriRuntime()) {
+      return () => {};
+    }
     if (process.env.NODE_ENV !== "development") {
       return () => {};
     }
@@ -270,11 +277,7 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
   }, [router]);
 
   const init = useCallback(async () => {
-    if (!isTauriRuntime()) {
-      setIsInitializing(false);
-      hasInitializedOnce.current = true;
-      return;
-    }
+    const desktopRuntime = isTauriRuntime();
 
     // Only show full screen loading if we haven't initialized once
     if (!hasInitializedOnce.current) {
@@ -304,6 +307,9 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
         try {
           initializeResult = await initializeService(addr, 1);
         } catch {
+          if (!desktopRuntime) {
+            throw new Error(`服务未启动或无法访问: ${addr}`);
+          }
           initializeResult = await startAndInitializeService(addr);
         }
         setServiceStatus({

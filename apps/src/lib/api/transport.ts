@@ -5,6 +5,53 @@ import { useAppStore } from "../store/useAppStore";
 const WEB_RPC_METHOD_MAP = {
   app_settings_get: "appSettings/get",
   app_settings_set: "appSettings/set",
+  service_initialize: "initialize",
+  service_startup_snapshot: "startup/snapshot",
+  service_gateway_transport_get: "gateway/transport/get",
+  service_gateway_transport_set: "gateway/transport/set",
+  service_gateway_upstream_proxy_get: "gateway/upstreamProxy/get",
+  service_gateway_upstream_proxy_set: "gateway/upstreamProxy/set",
+  service_gateway_route_strategy_get: "gateway/routeStrategy/get",
+  service_gateway_route_strategy_set: "gateway/routeStrategy/set",
+  service_gateway_manual_account_get: "gateway/manualAccount/get",
+  service_gateway_manual_account_set: "gateway/manualAccount/set",
+  service_gateway_manual_account_clear: "gateway/manualAccount/clear",
+  service_gateway_header_policy_get: "gateway/headerPolicy/get",
+  service_gateway_header_policy_set: "gateway/headerPolicy/set",
+  service_gateway_background_tasks_get: "gateway/backgroundTasks/get",
+  service_gateway_background_tasks_set: "gateway/backgroundTasks/set",
+  service_requestlog_list: "requestlog/list",
+  service_requestlog_summary: "requestlog/summary",
+  service_requestlog_clear: "requestlog/clear",
+  service_requestlog_today_summary: "requestlog/today_summary",
+  service_listen_config_get: "service/listenConfig/get",
+  service_listen_config_set: "service/listenConfig/set",
+  service_account_list: "account/list",
+  service_account_delete: "account/delete",
+  service_account_delete_many: "account/deleteMany",
+  service_account_delete_unavailable_free: "account/deleteUnavailableFree",
+  service_account_update: "account/update",
+  service_account_import: "account/import",
+  service_usage_read: "account/usage/read",
+  service_usage_list: "account/usage/list",
+  service_usage_aggregate: "account/usage/aggregate",
+  service_usage_refresh: "account/usage/refresh",
+  service_login_start: "account/login/start",
+  service_login_status: "account/login/status",
+  service_login_complete: "account/login/complete",
+  service_login_chatgpt_auth_tokens: "account/login/start",
+  service_account_read: "account/read",
+  service_account_logout: "account/logout",
+  service_chatgpt_auth_tokens_refresh: "account/chatgptAuthTokens/refresh",
+  service_apikey_list: "apikey/list",
+  service_apikey_create: "apikey/create",
+  service_apikey_usage_stats: "apikey/usageStats",
+  service_apikey_delete: "apikey/delete",
+  service_apikey_update_model: "apikey/updateModel",
+  service_apikey_disable: "apikey/disable",
+  service_apikey_enable: "apikey/enable",
+  service_apikey_models: "apikey/models",
+  service_apikey_read_secret: "apikey/readSecret",
 } as const;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -36,10 +83,33 @@ function buildWebRpcParams(
   method: keyof typeof WEB_RPC_METHOD_MAP,
   params?: Record<string, unknown>
 ): Record<string, unknown> {
+  const nextParams = { ...(params ?? {}) };
   if (method === "app_settings_set") {
     return asRecord(asRecord(params)?.patch) ?? {};
   }
-  return params ?? {};
+  if ("addr" in nextParams) {
+    delete nextParams.addr;
+  }
+  if (method === "service_login_chatgpt_auth_tokens") {
+    return {
+      ...nextParams,
+      type: "chatgptAuthTokens",
+    };
+  }
+  if (
+    method === "service_apikey_delete" ||
+    method === "service_apikey_update_model" ||
+    method === "service_apikey_disable" ||
+    method === "service_apikey_enable" ||
+    method === "service_apikey_read_secret"
+  ) {
+    const keyId = typeof nextParams.keyId === "string" ? nextParams.keyId : null;
+    if (keyId) {
+      nextParams.id = keyId;
+    }
+    delete nextParams.keyId;
+  }
+  return nextParams;
 }
 
 async function invokeWebRpc<T>(

@@ -14,6 +14,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useAppStore } from "@/lib/store/useAppStore";
+import { isTauriRuntime } from "@/lib/api/transport";
 import { memo, useEffect, useMemo } from "react";
 
 const NAV_ITEMS = [
@@ -27,7 +28,7 @@ const NAV_ITEMS = [
 const NavItem = memo(({ item, isActive, isSidebarOpen }: { item: typeof NAV_ITEMS[0], isActive: boolean, isSidebarOpen: boolean }) => (
   <Link
     href={item.href}
-    prefetch={true}
+    prefetch={false}
     className={cn(
       "flex items-center gap-3 rounded-lg px-3 py-2 transition-all duration-200 hover:bg-accent hover:text-accent-foreground",
       isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground"
@@ -46,6 +47,10 @@ export function Sidebar() {
   const { isSidebarOpen, toggleSidebar } = useAppStore();
 
   useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+
     const runtime = globalThis as typeof globalThis & {
       requestIdleCallback?: (
         callback: IdleRequestCallback,

@@ -54,13 +54,14 @@ fn serve_embedded_path(path: &str) -> Response {
         return (StatusCode::BAD_REQUEST, "bad path").into_response();
     }
 
-    let wanted = if raw.is_empty() { "index.html" } else { raw };
-    let bytes = embedded_ui::read_asset_bytes(wanted)
-        .or_else(|| embedded_ui::read_asset_bytes("index.html"));
-    let Some(bytes) = bytes else {
+    let candidates = embedded_candidates(raw);
+    let resolved = candidates
+        .iter()
+        .find_map(|candidate| embedded_ui::read_asset_bytes(candidate).map(|bytes| (candidate.as_str(), bytes)));
+    let Some((resolved_path, bytes)) = resolved else {
         return (StatusCode::NOT_FOUND, "missing ui").into_response();
     };
-    let mime = embedded_ui::guess_mime(wanted);
+    let mime = embedded_ui::guess_mime(resolved_path);
 
     let mut out = Response::new(axum::body::Body::from(bytes));
     out.headers_mut().insert(
@@ -69,4 +70,20 @@ fn serve_embedded_path(path: &str) -> Response {
             .unwrap_or_else(|_| axum::http::HeaderValue::from_static("application/octet-stream")),
     );
     out
+}
+
+fn embedded_candidates(raw: &str) -> Vec<String> {
+    if raw.is_empty() {
+        return vec!["index.html".to_string()];
+    }
+    if raw.contains('.') {
+        return vec![raw.to_string()];
+    }
+
+    vec![
+        raw.to_string(),
+        format!("{raw}.html"),
+        format!("{raw}/index.html"),
+        "index.html".to_string(),
+    ]
 }
