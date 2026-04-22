@@ -45,7 +45,7 @@ const GUIDE_STEPS = [
     icon: Rocket,
     title: "第二步：把下面这份配置写入 Codex CLI 配置文件",
     description:
-      "推荐先复制右侧模板，再按你的实际端口或运行习惯微调。不要手敲 provider 名称，最容易在这里拼错。",
+      "推荐先复制这份配置模板，再按你的实际端口或运行习惯微调。不要手敲 provider 名称，最容易在这里拼错。",
     details: [
       "通常放在 `~/.codex/config.toml`。",
       "在 Windows 上一般是 `%USERPROFILE%\\\\.codex\\\\config.toml`。",
@@ -285,7 +285,7 @@ export function CodexCliOnboardingDialog({
                 </DialogTitle>
                 <DialogDescription className="text-sm leading-7">
                   {t(
-                    "先看左侧步骤，再复制右侧模板去写 `config.toml`。只要没有勾选“不再显示”，你下次进入软件时仍会看到它。",
+                    "先看步骤说明，再复制配置模板去写 `config.toml`。只要没有勾选“不再显示”，你下次进入软件时仍会看到它。",
                   )}
                 </DialogDescription>
               </div>
@@ -299,7 +299,7 @@ export function CodexCliOnboardingDialog({
 
           <div
             ref={scrollContainerRef}
-            className="grid min-h-0 gap-5 overflow-y-auto px-6 py-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]"
+            className="grid min-h-0 gap-5 overflow-y-auto px-6 py-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]"
           >
             <div className="space-y-5">
               <section className="rounded-2xl border border-border/60 bg-background/45 p-5 shadow-sm">

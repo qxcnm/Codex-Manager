@@ -1064,8 +1064,8 @@ export const EN_MESSAGES: MessageCatalog = {
     "This will restore every configurable variable on the Environment tab to its default value and clear any unsaved drafts.",
   确认恢复: "Confirm restore",
   "Codex CLI 首次接入引导": "Codex CLI first-time setup guide",
-  "先看左侧步骤，再复制右侧模板去写 `config.toml`。只要没有勾选“不再显示”，你下次进入软件时仍会看到它。":
-    "Read the steps on the left first, then copy the template on the right into `config.toml`. If you do not check “Don't show this guide again”, you will see it again the next time you open the app.",
+  "先看步骤说明，再复制配置模板去写 `config.toml`。只要没有勾选“不再显示”，你下次进入软件时仍会看到它。":
+    "Read the steps first, then copy the configuration template into `config.toml`. If you do not check “Don't show this guide again”, you will see it again the next time you open the app.",
   "推荐先完整读一遍，再复制模板；这比自己手写 provider 名称和地址更不容易出错。":
     "Read through it once before copying the template. This is much less error-prone than typing the provider name and address by hand.",
   "如果你要把当前模型目录替换到本地 Codex 缓存，可以去模型管理页点击“导出到本地 Codex 缓存”；桌面端会直接写入 `~/.codex/models_cache.json`，浏览器模式会下载同名文件。":
@@ -1091,8 +1091,8 @@ export const EN_MESSAGES: MessageCatalog = {
     "The CLI config will not work if the service is not running, the certificate is invalid, or the port does not match.",
   "第二步：把下面这份配置写入 Codex CLI 配置文件":
     "Step 2: Write the configuration below into the Codex CLI config file",
-  "推荐先复制右侧模板，再按你的实际端口或运行习惯微调。不要手敲 provider 名称，最容易在这里拼错。":
-    "Copy the template on the right first, then adjust it for your actual port and workflow. Do not type the provider name by hand; this is where typos happen most often.",
+  "推荐先复制这份配置模板，再按你的实际端口或运行习惯微调。不要手敲 provider 名称，最容易在这里拼错。":
+    "Copy this configuration template first, then adjust it for your actual port and workflow. Do not type the provider name by hand; this is where typos happen most often.",
   "通常放在 `~/.codex/config.toml`。":
     "It is usually stored at `~/.codex/config.toml`.",
   "在 Windows 上一般是 `%USERPROFILE%\\\\.codex\\\\config.toml`。":
