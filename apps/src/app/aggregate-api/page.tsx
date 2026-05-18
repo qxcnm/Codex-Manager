@@ -291,6 +291,7 @@ export default function AggregateApiPage() {
     [modelPoolApi],
   );
   const modelPoolProviderType = modelPoolApi?.providerType || "codex";
+  const modelPoolApiActive = modelPoolApi?.status === "active";
 
   const { data: supplierModels = [], isLoading: supplierModelsLoading } = useQuery({
     queryKey: [
@@ -1546,6 +1547,7 @@ export default function AggregateApiPage() {
                       className="gap-2"
                       disabled={
                         !isServiceReady ||
+                        !modelPoolApiActive ||
                         syncModelPoolMutation.isPending ||
                         !modelPoolApiId
                       }
@@ -1567,6 +1569,7 @@ export default function AggregateApiPage() {
                       className="gap-2"
                       disabled={
                         !isServiceReady ||
+                        !modelPoolApiActive ||
                         importSupplierModelsMutation.isPending ||
                         supplierModels.length === 0 ||
                         !modelPoolApiId
@@ -1584,6 +1587,11 @@ export default function AggregateApiPage() {
                       {t("从供应商模板导入")}
                     </Button>
                   </div>
+                  {!modelPoolApiActive ? (
+                    <p className="text-xs text-muted-foreground">
+                      {t("当前聚合 API 未启用，启用后才能同步或导入模型。")}
+                    </p>
+                  ) : null}
 
                   <div className="grid gap-3 rounded-lg border bg-muted/10 p-3 md:grid-cols-[1fr_1fr_auto]">
                     <div className="grid gap-1.5">

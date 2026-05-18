@@ -566,6 +566,15 @@ fn sync_aggregate_api_source_models(
     let apis = storage
         .list_aggregate_apis()
         .map_err(|err| format!("list aggregate apis failed: {err}"))?;
+    if let Some(source_id) = requested_source_id.as_deref() {
+        let api = apis
+            .iter()
+            .find(|api| api.id == source_id)
+            .ok_or_else(|| format!("aggregate api `{source_id}` not found"))?;
+        if api.status != "active" {
+            return Err(format!("aggregate api `{source_id}` is disabled"));
+        }
+    }
     let mut synced_any = false;
     let mut last_error: Option<String> = None;
     for api in apis
@@ -1855,8 +1864,9 @@ mod tests {
         managed_catalog_to_models_response, merge_managed_model_catalog, merge_models_response,
         normalize_models_response, read_managed_model_catalog_from_storage,
         read_model_options_from_storage, save_managed_model_catalog_with_storage,
-        save_model_options_with_storage, MODEL_SOURCE_KIND_CUSTOM, MODEL_SOURCE_KIND_REMOTE,
-        ROUTING_SOURCE_KIND_AGGREGATE_API, ROUTING_SOURCE_KIND_OPENAI_ACCOUNT,
+        save_model_options_with_storage, sync_aggregate_api_source_models,
+        MODEL_SOURCE_KIND_CUSTOM, MODEL_SOURCE_KIND_REMOTE, ROUTING_SOURCE_KIND_AGGREGATE_API,
+        ROUTING_SOURCE_KIND_OPENAI_ACCOUNT,
     };
     use codexmanager_core::rpc::types::{
         ManagedModelCatalogEntry, ManagedModelCatalogResult, ModelInfo, ModelsResponse,
@@ -2431,6 +2441,45 @@ mod tests {
             .list_enabled_model_source_mappings_for_platform("vendor-only")
             .expect("list vendor mappings")
             .is_empty());
+    }
+
+    #[test]
+    fn aggregate_source_sync_rejects_disabled_api() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        storage
+            .insert_aggregate_api(&codexmanager_core::storage::AggregateApi {
+                id: "agg-disabled".to_string(),
+                provider_type: "codex".to_string(),
+                supplier_name: Some("disabled".to_string()),
+                sort: 0,
+                url: "https://disabled.example/v1".to_string(),
+                auth_type: "apikey".to_string(),
+                auth_params_json: None,
+                action: None,
+                model_override: None,
+                status: "disabled".to_string(),
+                created_at: 0,
+                updated_at: 0,
+                last_test_at: None,
+                last_test_status: None,
+                last_test_error: None,
+                balance_query_enabled: false,
+                balance_query_template: None,
+                balance_query_base_url: None,
+                balance_query_user_id: None,
+                balance_query_config_json: None,
+                last_balance_at: None,
+                last_balance_status: None,
+                last_balance_error: None,
+                last_balance_json: None,
+            })
+            .expect("insert disabled aggregate api");
+
+        let err = sync_aggregate_api_source_models(&storage, Some("agg-disabled"))
+            .expect_err("disabled aggregate api should not sync");
+        assert!(err.contains("agg-disabled"));
+        assert!(err.contains("disabled"));
     }
 
     #[test]
