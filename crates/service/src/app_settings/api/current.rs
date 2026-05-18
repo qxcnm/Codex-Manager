@@ -13,7 +13,7 @@ use super::{
     current_background_tasks_snapshot_value, current_close_to_tray_on_close_setting,
     current_codex_cli_guide_dismissed, current_env_overrides, current_gateway_account_max_inflight,
     current_gateway_free_account_max_model, current_gateway_model_forward_rules,
-    current_gateway_originator, current_gateway_residency_requirement,
+    current_gateway_originator, current_gateway_quota_guard, current_gateway_residency_requirement,
     current_gateway_sse_keepalive_interval_ms, current_gateway_upstream_stream_timeout_ms,
     current_gateway_upstream_total_timeout_ms, current_gateway_user_agent_version,
     current_lightweight_mode_on_close_to_tray_setting, current_saved_service_addr,
@@ -26,9 +26,10 @@ use super::{
     APP_SETTING_AUTHOR_SPONSORS_KEY, APP_SETTING_CLOSE_TO_TRAY_ON_CLOSE_KEY,
     APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY, APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY,
     APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY, APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY,
-    APP_SETTING_GATEWAY_ORIGINATOR_KEY, APP_SETTING_GATEWAY_RESIDENCY_REQUIREMENT_KEY,
-    APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY, APP_SETTING_GATEWAY_SSE_KEEPALIVE_INTERVAL_MS_KEY,
-    APP_SETTING_GATEWAY_UPSTREAM_PROXY_URL_KEY, APP_SETTING_GATEWAY_UPSTREAM_STREAM_TIMEOUT_MS_KEY,
+    APP_SETTING_GATEWAY_ORIGINATOR_KEY, APP_SETTING_GATEWAY_QUOTA_GUARD_KEY,
+    APP_SETTING_GATEWAY_RESIDENCY_REQUIREMENT_KEY, APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY,
+    APP_SETTING_GATEWAY_SSE_KEEPALIVE_INTERVAL_MS_KEY, APP_SETTING_GATEWAY_UPSTREAM_PROXY_URL_KEY,
+    APP_SETTING_GATEWAY_UPSTREAM_STREAM_TIMEOUT_MS_KEY,
     APP_SETTING_GATEWAY_UPSTREAM_TOTAL_TIMEOUT_MS_KEY, APP_SETTING_GATEWAY_USER_AGENT_VERSION_KEY,
     APP_SETTING_LIGHTWEIGHT_MODE_ON_CLOSE_TO_TRAY_KEY, APP_SETTING_PLUGIN_MARKET_MODE_KEY,
     APP_SETTING_PLUGIN_MARKET_SOURCE_URL_KEY, APP_SETTING_SERVICE_ADDR_KEY,
@@ -117,6 +118,7 @@ pub(super) fn current_app_settings_value(
     let free_account_max_model = current_gateway_free_account_max_model();
     let model_forward_rules = current_gateway_model_forward_rules();
     let account_max_inflight = current_gateway_account_max_inflight();
+    let quota_guard = current_gateway_quota_guard();
     let gateway_originator = current_gateway_originator();
     let gateway_user_agent_version = current_gateway_user_agent_version();
     let gateway_originator_default = default_gateway_originator();
@@ -155,6 +157,8 @@ pub(super) fn current_app_settings_value(
         .to_string();
     let background_tasks_raw = serde_json::to_string(&background_tasks)
         .map_err(|err| format!("serialize background tasks failed: {err}"))?;
+    let quota_guard_raw = serde_json::to_string(&quota_guard)
+        .map_err(|err| format!("serialize quota guard settings failed: {err}"))?;
     let author_sponsors_raw = serialize_author_link_items(&author_sponsors)?;
     let author_server_recommendations_raw =
         serialize_author_link_items(&author_server_recommendations)?;
@@ -185,6 +189,7 @@ pub(super) fn current_app_settings_value(
         &gateway_originator,
         &gateway_user_agent_version,
         &gateway_residency_requirement,
+        &quota_guard_raw,
         &plugin_market_mode,
         &plugin_market_source_url,
         &author_sponsors_raw,
@@ -226,6 +231,7 @@ pub(super) fn current_app_settings_value(
         "freeAccountMaxModel": free_account_max_model,
         "modelForwardRules": model_forward_rules,
         "accountMaxInflight": account_max_inflight,
+        "quotaGuard": quota_guard,
         "freeAccountMaxModelOptions": free_account_max_model_options,
         "gatewayOriginator": gateway_originator,
         "gatewayOriginatorDefault": gateway_originator_default,
@@ -438,6 +444,7 @@ fn persist_current_snapshot(
     gateway_originator: &str,
     gateway_user_agent_version: &str,
     gateway_residency_requirement: &str,
+    quota_guard_raw: &str,
     plugin_market_mode: &str,
     plugin_market_source_url: &str,
     author_sponsors_raw: &str,
@@ -503,6 +510,7 @@ fn persist_current_snapshot(
             Some(gateway_residency_requirement)
         },
     );
+    let _ = save_persisted_app_setting(APP_SETTING_GATEWAY_QUOTA_GUARD_KEY, Some(quota_guard_raw));
     let _ = save_persisted_app_setting(
         APP_SETTING_PLUGIN_MARKET_SOURCE_URL_KEY,
         if plugin_market_source_url.trim().is_empty() {

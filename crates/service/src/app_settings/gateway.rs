@@ -28,7 +28,8 @@ use super::{
     normalize_optional_text, save_persisted_app_setting, save_persisted_bool_setting,
     APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY, APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY,
     APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY, APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY,
-    APP_SETTING_GATEWAY_ORIGINATOR_KEY, APP_SETTING_GATEWAY_REQUEST_COMPRESSION_ENABLED_KEY,
+    APP_SETTING_GATEWAY_ORIGINATOR_KEY, APP_SETTING_GATEWAY_QUOTA_GUARD_KEY,
+    APP_SETTING_GATEWAY_REQUEST_COMPRESSION_ENABLED_KEY,
     APP_SETTING_GATEWAY_RESIDENCY_REQUIREMENT_KEY, APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY,
     APP_SETTING_GATEWAY_SSE_KEEPALIVE_INTERVAL_MS_KEY, APP_SETTING_GATEWAY_UPSTREAM_PROXY_URL_KEY,
     APP_SETTING_GATEWAY_UPSTREAM_STREAM_TIMEOUT_MS_KEY,
@@ -76,6 +77,33 @@ impl BackgroundTasksInput {
             http_worker_min: self.http_worker_min,
             http_stream_worker_factor: self.http_stream_worker_factor,
             http_stream_worker_min: self.http_stream_worker_min,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct QuotaGuardInput {
+    enabled: Option<bool>,
+    primary_min_remaining_percent: Option<f64>,
+    secondary_min_remaining_percent: Option<f64>,
+    allow_all_low_quota_fallback: Option<bool>,
+}
+
+impl QuotaGuardInput {
+    pub(crate) fn into_config(self) -> gateway::QuotaGuardConfig {
+        let current = gateway::current_quota_guard_config();
+        gateway::QuotaGuardConfig {
+            enabled: self.enabled.unwrap_or(current.enabled),
+            primary_min_remaining_percent: self
+                .primary_min_remaining_percent
+                .unwrap_or(current.primary_min_remaining_percent),
+            secondary_min_remaining_percent: self
+                .secondary_min_remaining_percent
+                .unwrap_or(current.secondary_min_remaining_percent),
+            allow_all_low_quota_fallback: self
+                .allow_all_low_quota_fallback
+                .unwrap_or(current.allow_all_low_quota_fallback),
         }
     }
 }
@@ -204,6 +232,20 @@ pub fn set_gateway_account_max_inflight(limit: usize) -> Result<usize, String> {
 /// 返回函数执行结果
 pub fn current_gateway_account_max_inflight() -> usize {
     gateway::account_max_inflight_limit()
+}
+
+pub(crate) fn set_gateway_quota_guard(
+    input: QuotaGuardInput,
+) -> Result<gateway::QuotaGuardConfig, String> {
+    let applied = gateway::set_quota_guard_config(input.into_config());
+    let raw = serde_json::to_string(&applied)
+        .map_err(|err| format!("serialize quota guard settings failed: {err}"))?;
+    save_persisted_app_setting(APP_SETTING_GATEWAY_QUOTA_GUARD_KEY, Some(&raw))?;
+    Ok(applied)
+}
+
+pub(crate) fn current_gateway_quota_guard() -> gateway::QuotaGuardConfig {
+    gateway::current_quota_guard_config()
 }
 
 /// 函数 `set_gateway_request_compression_enabled`

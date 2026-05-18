@@ -9,13 +9,13 @@ use super::{
     save_persisted_app_setting, set_close_to_tray_on_close_setting, set_codex_cli_guide_dismissed,
     set_env_overrides, set_gateway_account_max_inflight, set_gateway_background_tasks,
     set_gateway_free_account_max_model, set_gateway_model_forward_rules, set_gateway_originator,
-    set_gateway_residency_requirement, set_gateway_route_strategy,
+    set_gateway_quota_guard, set_gateway_residency_requirement, set_gateway_route_strategy,
     set_gateway_sse_keepalive_interval_ms, set_gateway_upstream_proxy_url,
     set_gateway_upstream_stream_timeout_ms, set_gateway_upstream_total_timeout_ms,
     set_gateway_user_agent_version, set_lightweight_mode_on_close_to_tray_setting,
     set_saved_service_addr, set_service_bind_mode, set_ui_appearance_preset, set_ui_locale,
     set_ui_low_transparency_enabled, set_ui_theme, set_update_auto_check_enabled,
-    BackgroundTasksInput, APP_SETTING_AUTHOR_SERVER_RECOMMENDATIONS_KEY,
+    BackgroundTasksInput, QuotaGuardInput, APP_SETTING_AUTHOR_SERVER_RECOMMENDATIONS_KEY,
     APP_SETTING_AUTHOR_SPONSORS_KEY, APP_SETTING_PLUGIN_MARKET_MODE_KEY,
     APP_SETTING_PLUGIN_MARKET_SOURCE_URL_KEY,
 };
@@ -48,6 +48,7 @@ pub(super) struct AppSettingsPatch {
     upstream_stream_timeout_ms: Option<u64>,
     upstream_total_timeout_ms: Option<u64>,
     sse_keepalive_interval_ms: Option<u64>,
+    quota_guard: Option<QuotaGuardInput>,
     background_tasks: Option<BackgroundTasksInput>,
     env_overrides: Option<HashMap<String, String>>,
     web_access_password: Option<String>,
@@ -179,6 +180,9 @@ pub(super) fn apply_app_settings_patch(patch: AppSettingsPatch) -> Result<(), St
     }
     if let Some(interval_ms) = patch.sse_keepalive_interval_ms {
         let _ = set_gateway_sse_keepalive_interval_ms(interval_ms)?;
+    }
+    if let Some(quota_guard) = patch.quota_guard {
+        let _ = set_gateway_quota_guard(quota_guard)?;
     }
     if let Some(background_tasks) = patch.background_tasks {
         let _ = set_gateway_background_tasks(background_tasks)?;

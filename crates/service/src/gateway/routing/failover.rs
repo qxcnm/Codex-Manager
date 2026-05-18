@@ -1,4 +1,4 @@
-use codexmanager_core::storage::{Storage, UsageSnapshotRecord};
+use codexmanager_core::storage::Storage;
 
 use crate::account_availability::{evaluate_snapshot, Availability};
 
@@ -52,19 +52,7 @@ pub(crate) fn should_failover_from_low_quota_snapshot(storage: &Storage, account
         .ok()
         .flatten()
         .as_ref()
-        .is_some_and(is_low_quota_snapshot)
-}
-
-fn is_low_quota_snapshot(snap: &UsageSnapshotRecord) -> bool {
-    is_low_quota_snapshot_at(snap, super::selection::low_quota_threshold_percent())
-}
-
-fn is_low_quota_snapshot_at(snap: &UsageSnapshotRecord, threshold: f64) -> bool {
-    let primary_low = snap.used_percent.is_some_and(|pct| pct >= threshold);
-    let secondary_low = snap
-        .secondary_used_percent
-        .is_some_and(|pct| pct >= threshold);
-    primary_low || secondary_low
+        .is_some_and(super::selection::is_low_quota_snapshot)
 }
 
 /// 函数 `should_failover_by_snapshot`

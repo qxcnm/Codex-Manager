@@ -14,6 +14,7 @@ pub const APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY: &str = "gateway.route_strategy
 pub const APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY: &str = "gateway.free_account_max_model";
 pub const APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY: &str = "gateway.model_forward_rules";
 pub const APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY: &str = "gateway.account_max_inflight";
+pub const APP_SETTING_GATEWAY_QUOTA_GUARD_KEY: &str = "gateway.quota_guard";
 pub const APP_SETTING_GATEWAY_REQUEST_COMPRESSION_ENABLED_KEY: &str =
     "gateway.request_compression_enabled";
 pub const APP_SETTING_GATEWAY_ORIGINATOR_KEY: &str = "gateway.originator";

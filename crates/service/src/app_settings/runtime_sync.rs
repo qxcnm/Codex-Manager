@@ -4,9 +4,10 @@ use crate::usage_refresh;
 use super::{
     apply_env_overrides_to_process, list_app_settings_map, normalize_optional_text,
     persisted_env_overrides_missing_process_env, reload_runtime_after_env_override_apply,
-    set_service_bind_mode, BackgroundTasksInput, APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY,
-    APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY, APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY,
-    APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY, APP_SETTING_GATEWAY_ORIGINATOR_KEY,
+    set_service_bind_mode, BackgroundTasksInput, QuotaGuardInput,
+    APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY, APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY,
+    APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY, APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY,
+    APP_SETTING_GATEWAY_ORIGINATOR_KEY, APP_SETTING_GATEWAY_QUOTA_GUARD_KEY,
     APP_SETTING_GATEWAY_RESIDENCY_REQUIREMENT_KEY, APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY,
     APP_SETTING_GATEWAY_SSE_KEEPALIVE_INTERVAL_MS_KEY, APP_SETTING_GATEWAY_UPSTREAM_PROXY_URL_KEY,
     APP_SETTING_GATEWAY_UPSTREAM_STREAM_TIMEOUT_MS_KEY,
@@ -165,6 +166,24 @@ pub fn sync_runtime_settings_from_storage() {
                 }
             } else {
                 log::warn!("parse persisted sse keepalive interval failed: {raw}");
+            }
+        }
+    }
+    if !any_process_env_has_value(&[
+        "CODEXMANAGER_QUOTA_GUARD_ENABLED",
+        "CODEXMANAGER_QUOTA_GUARD_5H_MIN_REMAINING_PERCENT",
+        "CODEXMANAGER_QUOTA_GUARD_WEEKLY_MIN_REMAINING_PERCENT",
+        "CODEXMANAGER_QUOTA_GUARD_ALLOW_ALL_LOW_FALLBACK",
+        "CODEXMANAGER_LOW_QUOTA_THRESHOLD_PERCENT",
+    ]) {
+        if let Some(raw) = settings.get(APP_SETTING_GATEWAY_QUOTA_GUARD_KEY) {
+            match serde_json::from_str::<QuotaGuardInput>(raw) {
+                Ok(input) => {
+                    let _ = gateway::set_quota_guard_config(input.into_config());
+                }
+                Err(err) => {
+                    log::warn!("parse persisted quota guard settings failed: {err}");
+                }
             }
         }
     }

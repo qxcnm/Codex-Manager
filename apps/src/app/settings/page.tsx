@@ -333,6 +333,9 @@ function AdminSettingsPage() {
   const [backgroundTaskDraft, setBackgroundTaskDraft] = useState<
     Record<string, string>
   >({});
+  const [quotaGuardDraft, setQuotaGuardDraft] = useState<Record<string, string>>(
+    {},
+  );
   const [workerAdvancedDialogOpen, setWorkerAdvancedDialogOpen] =
     useState(false);
   const [webPasswordModalOpen, setWebPasswordModalOpen] = useState(false);
@@ -740,6 +743,14 @@ function AdminSettingsPage() {
       transportDraft.upstreamTotalTimeoutMs ??
       stringifyNumber(snapshot?.upstreamTotalTimeoutMs),
   };
+  const quotaGuardInputValues = {
+    primaryMinRemainingPercent:
+      quotaGuardDraft.primaryMinRemainingPercent ??
+      stringifyNumber(snapshot?.quotaGuard.primaryMinRemainingPercent),
+    secondaryMinRemainingPercent:
+      quotaGuardDraft.secondaryMinRemainingPercent ??
+      stringifyNumber(snapshot?.quotaGuard.secondaryMinRemainingPercent),
+  };
   const selectedEnvValue = selectedEnvKey
     ? (envDrafts[selectedEnvKey] ??
       snapshot?.envOverrides[selectedEnvKey] ??
@@ -1016,6 +1027,37 @@ function AdminSettingsPage() {
       .mutateAsync({ [key]: nextValue } as Partial<AppSettings>)
       .then(() => {
         setTransportDraft((current) => {
+          const nextDraft = { ...current };
+          delete nextDraft[key];
+          return nextDraft;
+        });
+      })
+      .catch(() => undefined);
+  };
+
+  const saveQuotaGuardField = (
+    key: "primaryMinRemainingPercent" | "secondaryMinRemainingPercent",
+  ) => {
+    if (!snapshot) return;
+    const nextValue = parseIntegerInput(quotaGuardInputValues[key], 0);
+    if (nextValue == null || nextValue > 100) {
+      toast.error(t("请输入 0-100 之间的百分比"));
+      setQuotaGuardDraft((current) => {
+        const nextDraft = { ...current };
+        delete nextDraft[key];
+        return nextDraft;
+      });
+      return;
+    }
+    void updateSettings
+      .mutateAsync({
+        quotaGuard: {
+          ...snapshot.quotaGuard,
+          [key]: nextValue,
+        },
+      })
+      .then(() => {
+        setQuotaGuardDraft((current) => {
           const nextDraft = { ...current };
           delete nextDraft[key];
           return nextDraft;
@@ -1630,6 +1672,92 @@ function AdminSettingsPage() {
                     "顺序优先：按账号候选顺序优先尝试，默认只会在头部小窗口内按健康度做轻微换头；均衡轮询：按“平台密钥 + 模型”维度严格轮询可用账号，默认不做健康度换头。",
                   )}
                 </p>
+              </div>
+
+              <div className="grid gap-4 border-t pt-6">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <ShieldCheck className="h-4 w-4 text-primary" />
+                      <Label>{t("额度保护")}</Label>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      {t("低于保留百分比的账号会从网关路由和远端模型刷新候选中跳过。")}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={snapshot.quotaGuard.enabled}
+                    onCheckedChange={(checked) =>
+                      updateSettings.mutate({
+                        quotaGuard: {
+                          ...snapshot.quotaGuard,
+                          enabled: checked,
+                        },
+                      })
+                    }
+                  />
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div className="grid gap-2">
+                    <Label>{t("5 小时窗口保留 (%)")}</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={quotaGuardInputValues.primaryMinRemainingPercent}
+                      onChange={(event) =>
+                        setQuotaGuardDraft((current) => ({
+                          ...current,
+                          primaryMinRemainingPercent: event.target.value,
+                        }))
+                      }
+                      onBlur={() =>
+                        saveQuotaGuardField("primaryMinRemainingPercent")
+                      }
+                      disabled={!snapshot.quotaGuard.enabled}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>{t("周窗口保留 (%)")}</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={quotaGuardInputValues.secondaryMinRemainingPercent}
+                      onChange={(event) =>
+                        setQuotaGuardDraft((current) => ({
+                          ...current,
+                          secondaryMinRemainingPercent: event.target.value,
+                        }))
+                      }
+                      onBlur={() =>
+                        saveQuotaGuardField("secondaryMinRemainingPercent")
+                      }
+                      disabled={!snapshot.quotaGuard.enabled}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 px-3 py-2">
+                    <div className="space-y-1">
+                      <Label>{t("全部低额度时兜底")}</Label>
+                      <p className="text-[10px] text-muted-foreground">
+                        {t("关闭后如果所有账号都低于阈值，网关会返回无可用账号。")}
+                      </p>
+                    </div>
+                    <Switch
+                      checked={snapshot.quotaGuard.allowAllLowQuotaFallback}
+                      onCheckedChange={(checked) =>
+                        updateSettings.mutate({
+                          quotaGuard: {
+                            ...snapshot.quotaGuard,
+                            allowAllLowQuotaFallback: checked,
+                          },
+                        })
+                      }
+                      disabled={!snapshot.quotaGuard.enabled}
+                    />
+                  </div>
+                </div>
               </div>
 
               <div className="grid gap-2">

@@ -18,6 +18,11 @@ const ISOLATED_RUNTIME_ENV_KEYS: &[&str] = &[
     "CODEXMANAGER_ROUTE_STRATEGY",
     "CODEXMANAGER_FREE_ACCOUNT_MAX_MODEL",
     "CODEXMANAGER_MODEL_FORWARD_RULES",
+    "CODEXMANAGER_QUOTA_GUARD_ENABLED",
+    "CODEXMANAGER_QUOTA_GUARD_5H_MIN_REMAINING_PERCENT",
+    "CODEXMANAGER_QUOTA_GUARD_WEEKLY_MIN_REMAINING_PERCENT",
+    "CODEXMANAGER_QUOTA_GUARD_ALLOW_ALL_LOW_FALLBACK",
+    "CODEXMANAGER_LOW_QUOTA_THRESHOLD_PERCENT",
     "CODEXMANAGER_ENABLE_REQUEST_COMPRESSION",
     "CODEXMANAGER_ORIGINATOR",
     "CODEXMANAGER_RESIDENCY_REQUIREMENT",
@@ -77,6 +82,12 @@ fn reset_runtime_defaults() {
         "routeStrategy": "balanced",
         "freeAccountMaxModel": "gpt-5.2",
         "modelForwardRules": "",
+        "quotaGuard": {
+            "enabled": true,
+            "primaryMinRemainingPercent": 5,
+            "secondaryMinRemainingPercent": 10,
+            "allowAllLowQuotaFallback": true
+        },
         "gatewayOriginator": "codex_cli_rs",
         "gatewayUserAgentVersion": codexmanager_service::default_gateway_user_agent_version(),
         "gatewayResidencyRequirement": "",
@@ -697,6 +708,12 @@ fn app_settings_set_persists_snapshot_and_password_hash() {
             "routeStrategy": "rr",
             "freeAccountMaxModel": "gpt-5.3-codex",
             "modelForwardRules": "spark*=gpt-5.4-mini",
+            "quotaGuard": {
+                "enabled": true,
+                "primaryMinRemainingPercent": 7,
+                "secondaryMinRemainingPercent": 12,
+                "allowAllLowQuotaFallback": false
+            },
             "gatewayOriginator": "codex_cli_rs_test",
             "gatewayUserAgentVersion": "0.101.2",
             "gatewayResidencyRequirement": "us",
@@ -797,6 +814,10 @@ fn app_settings_set_persists_snapshot_and_password_hash() {
                 .and_then(|value| value.as_str()),
             Some("spark*=gpt-5.4-mini")
         );
+        assert_eq!(snapshot["quotaGuard"]["enabled"], true);
+        assert_eq!(snapshot["quotaGuard"]["primaryMinRemainingPercent"], 7.0);
+        assert_eq!(snapshot["quotaGuard"]["secondaryMinRemainingPercent"], 12.0);
+        assert_eq!(snapshot["quotaGuard"]["allowAllLowQuotaFallback"], false);
         assert_eq!(
             snapshot
                 .get("gatewayOriginator")
@@ -872,6 +893,14 @@ fn app_settings_set_persists_snapshot_and_password_hash() {
                 .expect("read model forward rules"),
             Some("spark*=gpt-5.4-mini".to_string())
         );
+        let stored_quota_guard = storage
+            .get_app_setting(codexmanager_service::APP_SETTING_GATEWAY_QUOTA_GUARD_KEY)
+            .expect("read quota guard")
+            .expect("quota guard stored");
+        let stored_quota_guard: serde_json::Value =
+            serde_json::from_str(&stored_quota_guard).expect("parse quota guard");
+        assert_eq!(stored_quota_guard["primaryMinRemainingPercent"], 7.0);
+        assert_eq!(stored_quota_guard["allowAllLowQuotaFallback"], false);
         assert_eq!(
             storage
                 .get_app_setting(codexmanager_service::APP_SETTING_GATEWAY_ORIGINATOR_KEY)

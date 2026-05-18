@@ -88,6 +88,12 @@ export const useAppStore = create<AppState>((set) => ({
     ],
     modelForwardRules: "",
     accountMaxInflight: 1,
+    quotaGuard: {
+      enabled: true,
+      primaryMinRemainingPercent: 5,
+      secondaryMinRemainingPercent: 10,
+      allowAllLowQuotaFallback: true,
+    },
     gatewayOriginator: DEFAULT_CODEX_ORIGINATOR,
     gatewayOriginatorDefault: DEFAULT_CODEX_ORIGINATOR,
     gatewayUserAgentVersion: DEFAULT_CODEX_USER_AGENT_VERSION,
