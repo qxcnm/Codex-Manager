@@ -413,10 +413,9 @@ fn gateway_claude_protocol_end_to_end_uses_codex_headers() {
         Some("text/event-stream")
     );
     assert!(
-        captured
-            .headers
-            .get("user-agent")
-            .is_some_and(|value| value.contains("0.101.0")),
+        captured.headers.get("user-agent").is_some_and(
+            |value| value.contains(codexmanager_service::default_gateway_user_agent_version())
+        ),
         "user-agent should carry codex client version"
     );
     assert_eq!(

@@ -78,7 +78,7 @@ fn reset_runtime_defaults() {
         "freeAccountMaxModel": "gpt-5.2",
         "modelForwardRules": "",
         "gatewayOriginator": "codex_cli_rs",
-        "gatewayUserAgentVersion": "0.101.0",
+        "gatewayUserAgentVersion": codexmanager_service::default_gateway_user_agent_version(),
         "gatewayResidencyRequirement": "",
         "appearancePreset": "classic",
         "lightweightModeOnCloseToTray": false,
@@ -819,7 +819,7 @@ fn app_settings_set_persists_snapshot_and_password_hash() {
             snapshot
                 .get("gatewayUserAgentVersionDefault")
                 .and_then(|value| value.as_str()),
-            Some("0.101.0")
+            Some(codexmanager_service::default_gateway_user_agent_version())
         );
         assert_eq!(
             snapshot
@@ -1163,7 +1163,7 @@ fn sync_runtime_settings_from_storage_applies_saved_runtime_values() {
             snapshot
                 .get("gatewayUserAgentVersionDefault")
                 .and_then(|value| value.as_str()),
-            Some("0.101.0")
+            Some(codexmanager_service::default_gateway_user_agent_version())
         );
         assert_eq!(
             snapshot
@@ -1370,13 +1370,13 @@ fn app_settings_get_loads_env_backed_dedicated_settings_when_storage_missing() {
             snapshot
                 .get("gatewayUserAgentVersion")
                 .and_then(|value| value.as_str()),
-            Some("0.101.0")
+            Some(codexmanager_service::default_gateway_user_agent_version())
         );
         assert_eq!(
             snapshot
                 .get("gatewayUserAgentVersionDefault")
                 .and_then(|value| value.as_str()),
-            Some("0.101.0")
+            Some(codexmanager_service::default_gateway_user_agent_version())
         );
         assert_eq!(
             snapshot
@@ -1474,7 +1474,7 @@ fn app_settings_get_loads_env_backed_dedicated_settings_when_storage_missing() {
             storage
                 .get_app_setting(codexmanager_service::APP_SETTING_GATEWAY_USER_AGENT_VERSION_KEY)
                 .expect("read gateway user agent version"),
-            Some("0.101.0".to_string())
+            Some(codexmanager_service::default_gateway_user_agent_version().to_string())
         );
         assert_eq!(
             storage

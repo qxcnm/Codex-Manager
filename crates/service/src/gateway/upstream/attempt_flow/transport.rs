@@ -4,7 +4,7 @@ use futures_util::StreamExt;
 use rand::Rng;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tiny_http::Request;
 use tokio::runtime::Builder;
 
@@ -335,10 +335,128 @@ fn should_wrap_upstream_as_stream_response(request_path: &str, is_stream: bool) 
     is_stream && request_path.starts_with("/v1/responses") && !is_compact_request_path(request_path)
 }
 
+const STREAM_ERROR_PREVIEW_MAX_BYTES: usize = 64 * 1024;
+const STREAM_ERROR_PREVIEW_TIMEOUT: Duration = Duration::from_millis(250);
+
+fn first_header_value<'a>(headers: &'a reqwest::header::HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn header_value_contains(headers: &reqwest::header::HeaderMap, name: &str, needle: &str) -> bool {
+    let needle = needle.to_ascii_lowercase();
+    first_header_value(headers, name)
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|value| value.contains(needle.as_str()))
+}
+
+fn content_type_is(headers: &reqwest::header::HeaderMap, needle: &str) -> bool {
+    header_value_contains(headers, reqwest::header::CONTENT_TYPE.as_str(), needle)
+}
+
+fn has_cloudflare_header_signal(headers: &reqwest::header::HeaderMap) -> bool {
+    first_header_value(headers, "cf-ray").is_some()
+        || header_value_contains(headers, "server", "cloudflare")
+        || header_value_contains(headers, "cf-mitigated", "challenge")
+}
+
+fn should_fast_close_non_sse_error_stream(
+    request_path: &str,
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) -> bool {
+    if is_compact_request_path(request_path) || !request_path.starts_with("/v1/responses") {
+        return false;
+    }
+    if status.as_u16() < 400 {
+        return false;
+    }
+    if content_type_is(headers, "text/event-stream") || content_type_is(headers, "application/json")
+    {
+        return false;
+    }
+    content_type_is(headers, "text/html")
+        || header_value_contains(headers, "cf-mitigated", "challenge")
+        || (matches!(status.as_u16(), 401 | 403) && has_cloudflare_header_signal(headers))
+}
+
+async fn read_stream_error_preview(response: reqwest::Response) -> (Bytes, Option<String>, bool) {
+    let mut stream = response.bytes_stream();
+    let deadline = tokio::time::Instant::now() + STREAM_ERROR_PREVIEW_TIMEOUT;
+    let mut preview = Vec::new();
+    let mut read_error = None;
+    let mut timed_out = false;
+
+    while preview.len() < STREAM_ERROR_PREVIEW_MAX_BYTES {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            timed_out = true;
+            break;
+        }
+        match tokio::time::timeout(deadline - now, stream.next()).await {
+            Ok(Some(Ok(bytes))) => {
+                let remaining = STREAM_ERROR_PREVIEW_MAX_BYTES - preview.len();
+                let take = bytes.len().min(remaining);
+                preview.extend_from_slice(&bytes[..take]);
+                if take < bytes.len() {
+                    break;
+                }
+            }
+            Ok(Some(Err(err))) => {
+                read_error = Some(err.to_string());
+                break;
+            }
+            Ok(None) => break,
+            Err(_) => {
+                timed_out = true;
+                break;
+            }
+        }
+    }
+
+    (Bytes::from(preview), read_error, timed_out)
+}
+
+async fn fast_close_non_sse_error_stream(
+    request_path: &str,
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    response: reqwest::Response,
+    body_tx: mpsc::SyncSender<super::super::GatewayByteStreamItem>,
+) {
+    let content_type =
+        first_header_value(headers, reqwest::header::CONTENT_TYPE.as_str()).unwrap_or("-");
+    let cf_ray = first_header_value(headers, "cf-ray").unwrap_or("-");
+    let (preview, read_error, timed_out) = read_stream_error_preview(response).await;
+    let preview_bytes = preview.len();
+    log::warn!(
+        "event=gateway_stream_non_sse_error_fast_closed path={} status={} content_type={} cf_ray={} preview_bytes={} timed_out={} read_error={}",
+        request_path,
+        status.as_u16(),
+        content_type,
+        cf_ray,
+        preview_bytes,
+        timed_out,
+        read_error.as_deref().unwrap_or("-")
+    );
+    if !preview.is_empty()
+        && body_tx
+            .send(super::super::GatewayByteStreamItem::Chunk(preview))
+            .is_err()
+    {
+        return;
+    }
+    let _ = body_tx.send(super::super::GatewayByteStreamItem::Eof);
+}
+
 fn send_async_stream_request(
     client: &reqwest::Client,
     method: &reqwest::Method,
     target_url: &str,
+    request_path: &str,
     request_deadline: Option<Instant>,
     request_headers: &[(String, String)],
     request_body: &Bytes,
@@ -347,8 +465,10 @@ fn send_async_stream_request(
     let client = client.clone();
     let method = method.clone();
     let target_url = target_url.to_string();
+    let request_path = request_path.to_string();
     let request_headers = request_headers.to_vec();
     let request_body = request_body.clone();
+    let send_timeout = super::super::support::deadline::send_timeout(request_deadline, is_stream);
     let (meta_tx, meta_rx) = mpsc::sync_channel::<
         Result<(reqwest::StatusCode, reqwest::header::HeaderMap), reqwest::Error>,
     >(1);
@@ -360,9 +480,7 @@ fn send_async_stream_request(
             .unwrap_or_else(|err| panic!("build gateway upstream runtime failed: {err}"));
         runtime.block_on(async move {
             let mut builder = client.request(method, target_url);
-            if let Some(timeout) =
-                super::super::support::deadline::send_timeout(request_deadline, is_stream)
-            {
+            if let Some(timeout) = send_timeout {
                 builder = builder.timeout(timeout);
             }
             for (name, value) in request_headers.iter() {
@@ -375,7 +493,20 @@ fn send_async_stream_request(
                 Ok(response) => {
                     let status = response.status();
                     let headers = response.headers().clone();
-                    if meta_tx.send(Ok((status, headers))).is_err() {
+                    let should_fast_close =
+                        should_fast_close_non_sse_error_stream(&request_path, status, &headers);
+                    if meta_tx.send(Ok((status, headers.clone()))).is_err() {
+                        return;
+                    }
+                    if should_fast_close {
+                        fast_close_non_sse_error_stream(
+                            &request_path,
+                            status,
+                            &headers,
+                            response,
+                            body_tx,
+                        )
+                        .await;
                         return;
                     }
                     let mut stream = response.bytes_stream();
@@ -777,6 +908,7 @@ fn send_upstream_request_with_compression_override(
             &async_client,
             method,
             target_url,
+            request_ctx.request_path,
             request_deadline,
             upstream_headers.as_slice(),
             &body_for_request,
@@ -804,6 +936,7 @@ fn send_upstream_request_with_compression_override(
                         &fresh_async,
                         method,
                         target_url,
+                        request_ctx.request_path,
                         request_deadline,
                         upstream_headers_uncompressed.as_slice(),
                         &body_for_transport,
@@ -835,6 +968,7 @@ fn send_upstream_request_with_compression_override(
                         &fresh_async,
                         method,
                         target_url,
+                        request_ctx.request_path,
                         request_deadline,
                         upstream_headers.as_slice(),
                         &body_for_request,
@@ -945,17 +1079,91 @@ fn send_upstream_request_with_compression_override(
 mod tests {
     use super::{
         apply_gemini_codex_compat_header_profile, encode_request_body, resolve_request_compression,
-        resolve_request_compression_with_flag, should_retry_transport_without_compression,
-        should_wrap_upstream_as_stream_response, strip_compact_service_tier_for_transport,
-        RequestCompression, CPA_GEMINI_CODEX_USER_AGENT,
+        resolve_request_compression_with_flag, send_async_stream_request,
+        should_retry_transport_without_compression, should_wrap_upstream_as_stream_response,
+        strip_compact_service_tier_for_transport, RequestCompression, CPA_GEMINI_CODEX_USER_AGENT,
     };
     use bytes::Bytes;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
         headers
             .iter()
             .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
             .map(|(_, value)| value.as_str())
+    }
+
+    fn spawn_raw_http_response(
+        status: &'static str,
+        headers: Vec<(&'static str, &'static str)>,
+        body: Vec<u8>,
+        hold_open: bool,
+    ) -> (String, mpsc::Sender<()>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+        let addr = listener.local_addr().expect("mock upstream addr");
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept mock upstream");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("set read timeout");
+            let mut request = Vec::new();
+            let mut buf = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                match stream.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(read) => request.extend_from_slice(&buf[..read]),
+                    Err(_) => break,
+                }
+            }
+
+            let mut response = format!("HTTP/1.1 {status}\r\n");
+            for (name, value) in headers {
+                response.push_str(name);
+                response.push_str(": ");
+                response.push_str(value);
+                response.push_str("\r\n");
+            }
+            if hold_open {
+                response.push_str("Connection: keep-alive\r\n\r\n");
+            } else {
+                response.push_str(&format!(
+                    "Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                ));
+            }
+            stream
+                .write_all(response.as_bytes())
+                .expect("write mock response headers");
+            stream.write_all(&body).expect("write mock response body");
+            stream.flush().expect("flush mock response");
+            if hold_open {
+                let _ = release_rx.recv_timeout(Duration::from_secs(5));
+            }
+        });
+        (format!("http://{addr}/v1/responses"), release_tx, handle)
+    }
+
+    fn send_mock_stream_request(url: &str) -> super::super::super::GatewayStreamResponse {
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(1))
+            .build()
+            .expect("build reqwest client");
+        send_async_stream_request(
+            &client,
+            &reqwest::Method::GET,
+            url,
+            "/v1/responses",
+            Some(Instant::now() + Duration::from_secs(5)),
+            &[],
+            &Bytes::new(),
+            true,
+        )
+        .expect("send stream request")
     }
 
     /// 函数 `request_compression_only_applies_to_streaming_chatgpt_responses`
@@ -1199,5 +1407,72 @@ mod tests {
             "/v1/responses",
             false
         ));
+    }
+
+    #[test]
+    fn stream_transport_fast_closes_html_challenge_without_waiting_for_eof() {
+        let body = b"<html><title>Just a moment...</title><body>Cloudflare</body></html>".to_vec();
+        let (url, release, handle) = spawn_raw_http_response(
+            "403 Forbidden",
+            vec![
+                ("Content-Type", "text/html; charset=utf-8"),
+                ("cf-ray", "ray-fast-close"),
+            ],
+            body,
+            true,
+        );
+
+        let started = Instant::now();
+        let response = send_mock_stream_request(url.as_str());
+        assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
+        let body = response.read_all_bytes().expect("read fast-closed body");
+
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "fast-close path waited {:?}",
+            started.elapsed()
+        );
+        assert!(String::from_utf8_lossy(body.as_ref()).contains("Just a moment"));
+        let _ = release.send(());
+        handle.join().expect("join mock upstream");
+    }
+
+    #[test]
+    fn stream_transport_does_not_fast_close_json_error_body() {
+        let body = vec![b'a'; 70 * 1024];
+        let expected_len = body.len();
+        let (url, release, handle) = spawn_raw_http_response(
+            "403 Forbidden",
+            vec![("Content-Type", "application/json")],
+            body,
+            false,
+        );
+
+        let response = send_mock_stream_request(url.as_str());
+        assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
+        let body = response.read_all_bytes().expect("read json error body");
+
+        assert_eq!(body.len(), expected_len);
+        let _ = release.send(());
+        handle.join().expect("join mock upstream");
+    }
+
+    #[test]
+    fn stream_transport_does_not_fast_close_successful_sse_body() {
+        let expected = b"data: {\"type\":\"response.completed\"}\n\n".to_vec();
+        let (url, release, handle) = spawn_raw_http_response(
+            "200 OK",
+            vec![("Content-Type", "text/event-stream")],
+            expected.clone(),
+            false,
+        );
+
+        let response = send_mock_stream_request(url.as_str());
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let body = response.read_all_bytes().expect("read sse body");
+
+        assert_eq!(body.as_ref(), expected.as_slice());
+        let _ = release.send(());
+        handle.join().expect("join mock upstream");
     }
 }
