@@ -136,7 +136,40 @@ fn serve_embedded_path(path: &str) -> Response {
         axum::http::HeaderValue::from_str(&mime)
             .unwrap_or_else(|_| axum::http::HeaderValue::from_static("application/octet-stream")),
     );
+    append_no_store_for_html_documents(&mut out);
     out
+}
+
+fn is_html_document_response(response: &Response) -> bool {
+    response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            value
+                .split(';')
+                .next()
+                .map(str::trim)
+                .is_some_and(|mime| mime.eq_ignore_ascii_case("text/html"))
+        })
+        .unwrap_or(false)
+}
+
+pub(super) fn append_no_store_for_html_documents(response: &mut Response) {
+    if !is_html_document_response(response) {
+        return;
+    }
+
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+    );
+    response
+        .headers_mut()
+        .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    response
+        .headers_mut()
+        .insert(header::EXPIRES, HeaderValue::from_static("0"));
 }
 
 /// 函数 `resolve_embedded_asset`
@@ -217,6 +250,42 @@ mod tests {
     ///
     /// # 返回
     /// 无
+    #[test]
+    fn html_document_uses_no_store_cache_headers() {
+        let response = serve_embedded_path("settings");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store, no-cache, must-revalidate")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::PRAGMA)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-cache")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::EXPIRES)
+                .and_then(|value| value.to_str().ok()),
+            Some("0")
+        );
+    }
+
+    #[test]
+    fn static_asset_does_not_get_no_store_cache_headers() {
+        let response = serve_embedded_path("favicon.ico");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get(header::CACHE_CONTROL).is_none());
+    }
+
     #[test]
     fn directory_route_prefers_embedded_directory_index() {
         let (served_path, _) = resolve_embedded_asset("accounts/").expect("accounts asset");

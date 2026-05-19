@@ -33,9 +33,11 @@ import {
   getCanonicalStaticRouteUrl,
   normalizeRoutePath,
 } from "@/lib/utils/static-routes";
+import { withTimeout } from "@/lib/utils/timeout";
 
 const DEFAULT_SERVICE_ADDR = "localhost:48760";
 const STARTUP_WARMUP_LABEL = "[startup warmup]";
+const STARTUP_STEP_TIMEOUT_MS = 15_000;
 const CODEX_CLI_GUIDE_SESSION_DISMISSED_KEY =
   "codexmanager.codexCliGuide.sessionDismissed";
 const UNSUPPORTED_RUNTIME_AUTO_RETRY_LIMIT = 8;
@@ -186,7 +188,11 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
 
     for (let attempt = 0; attempt <= retries; attempt += 1) {
       try {
-        const initializeResult = await serviceClient.initialize(addr);
+        const initializeResult = await withTimeout(
+          serviceClient.initialize(addr),
+          STARTUP_STEP_TIMEOUT_MS,
+          `Service initialization timed out after ${STARTUP_STEP_TIMEOUT_MS / 1000}s (${addr})`,
+        );
         if (!isExpectedInitializeResult(initializeResult)) {
           throw new Error("Port is in use or unexpected service responded (invalid initialize response)");
         }
@@ -204,8 +210,12 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
 
   const startAndInitializeService = useCallback(
     async (addr: string) => {
-      await serviceClient.start(addr);
-      return initializeService(addr, 2);
+      await withTimeout(
+        serviceClient.start(addr),
+        STARTUP_STEP_TIMEOUT_MS,
+        `Service start timed out after ${STARTUP_STEP_TIMEOUT_MS / 1000}s (${addr})`,
+      );
+      return initializeService(addr, 0);
     },
     [initializeService]
   );
@@ -239,22 +249,12 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
   );
 
   const applyConnectedServiceState = useCallback(
-    async (
+    (
       addr: string,
       version: string,
       lowTransparency: boolean,
       options?: { blockOnDashboardSnapshot?: boolean },
     ) => {
-      if (options?.blockOnDashboardSnapshot) {
-        try {
-          await prefetchStartupSnapshot(addr);
-        } catch (warmupError) {
-          console.warn(
-            `${STARTUP_WARMUP_LABEL} initial dashboard snapshot prefetch failed`,
-            warmupError,
-          );
-        }
-      }
       setServiceStatus({
         addr,
         connected: true,
@@ -263,6 +263,19 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
       applyLowTransparency(lowTransparency);
       setIsInitializing(false);
       hasInitializedOnce.current = true;
+
+      if (options?.blockOnDashboardSnapshot) {
+        void withTimeout(
+          prefetchStartupSnapshot(addr),
+          STARTUP_STEP_TIMEOUT_MS,
+          `Startup dashboard snapshot prefetch timed out after ${STARTUP_STEP_TIMEOUT_MS / 1000}s`,
+        ).catch((warmupError) => {
+          console.warn(
+            `${STARTUP_WARMUP_LABEL} initial dashboard snapshot prefetch failed`,
+            warmupError,
+          );
+        });
+      }
     },
     [prefetchStartupSnapshot, setServiceStatus],
   );
@@ -275,8 +288,12 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
     setError(null);
 
     try {
-      const detectedRuntimeCapabilities = await loadRuntimeCapabilities(
-        runtimeCapabilitiesRef.current?.mode === "unsupported-web"
+      const detectedRuntimeCapabilities = await withTimeout(
+        loadRuntimeCapabilities(
+          runtimeCapabilitiesRef.current?.mode === "unsupported-web"
+        ),
+        STARTUP_STEP_TIMEOUT_MS,
+        `Runtime detection timed out after ${STARTUP_STEP_TIMEOUT_MS / 1000}s`,
       );
       setRuntimeCapabilities(detectedRuntimeCapabilities);
       const desktopRuntime = detectedRuntimeCapabilities.mode === "desktop-tauri";
@@ -296,7 +313,11 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
       }
       unsupportedRuntimeRetryCountRef.current = 0;
 
-      const settings = await appClient.getSettings();
+      const settings = await withTimeout(
+        appClient.getSettings(),
+        STARTUP_STEP_TIMEOUT_MS,
+        `Loading app settings timed out after ${STARTUP_STEP_TIMEOUT_MS / 1000}s`,
+      );
       const addr = normalizeServiceAddr(settings.serviceAddr || DEFAULT_SERVICE_ADDR);
       setRecoveryPort(readPortFromServiceAddr(addr));
       const currentServiceStatus = serviceStatusRef.current;
@@ -317,7 +338,7 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
 
       try {
         try {
-          await initializeService(addr, 1);
+          await initializeService(addr, 0);
         } catch (initializeError) {
           if (!desktopRuntime) {
             throw initializeError;

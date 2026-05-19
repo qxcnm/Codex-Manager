@@ -52,7 +52,7 @@ const SETTINGS_SNAPSHOT = {
 };
 
 test.beforeEach(async ({ page }) => {
-  await page.route("**/api/runtime", async (route) => {
+  await page.route("**/api/runtime**", async (route) => {
     await route.fulfill({
       contentType: "application/json; charset=utf-8",
       body: JSON.stringify({
@@ -80,6 +80,13 @@ test.beforeEach(async ({ page }) => {
         codexHome: "C:/Users/Test/.codex",
         platformFamily: "windows",
         platformOs: "windows",
+      },
+      "accountManager/session/current": {
+        mode: "none",
+        currentUser: null,
+        role: "system_admin",
+        permissions: [],
+        distributionEnabled: false,
       },
       "aggregateApi/list": { items: [] },
       "gateway/concurrencyRecommendation/get": {
@@ -134,7 +141,7 @@ test("revisiting visited routes stays responsive after idle time", async ({ page
   await expect(page).toHaveURL(/\/settings\/$/);
   await expect(settingsSectionTitle).toBeVisible({ timeout: 5_000 });
 
-  await page.getByRole("link", { name: "聚合API" }).click();
+  await page.getByRole("link", { name: /聚合\s*API/ }).click();
   await expect(page).toHaveURL(/\/aggregate-api\/$/);
   await expect(aggregateHeader).toBeVisible({ timeout: 5_000 });
 
@@ -149,7 +156,7 @@ test("revisiting visited routes stays responsive after idle time", async ({ page
   await page.waitForTimeout(1_200);
 
   const revisitAggregateStartedAt = Date.now();
-  await page.getByRole("link", { name: "聚合API" }).click();
+  await page.getByRole("link", { name: /聚合\s*API/ }).click();
   await expect(page).toHaveURL(/\/aggregate-api\/$/);
   await expect(aggregateHeader).toBeVisible({ timeout: 1_500 });
   expect(Date.now() - revisitAggregateStartedAt).toBeLessThan(1_500);

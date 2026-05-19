@@ -10,7 +10,7 @@
     "build:desktop": "next build",
     "test:e2e": "playwright test",
     "test:navigation": "playwright test tests/navigation-cache.spec.ts",
-    "test:runtime": "node --test tests/runtime-capabilities.test.mjs tests/gateway-endpoints.test.mjs tests/transport-errors.test.mjs tests/gateway-settings.test.mjs tests/transport-web-commands.test.mjs tests/rpc-http.test.mjs tests/app-updates.test.mjs tests/account-auth.test.mjs tests/account-maintenance.test.mjs tests/usage-response.test.mjs tests/ccswitch.test.mjs tests/billing-mode-lock.test.mjs tests/top-level-routes.test.mjs",
+    "test:runtime": "node --test tests/runtime-capabilities.test.mjs tests/gateway-endpoints.test.mjs tests/transport-errors.test.mjs tests/gateway-settings.test.mjs tests/transport-web-commands.test.mjs tests/rpc-http.test.mjs tests/app-updates.test.mjs tests/account-auth.test.mjs tests/account-maintenance.test.mjs tests/usage-response.test.mjs tests/ccswitch.test.mjs tests/billing-mode-lock.test.mjs tests/top-level-routes.test.mjs tests/timeout.test.mjs",
     "start": "next start",
     "lint": "eslint"
   },
