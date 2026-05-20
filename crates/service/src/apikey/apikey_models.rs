@@ -309,8 +309,7 @@ pub(crate) fn delete_managed_model_catalog_model(slug: &str) -> Result<(), Strin
 pub(crate) fn read_managed_model_routing() -> Result<ManagedModelRoutingResult, String> {
     let storage =
         storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    bootstrap_account_pool_model_routes(&storage, true)?;
-    routing_result_from_storage(&storage)
+    read_managed_model_routing_from_storage(&storage, true)
 }
 
 pub(crate) fn sync_managed_model_source_models(
@@ -356,19 +355,14 @@ pub(crate) fn upsert_managed_model_source_model(
     storage
         .upsert_model_source_model(&record)
         .map_err(|err| format!("save source model failed: {err}"))?;
-    if record.source_kind == ROUTING_SOURCE_KIND_OPENAI_ACCOUNT {
+    if record.source_kind == ROUTING_SOURCE_KIND_OPENAI_ACCOUNT
+        || record.source_kind == ROUTING_SOURCE_KIND_AGGREGATE_API
+    {
         auto_associate_source_models(
             &storage,
             record.source_kind.as_str(),
             record.source_id.as_str(),
             true,
-        )?;
-    } else if record.source_kind == ROUTING_SOURCE_KIND_AGGREGATE_API {
-        auto_associate_source_models(
-            &storage,
-            record.source_kind.as_str(),
-            record.source_id.as_str(),
-            false,
         )?;
     }
     Ok(source_model_entry(record))
@@ -442,6 +436,15 @@ fn routing_result_from_storage(storage: &Storage) -> Result<ManagedModelRoutingR
     })
 }
 
+fn read_managed_model_routing_from_storage(
+    storage: &Storage,
+    allow_remote_account_catalog_fetch: bool,
+) -> Result<ManagedModelRoutingResult, String> {
+    bootstrap_account_pool_model_routes(storage, allow_remote_account_catalog_fetch)?;
+    bootstrap_aggregate_api_model_routes(storage)?;
+    routing_result_from_storage(storage)
+}
+
 fn sync_openai_account_source_models(
     storage: &Storage,
     source_id: Option<&str>,
@@ -456,11 +459,25 @@ pub(crate) fn bootstrap_account_pool_model_routes(
     sync_openai_account_source_models_with_options(storage, None, allow_remote_catalog_fetch)
 }
 
+pub(crate) fn bootstrap_aggregate_api_model_routes(storage: &Storage) -> Result<(), String> {
+    let active_source_ids = active_aggregate_api_source_ids(storage)?;
+    prune_stale_aggregate_api_source_routes(storage, &active_source_ids)?;
+    for source_id in active_source_ids {
+        auto_associate_source_models(
+            storage,
+            ROUTING_SOURCE_KIND_AGGREGATE_API,
+            source_id.as_str(),
+            true,
+        )?;
+    }
+    Ok(())
+}
+
 pub(crate) fn auto_associate_aggregate_api_source_models(
     storage: &Storage,
     source_id: &str,
 ) -> Result<(), String> {
-    auto_associate_source_models(storage, ROUTING_SOURCE_KIND_AGGREGATE_API, source_id, false)
+    auto_associate_source_models(storage, ROUTING_SOURCE_KIND_AGGREGATE_API, source_id, true)
 }
 
 fn sync_openai_account_source_models_with_options(
@@ -562,18 +579,40 @@ fn sync_aggregate_api_source_models(
     storage: &Storage,
     source_id: Option<&str>,
 ) -> Result<(), String> {
+    sync_aggregate_api_source_models_with_discovery(storage, source_id, |api_id| {
+        crate::discover_aggregate_api_models(api_id)
+    })
+}
+
+fn sync_aggregate_api_source_models_with_discovery<F>(
+    storage: &Storage,
+    source_id: Option<&str>,
+    mut discover_models: F,
+) -> Result<(), String>
+where
+    F: FnMut(&str) -> Result<Vec<String>, String>,
+{
     let requested_source_id = source_id.and_then(normalize_optional);
     let apis = storage
         .list_aggregate_apis()
         .map_err(|err| format!("list aggregate apis failed: {err}"))?;
-    if let Some(source_id) = requested_source_id.as_deref() {
-        let api = apis
-            .iter()
-            .find(|api| api.id == source_id)
-            .ok_or_else(|| format!("aggregate api `{source_id}` not found"))?;
-        if api.status != "active" {
-            return Err(format!("aggregate api `{source_id}` is disabled"));
+    let active_source_ids = apis
+        .iter()
+        .filter(|api| api.status == "active")
+        .map(|api| api.id.clone())
+        .collect::<HashSet<_>>();
+    match requested_source_id.as_deref() {
+        Some(source_id) if !active_source_ids.contains(source_id) => {
+            storage
+                .delete_model_source_routes_for_source(ROUTING_SOURCE_KIND_AGGREGATE_API, source_id)
+                .map_err(|err| format!("delete stale aggregate api source routes failed: {err}"))?;
+            if apis.iter().any(|api| api.id == source_id) {
+                return Err(format!("aggregate api `{source_id}` is disabled"));
+            }
+            return Err(format!("aggregate api `{source_id}` not found"));
         }
+        Some(_) => {}
+        None => prune_stale_aggregate_api_source_routes(storage, &active_source_ids)?,
     }
     let mut synced_any = false;
     let mut last_error: Option<String> = None;
@@ -585,7 +624,7 @@ fn sync_aggregate_api_source_models(
             None => true,
         })
     {
-        match crate::discover_aggregate_api_models(api.id.as_str()) {
+        match discover_models(api.id.as_str()) {
             Ok(models) => {
                 storage
                     .upsert_discovered_model_source_models(
@@ -599,7 +638,7 @@ fn sync_aggregate_api_source_models(
                     storage,
                     ROUTING_SOURCE_KIND_AGGREGATE_API,
                     api.id.as_str(),
-                    false,
+                    true,
                 )?;
                 synced_any = true;
             }
@@ -612,6 +651,50 @@ fn sync_aggregate_api_source_models(
         if let Some(err) = last_error {
             return Err(err);
         }
+    }
+    Ok(())
+}
+
+fn active_aggregate_api_source_ids(storage: &Storage) -> Result<HashSet<String>, String> {
+    storage
+        .list_aggregate_apis()
+        .map_err(|err| format!("list aggregate apis failed: {err}"))
+        .map(|apis| {
+            apis.into_iter()
+                .filter(|api| api.status == "active")
+                .map(|api| api.id)
+                .collect::<HashSet<_>>()
+        })
+}
+
+fn prune_stale_aggregate_api_source_routes(
+    storage: &Storage,
+    active_source_ids: &HashSet<String>,
+) -> Result<(), String> {
+    let mut known_source_ids = storage
+        .list_model_source_models(Some(ROUTING_SOURCE_KIND_AGGREGATE_API), None)
+        .map_err(|err| format!("list aggregate api source models failed: {err}"))?
+        .into_iter()
+        .map(|model| model.source_id)
+        .collect::<HashSet<_>>();
+    for mapping in storage
+        .list_model_source_mappings(None)
+        .map_err(|err| format!("list model mappings failed: {err}"))?
+        .into_iter()
+        .filter(|mapping| mapping.source_kind == ROUTING_SOURCE_KIND_AGGREGATE_API)
+    {
+        known_source_ids.insert(mapping.source_id);
+    }
+    for source_id in known_source_ids {
+        if active_source_ids.contains(source_id.as_str()) {
+            continue;
+        }
+        storage
+            .delete_model_source_routes_for_source(
+                ROUTING_SOURCE_KIND_AGGREGATE_API,
+                source_id.as_str(),
+            )
+            .map_err(|err| format!("delete stale aggregate api source routes failed: {err}"))?;
     }
     Ok(())
 }
@@ -1855,16 +1938,18 @@ fn needs_structured_backfill(rows: &[ModelCatalogModelRecord], missing_scope_row
 mod tests {
     use std::collections::BTreeMap;
 
-    use codexmanager_core::storage::{now_ts, Account, ModelSourceMapping, Storage};
+    use codexmanager_core::storage::{now_ts, Account, AggregateApi, ModelSourceMapping, Storage};
     use serde_json::{json, Value};
 
     use super::{
-        auto_associate_source_models, bootstrap_account_pool_model_routes,
+        auto_associate_aggregate_api_source_models, auto_associate_source_models,
+        bootstrap_account_pool_model_routes, bootstrap_aggregate_api_model_routes,
         ensure_codex_image_tool_model_in_catalog, ensure_codex_image_tool_model_listed,
         managed_catalog_to_models_response, merge_managed_model_catalog, merge_models_response,
         normalize_models_response, read_managed_model_catalog_from_storage,
-        read_model_options_from_storage, save_managed_model_catalog_with_storage,
-        save_model_options_with_storage, sync_aggregate_api_source_models,
+        read_managed_model_routing_from_storage, read_model_options_from_storage,
+        save_managed_model_catalog_with_storage, save_model_options_with_storage,
+        sync_aggregate_api_source_models, sync_aggregate_api_source_models_with_discovery,
         MODEL_SOURCE_KIND_CUSTOM, MODEL_SOURCE_KIND_REMOTE, ROUTING_SOURCE_KIND_AGGREGATE_API,
         ROUTING_SOURCE_KIND_OPENAI_ACCOUNT,
     };
@@ -1888,6 +1973,38 @@ mod tests {
                 updated_at: now,
             })
             .expect("insert account");
+    }
+
+    fn insert_test_aggregate_api(storage: &Storage, id: &str, status: &str) {
+        let now = now_ts();
+        storage
+            .insert_aggregate_api(&AggregateApi {
+                id: id.to_string(),
+                provider_type: "codex".to_string(),
+                supplier_name: Some(id.to_string()),
+                sort: 0,
+                url: format!("https://{id}.example/v1"),
+                auth_type: "apikey".to_string(),
+                auth_params_json: None,
+                action: None,
+                model_override: None,
+                status: status.to_string(),
+                created_at: now,
+                updated_at: now,
+                last_test_at: None,
+                last_test_status: None,
+                last_test_error: None,
+                balance_query_enabled: false,
+                balance_query_template: None,
+                balance_query_base_url: None,
+                balance_query_user_id: None,
+                balance_query_config_json: None,
+                last_balance_at: None,
+                last_balance_status: None,
+                last_balance_error: None,
+                last_balance_json: None,
+            })
+            .expect("insert aggregate api");
     }
 
     fn seed_platform_catalog(storage: &Storage, slugs: &[&str]) {
@@ -2407,7 +2524,7 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_auto_association_only_links_existing_platform_models() {
+    fn aggregate_auto_association_creates_missing_platform_models() {
         let storage = Storage::open_in_memory().expect("open storage");
         storage.init().expect("init storage");
         seed_platform_catalog(&storage, &["gpt-known"]);
@@ -2420,7 +2537,7 @@ mod tests {
             )
             .expect("seed aggregate source models");
 
-        auto_associate_source_models(&storage, ROUTING_SOURCE_KIND_AGGREGATE_API, "agg-1", false)
+        auto_associate_source_models(&storage, ROUTING_SOURCE_KIND_AGGREGATE_API, "agg-1", true)
             .expect("auto associate");
 
         let mappings = storage
@@ -2433,13 +2550,220 @@ mod tests {
 
         let catalog =
             read_managed_model_catalog_from_storage(&storage).expect("read platform catalog");
-        assert!(!catalog
+        assert!(catalog
             .items
             .iter()
-            .any(|item| item.model.slug == "vendor-only"));
-        assert!(storage
+            .any(|item| item.model.slug == "vendor-only" && item.model.supported_in_api));
+        let vendor_mappings = storage
             .list_enabled_model_source_mappings_for_platform("vendor-only")
-            .expect("list vendor mappings")
+            .expect("list vendor mappings");
+        assert_eq!(vendor_mappings.len(), 1);
+        assert_eq!(
+            vendor_mappings[0].source_kind,
+            ROUTING_SOURCE_KIND_AGGREGATE_API
+        );
+        assert_eq!(vendor_mappings[0].source_id, "agg-1");
+        assert_eq!(vendor_mappings[0].upstream_model, "vendor-only");
+    }
+
+    #[test]
+    fn aggregate_route_bootstrap_links_existing_source_models() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        insert_test_aggregate_api(&storage, "agg-bootstrap", "active");
+        storage
+            .upsert_discovered_model_source_models(
+                ROUTING_SOURCE_KIND_AGGREGATE_API,
+                "agg-bootstrap",
+                &["vendor-bootstrap".to_string()],
+                "synced",
+            )
+            .expect("seed aggregate source model");
+
+        bootstrap_aggregate_api_model_routes(&storage).expect("bootstrap aggregate routes");
+
+        let catalog =
+            read_managed_model_catalog_from_storage(&storage).expect("read platform catalog");
+        assert!(catalog
+            .items
+            .iter()
+            .any(|item| item.model.slug == "vendor-bootstrap"));
+        let mappings = storage
+            .list_enabled_model_source_mappings_for_platform("vendor-bootstrap")
+            .expect("list mappings");
+        assert_eq!(mappings.len(), 1);
+        assert_eq!(mappings[0].source_kind, ROUTING_SOURCE_KIND_AGGREGATE_API);
+        assert_eq!(mappings[0].source_id, "agg-bootstrap");
+    }
+
+    #[test]
+    fn managed_model_routing_read_bootstraps_aggregate_sources() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        insert_test_aggregate_api(&storage, "agg-routing", "active");
+        storage
+            .upsert_discovered_model_source_models(
+                ROUTING_SOURCE_KIND_AGGREGATE_API,
+                "agg-routing",
+                &["vendor-routing".to_string()],
+                "synced",
+            )
+            .expect("seed aggregate source model");
+
+        let result =
+            read_managed_model_routing_from_storage(&storage, false).expect("read routing");
+
+        assert!(result
+            .source_models
+            .iter()
+            .any(|item| item.source_kind == ROUTING_SOURCE_KIND_AGGREGATE_API
+                && item.source_id == "agg-routing"
+                && item.upstream_model == "vendor-routing"));
+        assert!(result.mappings.iter().any(|item| item.source_kind
+            == ROUTING_SOURCE_KIND_AGGREGATE_API
+            && item.source_id == "agg-routing"
+            && item.platform_model_slug == "vendor-routing"
+            && item.upstream_model == "vendor-routing"
+            && item.enabled));
+    }
+
+    #[test]
+    fn aggregate_source_sync_creates_platform_models_and_mappings() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        insert_test_aggregate_api(&storage, "agg-sync", "active");
+
+        sync_aggregate_api_source_models_with_discovery(&storage, Some("agg-sync"), |source_id| {
+            assert_eq!(source_id, "agg-sync");
+            Ok(vec!["vendor-sync".to_string()])
+        })
+        .expect("sync aggregate models");
+
+        let catalog =
+            read_managed_model_catalog_from_storage(&storage).expect("read platform catalog");
+        assert!(catalog
+            .items
+            .iter()
+            .any(|item| item.model.slug == "vendor-sync" && item.model.supported_in_api));
+        let mappings = storage
+            .list_enabled_model_source_mappings_for_platform("vendor-sync")
+            .expect("list mappings");
+        assert_eq!(mappings.len(), 1);
+        assert_eq!(mappings[0].source_kind, ROUTING_SOURCE_KIND_AGGREGATE_API);
+        assert_eq!(mappings[0].source_id, "agg-sync");
+    }
+
+    #[test]
+    fn aggregate_supplier_import_association_creates_platform_route() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        insert_test_aggregate_api(&storage, "agg-template", "active");
+        storage
+            .upsert_discovered_model_source_models(
+                ROUTING_SOURCE_KIND_AGGREGATE_API,
+                "agg-template",
+                &["vendor-template".to_string()],
+                "template",
+            )
+            .expect("seed template source model");
+
+        auto_associate_aggregate_api_source_models(&storage, "agg-template")
+            .expect("associate template import");
+
+        let catalog =
+            read_managed_model_catalog_from_storage(&storage).expect("read platform catalog");
+        assert!(catalog
+            .items
+            .iter()
+            .any(|item| item.model.slug == "vendor-template"));
+        let mappings = storage
+            .list_enabled_model_source_mappings_for_platform("vendor-template")
+            .expect("list mappings");
+        assert_eq!(mappings.len(), 1);
+        assert_eq!(mappings[0].source_kind, ROUTING_SOURCE_KIND_AGGREGATE_API);
+        assert_eq!(mappings[0].source_id, "agg-template");
+    }
+
+    #[test]
+    fn aggregate_bootstrap_preserves_disabled_mapping_state() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        insert_test_aggregate_api(&storage, "agg-disabled-mapping", "active");
+        storage
+            .upsert_discovered_model_source_models(
+                ROUTING_SOURCE_KIND_AGGREGATE_API,
+                "agg-disabled-mapping",
+                &["vendor-disabled".to_string()],
+                "synced",
+            )
+            .expect("seed aggregate source model");
+        let now = now_ts();
+        storage
+            .upsert_model_source_mapping(&ModelSourceMapping {
+                id: "mapping-aggregate-disabled".to_string(),
+                platform_model_slug: "vendor-disabled".to_string(),
+                source_kind: ROUTING_SOURCE_KIND_AGGREGATE_API.to_string(),
+                source_id: "agg-disabled-mapping".to_string(),
+                upstream_model: "vendor-disabled".to_string(),
+                enabled: false,
+                priority: 0,
+                weight: 1,
+                billing_model_slug: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("seed disabled mapping");
+
+        bootstrap_aggregate_api_model_routes(&storage).expect("bootstrap aggregate routes");
+
+        let mappings = storage
+            .list_model_source_mappings(Some("vendor-disabled"))
+            .expect("list mappings");
+        assert_eq!(mappings.len(), 1);
+        assert_eq!(mappings[0].id, "mapping-aggregate-disabled");
+        assert!(!mappings[0].enabled);
+    }
+
+    #[test]
+    fn aggregate_bootstrap_prunes_stale_source_routes() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        insert_test_aggregate_api(&storage, "agg-stale", "disabled");
+        seed_platform_catalog(&storage, &["vendor-stale"]);
+        storage
+            .upsert_discovered_model_source_models(
+                ROUTING_SOURCE_KIND_AGGREGATE_API,
+                "agg-stale",
+                &["vendor-stale".to_string()],
+                "synced",
+            )
+            .expect("seed aggregate source model");
+        let now = now_ts();
+        storage
+            .upsert_model_source_mapping(&ModelSourceMapping {
+                id: "mapping-aggregate-stale".to_string(),
+                platform_model_slug: "vendor-stale".to_string(),
+                source_kind: ROUTING_SOURCE_KIND_AGGREGATE_API.to_string(),
+                source_id: "agg-stale".to_string(),
+                upstream_model: "vendor-stale".to_string(),
+                enabled: true,
+                priority: 0,
+                weight: 1,
+                billing_model_slug: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("seed stale mapping");
+
+        bootstrap_aggregate_api_model_routes(&storage).expect("bootstrap aggregate routes");
+
+        assert!(storage
+            .list_model_source_models(Some(ROUTING_SOURCE_KIND_AGGREGATE_API), Some("agg-stale"))
+            .expect("list source models")
+            .is_empty());
+        assert!(storage
+            .list_model_source_mappings(Some("vendor-stale"))
+            .expect("list mappings")
             .is_empty());
     }
 

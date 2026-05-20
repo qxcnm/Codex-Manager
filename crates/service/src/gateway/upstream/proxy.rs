@@ -133,14 +133,15 @@ fn route_kind_label(value: GatewayUpstreamRouteKind) -> &'static str {
 }
 
 fn model_route_error(
-    storage: &crate::storage_helpers::StorageHandle,
+    storage: &codexmanager_core::storage::Storage,
     key_id: &str,
     model: Option<&str>,
+    execution_plan: super::executor::GatewayUpstreamExecutionPlan,
 ) -> Result<(), (u16, String)> {
     let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(());
     };
-    let _ = crate::apikey_models::bootstrap_account_pool_model_routes(storage, false);
+    bootstrap_model_routes_for_plan(storage, execution_plan);
     let model_exists = storage
         .list_model_catalog_models("default")
         .map_err(|err| (500, format!("model_catalog_read_failed: {err}")))?
@@ -158,10 +159,44 @@ fn model_route_error(
     let mappings = storage
         .list_enabled_model_source_mappings_for_platform(model)
         .map_err(|err| (500, format!("model_mapping_read_failed: {err}")))?;
-    if mappings.is_empty() {
+    if !mappings
+        .into_iter()
+        .any(|mapping| source_mapping_matches_route(mapping.source_kind.as_str(), execution_plan))
+    {
         return Err((503, format!("model_unavailable: {model}")));
     }
     Ok(())
+}
+
+fn bootstrap_model_routes_for_plan(
+    storage: &codexmanager_core::storage::Storage,
+    execution_plan: super::executor::GatewayUpstreamExecutionPlan,
+) {
+    match execution_plan.route_kind {
+        GatewayUpstreamRouteKind::AccountRotation => {
+            let _ = crate::apikey_models::bootstrap_account_pool_model_routes(storage, false);
+        }
+        GatewayUpstreamRouteKind::AggregateApi => {
+            let _ = crate::apikey_models::bootstrap_aggregate_api_model_routes(storage);
+        }
+        GatewayUpstreamRouteKind::HybridAccountFirst => {
+            let _ = crate::apikey_models::bootstrap_account_pool_model_routes(storage, false);
+            let _ = crate::apikey_models::bootstrap_aggregate_api_model_routes(storage);
+        }
+    }
+}
+
+fn source_mapping_matches_route(
+    source_kind: &str,
+    execution_plan: super::executor::GatewayUpstreamExecutionPlan,
+) -> bool {
+    match execution_plan.route_kind {
+        GatewayUpstreamRouteKind::AccountRotation => source_kind == "openai_account",
+        GatewayUpstreamRouteKind::AggregateApi => source_kind == "aggregate_api",
+        GatewayUpstreamRouteKind::HybridAccountFirst => {
+            source_kind == "openai_account" || source_kind == "aggregate_api"
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -519,9 +554,12 @@ pub(in super::super) fn proxy_validated_request(
         route_kind_label(execution_plan.route_kind),
     );
 
-    if let Err((status_code, message)) =
-        model_route_error(&storage, key_id.as_str(), model_for_log.as_deref())
-    {
+    if let Err((status_code, message)) = model_route_error(
+        &storage,
+        key_id.as_str(),
+        model_for_log.as_deref(),
+        execution_plan,
+    ) {
         return respond_model_route_error(
             request,
             &storage,
@@ -825,8 +863,8 @@ pub(in super::super) fn proxy_validated_request(
 #[cfg(test)]
 mod tests {
     use super::{
-        exhausted_gateway_error_for_log, hybrid_route_error_message, provider_upstream_hint,
-        request_deadline_for_path, resolve_upstream_is_stream,
+        exhausted_gateway_error_for_log, hybrid_route_error_message, model_route_error,
+        provider_upstream_hint, request_deadline_for_path, resolve_upstream_is_stream,
         respond_when_account_candidates_empty,
         should_fallback_to_aggregate_after_account_exhaustion,
         should_try_provider_executor_aggregate_route,
@@ -834,7 +872,74 @@ mod tests {
     use crate::gateway::upstream::executor::{
         GatewayUpstreamExecutionPlan, GatewayUpstreamExecutorKind, GatewayUpstreamRouteKind,
     };
+    use codexmanager_core::rpc::types::{
+        ManagedModelCatalogEntry, ManagedModelCatalogResult, ModelInfo,
+    };
+    use codexmanager_core::storage::{now_ts, AggregateApi, ModelSourceMapping, Storage};
+    use std::collections::BTreeMap;
     use std::time::{Duration, Instant};
+
+    fn execution_plan(route_kind: GatewayUpstreamRouteKind) -> GatewayUpstreamExecutionPlan {
+        GatewayUpstreamExecutionPlan {
+            executor_kind: GatewayUpstreamExecutorKind::CodexResponses,
+            route_kind,
+        }
+    }
+
+    fn insert_test_aggregate_api(storage: &Storage, id: &str) {
+        let now = now_ts();
+        storage
+            .insert_aggregate_api(&AggregateApi {
+                id: id.to_string(),
+                provider_type: "codex".to_string(),
+                supplier_name: Some(id.to_string()),
+                sort: 0,
+                url: format!("https://{id}.example/v1"),
+                auth_type: "apikey".to_string(),
+                auth_params_json: None,
+                action: None,
+                model_override: None,
+                status: "active".to_string(),
+                created_at: now,
+                updated_at: now,
+                last_test_at: None,
+                last_test_status: None,
+                last_test_error: None,
+                balance_query_enabled: false,
+                balance_query_template: None,
+                balance_query_base_url: None,
+                balance_query_user_id: None,
+                balance_query_config_json: None,
+                last_balance_at: None,
+                last_balance_status: None,
+                last_balance_error: None,
+                last_balance_json: None,
+            })
+            .expect("insert aggregate api");
+    }
+
+    fn seed_platform_catalog(storage: &Storage, slug: &str) {
+        crate::apikey_models::save_managed_model_catalog_with_storage(
+            storage,
+            &ManagedModelCatalogResult {
+                items: vec![ManagedModelCatalogEntry {
+                    model: ModelInfo {
+                        slug: slug.to_string(),
+                        display_name: slug.to_string(),
+                        supported_in_api: true,
+                        visibility: Some("list".to_string()),
+                        ..Default::default()
+                    },
+                    source_kind: "remote".to_string(),
+                    user_edited: false,
+                    sort_index: 0,
+                    updated_at: now_ts(),
+                }],
+                extra: BTreeMap::new(),
+            },
+        )
+        .expect("seed platform catalog");
+    }
 
     /// 函数 `exhausted_gateway_error_includes_attempts_skips_and_last_error`
     ///
@@ -1024,5 +1129,92 @@ mod tests {
             provider_upstream_hint(GatewayUpstreamExecutorKind::CodexResponses),
             None
         );
+    }
+
+    #[test]
+    fn aggregate_route_model_validation_bootstraps_aggregate_source() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        insert_test_aggregate_api(&storage, "agg-route");
+        storage
+            .upsert_discovered_model_source_models(
+                "aggregate_api",
+                "agg-route",
+                &["vendor-route".to_string()],
+                "synced",
+            )
+            .expect("seed aggregate source model");
+
+        model_route_error(
+            &storage,
+            "key-route",
+            Some("vendor-route"),
+            execution_plan(GatewayUpstreamRouteKind::AggregateApi),
+        )
+        .expect("aggregate route should bootstrap source mapping");
+
+        let mappings = storage
+            .list_enabled_model_source_mappings_for_platform("vendor-route")
+            .expect("list mappings");
+        assert_eq!(mappings.len(), 1);
+        assert_eq!(mappings[0].source_kind, "aggregate_api");
+        assert_eq!(mappings[0].source_id, "agg-route");
+    }
+
+    #[test]
+    fn account_route_model_validation_ignores_aggregate_only_mapping() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        seed_platform_catalog(&storage, "vendor-account-route");
+        let now = now_ts();
+        storage
+            .upsert_model_source_mapping(&ModelSourceMapping {
+                id: "mapping-aggregate-only".to_string(),
+                platform_model_slug: "vendor-account-route".to_string(),
+                source_kind: "aggregate_api".to_string(),
+                source_id: "agg-only".to_string(),
+                upstream_model: "vendor-account-route".to_string(),
+                enabled: true,
+                priority: 0,
+                weight: 1,
+                billing_model_slug: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("seed aggregate mapping");
+
+        let err = model_route_error(
+            &storage,
+            "key-route",
+            Some("vendor-account-route"),
+            execution_plan(GatewayUpstreamRouteKind::AccountRotation),
+        )
+        .expect_err("account route should require an account mapping");
+
+        assert_eq!(err.0, 503);
+        assert!(err.1.contains("model_unavailable"));
+    }
+
+    #[test]
+    fn hybrid_model_validation_accepts_aggregate_mapping() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        insert_test_aggregate_api(&storage, "agg-hybrid");
+        storage
+            .upsert_discovered_model_source_models(
+                "aggregate_api",
+                "agg-hybrid",
+                &["vendor-hybrid".to_string()],
+                "synced",
+            )
+            .expect("seed aggregate source model");
+
+        model_route_error(
+            &storage,
+            "key-route",
+            Some("vendor-hybrid"),
+            execution_plan(GatewayUpstreamRouteKind::HybridAccountFirst),
+        )
+        .expect("hybrid route should accept aggregate mapping");
     }
 }
