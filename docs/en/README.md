@@ -59,18 +59,6 @@ Thanks to the following sponsors for supporting CodexManager.
 <table>
   <tr>
     <td align="center" valign="middle" width="180">
-      <a href="https://coder.visioncoder.cn">
-        <img src="https://coder.visioncoder.cn/logo.png" alt="VisionCoder" width="88" />
-      </a>
-    </td>
-    <td valign="top">
-      <strong>Thanks to VisionCoder for supporting this project.</strong><br />
-      <a href="https://coder.visioncoder.cn">VisionCoder Developer Platform</a> is a reliable and efficient API relay provider that offers mainstream AI models such as Claude Code, Codex, and Gemini, helping developers and teams integrate AI more easily and improve productivity.<br />
-      <strong>Limited-time offer:</strong> VisionCoder is offering our users a <a href="https://coder.visioncoder.cn">Token Plan</a> promotion: buy 1 month and get 1 month free.
-    </td>
-  </tr>
-  <tr>
-    <td align="center" valign="middle" width="180">
       <a href="https://gzxsy.vip/register?aff=eapz">
         <img src="../../assets/images/sponsors/xingsiyan.jpg" alt="Xing Si Yan Gateway" width="120" />
       </a>

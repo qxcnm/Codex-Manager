@@ -59,18 +59,6 @@ CodexManager를 후원해 주신 다음 스폰서께 감사드립니다.
 <table>
   <tr>
     <td align="center" valign="middle" width="180">
-      <a href="https://coder.visioncoder.cn">
-        <img src="https://coder.visioncoder.cn/logo.png" alt="VisionCoder" width="88" />
-      </a>
-    </td>
-    <td valign="top">
-      <strong>VisionCoder의 후원에 감사드립니다.</strong><br />
-      <a href="https://coder.visioncoder.cn">VisionCoder 개발 플랫폼</a>은 Claude Code, Codex, Gemini 등 주요 AI 모델을 제공하는 신뢰할 수 있고 효율적인 API 중계 서비스로, 개발자와 팀이 AI 기능을 더 쉽게 통합하고 업무 효율을 높일 수 있도록 돕습니다.<br />
-      <strong>기간 한정 혜택:</strong> VisionCoder는 우리 사용자에게 <a href="https://coder.visioncoder.cn">Token Plan</a> 프로모션을 제공합니다. 1개월 구매 시 1개월을 추가로 제공합니다.
-    </td>
-  </tr>
-  <tr>
-    <td align="center" valign="middle" width="180">
       <a href="https://gzxsy.vip/register?aff=eapz">
         <img src="../../assets/images/sponsors/xingsiyan.jpg" alt="Xing Si Yan Gateway" width="120" />
       </a>

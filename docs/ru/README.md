@@ -59,18 +59,6 @@ CodexManager — локальный desktop + service-process менеджер �
 <table>
   <tr>
     <td align="center" valign="middle" width="180">
-      <a href="https://coder.visioncoder.cn">
-        <img src="https://coder.visioncoder.cn/logo.png" alt="VisionCoder" width="88" />
-      </a>
-    </td>
-    <td valign="top">
-      <strong>Спасибо VisionCoder за поддержку проекта.</strong><br />
-      <a href="https://coder.visioncoder.cn">Платформа VisionCoder Developer</a> — это надёжный и эффективный API-ретранслятор, который предоставляет популярные AI-модели, включая Claude Code, Codex и Gemini, помогая разработчикам и командам проще интегрировать AI и повышать эффективность работы.<br />
-      <strong>Ограниченное по времени предложение:</strong> VisionCoder предоставляет нашим пользователям акцию <a href="https://coder.visioncoder.cn">Token Plan</a>: оплатите 1 месяц и получите ещё 1 месяц в подарок.
-    </td>
-  </tr>
-  <tr>
-    <td align="center" valign="middle" width="180">
       <a href="https://gzxsy.vip/register?aff=eapz">
         <img src="../../assets/images/sponsors/xingsiyan.jpg" alt="Xing Si Yan Gateway" width="120" />
       </a>
