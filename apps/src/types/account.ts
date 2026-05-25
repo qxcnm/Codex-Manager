@@ -53,6 +53,20 @@ export interface AccountListResult {
   pageSize: number;
 }
 
+export interface LocalCodexAccountStatus {
+  activeAccountId: string | null;
+  liveAuthPresent: boolean;
+  liveAuthPath: string;
+}
+
+export interface LocalCodexAccountPoolSwitchResult {
+  success: boolean;
+  activeAccountId: string | null;
+  backupPath: string | null;
+  warning: string | null;
+  status: LocalCodexAccountStatus;
+}
+
 export interface UsageAggregateSummary {
   primaryBucketCount: number;
   primaryKnownCount: number;

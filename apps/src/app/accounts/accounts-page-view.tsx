@@ -6,6 +6,7 @@ import {
   ArrowUp,
   ArrowUpDown,
   BarChart3,
+  CheckCircle2,
   Download,
   FileUp,
   FolderOpen,
@@ -154,6 +155,10 @@ export interface AccountsPageViewProps {
   isDeletingMany: boolean;
   isCleaningAccountsByStatus: boolean;
   isUpdatingPreferred: boolean;
+  localActiveAccountId: string | null;
+  localAuthPath: string;
+  isLoadingLocalCodexStatus: boolean;
+  isSwitchingLocalCodexAccountId: string | null;
   isReorderingAccounts: boolean;
   isUpdatingProfileAccountId: string | null;
   isUpdatingStatusAccountId: string | null;
@@ -209,6 +214,7 @@ export interface AccountsPageViewProps {
   refreshAccount: (accountId: string) => void;
   clearPreferredAccount: (accountId: string) => void;
   setPreferredAccount: (accountId: string) => void;
+  switchLocalCodexAccount: (accountId: string) => void;
   toggleAccountStatus: (
     accountId: string,
     enabled: boolean,
@@ -263,6 +269,10 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     isDeletingMany,
     isCleaningAccountsByStatus,
     isUpdatingPreferred,
+    localActiveAccountId,
+    localAuthPath,
+    isLoadingLocalCodexStatus,
+    isSwitchingLocalCodexAccountId,
     isReorderingAccounts,
     isUpdatingProfileAccountId,
     isUpdatingStatusAccountId,
@@ -315,6 +325,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     refreshAccount,
     clearPreferredAccount,
     setPreferredAccount,
+    switchLocalCodexAccount,
     toggleAccountStatus,
   } = props;
   const cleanupSelectedCount = cleanupStatusOptions.reduce(
@@ -783,6 +794,9 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                 </TableHead>
                 <TableHead className="w-[156px]">{t("顺序")}</TableHead>
                 <TableHead>{t("状态")}</TableHead>
+                <TableHead className="w-[132px] text-center">
+                  {t("本地账号")}
+                </TableHead>
                 <TableHead className="table-sticky-action-head w-[112px] text-center">
                   {t("操作")}
                 </TableHead>
@@ -811,6 +825,9 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     <TableCell>
                       <Skeleton className="h-6 w-16 rounded-full" />
                     </TableCell>
+                    <TableCell>
+                      <Skeleton className="mx-auto h-7 w-20 rounded-md" />
+                    </TableCell>
                     <TableCell className="table-sticky-action-cell">
                       <Skeleton className="mx-auto h-8 w-24" />
                     </TableCell>
@@ -818,7 +835,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                 ))
               ) : visibleAccounts.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-48 text-center">
+                  <TableCell colSpan={7} className="h-48 text-center">
                     <div className="flex flex-col items-center justify-center gap-2 text-muted-foreground">
                       <Search className="h-8 w-8 opacity-20" />
                       <p>{t("未找到符合条件的账号")}</p>
@@ -834,6 +851,9 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     isRefreshingAccountId === account.id;
                   const isRefreshingCurrentRt =
                     isRefreshingRtAccountId === account.id;
+                  const isLocalActive = localActiveAccountId === account.id;
+                  const isSwitchingLocalAccount =
+                    isSwitchingLocalCodexAccountId === account.id;
                   const filteredIndex =
                     filteredAccountIndexMap.get(account.id) ?? -1;
                   const canMoveUp = filteredIndex > 0;
@@ -950,6 +970,55 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                       </TableCell>
                       <TableCell>
                         <AccountStatusCell account={account} />
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <div className="flex justify-center">
+                          {isLocalActive ? (
+                            <Tooltip>
+                              <TooltipTrigger render={<span />} className="inline-flex">
+                                <span className="inline-flex h-7 items-center gap-1.5 rounded-md border border-green-500/30 bg-green-500/10 px-2 text-xs font-medium text-green-700 dark:text-green-300">
+                                  <CheckCircle2 className="h-3.5 w-3.5" />
+                                  {t("运行中")}
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent className="max-w-xs">
+                                <div className="space-y-1">
+                                  <div>{t("当前本机 Codex 正在使用此账号")}</div>
+                                  {localAuthPath ? (
+                                    <div className="break-all font-mono text-[10px] opacity-80">
+                                      {localAuthPath}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              disabled={
+                                !isServiceReady ||
+                                !account.hasToken ||
+                                isLoadingLocalCodexStatus ||
+                                Boolean(isSwitchingLocalCodexAccountId)
+                              }
+                              onClick={() => switchLocalCodexAccount(account.id)}
+                              title={
+                                account.hasToken
+                                  ? t("切换本机 Codex 到此账号")
+                                  : t("该账号缺少 AT/RT，无法切换")
+                              }
+                            >
+                              {isSwitchingLocalAccount ? (
+                                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                              )}
+                              {t("切换")}
+                            </Button>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell className="table-sticky-action-cell">
                         <div className="table-action-cell gap-1">

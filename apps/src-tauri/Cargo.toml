@@ -30,6 +30,7 @@ semver = "1.0"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 rfd = "0.15"
 rusqlite = { version = "0.31", features = ["bundled", "backup"] }
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

@@ -15,7 +15,8 @@
     "windows": [
       {
         "title": "CodexManager",
-        "width": 1100,
+        "width": 1320,
+        "minWidth": 1180,
         "height": 720,
         "resizable": true
       }

@@ -23,6 +23,8 @@ macro_rules! invoke_handler {
             crate::commands::account::transfer::service_account_import_by_directory,
             crate::commands::account::transfer::service_account_export_by_account_files,
             crate::commands::account::local::local_account_delete,
+            crate::commands::account::local::codex_local_account_pool_status,
+            crate::commands::account::local::codex_local_account_pool_switch,
             // account manager
             crate::commands::account_manager::service_account_manager_status,
             crate::commands::account_manager::service_account_manager_session_current,

@@ -165,7 +165,7 @@ export function useAccounts() {
   const localDayRange = useLocalDayRange();
   const serviceStatus = useAppStore((state) => state.serviceStatus);
   const backgroundTasks = useAppStore((state) => state.appSettings.backgroundTasks);
-  const { canAccessManagementRpc } = useRuntimeCapabilities();
+  const { canAccessManagementRpc, isDesktopRuntime } = useRuntimeCapabilities();
   const isServiceReady = canAccessManagementRpc && serviceStatus.connected;
   const isPageActive = useDesktopPageActive("/accounts/");
   const areAccountQueriesEnabled = useDeferredDesktopActivation(
@@ -240,6 +240,15 @@ export function useAccounts() {
     refetchIntervalInBackground: false,
     placeholderData: (previousData) =>
       previousData || (startupUsages.length > 0 ? startupUsages : undefined),
+  });
+
+  const localCodexAccountStatusQuery = useQuery({
+    queryKey: ["local-codex-account-status"],
+    queryFn: () => accountClient.getLocalCodexAccountStatus(),
+    enabled: isDesktopRuntime && isPageActive,
+    retry: 1,
+    refetchInterval: isDesktopRuntime && isPageActive ? 5_000 : false,
+    refetchIntervalInBackground: false,
   });
 
   const usageListFingerprint = useMemo(
@@ -384,6 +393,7 @@ export function useAccounts() {
       queryClient.invalidateQueries({ queryKey: ["today-summary"] }),
       queryClient.invalidateQueries({ queryKey: ["startup-snapshot"] }),
       queryClient.invalidateQueries({ queryKey: ["logs"] }),
+      queryClient.invalidateQueries({ queryKey: ["local-codex-account-status"] }),
     ]);
   };
 
@@ -730,6 +740,20 @@ export function useAccounts() {
     },
   });
 
+  const switchLocalCodexAccountMutation = useMutation({
+    mutationFn: (accountId: string) => accountClient.switchLocalCodexAccount(accountId),
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: ["local-codex-account-status"] });
+      toast.success(t("本地账号已切换"));
+      if (result.warning) {
+        toast.info(t(result.warning));
+      }
+    },
+    onError: (error: unknown) => {
+      toast.error(`${t("切换本地账号失败")}: ${getAppErrorMessage(error)}`);
+    },
+  });
+
   return {
     accounts,
     planTypes,
@@ -814,6 +838,15 @@ export function useAccounts() {
       if (!ensureServiceReady("取消优先账号")) return;
       clearPreferredMutation.mutate(accountId);
     },
+    switchLocalCodexAccount: (accountId: string) => {
+      if (!ensureServiceReady("切换本地账号")) return;
+      const targetAccountId = accountId.trim();
+      if (!targetAccountId) {
+        toast.error(t("未找到当前账号，请刷新后重试"));
+        return;
+      }
+      switchLocalCodexAccountMutation.mutate(targetAccountId);
+    },
     updateAccountSort: async (accountId: string, sort: number) => {
       if (!ensureServiceReady("更新账号顺序")) return;
       await updateAccountSortMutation.mutateAsync({ accountId, sort });
@@ -863,6 +896,14 @@ export function useAccounts() {
     isCleaningAccountsByStatus: deleteByStatusesMutation.isPending,
     isUpdatingPreferred:
       setPreferredMutation.isPending || clearPreferredMutation.isPending,
+    localActiveAccountId: localCodexAccountStatusQuery.data?.activeAccountId || null,
+    localAuthPath: localCodexAccountStatusQuery.data?.liveAuthPath || "",
+    isLoadingLocalCodexStatus: localCodexAccountStatusQuery.isLoading,
+    isSwitchingLocalCodexAccountId:
+      switchLocalCodexAccountMutation.isPending &&
+      typeof switchLocalCodexAccountMutation.variables === "string"
+        ? switchLocalCodexAccountMutation.variables
+        : "",
     isUpdatingSortAccountId:
       updateAccountSortMutation.isPending &&
       updateAccountSortMutation.variables &&

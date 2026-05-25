@@ -60,6 +60,8 @@ import {
   CurrentAccessTokenAccountReadResult,
   LoginStatusResult,
   LoginStartResult,
+  LocalCodexAccountPoolSwitchResult,
+  LocalCodexAccountStatus,
   ManagedModelCatalog,
   ManagedModelInfo,
   ManagedModelRouting,
@@ -194,6 +196,42 @@ interface AggregateApiPayload {
 
 const MAX_IMPORT_RPC_BODY_BYTES = 4 * 1024 * 1024;
 const MAX_IMPORT_ERROR_ITEMS = 50;
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function asString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function asBoolean(value: unknown): boolean {
+  return typeof value === "boolean" ? value : false;
+}
+
+function readLocalCodexAccountStatus(value: unknown): LocalCodexAccountStatus {
+  const source = asRecord(value);
+  return {
+    activeAccountId: asString(source.activeAccountId) || null,
+    liveAuthPresent: asBoolean(source.liveAuthPresent),
+    liveAuthPath: asString(source.liveAuthPath),
+  };
+}
+
+function readLocalCodexAccountPoolSwitchResult(
+  value: unknown,
+): LocalCodexAccountPoolSwitchResult {
+  const source = asRecord(value);
+  return {
+    success: asBoolean(source.success),
+    activeAccountId: asString(source.activeAccountId) || null,
+    backupPath: asString(source.backupPath) || null,
+    warning: asString(source.warning) || null,
+    status: readLocalCodexAccountStatus(source.status),
+  };
+}
 
 /**
  * 函数 `createEmptyImportResult`
@@ -349,6 +387,18 @@ export const accountClient = {
   async list(params?: Record<string, unknown>): Promise<AccountListResult> {
     const result = await invoke<unknown>("service_account_list", withAddr(params));
     return normalizeAccountList(result);
+  },
+  async getLocalCodexAccountStatus(): Promise<LocalCodexAccountStatus> {
+    const result = await invoke<unknown>("codex_local_account_pool_status");
+    return readLocalCodexAccountStatus(result);
+  },
+  async switchLocalCodexAccount(
+    accountId: string,
+  ): Promise<LocalCodexAccountPoolSwitchResult> {
+    const result = await invoke<unknown>("codex_local_account_pool_switch", {
+      accountId,
+    });
+    return readLocalCodexAccountPoolSwitchResult(result);
   },
   delete: (accountId: string) =>
     invoke("service_account_delete", withAddr({ accountId })),

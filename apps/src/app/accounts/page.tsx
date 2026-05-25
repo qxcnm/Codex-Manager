@@ -69,6 +69,11 @@ export default function AccountsPage() {
     setPreferredAccount,
     clearPreferredAccount,
     isUpdatingPreferred,
+    localActiveAccountId,
+    localAuthPath,
+    isLoadingLocalCodexStatus,
+    isSwitchingLocalCodexAccountId,
+    switchLocalCodexAccount,
     reorderAccounts,
     isReorderingAccounts,
     updateAccountProfile,
@@ -648,6 +653,10 @@ const toggleCleanupStatus = (rawStatus: string) => {
       isDeletingMany={isDeletingMany}
       isCleaningAccountsByStatus={isCleaningAccountsByStatus}
       isUpdatingPreferred={isUpdatingPreferred}
+      localActiveAccountId={localActiveAccountId}
+      localAuthPath={localAuthPath}
+      isLoadingLocalCodexStatus={isLoadingLocalCodexStatus}
+      isSwitchingLocalCodexAccountId={isSwitchingLocalCodexAccountId}
       isReorderingAccounts={isReorderingAccounts}
       isUpdatingProfileAccountId={isUpdatingProfileAccountId}
       isUpdatingStatusAccountId={isUpdatingStatusAccountId}
@@ -700,6 +709,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
       refreshAccount={refreshAccount}
       clearPreferredAccount={clearPreferredAccount}
       setPreferredAccount={setPreferredAccount}
+      switchLocalCodexAccount={switchLocalCodexAccount}
       toggleAccountStatus={toggleAccountStatus}
     />
   );
