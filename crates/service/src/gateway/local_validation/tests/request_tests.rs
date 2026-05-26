@@ -169,6 +169,24 @@ fn anthropic_key_maps_fast_service_tier_to_priority_on_adapted_responses_request
 }
 
 #[test]
+fn compat_service_tier_normalizer_maps_auto_to_priority() {
+    let body = serde_json::json!({
+        "model": "gpt-5.3-codex",
+        "input": [],
+        "service_tier": "auto"
+    });
+    let normalized = normalize_compat_service_tier_for_codex_backend(
+        serde_json::to_vec(&body).expect("serialize request"),
+    );
+    let payload: Value = serde_json::from_slice(&normalized).expect("json body");
+
+    assert_eq!(
+        payload.get("service_tier").and_then(Value::as_str),
+        Some("priority")
+    );
+}
+
+#[test]
 fn anthropic_key_ignores_unsupported_flex_service_tier_on_responses_request() {
     let api_key = sample_api_key(
         crate::apikey_profile::PROTOCOL_ANTHROPIC_NATIVE,

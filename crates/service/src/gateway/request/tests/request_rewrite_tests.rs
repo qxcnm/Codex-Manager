@@ -1702,6 +1702,30 @@ fn responses_default_path_still_maps_fast_service_tier_to_priority_for_codex_bac
     );
 }
 
+#[test]
+fn responses_default_path_maps_auto_service_tier_to_priority_for_codex_backend() {
+    let _guard = crate::test_env_guard();
+    let body = json!({
+        "model": "gpt-5.4",
+        "input": "hello",
+        "service_tier": "auto"
+    });
+    let out = apply_request_overrides(
+        "/v1/responses",
+        serde_json::to_vec(&body).expect("serialize request body"),
+        None,
+        None,
+        Some("https://chatgpt.com/backend-api/codex"),
+    );
+    let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
+    assert_eq!(
+        value
+            .get("service_tier")
+            .and_then(serde_json::Value::as_str),
+        Some("priority")
+    );
+}
+
 /// 函数 `responses_ignores_unsupported_flex_service_tier_override_for_codex_backend`
 ///
 /// 作者: gaohongshun

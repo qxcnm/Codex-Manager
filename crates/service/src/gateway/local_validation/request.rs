@@ -1279,7 +1279,10 @@ fn normalize_compat_service_tier_for_codex_backend(body: Vec<u8>) -> Vec<u8> {
         return body;
     };
 
-    if raw_value.eq_ignore_ascii_case("fast") || raw_value.eq_ignore_ascii_case("priority") {
+    if raw_value.eq_ignore_ascii_case("auto")
+        || raw_value.eq_ignore_ascii_case("fast")
+        || raw_value.eq_ignore_ascii_case("priority")
+    {
         *service_tier = serde_json::Value::String("priority".to_string());
     } else {
         obj.remove("service_tier");
