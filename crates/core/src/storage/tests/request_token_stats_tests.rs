@@ -163,3 +163,75 @@ fn summaries_for_selected_keys_include_rollups_and_respect_time_ranges() {
     assert_eq!(by_key_and_model[0].total_tokens, 12);
     assert_float_close(by_key_and_model[0].estimated_cost_usd, 0.10);
 }
+
+/// 函数 `summaries_for_large_key_lists_are_chunked`
+///
+/// 作者: gaohongshun
+///
+/// 时间: 2026-05-28
+///
+/// # 参数
+/// 无
+///
+/// # 返回
+/// 无
+#[test]
+fn summaries_for_large_key_lists_are_chunked() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+
+    let mut selected = Vec::new();
+    for index in 0..901 {
+        let key_id = format!("key-{index:04}");
+        selected.push(key_id.clone());
+        storage
+            .insert_request_token_stat(&RequestTokenStat {
+                request_log_id: index as i64 + 1,
+                key_id: Some(key_id),
+                account_id: Some(format!("acc-{index:04}")),
+                model: Some("gpt-5".to_string()),
+                input_tokens: Some(1),
+                cached_input_tokens: Some(0),
+                output_tokens: Some(0),
+                total_tokens: Some(1),
+                reasoning_output_tokens: Some(0),
+                estimated_cost_usd: Some(0.01),
+                created_at: 1_000 + index as i64,
+            })
+            .expect("insert request token stat");
+    }
+
+    let by_key = storage
+        .summarize_request_token_stats_by_key_for_keys(&selected)
+        .expect("summarize by key");
+    assert_eq!(by_key.len(), selected.len());
+    assert_eq!(
+        by_key.first().map(|item| item.key_id.as_str()),
+        Some("key-0000")
+    );
+    assert_eq!(
+        by_key.last().map(|item| item.key_id.as_str()),
+        Some("key-0900")
+    );
+
+    let by_model = storage
+        .summarize_request_token_stats_by_model_for_keys(None, None, &selected)
+        .expect("summarize by model");
+    assert_eq!(by_model.len(), 1);
+    assert_eq!(by_model[0].model, "gpt-5");
+    assert_eq!(by_model[0].total_tokens, selected.len() as i64);
+    assert_float_close(by_model[0].estimated_cost_usd, 9.01);
+
+    let by_key_and_model = storage
+        .summarize_request_token_stats_by_key_and_model_for_keys(None, None, &selected)
+        .expect("summarize by key and model");
+    assert_eq!(by_key_and_model.len(), selected.len());
+    assert_eq!(
+        by_key_and_model.first().map(|item| item.key_id.as_str()),
+        Some("key-0000")
+    );
+    assert_eq!(
+        by_key_and_model.last().map(|item| item.key_id.as_str()),
+        Some("key-0900")
+    );
+}

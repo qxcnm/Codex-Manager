@@ -2,6 +2,9 @@ use rusqlite::{params_from_iter, types::Value, Result, Row};
 
 use super::{now_ts, ApiKey, Storage};
 
+// SQLite 默认的 host parameter 上限是 999，这里保留一点余量，避免大 key 列表把单条语句撑爆。
+const SQLITE_IN_CLAUSE_BATCH_SIZE: usize = 900;
+
 const API_KEY_SELECT_SQL: &str = "SELECT
     k.id,
     k.name,
@@ -126,22 +129,15 @@ impl Storage {
             return Ok(Vec::new());
         }
 
-        let placeholders = std::iter::repeat("?")
-            .take(key_ids.len())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!(
-            "{API_KEY_SELECT_SQL}
-             WHERE k.id IN ({placeholders})
-             ORDER BY k.created_at DESC, k.id ASC"
-        );
-        let params = key_ids.into_iter().map(Value::Text).collect::<Vec<_>>();
-        let mut stmt = self.conn.prepare(&sql)?;
-        let mut rows = stmt.query(params_from_iter(params.iter()))?;
         let mut out = Vec::new();
-        while let Some(row) = rows.next()? {
-            out.push(map_api_key_row(row)?);
+        for chunk in key_ids.chunks(SQLITE_IN_CLAUSE_BATCH_SIZE) {
+            out.extend(list_api_keys_for_ids_chunk(self, chunk)?);
         }
+        out.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
         Ok(out)
     }
 
@@ -711,6 +707,26 @@ impl Storage {
     }
 }
 
+fn list_api_keys_for_ids_chunk(storage: &Storage, key_ids: &[String]) -> Result<Vec<ApiKey>> {
+    let placeholders = std::iter::repeat("?")
+        .take(key_ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "{API_KEY_SELECT_SQL}
+         WHERE k.id IN ({placeholders})
+         ORDER BY k.created_at DESC, k.id ASC"
+    );
+    let params = key_ids.iter().cloned().map(Value::Text).collect::<Vec<_>>();
+    let mut stmt = storage.conn.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(params.iter()))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(map_api_key_row(row)?);
+    }
+    Ok(out)
+}
+
 fn normalize_key_ids(key_ids: &[String]) -> Vec<String> {
     let mut normalized = key_ids
         .iter()
@@ -756,3 +772,7 @@ fn map_api_key_row(row: &Row<'_>) -> Result<ApiKey> {
         last_used_at: row.get(17)?,
     })
 }
+
+#[cfg(test)]
+#[path = "tests/api_keys_tests.rs"]
+mod tests;

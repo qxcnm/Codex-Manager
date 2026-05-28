@@ -4,6 +4,9 @@ use rusqlite::{params_from_iter, types::Value, OptionalExtension, Result};
 
 use super::{now_ts, Storage};
 
+// SQLite 默认的 host parameter 上限是 999，这里保留一点余量，避免大 key 列表把单条语句撑爆。
+const SQLITE_IN_CLAUSE_BATCH_SIZE: usize = 900;
+
 impl Storage {
     pub fn upsert_api_key_quota_limit(
         &self,
@@ -68,22 +71,9 @@ impl Storage {
             return Ok(HashMap::new());
         }
 
-        let placeholders = std::iter::repeat("?")
-            .take(key_ids.len())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!(
-            "SELECT key_id, quota_limit_tokens
-             FROM api_key_quota_limits
-             WHERE quota_limit_tokens > 0
-               AND key_id IN ({placeholders})"
-        );
-        let params = key_ids.into_iter().map(Value::Text).collect::<Vec<_>>();
-        let mut stmt = self.conn.prepare(&sql)?;
-        let mut rows = stmt.query(params_from_iter(params.iter()))?;
         let mut out = HashMap::new();
-        while let Some(row) = rows.next()? {
-            out.insert(row.get(0)?, row.get(1)?);
+        for chunk in key_ids.chunks(SQLITE_IN_CLAUSE_BATCH_SIZE) {
+            out.extend(list_api_key_quota_limits_for_ids_chunk(self, chunk)?);
         }
         Ok(out)
     }
@@ -151,6 +141,30 @@ impl Storage {
         )?;
         Ok(())
     }
+}
+
+fn list_api_key_quota_limits_for_ids_chunk(
+    storage: &Storage,
+    key_ids: &[String],
+) -> Result<HashMap<String, i64>> {
+    let placeholders = std::iter::repeat("?")
+        .take(key_ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT key_id, quota_limit_tokens
+         FROM api_key_quota_limits
+         WHERE quota_limit_tokens > 0
+           AND key_id IN ({placeholders})"
+    );
+    let params = key_ids.iter().cloned().map(Value::Text).collect::<Vec<_>>();
+    let mut stmt = storage.conn.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(params.iter()))?;
+    let mut out = HashMap::new();
+    while let Some(row) = rows.next()? {
+        out.insert(row.get(0)?, row.get(1)?);
+    }
+    Ok(out)
 }
 
 fn normalize_key_ids(key_ids: &[String]) -> Vec<String> {

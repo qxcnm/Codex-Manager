@@ -26,6 +26,51 @@ pub(crate) struct AccountSummaryContext {
     pub usage_snapshots: Vec<UsageSnapshotRecord>,
 }
 
+#[derive(Debug)]
+struct AccountSummaryParts {
+    id: String,
+    label: String,
+    group_name: Option<String>,
+    sort: i64,
+    status: String,
+}
+
+impl From<Account> for AccountSummaryParts {
+    fn from(account: Account) -> Self {
+        Self {
+            id: account.id,
+            label: account.label,
+            group_name: account.group_name,
+            sort: account.sort,
+            status: account.status,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct AccountSummarySetup {
+    preferred_account_id: Option<String>,
+    status_reasons: HashMap<String, String>,
+    tokens: HashMap<String, Token>,
+    usage_snapshots: Vec<UsageSnapshotRecord>,
+    metadata: HashMap<String, AccountMetadata>,
+    subscriptions: HashMap<String, AccountSubscription>,
+    model_slugs_by_account: HashMap<String, Vec<String>>,
+    quota_overrides: HashMap<String, AccountQuotaCapacityOverride>,
+}
+
+impl From<&Account> for AccountSummaryParts {
+    fn from(account: &Account) -> Self {
+        Self {
+            id: account.id.clone(),
+            label: account.label.clone(),
+            group_name: account.group_name.clone(),
+            sort: account.sort,
+            status: account.status.clone(),
+        }
+    }
+}
+
 /// 函数 `read_accounts`
 ///
 /// 作者: gaohongshun
@@ -65,7 +110,7 @@ pub(crate) fn read_accounts(
                     page_size,
                 )
                 .map_err(|err| format!("list accounts failed: {err}"))?;
-            let items = to_account_summaries(&storage, &accounts)?;
+            let items = to_account_summaries(&storage, accounts)?;
             return Ok(AccountListResult {
                 items,
                 total,
@@ -78,7 +123,7 @@ pub(crate) fn read_accounts(
             .list_accounts_filtered(query.as_deref(), group_filter.as_deref())
             .map_err(|err| format!("list accounts failed: {err}"))?;
         let total = accounts.len() as i64;
-        let items = to_account_summaries(&storage, &accounts)?;
+        let items = to_account_summaries(&storage, accounts)?;
         return Ok(AccountListResult {
             items,
             total,
@@ -104,7 +149,7 @@ pub(crate) fn read_accounts(
             group_filter.as_deref(),
             Some((offset, page_size)),
         )?;
-        let items = to_account_summaries(&storage, &paged)?;
+        let items = to_account_summaries(&storage, paged)?;
         return Ok(AccountListResult {
             items,
             total,
@@ -121,7 +166,7 @@ pub(crate) fn read_accounts(
         None,
     )?;
     let total = accounts.len() as i64;
-    let items = to_account_summaries(&storage, &accounts)?;
+    let items = to_account_summaries(&storage, accounts)?;
 
     Ok(AccountListResult {
         items,
@@ -306,7 +351,7 @@ fn filtered_accounts(
 /// # 返回
 /// 返回函数执行结果
 fn to_account_summary_with_reason(
-    acc: &Account,
+    parts: AccountSummaryParts,
     preferred: bool,
     status_reason: Option<String>,
     has_token: bool,
@@ -323,12 +368,12 @@ fn to_account_summary_with_reason(
     quota_capacity_secondary_window_tokens: Option<i64>,
 ) -> AccountSummary {
     AccountSummary {
-        id: acc.id.clone(),
-        label: acc.label.clone(),
-        group_name: acc.group_name.clone(),
+        id: parts.id,
+        label: parts.label,
+        group_name: parts.group_name,
         preferred,
-        sort: acc.sort,
-        status: acc.status.clone(),
+        sort: parts.sort,
+        status: parts.status,
         status_reason,
         has_token,
         plan_type,
@@ -365,11 +410,35 @@ pub(crate) fn build_account_summary_context(
         .iter()
         .map(|account| account.id.clone())
         .collect::<Vec<_>>();
+    let setup = load_account_summary_setup(storage, &account_ids)?;
+    let items = build_account_summary_items(accounts.iter(), &setup);
+    Ok(AccountSummaryContext {
+        items,
+        usage_snapshots: setup.usage_snapshots,
+    })
+}
+
+fn to_account_summaries(
+    storage: &codexmanager_core::storage::Storage,
+    accounts: Vec<Account>,
+) -> Result<Vec<AccountSummary>, String> {
+    let account_ids = accounts
+        .iter()
+        .map(|account| account.id.clone())
+        .collect::<Vec<_>>();
+    let setup = load_account_summary_setup(storage, &account_ids)?;
+    Ok(build_account_summary_items(accounts, &setup))
+}
+
+fn load_account_summary_setup(
+    storage: &codexmanager_core::storage::Storage,
+    account_ids: &[String],
+) -> Result<AccountSummarySetup, String> {
     let preferred_account_id = storage
         .preferred_account_id()
         .map_err(|err| format!("load preferred account failed: {err}"))?;
     let status_reasons = storage
-        .latest_account_status_reasons(&account_ids)
+        .latest_account_status_reasons(account_ids)
         .map_err(|err| format!("load account status reasons failed: {err}"))?;
     let tokens = storage
         .list_tokens()
@@ -380,10 +449,6 @@ pub(crate) fn build_account_summary_context(
     let usage_snapshots = storage
         .latest_usage_snapshots_by_account()
         .map_err(|err| format!("load account usage snapshots failed: {err}"))?;
-    let usages = usage_snapshots
-        .iter()
-        .map(|snapshot| (snapshot.account_id.clone(), snapshot))
-        .collect::<HashMap<String, &UsageSnapshotRecord>>();
     let metadata = storage
         .list_account_metadata()
         .map_err(|err| format!("load account metadata failed: {err}"))?
@@ -414,33 +479,47 @@ pub(crate) fn build_account_summary_context(
         .into_iter()
         .map(|item| (item.account_id.clone(), item))
         .collect::<HashMap<String, AccountQuotaCapacityOverride>>();
-    let items = accounts
-        .iter()
-        .map(|account| {
-            map_account_summary(
-                account,
-                preferred_account_id.as_deref(),
-                &status_reasons,
-                &tokens,
-                &usages,
-                &metadata,
-                &subscriptions,
-                &model_slugs_by_account,
-                &quota_overrides,
-            )
-        })
-        .collect();
-    Ok(AccountSummaryContext {
-        items,
+    Ok(AccountSummarySetup {
+        preferred_account_id,
+        status_reasons,
+        tokens,
         usage_snapshots,
+        metadata,
+        subscriptions,
+        model_slugs_by_account,
+        quota_overrides,
     })
 }
 
-fn to_account_summaries(
-    storage: &codexmanager_core::storage::Storage,
-    accounts: &[Account],
-) -> Result<Vec<AccountSummary>, String> {
-    Ok(build_account_summary_context(storage, accounts)?.items)
+fn build_account_summary_items<I, A>(
+    accounts: I,
+    setup: &AccountSummarySetup,
+) -> Vec<AccountSummary>
+where
+    I: IntoIterator<Item = A>,
+    A: Into<AccountSummaryParts>,
+{
+    let usages = setup
+        .usage_snapshots
+        .iter()
+        .map(|snapshot| (snapshot.account_id.clone(), snapshot))
+        .collect::<HashMap<String, &UsageSnapshotRecord>>();
+    accounts
+        .into_iter()
+        .map(|account| {
+            map_account_summary(
+                account,
+                setup.preferred_account_id.as_deref(),
+                &setup.status_reasons,
+                &setup.tokens,
+                &usages,
+                &setup.metadata,
+                &setup.subscriptions,
+                &setup.model_slugs_by_account,
+                &setup.quota_overrides,
+            )
+        })
+        .collect()
 }
 
 /// 函数 `map_account_summary`
@@ -458,8 +537,8 @@ fn to_account_summaries(
 ///
 /// # 返回
 /// 返回函数执行结果
-fn map_account_summary(
-    account: &Account,
+fn map_account_summary<A>(
+    account: A,
     preferred_account_id: Option<&str>,
     status_reasons: &HashMap<String, String>,
     tokens: &HashMap<String, Token>,
@@ -468,8 +547,18 @@ fn map_account_summary(
     subscriptions: &HashMap<String, AccountSubscription>,
     model_slugs_by_account: &HashMap<String, Vec<String>>,
     quota_overrides: &HashMap<String, AccountQuotaCapacityOverride>,
-) -> AccountSummary {
-    let account_id = account.id.clone();
+) -> AccountSummary
+where
+    A: Into<AccountSummaryParts>,
+{
+    let account = account.into();
+    let AccountSummaryParts {
+        id: account_id,
+        label,
+        group_name,
+        sort,
+        status,
+    } = account;
     let status_reason = status_reasons.get(&account_id).cloned();
     let preferred = preferred_account_id.is_some_and(|id| id == account_id);
     let subscription = subscriptions.get(&account_id);
@@ -492,7 +581,13 @@ fn map_account_summary(
     let subscription_plan = subscription.and_then(|value| value.plan_type.clone());
     let plan_type = fallback_plan_type;
     to_account_summary_with_reason(
-        account,
+        AccountSummaryParts {
+            id: account_id,
+            label,
+            group_name,
+            sort,
+            status,
+        },
         preferred,
         status_reason,
         has_token,
