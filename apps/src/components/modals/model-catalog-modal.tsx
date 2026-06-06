@@ -352,12 +352,14 @@ export function ModelCatalogModal({
     const ip = draft.inputPricePer1m.trim();
     const cp = draft.cachedInputPricePer1m.trim();
     const op = draft.outputPricePer1m.trim();
-    const hasUserInput = ip !== "" || cp !== "" || op !== "" || !!priceRule?.id;
+    const hasAnyPriceText = ip !== "" || cp !== "" || op !== "";
+    const isClearingExistingOverride = !hasAnyPriceText && !!priceRule?.id;
+    const hasUserInput = hasAnyPriceText || isClearingExistingOverride;
 
     if (hasUserInput) {
-      const inputNum = ip !== "" ? Number(ip) : (priceRule?.inputPricePer1m ?? null);
-      const cachedNum = cp !== "" ? Number(cp) : (priceRule?.cachedInputPricePer1m ?? null);
-      const outputNum = op !== "" ? Number(op) : (priceRule?.outputPricePer1m ?? null);
+      const inputNum = ip !== "" ? Number(ip) : null;
+      const cachedNum = cp !== "" ? Number(cp) : null;
+      const outputNum = op !== "" ? Number(op) : null;
       if (
         (inputNum !== null && (!Number.isFinite(inputNum) || inputNum < 0)) ||
         (cachedNum !== null && (!Number.isFinite(cachedNum) || cachedNum < 0)) ||
@@ -366,7 +368,7 @@ export function ModelCatalogModal({
         setPriceError("价格必须为非负有效数字");
         return;
       }
-      if (inputNum == null || outputNum == null) {
+      if (!isClearingExistingOverride && (inputNum == null || outputNum == null)) {
         setPriceError("输入价格和输出价格必须同时填写");
         return;
       }
@@ -387,9 +389,12 @@ export function ModelCatalogModal({
             id: priceRule?.id,
             provider: priceRule?.provider ?? undefined,
             modelPattern: slug,
-            inputPricePer1m: ip !== "" ? Number(ip) : 0,
-            cachedInputPricePer1m: cp !== "" ? Number(cp) : 0,
-            outputPricePer1m: op !== "" ? Number(op) : 0,
+            inputPricePer1m: isClearingExistingOverride ? 0 : Number(ip),
+            cachedInputPricePer1m: isClearingExistingOverride
+              ? null
+              : (cp !== "" ? Number(cp) : null),
+            outputPricePer1m: isClearingExistingOverride ? 0 : Number(op),
+            enabled: isClearingExistingOverride ? false : true,
           });
         } catch (error) {
           setPriceError(

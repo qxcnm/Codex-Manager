@@ -1503,7 +1503,11 @@ pub(crate) fn read_model_price_rule(
     let normalized = model_pattern.trim().to_ascii_lowercase();
     Ok(rules
         .into_iter()
-        .find(|rule| rule.model_pattern.to_ascii_lowercase() == normalized)
+        .find(|rule| {
+            rule.source == "custom"
+                && rule.match_type.eq_ignore_ascii_case("exact")
+                && rule.model_pattern.to_ascii_lowercase() == normalized
+        })
         .map(price_rule_entry))
 }
 

@@ -407,7 +407,9 @@ export function useManagedModels() {
       return saveMutation.mutateAsync(params);
     },
     saveModelPriceRule: async (params: ModelPriceRuleUpsertPayload) => {
-      if (!ensureServiceReady("保存模型价格")) return;
+      if (!ensureServiceReady("保存模型价格")) {
+        throw new Error("服务未就绪，无法保存模型价格");
+      }
       await accountClient.upsertModelPriceRule(params);
     },
     readModelPriceRule: async (modelPattern: string) => {
