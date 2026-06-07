@@ -142,11 +142,7 @@ interface AdminUsageRangeValue {
 
 const SUPPORTED_INTL_LOCALES = ["zh-CN", "en-US", "ru-RU", "ko-KR"] as const;
 
-const INTL_LOCALE_BY_APP_LOCALE: Record<
-  "cn" | Exclude<AppLocale, "zh-CN">,
-  string
-> = {
-  cn: "zh-CN",
+const INTL_LOCALE_BY_APP_LOCALE: Record<Exclude<AppLocale, "zh-CN">, string> = {
   en: "en-US",
   ru: "ru-RU",
   ko: "ko-KR",
@@ -160,11 +156,7 @@ function intlLocaleFromAppLocale(locale: string): string {
   ) {
     return locale;
   }
-  return (
-    INTL_LOCALE_BY_APP_LOCALE[
-      locale === "zh-CN" ? "cn" : (locale as Exclude<AppLocale, "zh-CN">)
-    ] ?? "zh-CN"
-  );
+  return INTL_LOCALE_BY_APP_LOCALE[locale as Exclude<AppLocale, "zh-CN">] ?? "zh-CN";
 }
 
 function formatDateInputValue(date: Date): string {
