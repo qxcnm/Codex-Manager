@@ -76,6 +76,7 @@ import { appClient } from "@/lib/api/app-client";
 import { dashboardClient } from "@/lib/api/dashboard-client";
 import { getAppErrorMessage } from "@/lib/api/transport";
 import { estimateChartYAxisWidth } from "@/lib/dashboard/format";
+import type { AppLocale } from "@/lib/i18n/config";
 import { useI18n } from "@/lib/i18n/provider";
 import { cn } from "@/lib/utils";
 import { formatCompactNumber } from "@/lib/utils/usage";
@@ -87,6 +88,10 @@ const ACCOUNT_MANAGER_QUERY_KEYS = {
 };
 
 const CREDIT_MICROS_PER_USD = 1_000_000;
+
+function intlLocaleFromAppLocale(locale: AppLocale): string {
+  return locale === "ru" ? "ru-RU" : locale === "ko" ? "ko-KR" : locale;
+}
 
 function formatCreditMicros(value: number | null | undefined): string {
   const normalized =
@@ -130,11 +135,12 @@ function parseCreditInput(value: string): number | null {
 function formatTime(
   value: number | null | undefined,
   t: (message: string) => string,
+  locale: AppLocale,
 ): string {
   if (!value) return t("从未");
   const date = new Date(value * 1000);
   if (Number.isNaN(date.getTime())) return t("未知");
-  return date.toLocaleString("ru-RU", {
+  return date.toLocaleString(intlLocaleFromAppLocale(locale), {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -142,11 +148,11 @@ function formatTime(
   });
 }
 
-function formatShortDate(value: number | null | undefined): string {
+function formatShortDate(value: number | null | undefined, locale: AppLocale): string {
   if (!value) return "--";
   const date = new Date(value * 1000);
   if (Number.isNaN(date.getTime())) return "--";
-  return date.toLocaleDateString("zh-CN", {
+  return date.toLocaleDateString(intlLocaleFromAppLocale(locale), {
     month: "2-digit",
     day: "2-digit",
   });
@@ -220,6 +226,7 @@ function StatCard({
 }
 
 function UserUsageTrendLine({ summary }: { summary: MemberDashboardSummary }) {
+  const { locale } = useI18n();
   const chartConfig = {
     totalTokens: {
       label: "Token",
@@ -227,7 +234,7 @@ function UserUsageTrendLine({ summary }: { summary: MemberDashboardSummary }) {
     },
   } satisfies ChartConfig;
   const chartData = summary.usageTrend7d.map((item) => ({
-    date: formatShortDate(item.dayStartTs),
+    date: formatShortDate(item.dayStartTs, locale),
     totalTokens: item.totalTokens,
     estimatedCostUsd: item.estimatedCostUsd,
   }));
@@ -325,7 +332,7 @@ function UserUsageDetail({
   user: AppUser;
   summary: MemberDashboardSummary;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const successRate =
     summary.usageToday.successRate == null
       ? "--"
@@ -438,7 +445,7 @@ function UserUsageDetail({
               >
                 <div className="min-w-0">
                   <div className="truncate font-mono font-medium">{log.model || "unknown"}</div>
-                  <div className="truncate text-muted-foreground">{formatTime(log.createdAt, t)}</div>
+                  <div className="truncate text-muted-foreground">{formatTime(log.createdAt, t, locale)}</div>
                 </div>
                 <div className="flex gap-3 text-muted-foreground sm:justify-end">
                   <span>{log.statusCode || "-"}</span>
@@ -455,7 +462,7 @@ function UserUsageDetail({
 }
 
 export default function AccountManagerPage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const queryClient = useQueryClient();
   const { canAccessManagementRpc } = useRuntimeCapabilities();
   const isPageActive = useDesktopPageActive("/account-manager/");
@@ -830,7 +837,7 @@ export default function AccountManagerPage() {
                         formatCreditMicros(user.wallet?.availableCreditMicros)
                       )}
                     </TableCell>
-                    <TableCell>{formatTime(user.lastLoginAt, t)}</TableCell>
+                    <TableCell>{formatTime(user.lastLoginAt, t, locale)}</TableCell>
                     <TableCell className="max-w-[180px] truncate font-mono text-xs text-muted-foreground">
                       {user.id}
                     </TableCell>

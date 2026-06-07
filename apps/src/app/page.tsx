@@ -73,6 +73,7 @@ import {
   formatPercent,
 } from "@/lib/dashboard/format";
 import { quotaClient } from "@/lib/api/quota-client";
+import type { AppLocale } from "@/lib/i18n/config";
 import { useI18n } from "@/lib/i18n/provider";
 import { cn } from "@/lib/utils";
 import { buildStaticRouteUrl } from "@/lib/utils/static-routes";
@@ -137,6 +138,10 @@ interface AdminUsageRangeValue {
   endTs: number | null;
   startInput: string;
   endInput: string;
+}
+
+function intlLocaleFromAppLocale(locale: AppLocale): string {
+  return locale === "ru" ? "ru-RU" : locale === "ko" ? "ko-KR" : locale;
 }
 
 function formatDateInputValue(date: Date): string {
@@ -216,11 +221,11 @@ function formatDateTime(value: number | null | undefined): string {
   return formatLocalDateTimeFromSeconds(value, "从未使用");
 }
 
-function formatShortDate(value: number | null | undefined): string {
+function formatShortDate(value: number | null | undefined, locale: AppLocale): string {
   if (!value) return "--";
   const date = new Date(value * 1000);
   if (Number.isNaN(date.getTime())) return "--";
-  return new Intl.DateTimeFormat("ru-RU", {
+  return new Intl.DateTimeFormat(intlLocaleFromAppLocale(locale), {
     month: "2-digit",
     day: "2-digit",
   }).format(date);
@@ -229,11 +234,12 @@ function formatShortDate(value: number | null | undefined): string {
 function formatShortDateRange(
   startTs: number | null | undefined,
   endTsExclusive: number | null | undefined,
+  locale: AppLocale,
 ): string {
   if (!startTs || !endTsExclusive || endTsExclusive <= startTs) {
     return "--";
   }
-  return `${formatShortDate(startTs)} - ${formatShortDate(endTsExclusive - 1)}`;
+  return `${formatShortDate(startTs, locale)} - ${formatShortDate(endTsExclusive - 1, locale)}`;
 }
 
 function formatDuration(value: number | null | undefined): string {
@@ -463,7 +469,7 @@ function DailyTokenLineChart({
   zoomWindow?: { startIndex: number; endIndex: number } | null;
   onZoomWindowChange?: (next: { startIndex: number; endIndex: number } | null) => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const chartConfig = {
     totalTokens: {
       label: t("Token"),
@@ -471,7 +477,7 @@ function DailyTokenLineChart({
     },
   } satisfies ChartConfig;
   const chartData = points.map((item) => ({
-    date: formatShortDate(item.dayStartTs),
+    date: formatShortDate(item.dayStartTs, locale),
     totalTokens: item.usage.totalTokens,
     estimatedCostUsd: item.usage.estimatedCostUsd,
     requestCount: item.usage.requestCount,
@@ -708,7 +714,7 @@ function AdminUsageAnalyticsCard({
   onApplyCustomRange: () => void;
   isCustomRangeInvalid: boolean;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [zoomWindow, setZoomWindow] = useState<{
     startIndex: number;
     endIndex: number;
@@ -814,7 +820,7 @@ function AdminUsageAnalyticsCard({
               {t("按天、成员、OpenAI 账号和聚合 API 汇总 token 消耗")}
             </p>
             <div className="mt-2 text-[11px] text-muted-foreground">
-              {t("当前区间")} {formatShortDateRange(summary.rangeStartTs, summary.rangeEndTs)}
+              {t("当前区间")} {formatShortDateRange(summary.rangeStartTs, summary.rangeEndTs, locale)}
               {" · "}
               {t("图表区域支持鼠标滚轮缩放")}
             </div>
@@ -1636,7 +1642,7 @@ function MemberUsageTrendCard({
   summary: MemberDashboardSummary;
   className?: string;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const maxTokens = useMemo(
     () => Math.max(1, ...summary.usageTrend7d.map((item) => item.totalTokens)),
     [summary.usageTrend7d],
@@ -1661,10 +1667,10 @@ function MemberUsageTrendCard({
                 <div
                   className="w-full rounded-t-md bg-primary/75 transition-all"
                   style={{ height }}
-                  title={`${formatShortDate(item.dayStartTs)} ${formatCompactTokenAmount(item.totalTokens)}`}
+                  title={`${formatShortDate(item.dayStartTs, locale)} ${formatCompactTokenAmount(item.totalTokens)}`}
                 />
                 <div className="text-[10px] text-muted-foreground">
-                  {formatShortDate(item.dayStartTs)}
+                  {formatShortDate(item.dayStartTs, locale)}
                 </div>
               </div>
             );
