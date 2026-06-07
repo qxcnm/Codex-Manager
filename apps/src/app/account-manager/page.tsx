@@ -89,15 +89,31 @@ const ACCOUNT_MANAGER_QUERY_KEYS = {
 
 const CREDIT_MICROS_PER_USD = 1_000_000;
 
-const INTL_LOCALE_BY_APP_LOCALE: Record<AppLocale, string> = {
-  "zh-CN": "zh-CN",
+const SUPPORTED_INTL_LOCALES = ["zh-CN", "en-US", "ru-RU", "ko-KR"] as const;
+
+const INTL_LOCALE_BY_APP_LOCALE: Record<
+  "cn" | Exclude<AppLocale, "zh-CN">,
+  string
+> = {
+  cn: "zh-CN",
   en: "en-US",
   ru: "ru-RU",
   ko: "ko-KR",
 };
 
-function intlLocaleFromAppLocale(locale: AppLocale): string {
-  return INTL_LOCALE_BY_APP_LOCALE[locale];
+function intlLocaleFromAppLocale(locale: string): string {
+  if (
+    SUPPORTED_INTL_LOCALES.includes(
+      locale as (typeof SUPPORTED_INTL_LOCALES)[number],
+    )
+  ) {
+    return locale;
+  }
+  return (
+    INTL_LOCALE_BY_APP_LOCALE[
+      locale === "zh-CN" ? "cn" : (locale as Exclude<AppLocale, "zh-CN">)
+    ] ?? "zh-CN"
+  );
 }
 
 function formatCreditMicros(value: number | null | undefined): string {
