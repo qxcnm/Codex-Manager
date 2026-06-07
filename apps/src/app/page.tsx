@@ -140,8 +140,15 @@ interface AdminUsageRangeValue {
   endInput: string;
 }
 
+const INTL_LOCALE_BY_APP_LOCALE: Record<AppLocale, string> = {
+  "zh-CN": "zh-CN",
+  en: "en-US",
+  ru: "ru-RU",
+  ko: "ko-KR",
+};
+
 function intlLocaleFromAppLocale(locale: AppLocale): string {
-  return locale === "ru" ? "ru-RU" : locale === "ko" ? "ko-KR" : locale;
+  return INTL_LOCALE_BY_APP_LOCALE[locale];
 }
 
 function formatDateInputValue(date: Date): string {
