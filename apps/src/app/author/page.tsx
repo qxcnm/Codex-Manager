@@ -50,6 +50,11 @@ const AUTHOR_SUPPORT_IMAGES = [
   },
 ] as const;
 
+const AUTHOR_PARTNER_IMAGE_BY_KEY: Record<string, string> = {
+  xingsiyan: "/sponsors/xingsiyan.jpg",
+  racknerd: "/sponsors/racknerd.gif",
+};
+
 function PartnerTable({
   items,
   onOpenLink,
@@ -72,9 +77,9 @@ function PartnerTable({
             >
               <TableCell className="w-[180px] p-5 align-middle">
                 <div className="flex items-center justify-center rounded-xl border border-border/50 bg-white/95 p-4">
-                  {item.imageSrc ? (
+                  {AUTHOR_PARTNER_IMAGE_BY_KEY[item.key] || item.imageSrc ? (
                     <img
-                      src={item.imageSrc}
+                      src={AUTHOR_PARTNER_IMAGE_BY_KEY[item.key] || item.imageSrc}
                       alt={translate(item.imageAlt ?? item.name)}
                       className="max-h-20 w-auto object-contain"
                     />

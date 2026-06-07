@@ -177,10 +177,14 @@ export function EnvTabContent({
                 <Alert>
                   <Info />
                   <AlertDescription>
-                    {t(
-                      descriptionMap[selectedEnvKey] ||
-                        `${selectedEnvItem?.label} 对应环境变量，修改后会应用到相关模块。`,
-                    )}
+                    {descriptionMap[selectedEnvKey]
+                      ? t(descriptionMap[selectedEnvKey])
+                      : (
+                          <>
+                            {selectedEnvItem ? t(selectedEnvItem.label) : null}{" "}
+                            {t("对应环境变量，修改后会应用到相关模块。")}
+                          </>
+                        )}
                   </AlertDescription>
                 </Alert>
                 {selectedEnvRiskLevel === "high" ? (
