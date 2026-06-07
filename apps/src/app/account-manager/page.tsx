@@ -127,11 +127,14 @@ function parseCreditInput(value: string): number | null {
   return Math.round(normalized * CREDIT_MICROS_PER_USD);
 }
 
-function formatTime(value: number | null | undefined): string {
-  if (!value) return "从未";
+function formatTime(
+  value: number | null | undefined,
+  t: (message: string) => string,
+): string {
+  if (!value) return t("从未");
   const date = new Date(value * 1000);
-  if (Number.isNaN(date.getTime())) return "未知";
-  return date.toLocaleString("zh-CN", {
+  if (Number.isNaN(date.getTime())) return t("未知");
+  return date.toLocaleString("ru-RU", {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -149,21 +152,21 @@ function formatShortDate(value: number | null | undefined): string {
   });
 }
 
-function modeLabel(mode: string): string {
+function modeLabel(mode: string, t: (message: string) => string): string {
   switch (mode) {
     case "accounts":
-      return "账号登录";
+      return t("账号登录");
     case "password":
-      return "共享密码";
+      return t("共享密码");
     case "none":
-      return "未开启";
+      return t("未开启");
     default:
-      return mode || "未知";
+      return mode || t("未知");
   }
 }
 
-function roleLabel(role: string): string {
-  return role === "admin" ? "管理员" : "成员";
+function roleLabel(role: string, t: (message: string) => string): string {
+  return role === "admin" ? t("管理员") : t("成员");
 }
 
 function isAdminUser(user: AppUser): boolean {
@@ -174,13 +177,16 @@ function userCanOwnWallet(user: AppUser): boolean {
   return !isAdminUser(user);
 }
 
-function statusLabel(status: string): string {
-  if (status === "disabled") return "禁用";
-  return status === "active" ? "启用" : status || "未知";
+function statusLabel(status: string, t: (message: string) => string): string {
+  if (status === "disabled") return t("禁用");
+  return status === "active" ? t("启用") : status || t("未知");
 }
 
-function userSelectLabel(user: AppUser | null | undefined): string {
-  if (!user) return "选择可分发成员";
+function userSelectLabel(
+  user: AppUser | null | undefined,
+  t: (message: string) => string,
+): string {
+  if (!user) return t("选择可分发成员");
   return user.displayName ? `${user.displayName} (${user.username})` : user.username;
 }
 
@@ -432,7 +438,7 @@ function UserUsageDetail({
               >
                 <div className="min-w-0">
                   <div className="truncate font-mono font-medium">{log.model || "unknown"}</div>
-                  <div className="truncate text-muted-foreground">{formatTime(log.createdAt)}</div>
+                  <div className="truncate text-muted-foreground">{formatTime(log.createdAt, t)}</div>
                 </div>
                 <div className="flex gap-3 text-muted-foreground sm:justify-end">
                   <span>{log.statusCode || "-"}</span>
@@ -540,14 +546,14 @@ export default function AccountManagerPage() {
     mutationFn: async () => {
       const username = createDraft.username.trim();
       const password = createDraft.password;
-      if (!username) throw new Error("请输入用户名");
-      if (!password) throw new Error("请输入初始密码");
+      if (!username) throw new Error(t("请输入用户名"));
+      if (!password) throw new Error(t("请输入初始密码"));
       const creatingAdmin = createDraft.role === "admin";
       const initialBalanceCreditMicros = creatingAdmin
         ? null
         : parseCreditInput(createDraft.initialBalance);
       if (!creatingAdmin && initialBalanceCreditMicros === null) {
-        throw new Error("初始额度必须是非负数字");
+        throw new Error(t("初始额度必须是非负数字"));
       }
       return appClient.createAppUser({
         username,
@@ -577,11 +583,11 @@ export default function AccountManagerPage() {
   const setWalletAvailable = useMutation({
     mutationFn: async () => {
       if (!topUpUser || !userCanOwnWallet(topUpUser)) {
-        throw new Error("请选择可分发成员");
+        throw new Error(t("请选择可分发成员"));
       }
       const amountCreditMicros = parseCreditInput(topUpDraft.amount);
       if (amountCreditMicros === null) {
-        throw new Error("可用额度必须是非负数字");
+        throw new Error(t("可用额度必须是非负数字"));
       }
       return appClient.setWalletAvailable({
         ownerKind: "user",
@@ -603,7 +609,7 @@ export default function AccountManagerPage() {
 
   const updateUser = useMutation({
     mutationFn: async () => {
-      if (!editUser) throw new Error("请选择要编辑的账号");
+      if (!editUser) throw new Error(t("请选择要编辑的账号"));
       const password = editDraft.password.trim();
       return appClient.updateAppUser({
         id: editUser.id,
@@ -631,7 +637,7 @@ export default function AccountManagerPage() {
 
   const deleteUserMutation = useMutation({
     mutationFn: async () => {
-      if (!deleteUser) throw new Error("请选择要删除的账号");
+      if (!deleteUser) throw new Error(t("请选择要删除的账号"));
       await appClient.deleteAppUser(deleteUser.id);
     },
     onSuccess: async () => {
@@ -728,7 +734,7 @@ export default function AccountManagerPage() {
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard
           title={t("登录模式")}
-          value={modeLabel(status?.mode || "none")}
+          value={modeLabel(status?.mode || "none", t)}
           detail={
             status?.appUsersConfigured
               ? t("账号系统已初始化")
@@ -813,10 +819,10 @@ export default function AccountManagerPage() {
                       <Badge
                         variant={user.role === "admin" ? "default" : "secondary"}
                       >
-                        {roleLabel(user.role)}
+                        {roleLabel(user.role, t)}
                       </Badge>
                     </TableCell>
-                    <TableCell>{statusLabel(user.status)}</TableCell>
+                    <TableCell>{statusLabel(user.status, t)}</TableCell>
                     <TableCell>
                       {isAdminUser(user) ? (
                         <Badge variant="outline">{t("不参与分发")}</Badge>
@@ -824,7 +830,7 @@ export default function AccountManagerPage() {
                         formatCreditMicros(user.wallet?.availableCreditMicros)
                       )}
                     </TableCell>
-                    <TableCell>{formatTime(user.lastLoginAt)}</TableCell>
+                    <TableCell>{formatTime(user.lastLoginAt, t)}</TableCell>
                     <TableCell className="max-w-[180px] truncate font-mono text-xs text-muted-foreground">
                       {user.id}
                     </TableCell>
@@ -946,7 +952,7 @@ export default function AccountManagerPage() {
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue>
-                      {(value) => roleLabel(String(value || "member"))}
+                      {(value) => roleLabel(String(value || "member"), t)}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
@@ -1015,7 +1021,7 @@ export default function AccountManagerPage() {
           <DialogHeader>
             <DialogTitle>{t("编辑登录账号")}</DialogTitle>
             <DialogDescription>
-              {editUser ? userSelectLabel(editUser) : t("选择登录账号")}
+              {editUser ? userSelectLabel(editUser, t) : t("选择登录账号")}
             </DialogDescription>
           </DialogHeader>
           <form className="grid gap-4" onSubmit={handleUpdateUser}>
@@ -1047,7 +1053,7 @@ export default function AccountManagerPage() {
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue>
-                      {(value) => roleLabel(String(value || "member"))}
+                      {(value) => roleLabel(String(value || "member"), t)}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
@@ -1071,7 +1077,7 @@ export default function AccountManagerPage() {
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue>
-                      {(value) => statusLabel(String(value || "active"))}
+                      {(value) => statusLabel(String(value || "active"), t)}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
@@ -1134,7 +1140,7 @@ export default function AccountManagerPage() {
           <DialogHeader>
             <DialogTitle>{t("成员用量详情")}</DialogTitle>
             <DialogDescription>
-              {usageUser ? userSelectLabel(usageUser) : t("选择登录账号")}
+              {usageUser ? userSelectLabel(usageUser, t) : t("选择登录账号")}
             </DialogDescription>
           </DialogHeader>
           {!usageUser ? (
@@ -1185,7 +1191,7 @@ export default function AccountManagerPage() {
             <DialogTitle>{t("删除登录账号")}</DialogTitle>
             <DialogDescription>
               {deleteUser
-                ? `${t("确认删除")}：${userSelectLabel(deleteUser)}`
+                ? `${t("确认删除")}：${userSelectLabel(deleteUser, t)}`
                 : t("选择登录账号")}
             </DialogDescription>
           </DialogHeader>
@@ -1228,7 +1234,7 @@ export default function AccountManagerPage() {
             <DialogTitle>{t("修改可用额度")}</DialogTitle>
             <DialogDescription>
               {topUpUser
-                ? `${t("目标账号")}：${userSelectLabel(topUpUser)}`
+                ? `${t("目标账号")}：${userSelectLabel(topUpUser, t)}`
                 : t("选择可分发成员")}
             </DialogDescription>
           </DialogHeader>

@@ -182,6 +182,7 @@ export default function ModelGroupsPage() {
 
   useEffect(() => {
     if (!groupDialogOpen || !activeGroupId) return;
+    let active = true;
     const bySlug = new Map(
       groupModels
         .filter((item) => item.groupId === activeGroupId)
@@ -191,12 +192,17 @@ export default function ModelGroupsPage() {
     for (const model of catalogModels) {
       nextDrafts[model.slug] = modelDraftFromEntry(bySlug.get(model.slug));
     }
-    setModelDrafts(nextDrafts);
-    setSelectedUserIds(
-      userAssignments
-        .filter((item) => item.groupId === activeGroupId && item.status === "active")
-        .map((item) => item.userId),
-    );
+    const nextSelectedUserIds = userAssignments
+      .filter((item) => item.groupId === activeGroupId && item.status === "active")
+      .map((item) => item.userId);
+    queueMicrotask(() => {
+      if (!active) return;
+      setModelDrafts(nextDrafts);
+      setSelectedUserIds(nextSelectedUserIds);
+    });
+    return () => {
+      active = false;
+    };
   }, [activeGroupId, catalogModels, groupDialogOpen, groupModels, userAssignments]);
 
   const refreshAll = async () => {
@@ -243,7 +249,7 @@ export default function ModelGroupsPage() {
 
   const saveModels = useMutation({
     mutationFn: async () => {
-      if (!activeGroup) throw new Error("请选择模型组");
+      if (!activeGroup) throw new Error(t("请选择模型组"));
       return appClient.setModelGroupModels({
         groupId: activeGroup.id,
         models: catalogModels
@@ -276,7 +282,7 @@ export default function ModelGroupsPage() {
 
   const saveUsers = useMutation({
     mutationFn: async () => {
-      if (!activeGroup) throw new Error("请选择模型组");
+      if (!activeGroup) throw new Error(t("请选择模型组"));
       return appClient.setModelGroupUsers({
         groupId: activeGroup.id,
         userIds: selectedUserIds,

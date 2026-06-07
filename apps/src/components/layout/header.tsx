@@ -129,7 +129,7 @@ export function Header() {
           version: "",
           addr: nextAddr,
         });
-        toast.success("服务已启动");
+        toast.success(t("服务已启动"));
       } else {
         await serviceClient.stop();
         setServiceStatus({ connected: false, version: "" });
@@ -160,7 +160,7 @@ export function Header() {
       const nextAddr = await persistServiceAddr(`localhost:${portInput}`);
       setServiceStatus({ addr: nextAddr });
     } catch (error: unknown) {
-      toast.error(`${t("保存")}失败: ${formatServiceError(error)}`);
+      toast.error(`${t("保存失败")}: ${formatServiceError(error)}`);
     }
   };
 

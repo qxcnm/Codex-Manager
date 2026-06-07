@@ -137,7 +137,9 @@ function formatUsd(value: number): string {
  */
 function formatCompactTokenAmount(value: number | null | undefined): string {
   const normalized =
-    typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0;
+    typeof value === "number" && Number.isFinite(value)
+      ? Math.max(0, value)
+      : 0;
   if (normalized < 1000) {
     return normalized.toLocaleString("zh-CN", {
       minimumFractionDigits: 2,
@@ -212,12 +214,16 @@ export default function ApiKeysPage() {
     "/apikeys/",
     !isServiceReady || (!isLoading && !isModelsLoading),
   );
-  const [revealedSecrets, setRevealedSecrets] = useState<Record<string, string>>({});
+  const [revealedSecrets, setRevealedSecrets] = useState<
+    Record<string, string>
+  >({});
   const [loadingSecretId, setLoadingSecretId] = useState<string | null>(null);
   const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
   const [editingKeyId, setEditingKeyId] = useState<string | null>(null);
   const [deleteKeyId, setDeleteKeyId] = useState<string | null>(null);
-  const [ccSwitchImportingId, setCcSwitchImportingId] = useState<string | null>(null);
+  const [ccSwitchImportingId, setCcSwitchImportingId] = useState<string | null>(
+    null,
+  );
   const [browserOrigin, setBrowserOrigin] = useState("");
   const { data: accountManagerStatus } = useQuery({
     queryKey: ["account-manager", "status"],
@@ -289,7 +295,7 @@ export default function ApiKeysPage() {
 
   const editingApiKey = useMemo(
     () => apiKeys.find((item) => item.id === editingKeyId) || null,
-    [apiKeys, editingKeyId]
+    [apiKeys, editingKeyId],
   );
   const handleOwnerSaved = async () => {
     await Promise.all([
@@ -306,12 +312,15 @@ export default function ApiKeysPage() {
     queryKey: ["apikey-usage-overview", serviceAddr || null],
     queryFn: async () => {
       const stats = await accountClient.listApiKeyUsageStats();
-      const usageByKey = stats.reduce<Record<string, number>>((result, item) => {
-        const keyId = String(item.keyId || "").trim();
-        if (!keyId) return result;
-        result[keyId] = Math.max(0, item.totalTokens || 0);
-        return result;
-      }, {});
+      const usageByKey = stats.reduce<Record<string, number>>(
+        (result, item) => {
+          const keyId = String(item.keyId || "").trim();
+          if (!keyId) return result;
+          result[keyId] = Math.max(0, item.totalTokens || 0);
+          return result;
+        },
+        {},
+      );
       const costByKey = stats.reduce<Record<string, number>>((result, item) => {
         const keyId = String(item.keyId || "").trim();
         if (!keyId) return result;
@@ -339,7 +348,8 @@ export default function ApiKeysPage() {
   });
   const usageByKey = usageOverview?.usageByKey || {};
   const costByKey = usageOverview?.costByKey || {};
-  const showOverviewLoading = isServiceReady && isPageActive && isUsageOverviewLoading;
+  const showOverviewLoading =
+    isServiceReady && isPageActive && isUsageOverviewLoading;
 
   /**
    * 函数 `openCreateModal`
@@ -927,7 +937,7 @@ export default function ApiKeysPage() {
         appUsers={billableAppUsers}
         apiKeyOwner={
           showMemberOwnership && editingApiKey
-            ? ownerByKeyId.get(editingApiKey.id) ?? null
+            ? (ownerByKeyId.get(editingApiKey.id) ?? null)
             : null
         }
         distributionEnabled={distributionEnabled}

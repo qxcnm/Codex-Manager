@@ -291,7 +291,7 @@ export default function AuthorPage() {
                   <div className="mt-4 overflow-hidden rounded-xl border border-border/50 bg-white p-3">
                     <img
                       src={item.src}
-                      alt={item.title}
+                      alt={t(item.title)}
                       className="mx-auto aspect-square w-full max-w-[220px] rounded-xl object-cover"
                     />
                   </div>
@@ -327,7 +327,7 @@ export default function AuthorPage() {
                 <div className="mt-4 overflow-hidden rounded-xl border border-border/50 bg-white p-3">
                   <img
                     src="/author-wechat.jpg"
-                    alt="作者微信二维码"
+                    alt={t("作者微信二维码")}
                     className="mx-auto aspect-square w-full max-w-[180px] rounded-xl object-cover"
                   />
                 </div>

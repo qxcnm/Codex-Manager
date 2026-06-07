@@ -243,7 +243,7 @@ export function QuotaOverviewCell({ items }: { items: QuotaSummaryItem[] }) {
                     item.id.endsWith("-primary") ? "hours" : "days",
                     item.emptyResetText ?? t("未知"),
                   )}
-                  后刷新
+                  {t("后刷新")}
                 </span>
               </div>
             ))}

@@ -128,7 +128,14 @@ function MemberSettingsPage() {
   const [newPassword, setNewPassword] = useState("");
 
   useEffect(() => {
-    setDisplayName(session?.currentUser?.displayName || "");
+    let active = true;
+    const nextDisplayName = session?.currentUser?.displayName || "";
+    queueMicrotask(() => {
+      if (active) setDisplayName(nextDisplayName);
+    });
+    return () => {
+      active = false;
+    };
   }, [session?.currentUser?.displayName]);
 
   const updateProfile = useMutation({
