@@ -29,6 +29,78 @@ pub(crate) fn adapt_request_for_protocol(
     })
 }
 
+pub(crate) fn adapt_openai_responses_to_anthropic_messages(
+    body: &[u8],
+    model_override: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    let payload = serde_json::from_slice::<Value>(body)
+        .map_err(|err| format!("invalid responses request json: {err}"))?;
+    let obj = payload
+        .as_object()
+        .ok_or_else(|| "responses request body must be an object".to_string())?;
+
+    let model = model_override
+        .and_then(normalize_text)
+        .or_else(|| {
+            obj.get("model")
+                .and_then(Value::as_str)
+                .and_then(normalize_text)
+        })
+        .ok_or_else(|| "responses request model is required for anthropic upstream".to_string())?;
+
+    let mut rewritten = Map::new();
+    rewritten.insert("model".to_string(), Value::String(model));
+    rewritten.insert(
+        "stream".to_string(),
+        Value::Bool(obj.get("stream").and_then(Value::as_bool).unwrap_or(true)),
+    );
+    let max_tokens = obj
+        .get("max_output_tokens")
+        .or_else(|| obj.get("max_tokens"))
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .unwrap_or(4096);
+    rewritten.insert("max_tokens".to_string(), Value::from(max_tokens));
+
+    let mut system_parts = Vec::new();
+    if let Some(instructions) = obj
+        .get("instructions")
+        .and_then(Value::as_str)
+        .and_then(normalize_system_text)
+    {
+        system_parts.push(instructions);
+    }
+
+    let mut messages = Vec::new();
+    responses_input_to_anthropic_messages(obj.get("input"), &mut system_parts, &mut messages)?;
+    if messages.is_empty() {
+        messages.push(json!({
+            "role": "user",
+            "content": [{ "type": "text", "text": "" }],
+        }));
+    }
+    rewritten.insert("messages".to_string(), Value::Array(messages));
+
+    if !system_parts.is_empty() {
+        rewritten.insert(
+            "system".to_string(),
+            Value::String(system_parts.join("\n\n")),
+        );
+    }
+    if let Some(tools) = responses_tools_to_anthropic(obj.get("tools"))? {
+        rewritten.insert("tools".to_string(), tools);
+        if let Some(tool_choice) = responses_tool_choice_to_anthropic(obj.get("tool_choice")) {
+            rewritten.insert("tool_choice".to_string(), tool_choice);
+        }
+    }
+    if let Some(thinking) = responses_reasoning_to_anthropic(obj.get("reasoning"), max_tokens) {
+        rewritten.insert("thinking".to_string(), thinking);
+    }
+
+    serde_json::to_vec(&Value::Object(rewritten))
+        .map_err(|err| format!("serialize anthropic request failed: {err}"))
+}
+
 fn adapt_anthropic_messages_request(
     _path: &str,
     body: Vec<u8>,
@@ -347,6 +419,281 @@ fn anthropic_message_role_to_responses(role: &str) -> &'static str {
         // developer message, not as a raw input role named "system".
         "system" | "developer" => "developer",
         _ => "user",
+    }
+}
+
+fn responses_input_to_anthropic_messages(
+    input: Option<&Value>,
+    system_parts: &mut Vec<String>,
+    messages: &mut Vec<Value>,
+) -> Result<(), String> {
+    match input {
+        Some(Value::String(text)) => {
+            messages.push(anthropic_message("user", vec![anthropic_text_block(text)]));
+        }
+        Some(Value::Array(items)) => {
+            for item in items {
+                responses_input_item_to_anthropic(item, system_parts, messages)?;
+            }
+        }
+        Some(Value::Object(_)) => {
+            responses_input_item_to_anthropic(input.unwrap(), system_parts, messages)?;
+        }
+        Some(_) | None => {}
+    }
+    Ok(())
+}
+
+fn responses_input_item_to_anthropic(
+    item: &Value,
+    system_parts: &mut Vec<String>,
+    messages: &mut Vec<Value>,
+) -> Result<(), String> {
+    let Some(obj) = item.as_object() else {
+        return Ok(());
+    };
+    match obj.get("type").and_then(Value::as_str).unwrap_or("message") {
+        "message" => {
+            let role = obj
+                .get("role")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("user");
+            let content = responses_message_content_to_anthropic(obj.get("content"))?;
+            if matches!(role, "developer" | "system") {
+                let text = anthropic_content_to_text(&content);
+                if !text.trim().is_empty() {
+                    system_parts.push(text);
+                }
+            } else if !content.is_empty() {
+                messages.push(anthropic_message(
+                    if role == "assistant" {
+                        "assistant"
+                    } else {
+                        "user"
+                    },
+                    content,
+                ));
+            }
+        }
+        "function_call" | "custom_tool_call" => {
+            let name = obj
+                .get("name")
+                .and_then(Value::as_str)
+                .and_then(normalize_text)
+                .unwrap_or_else(|| "tool".to_string());
+            let id = obj
+                .get("call_id")
+                .or_else(|| obj.get("id"))
+                .and_then(Value::as_str)
+                .and_then(normalize_text)
+                .unwrap_or_else(generate_tool_call_id);
+            let input =
+                parse_json_string_or_value(obj.get("arguments").or_else(|| obj.get("input")));
+            messages.push(anthropic_message(
+                "assistant",
+                vec![json!({
+                    "type": "tool_use",
+                    "id": id,
+                    "name": name,
+                    "input": input,
+                })],
+            ));
+        }
+        "function_call_output" => {
+            let call_id = obj
+                .get("call_id")
+                .and_then(Value::as_str)
+                .and_then(normalize_text)
+                .unwrap_or_else(generate_tool_call_id);
+            let content = obj
+                .get("output")
+                .cloned()
+                .unwrap_or(Value::String(String::new()));
+            messages.push(anthropic_message(
+                "user",
+                vec![json!({
+                    "type": "tool_result",
+                    "tool_use_id": call_id,
+                    "content": anthropic_tool_result_content(content),
+                })],
+            ));
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn responses_message_content_to_anthropic(content: Option<&Value>) -> Result<Vec<Value>, String> {
+    match content {
+        Some(Value::String(text)) => Ok(vec![anthropic_text_block(text)]),
+        Some(Value::Array(parts)) => {
+            let mut out = Vec::new();
+            for part in parts {
+                if let Some(mapped) = responses_content_part_to_anthropic(part)? {
+                    out.push(mapped);
+                }
+            }
+            Ok(out)
+        }
+        Some(Value::Object(_)) => Ok(responses_content_part_to_anthropic(content.unwrap())?
+            .map(|part| vec![part])
+            .unwrap_or_default()),
+        Some(other) => Ok(vec![anthropic_text_block(other.to_string().as_str())]),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn responses_content_part_to_anthropic(part: &Value) -> Result<Option<Value>, String> {
+    let Some(obj) = part.as_object() else {
+        return Ok(part.as_str().map(anthropic_text_block));
+    };
+    let kind = obj.get("type").and_then(Value::as_str).unwrap_or("text");
+    match kind {
+        "input_text" | "output_text" | "text" => Ok(obj
+            .get("text")
+            .and_then(Value::as_str)
+            .map(anthropic_text_block)),
+        "input_image" | "image" => Ok(None),
+        _ => Ok(None),
+    }
+}
+
+fn anthropic_message(role: &str, content: Vec<Value>) -> Value {
+    json!({
+        "role": role,
+        "content": content,
+    })
+}
+
+fn anthropic_text_block(text: &str) -> Value {
+    json!({
+        "type": "text",
+        "text": text,
+    })
+}
+
+fn anthropic_content_to_text(content: &[Value]) -> String {
+    content
+        .iter()
+        .filter_map(|item| item.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn anthropic_tool_result_content(value: Value) -> Value {
+    match value {
+        Value::Array(_) => value,
+        Value::String(text) => Value::String(text),
+        Value::Null => Value::String(String::new()),
+        other => Value::String(other.to_string()),
+    }
+}
+
+fn responses_tools_to_anthropic(tools: Option<&Value>) -> Result<Option<Value>, String> {
+    let Some(tools) = tools else {
+        return Ok(None);
+    };
+    let items = tools
+        .as_array()
+        .ok_or_else(|| "responses tools must be an array".to_string())?;
+    let mut out = Vec::new();
+    for item in items {
+        let Some(tool) = item.as_object() else {
+            continue;
+        };
+        if tool
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind == "web_search")
+        {
+            out.push(json!({ "type": "web_search_20250305" }));
+            continue;
+        }
+        if tool
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind != "function")
+        {
+            continue;
+        }
+        let Some(name) = tool
+            .get("name")
+            .and_then(Value::as_str)
+            .and_then(normalize_text)
+        else {
+            continue;
+        };
+        let mut mapped = Map::new();
+        mapped.insert("name".to_string(), Value::String(name));
+        if let Some(description) = tool
+            .get("description")
+            .and_then(Value::as_str)
+            .and_then(normalize_text)
+        {
+            mapped.insert("description".to_string(), Value::String(description));
+        }
+        mapped.insert(
+            "input_schema".to_string(),
+            tool.get("parameters")
+                .cloned()
+                .unwrap_or_else(|| json!({ "type": "object", "properties": {} })),
+        );
+        out.push(Value::Object(mapped));
+    }
+    Ok((!out.is_empty()).then(|| Value::Array(out)))
+}
+
+fn responses_tool_choice_to_anthropic(tool_choice: Option<&Value>) -> Option<Value> {
+    match tool_choice {
+        Some(Value::String(value)) if value == "none" => Some(json!({ "type": "none" })),
+        Some(Value::String(value)) if value == "required" => Some(json!({ "type": "any" })),
+        Some(Value::Object(obj)) => obj
+            .get("name")
+            .or_else(|| {
+                obj.get("function")
+                    .and_then(Value::as_object)
+                    .and_then(|function| function.get("name"))
+            })
+            .and_then(Value::as_str)
+            .and_then(normalize_text)
+            .map(|name| json!({ "type": "tool", "name": name })),
+        _ => Some(json!({ "type": "auto" })),
+    }
+}
+
+fn responses_reasoning_to_anthropic(reasoning: Option<&Value>, max_tokens: i64) -> Option<Value> {
+    let obj = reasoning?.as_object()?;
+    let effort = obj
+        .get("effort")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("medium");
+    if effort.eq_ignore_ascii_case("none") {
+        return Some(json!({ "type": "disabled" }));
+    }
+    if max_tokens <= 1024 {
+        return None;
+    }
+    let budget = match effort.to_ascii_lowercase().as_str() {
+        "minimal" | "low" => 1024,
+        "high" | "xhigh" => 8192,
+        _ => 4096,
+    }
+    .min(max_tokens - 1);
+    Some(json!({
+        "type": "enabled",
+        "budget_tokens": budget,
+    }))
+}
+
+fn parse_json_string_or_value(value: Option<&Value>) -> Value {
+    match value {
+        Some(Value::String(text)) => {
+            serde_json::from_str::<Value>(text).unwrap_or_else(|_| Value::String(text.clone()))
+        }
+        Some(value) => value.clone(),
+        None => Value::Object(Map::new()),
     }
 }
 
@@ -1304,8 +1651,8 @@ fn generate_tool_call_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        adapt_request_for_protocol, backfill_empty_gemini_function_response_names,
-        gemini_function_response_output,
+        adapt_openai_responses_to_anthropic_messages, adapt_request_for_protocol,
+        backfill_empty_gemini_function_response_names, gemini_function_response_output,
     };
     use crate::apikey_profile::{PROTOCOL_ANTHROPIC_NATIVE, PROTOCOL_GEMINI_NATIVE};
     use crate::gateway::{GeminiStreamOutputMode, ResponseAdapter};
@@ -1946,6 +2293,122 @@ mod tests {
             serde_json::from_slice(&adapted.body).expect("parse adapted body");
         assert_eq!(payload["reasoning"]["effort"], "medium");
         assert_eq!(payload["include"][0], "reasoning.encrypted_content");
+    }
+
+    #[test]
+    fn responses_request_rewrites_to_anthropic_messages_for_claude_upstream() {
+        let body = json!({
+            "model": "gpt-5.3",
+            "instructions": "be direct",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": "hello" }]
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "read_file",
+                    "arguments": "{\"path\":\"/tmp/a\"}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "done"
+                }
+            ],
+            "tools": [{
+                "type": "function",
+                "name": "read_file",
+                "description": "Read a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "path": { "type": "string" } }
+                }
+            }],
+            "reasoning": { "effort": "high" },
+            "stream": true
+        });
+
+        let adapted = adapt_openai_responses_to_anthropic_messages(
+            serde_json::to_vec(&body).expect("body").as_slice(),
+            Some("deepseek/deepseek-v4-pro"),
+        )
+        .expect("adapt responses request");
+        let payload: Value = serde_json::from_slice(&adapted).expect("parse adapted body");
+
+        assert_eq!(payload["model"], "deepseek/deepseek-v4-pro");
+        assert_eq!(payload["system"], "be direct");
+        assert_eq!(payload["stream"], true);
+        assert_eq!(payload["messages"][0]["role"], "user");
+        assert_eq!(payload["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(payload["messages"][0]["content"][0]["text"], "hello");
+        assert_eq!(payload["messages"][1]["role"], "assistant");
+        assert_eq!(payload["messages"][1]["content"][0]["type"], "tool_use");
+        assert_eq!(payload["messages"][1]["content"][0]["id"], "call_1");
+        assert_eq!(
+            payload["messages"][1]["content"][0]["input"]["path"],
+            "/tmp/a"
+        );
+        assert_eq!(payload["messages"][2]["role"], "user");
+        assert_eq!(payload["messages"][2]["content"][0]["type"], "tool_result");
+        assert_eq!(payload["tools"][0]["name"], "read_file");
+        assert_eq!(payload["thinking"]["type"], "enabled");
+    }
+
+    #[test]
+    fn responses_reasoning_budget_stays_below_max_tokens() {
+        let body = json!({
+            "model": "gpt-5.3",
+            "max_output_tokens": 2048,
+            "input": "think carefully",
+            "reasoning": { "effort": "high" }
+        });
+
+        let adapted = adapt_openai_responses_to_anthropic_messages(
+            serde_json::to_vec(&body).expect("body").as_slice(),
+            Some("claude-sonnet-4"),
+        )
+        .expect("adapt responses request");
+        let payload: Value = serde_json::from_slice(&adapted).expect("parse adapted body");
+
+        let max_tokens = payload["max_tokens"].as_i64().expect("max tokens");
+        let budget_tokens = payload["thinking"]["budget_tokens"]
+            .as_i64()
+            .expect("budget tokens");
+        assert!(
+            budget_tokens < max_tokens,
+            "Anthropic thinking budget_tokens must be lower than max_tokens"
+        );
+    }
+
+    #[test]
+    fn responses_request_drops_images_for_deepseek_anthropic_bridge() {
+        let body = json!({
+            "model": "gpt-5.3",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [
+                    { "type": "input_text", "text": "describe this" },
+                    { "type": "input_image", "image_url": "data:image/png;base64,aGVsbG8=" }
+                ]
+            }]
+        });
+
+        let adapted = adapt_openai_responses_to_anthropic_messages(
+            serde_json::to_vec(&body).expect("body").as_slice(),
+            Some("deepseek-v4-pro"),
+        )
+        .expect("adapt responses request");
+        let payload: Value = serde_json::from_slice(&adapted).expect("parse adapted body");
+
+        assert_eq!(
+            payload["messages"][0]["content"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(payload["messages"][0]["content"][0]["type"], "text");
     }
 
     #[test]

@@ -27,6 +27,12 @@ export interface BackgroundTaskSettings {
   warmupCronExpression: string;
 }
 
+export interface RuntimeTimeZone {
+  name: string;
+  offset: string;
+  source: string;
+}
+
 export interface QuotaGuardSettings {
   enabled: boolean;
   primaryMinRemainingPercent: number;
@@ -76,6 +82,7 @@ export interface AppSettings {
   upstreamTotalTimeoutMs: number;
   sseKeepaliveIntervalMs: number;
   backgroundTasks: BackgroundTaskSettings;
+  runtimeTimeZone: RuntimeTimeZone;
   envOverrides: Record<string, string>;
   envOverrideCatalog: EnvOverrideCatalogItem[];
   envOverrideReservedKeys: string[];

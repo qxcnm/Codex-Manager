@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Cable,
   LayoutDashboard,
   Users,
   UserCog,
@@ -41,6 +42,7 @@ const NAV_ITEM_BY_PATH = new Map<TopLevelRoutePath, { icon: LucideIcon }>([
   ["/account-manager", { icon: UserCog }],
   ["/aggregate-api", { icon: Database }],
   ["/apikeys", { icon: Key }],
+  ["/platform-mode", { icon: Cable }],
   ["/models", { icon: Boxes }],
   ["/model-groups", { icon: Route }],
   ["/plugins", { icon: Puzzle }],

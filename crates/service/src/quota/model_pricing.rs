@@ -362,6 +362,19 @@ const PRICE_SEEDS: &[PriceSeed] = &[
     },
 ];
 
+pub(crate) fn infer_provider(model_pattern: &str) -> &str {
+    let normalized = model_pattern.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return "openai";
+    }
+    PRICE_SEEDS
+        .iter()
+        .filter(|seed| normalized.starts_with(seed.model_pattern))
+        .max_by_key(|seed| seed.model_pattern.len())
+        .map(|seed| seed.provider)
+        .unwrap_or("openai")
+}
+
 pub(crate) fn ensure_official_price_seed(storage: &Storage) -> Result<(), String> {
     let count = storage
         .count_model_price_rules_for_seed(PRICE_SEED_VERSION)

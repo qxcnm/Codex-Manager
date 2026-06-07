@@ -793,6 +793,22 @@ pub(crate) fn current_upstream_proxy_url() -> Option<String> {
     runtime_config::upstream_proxy_url()
 }
 
+pub(crate) fn apply_blocking_upstream_proxy(
+    builder: reqwest::blocking::ClientBuilder,
+    proxy_url: Option<&str>,
+    invalid_event: &str,
+) -> reqwest::blocking::ClientBuilder {
+    runtime_config::apply_blocking_upstream_proxy(builder, proxy_url, invalid_event)
+}
+
+pub(crate) fn apply_async_upstream_proxy(
+    builder: reqwest::ClientBuilder,
+    proxy_url: Option<&str>,
+    invalid_event: &str,
+) -> reqwest::ClientBuilder {
+    runtime_config::apply_async_upstream_proxy(builder, proxy_url, invalid_event)
+}
+
 pub(crate) fn current_upstream_proxy_url_for_account(account_id: &str) -> Option<String> {
     runtime_config::upstream_proxy_url_for_account(account_id)
 }
@@ -1133,7 +1149,7 @@ pub(crate) fn gateway_rewrite_ws_responses_body(
         normalized_service_tier,
         api_key.upstream_base_url.as_deref(),
         prompt_cache_key,
-        true,
+        false,
     )
 }
 

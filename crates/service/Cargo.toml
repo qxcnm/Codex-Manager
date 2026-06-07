@@ -8,6 +8,8 @@ codexmanager-core = { path = "../core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
+toml_edit = "0.22"
+rusqlite = { version = "0.31", features = ["bundled", "backup"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking", "stream", "socks"] }
 bytes = "1"
 rand = "0.8"

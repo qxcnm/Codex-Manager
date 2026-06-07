@@ -2,7 +2,6 @@ use chrono::DateTime;
 use codexmanager_core::usage::{accounts_check_endpoint, usage_endpoint};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
 use reqwest::Client;
-use reqwest::Proxy;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{OnceLock, RwLock};
@@ -88,8 +87,8 @@ impl RefreshTokenAuthErrorReason {
             Self::Unknown401 => REFRESH_TOKEN_UNKNOWN_MESSAGE,
         }
     }
-}
 
+}
 #[derive(serde::Deserialize)]
 pub(crate) struct RefreshTokenResponse {
     pub(crate) access_token: String,
@@ -540,7 +539,7 @@ fn format_refresh_token_status_error_with_headers(
 /// 返回函数执行结果
 fn build_usage_http_client() -> Client {
     let default_headers = build_usage_http_default_headers();
-    let mut builder = Client::builder()
+    let builder = Client::builder()
         // 中文注释：轮询链路复用连接池可降低握手开销；不复用会在多账号刷新时放大短连接抖动。
         .connect_timeout(USAGE_HTTP_CONNECT_TIMEOUT)
         .timeout(USAGE_HTTP_TOTAL_TIMEOUT)
@@ -548,46 +547,26 @@ fn build_usage_http_client() -> Client {
         .pool_idle_timeout(Some(Duration::from_secs(60)))
         .user_agent(crate::gateway::current_codex_user_agent())
         .default_headers(default_headers);
-    if let Some(proxy_url) = current_upstream_proxy_url() {
-        match Proxy::all(proxy_url.as_str()) {
-            Ok(proxy) => {
-                builder = builder.proxy(proxy);
-            }
-            Err(err) => {
-                log::warn!(
-                    "event=usage_http_proxy_invalid proxy={} err={}",
-                    proxy_url,
-                    err
-                );
-            }
-        }
-    }
+    let builder = crate::gateway::apply_async_upstream_proxy(
+        builder,
+        current_upstream_proxy_url().as_deref(),
+        "usage_http_proxy_invalid",
+    );
     builder.build().unwrap_or_else(|_| Client::new())
 }
-
 fn build_subscription_http_client() -> Client {
-    let mut builder = Client::builder()
+    let builder = Client::builder()
         .connect_timeout(USAGE_HTTP_CONNECT_TIMEOUT)
         .timeout(USAGE_HTTP_TOTAL_TIMEOUT)
         .pool_max_idle_per_host(4)
         .pool_idle_timeout(Some(Duration::from_secs(60)));
-    if let Some(proxy_url) = current_upstream_proxy_url() {
-        match Proxy::all(proxy_url.as_str()) {
-            Ok(proxy) => {
-                builder = builder.proxy(proxy);
-            }
-            Err(err) => {
-                log::warn!(
-                    "event=subscription_http_proxy_invalid proxy={} err={}",
-                    proxy_url,
-                    err
-                );
-            }
-        }
-    }
+    let builder = crate::gateway::apply_async_upstream_proxy(
+        builder,
+        current_upstream_proxy_url().as_deref(),
+        "subscription_http_proxy_invalid",
+    );
     builder.build().unwrap_or_else(|_| Client::new())
 }
-
 /// 函数 `build_usage_http_default_headers`
 ///
 /// 作者: gaohongshun

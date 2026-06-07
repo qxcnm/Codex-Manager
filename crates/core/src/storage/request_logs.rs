@@ -1,5 +1,6 @@
 use rusqlite::{params, params_from_iter, types::Value, Result, Row};
 
+use super::key_id_filters::KeyIdSqlFilter;
 use super::{
     request_log_query, RequestLog, RequestLogQuerySummary, RequestLogTodaySummary,
     RequestTokenStat, Storage,
@@ -307,6 +308,9 @@ impl Storage {
         limit: i64,
         key_ids: &[String],
     ) -> Result<Vec<RequestLog>> {
+        let Some(key_filter) = KeyIdSqlFilter::create(self, "r.key_id", key_ids)? else {
+            return Ok(Vec::new());
+        };
         let normalized_limit = normalize_request_log_limit(limit);
         let normalized_offset = offset.max(0);
         let include_account_lookup = self.has_table("accounts")?;
@@ -316,7 +320,7 @@ impl Storage {
             start_ts,
             end_ts,
             include_account_lookup,
-            Some(key_ids),
+            Some(&key_filter),
             false,
         );
         let sql = format!(
@@ -401,6 +405,9 @@ impl Storage {
         end_ts: Option<i64>,
         key_ids: &[String],
     ) -> Result<i64> {
+        let Some(key_filter) = KeyIdSqlFilter::create(self, "r.key_id", key_ids)? else {
+            return Ok(0);
+        };
         let include_account_lookup = self.has_table("accounts")?;
         let filters = build_request_log_filters(
             query,
@@ -408,7 +415,7 @@ impl Storage {
             start_ts,
             end_ts,
             include_account_lookup,
-            Some(key_ids),
+            Some(&key_filter),
             false,
         );
         let sql = format!(
@@ -501,6 +508,9 @@ impl Storage {
         end_ts: Option<i64>,
         key_ids: &[String],
     ) -> Result<RequestLogQuerySummary> {
+        let Some(key_filter) = KeyIdSqlFilter::create(self, "r.key_id", key_ids)? else {
+            return Ok(empty_request_log_query_summary());
+        };
         let include_account_lookup = self.has_table("accounts")?;
         let filters = build_request_log_filters(
             query,
@@ -508,7 +518,7 @@ impl Storage {
             start_ts,
             end_ts,
             include_account_lookup,
-            Some(key_ids),
+            Some(&key_filter),
             false,
         );
         let sql = format!(
@@ -612,35 +622,26 @@ impl Storage {
         end_ts: i64,
         key_ids: &[String],
     ) -> Result<RequestLogTodaySummary> {
-        if key_ids.is_empty() {
-            return Ok(RequestLogTodaySummary {
-                input_tokens: 0,
-                cached_input_tokens: 0,
-                output_tokens: 0,
-                reasoning_output_tokens: 0,
-                estimated_cost_usd: 0.0,
-            });
-        }
-        let placeholders = std::iter::repeat("?")
-            .take(key_ids.len())
-            .collect::<Vec<_>>()
-            .join(", ");
+        let Some(key_filter) = KeyIdSqlFilter::create(self, "s.key_id", key_ids)? else {
+            return Ok(empty_request_log_today_summary());
+        };
         let sql = format!(
             "SELECT
-                IFNULL(SUM(input_tokens), 0),
-                IFNULL(SUM(cached_input_tokens), 0),
-                IFNULL(SUM(output_tokens), 0),
-                IFNULL(SUM(reasoning_output_tokens), 0),
-                IFNULL(SUM(estimated_cost_usd), 0.0)
-             FROM request_token_stats
-             WHERE created_at >= ?
-               AND created_at < ?
-               AND IFNULL(key_id, '') IN ({placeholders})"
+                IFNULL(SUM(s.input_tokens), 0),
+                IFNULL(SUM(s.cached_input_tokens), 0),
+                IFNULL(SUM(s.output_tokens), 0),
+                IFNULL(SUM(s.reasoning_output_tokens), 0),
+                IFNULL(SUM(s.estimated_cost_usd), 0.0)
+             FROM request_token_stats s
+             WHERE s.created_at >= ?
+               AND s.created_at < ?
+               AND {}",
+            key_filter.condition()
         );
-        let mut params = Vec::with_capacity(key_ids.len() + 2);
+        let mut params = Vec::with_capacity(key_filter.params().len() + 2);
         params.push(Value::Integer(start_ts));
         params.push(Value::Integer(end_ts));
-        params.extend(key_ids.iter().cloned().map(Value::Text));
+        params.extend_from_slice(key_filter.params());
         self.conn
             .query_row(&sql, params_from_iter(params.iter()), |row| {
                 Ok(RequestLogTodaySummary {
@@ -1066,7 +1067,7 @@ fn build_request_log_filters(
     start_ts: Option<i64>,
     end_ts: Option<i64>,
     include_account_lookup: bool,
-    key_ids: Option<&[String]>,
+    key_filter: Option<&KeyIdSqlFilter<'_>>,
     include_route_detail_fields: bool,
 ) -> RequestLogSqlFilters {
     let mut clauses = Vec::new();
@@ -1081,7 +1082,7 @@ fn build_request_log_filters(
     );
     append_status_filter_clause(status_filter, &mut clauses, &mut params);
     append_time_range_clause(start_ts, end_ts, &mut clauses, &mut params);
-    append_key_ids_clause(key_ids, &mut clauses, &mut params);
+    append_key_filter_clause(key_filter, &mut clauses, &mut params);
 
     RequestLogSqlFilters {
         where_clause: if clauses.is_empty() {
@@ -1093,33 +1094,36 @@ fn build_request_log_filters(
     }
 }
 
-fn append_key_ids_clause(
-    key_ids: Option<&[String]>,
+fn append_key_filter_clause(
+    key_filter: Option<&KeyIdSqlFilter<'_>>,
     clauses: &mut Vec<String>,
     params: &mut Vec<Value>,
 ) {
-    let Some(key_ids) = key_ids else {
+    let Some(key_filter) = key_filter else {
         return;
     };
-    let normalized = key_ids
-        .iter()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .collect::<Vec<_>>();
-    if normalized.is_empty() {
-        clauses.push("1 = 0".to_string());
-        return;
+    clauses.push(key_filter.condition().to_string());
+    params.extend_from_slice(key_filter.params());
+}
+
+fn empty_request_log_today_summary() -> RequestLogTodaySummary {
+    RequestLogTodaySummary {
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_output_tokens: 0,
+        estimated_cost_usd: 0.0,
     }
-    let placeholders = std::iter::repeat("?")
-        .take(normalized.len())
-        .collect::<Vec<_>>()
-        .join(", ");
-    clauses.push(format!("IFNULL(r.key_id, '') IN ({placeholders})"));
-    params.extend(
-        normalized
-            .into_iter()
-            .map(|value| Value::Text(value.to_string())),
-    );
+}
+
+fn empty_request_log_query_summary() -> RequestLogQuerySummary {
+    RequestLogQuerySummary {
+        count: 0,
+        success_count: 0,
+        error_count: 0,
+        total_tokens: 0,
+        estimated_cost_usd: 0.0,
+    }
 }
 
 fn is_route_detail_query_column(column: &str) -> bool {

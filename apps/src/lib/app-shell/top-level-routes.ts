@@ -6,6 +6,7 @@ import type { AppRole } from "@/types";
 type TopLevelRouteSectionId =
   | "overview"
   | "resources"
+  | "platform-config"
   | "model-routing"
   | "users-keys"
   | "monitoring"
@@ -19,6 +20,7 @@ type TopLevelRouteSectionId =
 const ADMIN_ROUTE_SECTIONS = [
   "overview",
   "resources",
+  "platform-config",
   "model-routing",
   "users-keys",
   "monitoring",
@@ -36,8 +38,9 @@ const MEMBER_ROUTE_SECTIONS = [
 const ROUTE_SECTION_LABELS: Record<TopLevelRouteSectionId, string> = {
   overview: "概览",
   resources: "资源接入",
+  "platform-config": "平台配置",
   "model-routing": "模型路由",
-  "users-keys": "用户与密钥",
+  "users-keys": "用户管理",
   monitoring: "运行监控",
   system: "系统设置",
   "member-overview": "我的概览",
@@ -69,6 +72,20 @@ export const TOP_LEVEL_ROUTE_CONFIG = [
     roles: ["system_admin", "admin"],
   },
   {
+    path: "/platform-mode",
+    label: "平台模式选择",
+    section: "platform-config",
+    roles: ["system_admin", "admin"],
+  },
+  {
+    path: "/apikeys",
+    label: "平台密钥",
+    memberLabel: "我的密钥",
+    section: "platform-config",
+    memberSection: "member-keys",
+    roles: ["system_admin", "admin", "member"],
+  },
+  {
     path: "/models",
     label: "平台模型目录",
     memberLabel: "可用模型",
@@ -77,23 +94,15 @@ export const TOP_LEVEL_ROUTE_CONFIG = [
     roles: ["system_admin", "admin", "member"],
   },
   {
-    path: "/account-manager",
-    label: "成员账号",
-    section: "users-keys",
+    path: "/model-groups",
+    label: "模型组",
+    section: "model-routing",
     accountSystemOnly: true,
     roles: ["system_admin", "admin"],
   },
   {
-    path: "/apikeys",
-    label: "平台密钥",
-    memberLabel: "我的密钥",
-    section: "users-keys",
-    memberSection: "member-keys",
-    roles: ["system_admin", "admin", "member"],
-  },
-  {
-    path: "/model-groups",
-    label: "模型组",
+    path: "/account-manager",
+    label: "成员账号",
     section: "users-keys",
     accountSystemOnly: true,
     roles: ["system_admin", "admin"],

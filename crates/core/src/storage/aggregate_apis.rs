@@ -351,16 +351,32 @@ impl Storage {
     /// # 返回
     /// 返回函数执行结果
     pub fn delete_aggregate_api(&self, api_id: &str) -> Result<()> {
-        self.conn.execute(
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
             "DELETE FROM aggregate_api_balance_secrets WHERE aggregate_api_id = ?1",
             [api_id],
         )?;
-        self.conn.execute(
+        tx.execute(
             "DELETE FROM aggregate_api_secrets WHERE aggregate_api_id = ?1",
             [api_id],
         )?;
-        self.conn
-            .execute("DELETE FROM aggregate_apis WHERE id = ?1", [api_id])?;
+        tx.execute(
+            "DELETE FROM model_source_mapping_preferences
+             WHERE source_kind = 'aggregate_api' AND source_id = ?1",
+            [api_id],
+        )?;
+        tx.execute(
+            "DELETE FROM model_source_mappings
+             WHERE source_kind = 'aggregate_api' AND source_id = ?1",
+            [api_id],
+        )?;
+        tx.execute(
+            "DELETE FROM model_source_models
+             WHERE source_kind = 'aggregate_api' AND source_id = ?1",
+            [api_id],
+        )?;
+        tx.execute("DELETE FROM aggregate_apis WHERE id = ?1", [api_id])?;
+        tx.commit()?;
         Ok(())
     }
 

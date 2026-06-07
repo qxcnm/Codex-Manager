@@ -1,6 +1,18 @@
 "use client";
 
 import type { MessageCatalog } from "./types";
+import { RU_ACCESS_CONTROL_MESSAGES } from "./sections/ru-access-control";
+import { RU_ACCOUNT_MANAGER_MESSAGES } from "./sections/ru-account-manager";
+import { RU_ACCOUNTS_MESSAGES } from "./sections/ru-accounts";
+import { RU_API_KEYS_MESSAGES } from "./sections/ru-api-keys";
+import { RU_AGGREGATE_API_MESSAGES } from "./sections/ru-aggregate-api";
+import { RU_DASHBOARD_MESSAGES } from "./sections/ru-dashboard";
+import { RU_DYNAMIC_UI_MESSAGES } from "./sections/ru-dynamic-ui";
+import { RU_MODEL_CATALOG_MESSAGES } from "./sections/ru-model-catalog";
+import { RU_MODEL_GROUPS_MESSAGES } from "./sections/ru-model-groups";
+import { RU_MODELS_MESSAGES } from "./sections/ru-models";
+import { RU_PLATFORM_MODE_MESSAGES } from "./sections/ru-platform-mode";
+import { RU_RUNTIME_UI_MESSAGES } from "./sections/ru-runtime-ui";
 
 export const RU_MESSAGES: MessageCatalog = {
   "仪表盘": "Обзор",

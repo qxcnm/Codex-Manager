@@ -9,7 +9,7 @@ use codexmanager_core::rpc::types::{
 };
 use codexmanager_core::storage::{
     now_ts, ModelCatalogModelRecord, ModelCatalogReasoningLevelRecord, ModelCatalogScopeRecord,
-    ModelCatalogStringItemRecord, ModelSourceMapping, ModelSourceModel, Storage,
+    ModelCatalogStringItemRecord, ModelPriceRule, ModelSourceMapping, ModelSourceModel, Storage,
 };
 use rand::RngCore;
 use serde_json::Value;
@@ -17,7 +17,6 @@ use serde_json::Value;
 use crate::gateway;
 use crate::storage_helpers;
 
-const CODEX_IMAGE_TOOL_MODEL: &str = "gpt-image-2";
 const MODEL_CACHE_SCOPE_DEFAULT: &str = "default";
 const MODEL_SOURCE_KIND_REMOTE: &str = "remote";
 const MODEL_SOURCE_KIND_CUSTOM: &str = "custom";
@@ -76,7 +75,7 @@ pub(crate) fn read_managed_model_catalog(
     let cached_catalog = read_managed_model_catalog_from_storage(&storage)?;
     let cached = managed_catalog_to_models_response(&cached_catalog);
     if !refresh_remote && !cached.is_empty() {
-        return Ok(ensure_codex_image_tool_model_in_catalog(&cached_catalog));
+        return Ok(cached_catalog);
     }
 
     match gateway::fetch_models_for_picker() {
@@ -88,17 +87,13 @@ pub(crate) fn read_managed_model_catalog(
                         "event=model_catalog_refresh_ignored_empty_remote cached_models={}",
                         cached_catalog.items.len()
                     );
-                    return Ok(ensure_codex_image_tool_model_in_catalog(&cached_catalog));
+                    return Ok(cached_catalog);
                 }
                 if refresh_remote {
-                    return Err(
-                        "远端模型目录没有返回可用 Codex 文本模型，已拒绝覆盖本地目录".to_string(),
-                    );
+                    return Err("远端模型目录没有返回可用模型，已拒绝覆盖本地目录".to_string());
                 }
             }
-            let merged_catalog = ensure_codex_image_tool_model_in_catalog(
-                &merge_managed_model_catalog(cached_catalog.clone(), models),
-            );
+            let merged_catalog = merge_managed_model_catalog(cached_catalog.clone(), models);
             if !merged_catalog.items.is_empty() {
                 let _ = save_managed_model_catalog_with_storage(&storage, &merged_catalog);
             }
@@ -106,25 +101,19 @@ pub(crate) fn read_managed_model_catalog(
         }
         Err(err) => {
             if managed_catalog_has_catalog_text_model(&cached_catalog) {
-                return Ok(ensure_codex_image_tool_model_in_catalog(&cached_catalog));
+                return Ok(cached_catalog);
             }
             if refresh_remote {
                 Err(err)
             } else {
-                Ok(ensure_codex_image_tool_model_in_catalog(
-                    &ManagedModelCatalogResult::default(),
-                ))
+                Ok(ManagedModelCatalogResult::default())
             }
         }
     }
 }
 
-fn is_codex_image_tool_slug(slug: &str) -> bool {
-    slug.trim().eq_ignore_ascii_case(CODEX_IMAGE_TOOL_MODEL)
-}
-
 fn model_is_catalog_text_model(model: &ModelInfo) -> bool {
-    !is_codex_image_tool_slug(model.slug.as_str())
+    !model.slug.trim().is_empty()
 }
 
 fn models_response_has_catalog_text_model(models: &ModelsResponse) -> bool {
@@ -306,6 +295,25 @@ pub(crate) fn delete_managed_model_catalog_model(slug: &str) -> Result<(), Strin
     delete_model_catalog_entry(&storage, normalized_slug)
 }
 
+pub(crate) fn prune_stale_remote_managed_model_catalog() -> Result<ManagedModelCatalogResult, String>
+{
+    let storage =
+        storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let cached_catalog = read_managed_model_catalog_from_storage(&storage)?;
+    let remote_models = gateway::fetch_models_for_picker()?;
+    let remote_models = normalize_models_response(remote_models);
+    if !models_response_has_catalog_text_model(&remote_models) {
+        return Err("远端模型目录没有返回可用模型，已拒绝清理本地目录".to_string());
+    }
+
+    let merged_catalog = merge_managed_model_catalog(cached_catalog, remote_models.clone());
+    if !merged_catalog.items.is_empty() {
+        save_managed_model_catalog_with_storage(&storage, &merged_catalog)?;
+    }
+    prune_unedited_remote_model_catalog_entries_missing_from_remote(&storage, &remote_models)?;
+    read_managed_model_catalog_from_storage(&storage)
+}
+
 pub(crate) fn read_managed_model_routing() -> Result<ManagedModelRoutingResult, String> {
     let storage =
         storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
@@ -405,15 +413,41 @@ pub(crate) fn save_managed_model_source_mapping(
     storage
         .upsert_model_source_mapping(&mapping)
         .map_err(|err| format!("save model mapping failed: {err}"))?;
+    if mapping.enabled {
+        storage
+            .delete_model_source_mapping_preference(
+                &mapping.source_kind,
+                &mapping.source_id,
+                &mapping.upstream_model,
+            )
+            .map_err(|err| format!("clear preference failed: {err}"))?;
+    } else {
+        storage
+            .upsert_model_source_mapping_preference(
+                &mapping.source_kind,
+                &mapping.source_id,
+                &mapping.upstream_model,
+                "disabled",
+            )
+            .map_err(|err| format!("save disable preference failed: {err}"))?;
+    }
     Ok(source_mapping_entry(mapping))
 }
 
-pub(crate) fn delete_managed_model_source_mapping(id: &str) -> Result<(), String> {
+pub(crate) fn delete_managed_model_source_mapping(
+    id: &str,
+    source_kind: &str,
+    source_id: &str,
+    upstream_model: &str,
+) -> Result<(), String> {
     let storage =
         storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     let id = normalize_required("id", id)?;
+    let source_kind = normalize_routing_source_kind(source_kind)?;
+    let source_id = normalize_required("sourceId", source_id)?;
+    let upstream_model = normalize_required("upstreamModel", upstream_model)?;
     storage
-        .delete_model_source_mapping(id.as_str())
+        .delete_model_source_mapping_with_unlink_preference(&id, &source_kind, &source_id, &upstream_model)
         .map_err(|err| format!("delete model mapping failed: {err}"))
 }
 
@@ -502,6 +536,12 @@ fn sync_openai_account_source_models_with_options(
         .collect::<HashSet<_>>();
     if let Some(source_id) = requested_source_id.as_deref() {
         if !active_source_ids.contains(source_id) {
+            storage
+                .delete_model_source_mapping_preferences_for_source(
+                    ROUTING_SOURCE_KIND_OPENAI_ACCOUNT,
+                    source_id,
+                )
+                .map_err(|err| format!("delete account preferences failed: {err}"))?;
             storage
                 .delete_model_source_routes_for_source(
                     ROUTING_SOURCE_KIND_OPENAI_ACCOUNT,
@@ -608,6 +648,12 @@ where
                 ROUTING_SOURCE_KIND_AGGREGATE_API,
                 source_id,
             )?;
+            storage
+                .delete_model_source_mapping_preferences_for_source(
+                    ROUTING_SOURCE_KIND_AGGREGATE_API,
+                    source_id,
+                )
+                .map_err(|err| format!("delete api preferences failed: {err}"))?;
             storage
                 .delete_model_source_routes_for_source(ROUTING_SOURCE_KIND_AGGREGATE_API, source_id)
                 .map_err(|err| format!("delete stale aggregate api source routes failed: {err}"))?;
@@ -795,19 +841,12 @@ fn read_account_pool_platform_catalog(
 ) -> Result<ManagedModelCatalogResult, String> {
     let cached_catalog = read_managed_model_catalog_from_storage(storage)?;
     if !cached_catalog.items.is_empty() {
-        let catalog = ensure_codex_image_tool_model_in_catalog(&cached_catalog);
-        if catalog.items.len() != cached_catalog.items.len() {
-            let _ = save_managed_model_catalog_with_storage(storage, &catalog);
-        }
-        return Ok(catalog);
+        return Ok(cached_catalog);
     }
 
     if allow_remote_catalog_fetch {
         if let Ok(models) = gateway::fetch_models_for_picker() {
-            let catalog = ensure_codex_image_tool_model_in_catalog(&merge_managed_model_catalog(
-                cached_catalog.clone(),
-                models,
-            ));
+            let catalog = merge_managed_model_catalog(cached_catalog.clone(), models);
             if !catalog.items.is_empty() {
                 save_managed_model_catalog_with_storage(storage, &catalog)?;
                 return Ok(catalog);
@@ -831,6 +870,13 @@ fn auto_associate_source_models(
         .filter(|mapping| mapping.source_kind == source_kind && mapping.source_id == source_id)
         .map(|mapping| mapping.platform_model_slug)
         .collect::<HashSet<_>>();
+
+    let prefs: std::collections::HashMap<String, String> = storage
+        .list_model_source_mapping_preferences(source_kind, source_id)
+        .map_err(|err| format!("list preferences failed: {err}"))?
+        .into_iter()
+        .map(|p| (p.upstream_model, p.preference))
+        .collect();
 
     let source_models = storage
         .list_model_source_models(Some(source_kind), Some(source_id))
@@ -894,20 +940,25 @@ fn auto_associate_source_models(
     }
 
     let now = now_ts();
-    for source_model in source_models {
+    for source_model in &source_models {
         if !platform_slugs.contains(source_model.upstream_model.as_str()) {
             continue;
         }
         if existing_source_platform_mappings.contains(source_model.upstream_model.as_str()) {
             continue;
         }
+        let enabled = match prefs.get(source_model.upstream_model.as_str()).map(String::as_str) {
+            Some("unlinked") => continue,
+            Some(v) => v != "disabled",
+            None => true,
+        };
         let mapping = ModelSourceMapping {
             id: generate_mapping_id(),
             platform_model_slug: source_model.upstream_model.clone(),
             source_kind: source_kind.to_string(),
             source_id: source_id.to_string(),
-            upstream_model: source_model.upstream_model,
-            enabled: true,
+            upstream_model: source_model.upstream_model.clone(),
+            enabled,
             priority: 0,
             weight: 1,
             billing_model_slug: None,
@@ -917,6 +968,71 @@ fn auto_associate_source_models(
         storage
             .upsert_model_source_mapping(&mapping)
             .map_err(|err| format!("save model mapping failed: {err}"))?;
+    }
+
+    if source_kind == ROUTING_SOURCE_KIND_AGGREGATE_API && auto_create_platform_models {
+        if let Err(err) =
+            ensure_model_price_rules_for_aggregate_api(storage, source_id, &source_models)
+        {
+            log::warn!(
+                "aggregate API {source_id}: 自动创建模型价格规则失败: {err}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn ensure_model_price_rules_for_aggregate_api(
+    storage: &Storage,
+    source_id: &str,
+    source_models: &[ModelSourceModel],
+) -> Result<(), String> {
+    let existing_patterns: HashSet<String> = storage
+        .list_enabled_model_price_rules()
+        .map_err(|err| format!("list model price rules failed: {err}"))?
+        .into_iter()
+        .map(|rule| rule.model_pattern.to_ascii_lowercase())
+        .collect();
+
+    let now = now_ts();
+    for model in source_models {
+        let slug = model.upstream_model.trim();
+        if slug.is_empty() || existing_patterns.contains(&slug.to_ascii_lowercase()) {
+            continue;
+        }
+        if crate::quota::model_pricing::resolve_model_price(slug, 0).is_some() {
+            continue;
+        }
+        storage
+            .upsert_model_price_rule(&ModelPriceRule {
+                id: format!("agg-sync-{source_id}-{slug}"),
+                provider: crate::quota::model_pricing::infer_provider(slug).to_string(),
+                model_pattern: slug.to_string(),
+                match_type: "exact".to_string(),
+                billing_mode: "standard".to_string(),
+                currency: "USD".to_string(),
+                unit: "per_1m_tokens".to_string(),
+                input_price_per_1m: Some(0.0),
+                cached_input_price_per_1m: Some(0.0),
+                output_price_per_1m: Some(0.0),
+                reasoning_output_price_per_1m: None,
+                cache_write_5m_price_per_1m: None,
+                cache_write_1h_price_per_1m: None,
+                cache_hit_price_per_1m: None,
+                long_context_threshold_tokens: None,
+                long_context_input_price_per_1m: None,
+                long_context_cached_input_price_per_1m: None,
+                long_context_output_price_per_1m: None,
+                source: "aggregate_api_sync".to_string(),
+                source_url: None,
+                seed_version: None,
+                enabled: true,
+                priority: -10,
+                created_at: now,
+                updated_at: now,
+            })
+            .map_err(|err| format!("upsert model price rule for {slug} failed: {err}"))?;
     }
     Ok(())
 }
@@ -1071,76 +1187,14 @@ fn generate_mapping_id() -> String {
 }
 
 fn managed_catalog_to_models_response(catalog: &ManagedModelCatalogResult) -> ModelsResponse {
-    ensure_codex_image_tool_model_listed(&ModelsResponse {
+    ModelsResponse {
         models: catalog
             .items
             .iter()
             .map(|item| item.model.clone())
             .collect::<Vec<_>>(),
         extra: catalog.extra.clone(),
-    })
-}
-
-fn codex_image_tool_model_info() -> ModelInfo {
-    let mut model = ModelInfo {
-        slug: CODEX_IMAGE_TOOL_MODEL.to_string(),
-        display_name: "GPT Image 2".to_string(),
-        description: Some("Image generation tool model for Codex image workflows.".to_string()),
-        supported_in_api: true,
-        visibility: Some("list".to_string()),
-        input_modalities: vec!["text".to_string(), "image".to_string()],
-        ..Default::default()
-    };
-    model.extra.insert(
-        "output_modalities".to_string(),
-        serde_json::json!(["image"]),
-    );
-    model
-}
-
-pub(crate) fn ensure_codex_image_tool_model_listed(models: &ModelsResponse) -> ModelsResponse {
-    if models.models.iter().any(|item| {
-        item.slug
-            .trim()
-            .eq_ignore_ascii_case(CODEX_IMAGE_TOOL_MODEL)
-    }) {
-        return models.clone();
     }
-    let mut augmented = models.clone();
-    augmented.models.push(codex_image_tool_model_info());
-    augmented.extra.remove("etag");
-    augmented
-}
-
-fn ensure_codex_image_tool_model_in_catalog(
-    catalog: &ManagedModelCatalogResult,
-) -> ManagedModelCatalogResult {
-    if catalog.items.iter().any(|item| {
-        item.model
-            .slug
-            .trim()
-            .eq_ignore_ascii_case(CODEX_IMAGE_TOOL_MODEL)
-    }) {
-        return catalog.clone();
-    }
-
-    let mut augmented = catalog.clone();
-    let sort_index = augmented
-        .items
-        .iter()
-        .map(|item| item.sort_index)
-        .max()
-        .unwrap_or(-1)
-        + 1;
-    augmented.items.push(ManagedModelCatalogEntry {
-        model: codex_image_tool_model_info(),
-        source_kind: MODEL_SOURCE_KIND_REMOTE.to_string(),
-        user_edited: false,
-        sort_index,
-        updated_at: 0,
-    });
-    augmented.extra.remove("etag");
-    augmented
 }
 
 fn normalize_managed_model_catalog(
@@ -1704,6 +1758,12 @@ fn replace_model_catalog_entry(
 
 fn delete_model_catalog_entry(storage: &Storage, slug: &str) -> Result<(), String> {
     storage
+        .delete_model_group_model_references(slug)
+        .map_err(|e| e.to_string())?;
+    storage
+        .delete_model_source_routes_for_platform_model(slug)
+        .map_err(|e| e.to_string())?;
+    storage
         .delete_model_catalog_reasoning_levels(MODEL_CACHE_SCOPE_DEFAULT, slug)
         .map_err(|e| e.to_string())?;
     storage
@@ -1729,6 +1789,30 @@ fn delete_model_catalog_entry(storage: &Storage, slug: &str) -> Result<(), Strin
     storage
         .delete_model_catalog_model(MODEL_CACHE_SCOPE_DEFAULT, slug)
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn prune_unedited_remote_model_catalog_entries_missing_from_remote(
+    storage: &Storage,
+    remote_models: &ModelsResponse,
+) -> Result<(), String> {
+    let remote_slugs = remote_models
+        .models
+        .iter()
+        .map(|model| model.slug.as_str())
+        .collect::<HashSet<_>>();
+    let rows = storage
+        .list_model_catalog_models(MODEL_CACHE_SCOPE_DEFAULT)
+        .map_err(|e| e.to_string())?;
+    for row in rows {
+        let source_kind = normalize_source_kind(Some(row.source_kind.as_str()));
+        if source_kind == MODEL_SOURCE_KIND_REMOTE
+            && !row.user_edited
+            && !remote_slugs.contains(row.slug.as_str())
+        {
+            delete_model_catalog_entry(storage, row.slug.as_str())?;
+        }
+    }
     Ok(())
 }
 
@@ -2029,20 +2113,23 @@ mod tests {
     use std::collections::BTreeMap;
 
     use codexmanager_core::storage::{
-        now_ts, Account, AggregateApi, ModelSourceMapping, ModelSourceModel, Storage,
+        now_ts, Account, AggregateApi, ModelCatalogModelRecord, ModelGroupModel,
+        ModelSourceMapping, ModelSourceModel, Storage,
     };
     use serde_json::{json, Value};
 
     use super::{
         auto_associate_aggregate_api_source_models, auto_associate_source_models,
-        bootstrap_account_pool_model_routes, bootstrap_aggregate_api_model_routes,
-        ensure_codex_image_tool_model_in_catalog, ensure_codex_image_tool_model_listed,
+        auto_platform_model_from_source_model, bootstrap_account_pool_model_routes,
+        bootstrap_aggregate_api_model_routes, delete_model_catalog_entry,
         managed_catalog_to_models_response, merge_managed_model_catalog, merge_models_response,
-        normalize_models_response, read_managed_model_catalog_from_storage,
-        read_managed_model_routing_from_storage, read_model_options_from_storage,
-        save_managed_model_catalog_with_storage, save_model_options_with_storage,
-        sync_aggregate_api_source_models, sync_aggregate_api_source_models_with_discovery,
-        MODEL_SOURCE_KIND_CUSTOM, MODEL_SOURCE_KIND_REMOTE, ROUTING_SOURCE_KIND_AGGREGATE_API,
+        normalize_managed_model_catalog, normalize_models_response,
+        prune_unedited_remote_model_catalog_entries_missing_from_remote,
+        read_managed_model_catalog_from_storage, read_managed_model_routing_from_storage,
+        read_model_options_from_storage, save_managed_model_catalog_with_storage,
+        save_model_options_with_storage, sync_aggregate_api_source_models,
+        sync_aggregate_api_source_models_with_discovery, MODEL_SOURCE_KIND_CUSTOM,
+        MODEL_SOURCE_KIND_REMOTE, ROUTING_SOURCE_KIND_AGGREGATE_API,
         ROUTING_SOURCE_KIND_OPENAI_ACCOUNT,
     };
     use codexmanager_core::rpc::types::{
@@ -2121,6 +2208,45 @@ mod tests {
             extra: BTreeMap::new(),
         };
         save_managed_model_catalog_with_storage(storage, &payload).expect("seed platform catalog");
+    }
+
+    fn model_catalog_record(slug: &str) -> ModelCatalogModelRecord {
+        ModelCatalogModelRecord {
+            scope: "default".to_string(),
+            slug: slug.to_string(),
+            display_name: slug.to_string(),
+            source_kind: MODEL_SOURCE_KIND_REMOTE.to_string(),
+            user_edited: false,
+            description: None,
+            default_reasoning_level: None,
+            shell_type: None,
+            visibility: Some("list".to_string()),
+            supported_in_api: Some(true),
+            priority: Some(0),
+            availability_nux_json: None,
+            upgrade_json: None,
+            base_instructions: None,
+            model_messages_json: None,
+            supports_reasoning_summaries: None,
+            default_reasoning_summary: None,
+            support_verbosity: None,
+            default_verbosity_json: None,
+            apply_patch_tool_type: None,
+            web_search_tool_type: None,
+            truncation_mode: None,
+            truncation_limit: None,
+            truncation_extra_json: None,
+            supports_parallel_tool_calls: None,
+            supports_image_detail_original: None,
+            context_window: None,
+            auto_compact_token_limit: None,
+            effective_context_window_percent: None,
+            minimal_client_version_json: None,
+            supports_search_tool: None,
+            extra_json: "{}".to_string(),
+            sort_index: 0,
+            updated_at: now_ts(),
+        }
     }
 
     #[test]
@@ -2257,73 +2383,103 @@ mod tests {
     }
 
     #[test]
-    fn model_options_response_appends_codex_image_tool_model() {
+    fn normalize_models_response_keeps_codex_image_model_from_remote() {
         let response = ModelsResponse {
-            models: vec![ModelInfo {
-                slug: "gpt-5.4-mini".to_string(),
-                display_name: "GPT-5.4 Mini".to_string(),
-                supported_in_api: true,
-                ..Default::default()
-            }],
+            models: vec![
+                ModelInfo {
+                    slug: "gpt-5.4-mini".to_string(),
+                    display_name: "GPT-5.4 Mini".to_string(),
+                    supported_in_api: true,
+                    ..Default::default()
+                },
+                ModelInfo {
+                    slug: "gpt-image-2".to_string(),
+                    display_name: "GPT Image 2".to_string(),
+                    supported_in_api: true,
+                    ..Default::default()
+                },
+            ],
             extra: BTreeMap::from([("etag".to_string(), json!("cached"))]),
         };
 
-        let augmented = ensure_codex_image_tool_model_listed(&response);
+        let normalized = normalize_models_response(response);
 
         assert_eq!(
-            augmented
+            normalized
                 .models
                 .iter()
                 .map(|model| model.slug.as_str())
                 .collect::<Vec<_>>(),
             vec!["gpt-5.4-mini", "gpt-image-2"]
         );
-        let image_model = augmented
-            .models
-            .iter()
-            .find(|model| model.slug == "gpt-image-2")
-            .expect("image tool model");
-        assert_eq!(image_model.display_name, "GPT Image 2");
         assert_eq!(
-            image_model.input_modalities,
-            vec!["text".to_string(), "image".to_string()]
+            normalized.extra.get("etag").and_then(Value::as_str),
+            Some("cached")
         );
-        assert_eq!(
-            image_model
-                .extra
-                .get("output_modalities")
-                .and_then(Value::as_array)
-                .and_then(|items| items.first())
-                .and_then(Value::as_str),
-            Some("image")
-        );
-        assert!(!augmented.extra.contains_key("etag"));
     }
 
     #[test]
-    fn managed_catalog_response_appends_codex_image_tool_model_once() {
+    fn normalize_managed_catalog_keeps_codex_image_model() {
         let catalog = ManagedModelCatalogResult {
-            items: vec![ManagedModelCatalogEntry {
-                model: ModelInfo {
-                    slug: "gpt-image-2".to_string(),
-                    display_name: "Existing Image Model".to_string(),
-                    supported_in_api: true,
-                    ..Default::default()
+            items: vec![
+                ManagedModelCatalogEntry {
+                    model: ModelInfo {
+                        slug: "gpt-5.4-mini".to_string(),
+                        display_name: "GPT-5.4 Mini".to_string(),
+                        supported_in_api: true,
+                        ..Default::default()
+                    },
+                    source_kind: MODEL_SOURCE_KIND_REMOTE.to_string(),
+                    user_edited: false,
+                    sort_index: 0,
+                    updated_at: 123,
                 },
-                source_kind: MODEL_SOURCE_KIND_CUSTOM.to_string(),
-                user_edited: true,
-                sort_index: 7,
-                updated_at: 123,
-            }],
-            extra: BTreeMap::new(),
+                ManagedModelCatalogEntry {
+                    model: ModelInfo {
+                        slug: "gpt-image-2".to_string(),
+                        display_name: "GPT Image 2".to_string(),
+                        supported_in_api: true,
+                        ..Default::default()
+                    },
+                    source_kind: MODEL_SOURCE_KIND_CUSTOM.to_string(),
+                    user_edited: true,
+                    sort_index: 1,
+                    updated_at: 123,
+                },
+            ],
+            extra: BTreeMap::from([("etag".to_string(), json!("cached"))]),
         };
 
-        let augmented = ensure_codex_image_tool_model_in_catalog(&catalog);
-        let response = managed_catalog_to_models_response(&augmented);
+        let normalized = normalize_managed_model_catalog(catalog);
+        let response = managed_catalog_to_models_response(&normalized);
 
-        assert_eq!(augmented.items.len(), 1);
-        assert_eq!(response.models.len(), 1);
-        assert_eq!(response.models[0].display_name, "Existing Image Model");
+        assert_eq!(normalized.items.len(), 2);
+        assert_eq!(normalized.items[0].model.slug, "gpt-5.4-mini");
+        assert_eq!(normalized.items[1].model.slug, "gpt-image-2");
+        assert_eq!(response.models.len(), 2);
+        assert_eq!(response.models[0].slug, "gpt-5.4-mini");
+        assert_eq!(response.models[1].slug, "gpt-image-2");
+    }
+
+    #[test]
+    fn auto_platform_model_keeps_codex_image_model_from_source() {
+        let now = now_ts();
+        let source_model = ModelSourceModel {
+            source_kind: ROUTING_SOURCE_KIND_OPENAI_ACCOUNT.to_string(),
+            source_id: "acc-image".to_string(),
+            display_name: Some("GPT Image 2".to_string()),
+            upstream_model: "gpt-image-2".to_string(),
+            status: "available".to_string(),
+            discovery_kind: "synced".to_string(),
+            last_synced_at: Some(now),
+            extra_json: "{}".to_string(),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let model =
+            auto_platform_model_from_source_model(&source_model).expect("auto platform model");
+        assert_eq!(model.slug, "gpt-image-2");
     }
 
     #[test]
@@ -2348,10 +2504,12 @@ mod tests {
         save_model_options_with_storage(&storage, &payload).expect("seed structured catalog");
 
         let response = read_model_options_from_storage(&storage).expect("read models");
-        assert_eq!(response.models.len(), 2);
+        assert_eq!(response.models.len(), 1);
         assert_eq!(response.models[0].slug, "gpt-5.4");
-        assert_eq!(response.models[1].slug, "gpt-image-2");
-        assert_eq!(response.extra.get("etag").and_then(Value::as_str), None);
+        assert_eq!(
+            response.extra.get("etag").and_then(Value::as_str),
+            Some("legacy")
+        );
 
         let scope = storage
             .get_model_catalog_scope("default")
@@ -2388,6 +2546,175 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["pro", "team"]
         );
+    }
+
+    #[test]
+    fn managed_catalog_save_prunes_stale_default_model_group_models() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+        storage
+            .replace_model_group_models(
+                "mg_default",
+                &[ModelGroupModel {
+                    group_id: "mg_default".to_string(),
+                    platform_model_slug: "gpt-stale".to_string(),
+                    enabled: true,
+                    rate_multiplier_millis: None,
+                    billing_model_slug: None,
+                    note: Some("stale".to_string()),
+                    created_at: now,
+                    updated_at: now,
+                }],
+            )
+            .expect("seed stale default model group model");
+
+        seed_platform_catalog(&storage, &["gpt-current"]);
+
+        let slugs = storage
+            .list_model_group_models_for_group("mg_default")
+            .expect("list default model group models")
+            .into_iter()
+            .map(|model| model.platform_model_slug)
+            .collect::<Vec<_>>();
+        assert_eq!(slugs, vec!["gpt-current"]);
+    }
+
+    #[test]
+    fn managed_catalog_save_preserves_catalog_rows_absent_from_payload() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        seed_platform_catalog(&storage, &["gpt-old"]);
+
+        seed_platform_catalog(&storage, &["gpt-current"]);
+
+        let mut catalog_slugs = storage
+            .list_model_catalog_models("default")
+            .expect("list catalog")
+            .into_iter()
+            .map(|model| model.slug)
+            .collect::<Vec<_>>();
+        catalog_slugs.sort();
+        let mut group_slugs = storage
+            .list_model_group_models_for_group("mg_default")
+            .expect("list default model group models")
+            .into_iter()
+            .map(|model| model.platform_model_slug)
+            .collect::<Vec<_>>();
+        group_slugs.sort();
+        assert_eq!(catalog_slugs, vec!["gpt-current", "gpt-old"]);
+        assert_eq!(group_slugs, vec!["gpt-current", "gpt-old"]);
+    }
+
+    #[test]
+    fn delete_model_catalog_entry_removes_model_group_and_platform_source_routes() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        seed_platform_catalog(&storage, &["gpt-delete"]);
+        storage
+            .upsert_discovered_model_source_models(
+                ROUTING_SOURCE_KIND_OPENAI_ACCOUNT,
+                "acc-delete",
+                &["gpt-delete".to_string()],
+                "synced",
+            )
+            .expect("seed source model");
+        let now = now_ts();
+        storage
+            .upsert_model_source_mapping(&ModelSourceMapping {
+                id: "mapping-delete".to_string(),
+                platform_model_slug: "gpt-delete".to_string(),
+                source_kind: ROUTING_SOURCE_KIND_OPENAI_ACCOUNT.to_string(),
+                source_id: "acc-delete".to_string(),
+                upstream_model: "gpt-delete".to_string(),
+                enabled: true,
+                priority: 0,
+                weight: 1,
+                billing_model_slug: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("seed mapping");
+        storage
+            .upsert_model_source_mapping(&ModelSourceMapping {
+                id: "mapping-wrapper".to_string(),
+                platform_model_slug: "custom-wrapper".to_string(),
+                source_kind: ROUTING_SOURCE_KIND_OPENAI_ACCOUNT.to_string(),
+                source_id: "acc-delete".to_string(),
+                upstream_model: "gpt-delete".to_string(),
+                enabled: true,
+                priority: 0,
+                weight: 1,
+                billing_model_slug: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("seed wrapper mapping");
+
+        delete_model_catalog_entry(&storage, "gpt-delete").expect("delete catalog entry");
+
+        assert!(storage
+            .list_model_catalog_models("default")
+            .expect("list catalog")
+            .is_empty());
+        assert!(storage
+            .list_model_group_models_for_group("mg_default")
+            .expect("list default model group models")
+            .is_empty());
+        let remaining_source_models = storage
+            .list_model_source_models(Some(ROUTING_SOURCE_KIND_OPENAI_ACCOUNT), Some("acc-delete"))
+            .expect("list source models")
+            .into_iter()
+            .map(|model| model.upstream_model)
+            .collect::<Vec<_>>();
+        assert_eq!(remaining_source_models, vec!["gpt-delete"]);
+        assert!(storage
+            .list_model_source_mappings(Some("gpt-delete"))
+            .expect("list mappings")
+            .is_empty());
+        let remaining_mapping_slugs = storage
+            .list_model_source_mappings(None)
+            .expect("list all mappings")
+            .into_iter()
+            .map(|mapping| mapping.platform_model_slug)
+            .collect::<Vec<_>>();
+        assert_eq!(remaining_mapping_slugs, vec!["custom-wrapper"]);
+    }
+
+    #[test]
+    fn read_managed_catalog_preserves_existing_codex_image_model_rows() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        storage
+            .upsert_model_catalog_models(&[model_catalog_record("gpt-image-2")])
+            .expect("seed image catalog row");
+
+        assert!(storage
+            .list_model_catalog_models("default")
+            .expect("list catalog before read")
+            .iter()
+            .any(|model| model.slug == "gpt-image-2"));
+        assert!(storage
+            .list_model_group_models_for_group("mg_default")
+            .expect("list default model group models before read")
+            .iter()
+            .any(|model| model.platform_model_slug == "gpt-image-2"));
+
+        let response =
+            read_managed_model_catalog_from_storage(&storage).expect("read managed catalog");
+
+        assert_eq!(response.items.len(), 1);
+        assert_eq!(response.items[0].model.slug, "gpt-image-2");
+        assert!(storage
+            .list_model_catalog_models("default")
+            .expect("list catalog after read")
+            .iter()
+            .any(|model| model.slug == "gpt-image-2"));
+        assert!(storage
+            .list_model_group_models_for_group("mg_default")
+            .expect("list default model group models after read")
+            .iter()
+            .any(|model| model.platform_model_slug == "gpt-image-2"));
     }
 
     #[test]
@@ -2466,6 +2793,143 @@ mod tests {
         );
         assert_eq!(merged.items[0].source_kind, MODEL_SOURCE_KIND_REMOTE);
         assert!(merged.items[0].user_edited);
+    }
+
+    #[test]
+    fn merge_managed_catalog_preserves_unedited_remote_entries_missing_from_remote() {
+        let cached = ManagedModelCatalogResult {
+            items: vec![
+                ManagedModelCatalogEntry {
+                    model: serde_json::from_value(json!({
+                        "slug": "gpt-stale",
+                        "display_name": "GPT Stale",
+                        "supported_in_api": true
+                    }))
+                    .expect("parse stale model"),
+                    source_kind: MODEL_SOURCE_KIND_REMOTE.to_string(),
+                    user_edited: false,
+                    sort_index: 0,
+                    updated_at: 10,
+                },
+                ManagedModelCatalogEntry {
+                    model: serde_json::from_value(json!({
+                        "slug": "gpt-custom",
+                        "display_name": "GPT Custom",
+                        "supported_in_api": true
+                    }))
+                    .expect("parse custom model"),
+                    source_kind: MODEL_SOURCE_KIND_CUSTOM.to_string(),
+                    user_edited: false,
+                    sort_index: 1,
+                    updated_at: 11,
+                },
+            ],
+            extra: BTreeMap::new(),
+        };
+        let incoming = ModelsResponse {
+            models: vec![serde_json::from_value(json!({
+                "slug": "gpt-current",
+                "display_name": "GPT Current",
+                "supported_in_api": true
+            }))
+            .expect("parse incoming model")],
+            extra: BTreeMap::new(),
+        };
+
+        let merged = merge_managed_model_catalog(cached, incoming);
+
+        assert_eq!(
+            merged
+                .items
+                .iter()
+                .map(|item| item.model.slug.as_str())
+                .collect::<Vec<_>>(),
+            vec!["gpt-current", "gpt-stale", "gpt-custom"]
+        );
+    }
+
+    #[test]
+    fn prune_stale_remote_models_only_deletes_unedited_remote_entries() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let payload = ManagedModelCatalogResult {
+            items: vec![
+                ManagedModelCatalogEntry {
+                    model: serde_json::from_value(json!({
+                        "slug": "gpt-current",
+                        "display_name": "GPT Current",
+                        "supported_in_api": true
+                    }))
+                    .expect("parse current model"),
+                    source_kind: MODEL_SOURCE_KIND_REMOTE.to_string(),
+                    user_edited: false,
+                    sort_index: 0,
+                    updated_at: 10,
+                },
+                ManagedModelCatalogEntry {
+                    model: serde_json::from_value(json!({
+                        "slug": "gpt-stale-remote",
+                        "display_name": "GPT Stale Remote",
+                        "supported_in_api": true
+                    }))
+                    .expect("parse stale remote model"),
+                    source_kind: MODEL_SOURCE_KIND_REMOTE.to_string(),
+                    user_edited: false,
+                    sort_index: 1,
+                    updated_at: 11,
+                },
+                ManagedModelCatalogEntry {
+                    model: serde_json::from_value(json!({
+                        "slug": "gpt-stale-edited",
+                        "display_name": "GPT Stale Edited",
+                        "supported_in_api": true
+                    }))
+                    .expect("parse stale edited model"),
+                    source_kind: MODEL_SOURCE_KIND_REMOTE.to_string(),
+                    user_edited: true,
+                    sort_index: 2,
+                    updated_at: 12,
+                },
+                ManagedModelCatalogEntry {
+                    model: serde_json::from_value(json!({
+                        "slug": "gpt-custom",
+                        "display_name": "GPT Custom",
+                        "supported_in_api": true
+                    }))
+                    .expect("parse custom model"),
+                    source_kind: MODEL_SOURCE_KIND_CUSTOM.to_string(),
+                    user_edited: false,
+                    sort_index: 3,
+                    updated_at: 13,
+                },
+            ],
+            extra: BTreeMap::new(),
+        };
+        save_managed_model_catalog_with_storage(&storage, &payload)
+            .expect("seed managed model catalog");
+
+        let remote = ModelsResponse {
+            models: vec![serde_json::from_value(json!({
+                "slug": "gpt-current",
+                "display_name": "GPT Current",
+                "supported_in_api": true
+            }))
+            .expect("parse remote model")],
+            extra: BTreeMap::new(),
+        };
+        prune_unedited_remote_model_catalog_entries_missing_from_remote(&storage, &remote)
+            .expect("prune stale remote models");
+
+        let catalog =
+            read_managed_model_catalog_from_storage(&storage).expect("read managed catalog");
+        assert_eq!(
+            catalog
+                .items
+                .iter()
+                .map(|item| item.model.slug.as_str())
+                .collect::<Vec<_>>(),
+            vec!["gpt-current", "gpt-stale-edited", "gpt-custom"]
+        );
     }
 
     #[test]

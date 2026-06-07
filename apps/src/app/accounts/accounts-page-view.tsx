@@ -87,6 +87,7 @@ import {
   formatAccountExportModeLabel,
   formatAccountPlanLabel,
   formatAccountPlanValueLabel,
+  fitLongTextClassName,
   formatPlanFilterLabel,
   formatStatusFilterLabel,
   getAccountStatusAction,
@@ -777,7 +778,9 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     onCheckedChange={toggleSelectAllVisible}
                   />
                 </TableHead>
-                <TableHead className="max-w-[220px]">{t("账号信息")}</TableHead>
+                <TableHead className="w-[clamp(220px,28vw,340px)] min-w-[220px] max-w-[340px] whitespace-normal">
+                  {t("账号信息")}
+                </TableHead>
                 <TableHead className="min-w-[250px] text-center">
                   {t("额度详情")}
                 </TableHead>
@@ -830,6 +833,14 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                   const quotaItems = buildQuotaSummaryItems(account, t);
                   const statusAction = getAccountStatusAction(account, t);
                   const StatusActionIcon = statusAction.icon;
+                  const modelPoolText = account.modelSlugs.length
+                    ? account.modelSlugs.slice(0, 2).join(", ")
+                    : t("全部 API 模型");
+                  const modelPoolDisplayText = `${t("模型池")}: ${modelPoolText}${
+                    account.modelSlugs.length > 2
+                      ? ` +${account.modelSlugs.length - 2}`
+                      : ""
+                  }`;
                   const isRefreshingCurrentAccount =
                     isRefreshingAccountId === account.id;
                   const isRefreshingCurrentRt =
@@ -848,7 +859,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                           onCheckedChange={() => toggleSelect(account.id)}
                         />
                       </TableCell>
-                      <TableCell className="max-w-[220px]">
+                      <TableCell className="w-[clamp(220px,28vw,340px)] min-w-[220px] max-w-[340px] whitespace-normal align-top">
                         <AccountInfoCell
                           account={account}
                           isPreferred={account.preferred}
@@ -857,18 +868,19 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                       <TableCell>
                         <QuotaOverviewCell items={quotaItems} />
                         <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
-                          <span className="rounded-full border border-border/50 bg-background/40 px-2 py-0.5">
-                            {t("模型池")}:{" "}
-                            {account.modelSlugs.length
-                              ? account.modelSlugs.slice(0, 2).join(", ")
-                              : t("全部 API 模型")}
-                            {account.modelSlugs.length > 2
-                              ? ` +${account.modelSlugs.length - 2}`
-                              : ""}
+                          <span
+                            className={fitLongTextClassName(
+                              modelPoolDisplayText,
+                              "max-w-full rounded-full border border-border/50 bg-background/40 px-2 py-0.5 break-all [overflow-wrap:anywhere]",
+                              "text-[10px]",
+                            )}
+                            title={modelPoolDisplayText}
+                          >
+                            {modelPoolDisplayText}
                           </span>
                           {account.quotaCapacityPrimaryWindowTokens ||
                           account.quotaCapacitySecondaryWindowTokens ? (
-                            <span className="rounded-full border border-border/50 bg-background/40 px-2 py-0.5">
+                            <span className="max-w-full rounded-full border border-border/50 bg-background/40 px-2 py-0.5 break-words [overflow-wrap:anywhere]">
                               {t("容量覆盖")}:{" "}
                               {account.quotaCapacityPrimaryWindowTokens
                                 ? `5h ${formatCompactNumber(
@@ -889,7 +901,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                                 : "7d --"}
                             </span>
                           ) : (
-                            <span className="rounded-full border border-border/50 bg-background/40 px-2 py-0.5">
+                            <span className="max-w-full rounded-full border border-border/50 bg-background/40 px-2 py-0.5 break-words [overflow-wrap:anywhere]">
                               {t("未设置账号容量覆盖")}
                             </span>
                           )}

@@ -75,3 +75,21 @@ export function formatLocalDateTimeFromSeconds(
     hour12: false,
   }).format(date);
 }
+
+export function formatLocalMinuteFromSeconds(
+  timestamp: number | null | undefined,
+  emptyLabel = "未知",
+): string {
+  if (!timestamp) return emptyLabel;
+  const date = new Date(timestamp * 1000);
+  if (Number.isNaN(date.getTime())) return emptyLabel;
+
+  return new Intl.DateTimeFormat(getPreferredLocale(), {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}

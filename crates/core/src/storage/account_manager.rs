@@ -475,6 +475,34 @@ impl Storage {
         Ok(out)
     }
 
+    /// 函数 `list_api_key_ids_for_user`
+    ///
+    ///
+    /// 时间: 2026-05-28
+    ///
+    /// # 参数
+    /// - self: 参数 self
+    /// - user_id: 参数 user_id
+    ///
+    /// # 返回
+    /// 返回函数执行结果
+    pub fn list_api_key_ids_for_user(&self, user_id: &str) -> Result<Vec<String>> {
+        let normalized_user_id = user_id.trim();
+        if normalized_user_id.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 中文注释：这里直接按 owner_user_id 走索引取 key_id，避免把整张 api_key_owners 表拉回 Rust 再过滤。
+        let mut stmt = self.conn.prepare(
+            "SELECT key_id
+             FROM api_key_owners
+             WHERE owner_kind = 'user' AND owner_user_id = ?1
+             ORDER BY key_id ASC",
+        )?;
+        let rows = stmt.query_map([normalized_user_id], |row| row.get(0))?;
+        rows.collect()
+    }
+
     pub fn api_key_owner_count(&self) -> Result<i64> {
         self.conn
             .query_row("SELECT COUNT(*) FROM api_key_owners", [], |row| row.get(0))

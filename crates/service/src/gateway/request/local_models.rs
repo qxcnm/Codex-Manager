@@ -42,8 +42,7 @@ fn serialize_models_response_body(models: &ModelsResponse) -> String {
 }
 
 fn serialize_models_response(models: &ModelsResponse) -> String {
-    let models = crate::apikey_models::ensure_codex_image_tool_model_listed(models);
-    serialize_models_response_body(&models)
+    serialize_models_response_body(models)
 }
 
 fn filter_models_for_key(
@@ -191,11 +190,6 @@ pub(super) fn maybe_respond_local_models(
         serialize_models_response(&output_models)
     } else {
         serialize_models_response_body(&output_models)
-    };
-    let output_models = if include_implicit_models {
-        crate::apikey_models::ensure_codex_image_tool_model_listed(&output_models)
-    } else {
-        output_models
     };
     let extra_headers = models_etag_header(&output_models)?.into_iter().collect();
     super::local_response::respond_local_json_with_headers(

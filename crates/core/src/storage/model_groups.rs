@@ -112,6 +112,7 @@ impl Storage {
                AND TRIM(slug) <> ''",
             params![DEFAULT_MODEL_GROUP_ID, now],
         )?;
+        self.prune_default_model_group_models_not_in_catalog()?;
         self.conn.execute(
             "INSERT OR IGNORE INTO user_model_groups (
                 user_id, group_id, status, expires_at, created_at, updated_at
@@ -121,6 +122,41 @@ impl Storage {
              WHERE role = 'member'
                AND status = 'active'",
             params![DEFAULT_MODEL_GROUP_ID, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn prune_default_model_group_models_not_in_catalog(&self) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM model_group_models
+             WHERE group_id IN (SELECT id FROM model_groups WHERE is_default = 1)
+               AND EXISTS (
+                   SELECT 1
+                   FROM model_catalog_models
+                   WHERE scope = 'default'
+                     AND COALESCE(supported_in_api, 1) = 1
+                     AND TRIM(slug) <> ''
+               )
+               AND platform_model_slug NOT IN (
+                   SELECT slug
+                   FROM model_catalog_models
+                   WHERE scope = 'default'
+                     AND COALESCE(supported_in_api, 1) = 1
+                     AND TRIM(slug) <> ''
+               )",
+            [],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_model_group_model_references(&self, platform_model_slug: &str) -> Result<()> {
+        let slug = platform_model_slug.trim();
+        if slug.is_empty() {
+            return Ok(());
+        }
+        self.conn.execute(
+            "DELETE FROM model_group_models WHERE platform_model_slug = ?1",
+            params![slug],
         )?;
         Ok(())
     }
@@ -335,6 +371,11 @@ impl Storage {
              FROM user_model_groups u
              JOIN model_groups g ON g.id = u.group_id
              JOIN model_group_models m ON m.group_id = g.id
+             JOIN model_catalog_models c
+               ON c.scope = 'default'
+              AND c.slug = m.platform_model_slug
+              AND COALESCE(c.supported_in_api, 1) = 1
+              AND TRIM(c.slug) <> ''
              WHERE u.user_id = ?1
                AND u.status = 'active'
                AND (u.expires_at IS NULL OR u.expires_at > ?2)
@@ -358,6 +399,11 @@ impl Storage {
              FROM user_model_groups u
              JOIN model_groups g ON g.id = u.group_id
              JOIN model_group_models m ON m.group_id = g.id
+             JOIN model_catalog_models c
+               ON c.scope = 'default'
+              AND c.slug = m.platform_model_slug
+              AND COALESCE(c.supported_in_api, 1) = 1
+              AND TRIM(c.slug) <> ''
              WHERE u.user_id = ?1
                AND m.platform_model_slug = ?2
                AND u.status = 'active'
@@ -393,7 +439,46 @@ impl Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::AppUser;
+    use crate::storage::{AppUser, ModelCatalogModelRecord};
+
+    fn model_catalog_record(slug: &str) -> ModelCatalogModelRecord {
+        ModelCatalogModelRecord {
+            scope: "default".to_string(),
+            slug: slug.to_string(),
+            display_name: slug.to_string(),
+            source_kind: "remote".to_string(),
+            user_edited: false,
+            description: None,
+            default_reasoning_level: None,
+            shell_type: None,
+            visibility: Some("list".to_string()),
+            supported_in_api: Some(true),
+            priority: Some(0),
+            availability_nux_json: None,
+            upgrade_json: None,
+            base_instructions: None,
+            model_messages_json: None,
+            supports_reasoning_summaries: None,
+            default_reasoning_summary: None,
+            support_verbosity: None,
+            default_verbosity_json: None,
+            apply_patch_tool_type: None,
+            web_search_tool_type: None,
+            truncation_mode: None,
+            truncation_limit: None,
+            truncation_extra_json: None,
+            supports_parallel_tool_calls: None,
+            supports_image_detail_original: None,
+            context_window: None,
+            auto_compact_token_limit: None,
+            effective_context_window_percent: None,
+            minimal_client_version_json: None,
+            supports_search_tool: None,
+            extra_json: "{}".to_string(),
+            sort_index: 0,
+            updated_at: now_ts(),
+        }
+    }
 
     #[test]
     fn resolves_lowest_effective_model_group_rate() {
@@ -413,6 +498,9 @@ mod tests {
                 last_login_at: None,
             })
             .expect("insert user");
+        storage
+            .upsert_model_catalog_models(&[model_catalog_record("gpt-test")])
+            .expect("seed catalog");
         storage
             .upsert_model_group(&ModelGroup {
                 id: "mg_a".to_string(),
@@ -504,5 +592,112 @@ mod tests {
         assert_eq!(access.group_id, "mg_b");
         assert_eq!(access.rate_multiplier_millis, 1080);
         assert_eq!(access.billing_model_slug.as_deref(), Some("gpt-bill"));
+    }
+
+    #[test]
+    fn pruning_default_group_models_keeps_rows_when_catalog_is_empty() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+        storage
+            .replace_model_group_models(
+                DEFAULT_MODEL_GROUP_ID,
+                &[ModelGroupModel {
+                    group_id: DEFAULT_MODEL_GROUP_ID.to_string(),
+                    platform_model_slug: "gpt-existing".to_string(),
+                    enabled: true,
+                    rate_multiplier_millis: None,
+                    billing_model_slug: None,
+                    note: None,
+                    created_at: now,
+                    updated_at: now,
+                }],
+            )
+            .expect("seed default group model");
+
+        storage
+            .prune_default_model_group_models_not_in_catalog()
+            .expect("prune default group models");
+
+        let slugs = storage
+            .list_model_group_models_for_group(DEFAULT_MODEL_GROUP_ID)
+            .expect("list default group models")
+            .into_iter()
+            .map(|model| model.platform_model_slug)
+            .collect::<Vec<_>>();
+        assert_eq!(slugs, vec!["gpt-existing"]);
+    }
+
+    #[test]
+    fn member_access_queries_ignore_models_missing_from_catalog() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+        storage
+            .insert_app_user(&AppUser {
+                id: "usr_1".to_string(),
+                username: "member".to_string(),
+                display_name: None,
+                password_hash: "hash".to_string(),
+                role: "member".to_string(),
+                status: "active".to_string(),
+                created_at: now,
+                updated_at: now,
+                last_login_at: None,
+            })
+            .expect("insert user");
+        storage
+            .upsert_model_catalog_models(&[model_catalog_record("gpt-current")])
+            .expect("seed catalog");
+        storage
+            .replace_model_group_models(
+                DEFAULT_MODEL_GROUP_ID,
+                &[
+                    ModelGroupModel {
+                        group_id: DEFAULT_MODEL_GROUP_ID.to_string(),
+                        platform_model_slug: "gpt-current".to_string(),
+                        enabled: true,
+                        rate_multiplier_millis: None,
+                        billing_model_slug: None,
+                        note: None,
+                        created_at: now,
+                        updated_at: now,
+                    },
+                    ModelGroupModel {
+                        group_id: DEFAULT_MODEL_GROUP_ID.to_string(),
+                        platform_model_slug: "gpt-stale".to_string(),
+                        enabled: true,
+                        rate_multiplier_millis: None,
+                        billing_model_slug: None,
+                        note: None,
+                        created_at: now,
+                        updated_at: now,
+                    },
+                ],
+            )
+            .expect("seed group models");
+        storage
+            .replace_user_model_groups_for_group(
+                DEFAULT_MODEL_GROUP_ID,
+                &[UserModelGroup {
+                    user_id: "usr_1".to_string(),
+                    group_id: DEFAULT_MODEL_GROUP_ID.to_string(),
+                    status: "active".to_string(),
+                    expires_at: None,
+                    created_at: now,
+                    updated_at: now,
+                }],
+            )
+            .expect("assign default group");
+
+        let slugs = storage
+            .allowed_model_slugs_for_user("usr_1", now)
+            .expect("read allowed slugs");
+        let stale_access = storage
+            .resolve_model_group_access_for_user("usr_1", "gpt-stale", now)
+            .expect("resolve stale access");
+
+        assert_eq!(slugs, vec!["gpt-current"]);
+        assert!(stale_access.is_none());
     }
 }

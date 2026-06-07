@@ -3,6 +3,7 @@ import type {
   AppSettings,
   BackgroundTaskSettings,
   EnvOverrideCatalogItem,
+  RuntimeTimeZone,
 } from "@/types";
 
 export const ENV_DESCRIPTION_MAP: Record<string, string> = {
@@ -225,6 +226,21 @@ export function readInitialSettingsTab(): SettingsTab {
 
 export function stringifyNumber(value: number | null | undefined): string {
   return value == null ? "" : String(value);
+}
+
+export function formatRuntimeTimeZoneLabel(
+  runtimeTimeZone: RuntimeTimeZone | null | undefined,
+  localTimeZoneLabel = "服务端本地时区",
+): string {
+  const name = String(runtimeTimeZone?.name || "").trim();
+  const offset = String(runtimeTimeZone?.offset || "").trim();
+  const displayName =
+    name && name !== "Local" ? name : localTimeZoneLabel;
+  const normalizedOffset =
+    offset && !offset.toUpperCase().startsWith("UTC")
+      ? `UTC${offset.startsWith("+") || offset.startsWith("-") ? offset : `+${offset}`}`
+      : offset;
+  return normalizedOffset ? `${displayName} (${normalizedOffset})` : displayName;
 }
 
 export function readNumberField(

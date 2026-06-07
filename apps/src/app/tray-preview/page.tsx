@@ -38,14 +38,14 @@ interface QuotaLineProps {
 
 function MetricTile({ label, value, icon: Icon, tone }: MetricTileProps) {
   return (
-    <div className="rounded-xl border border-black/5 bg-white/55 px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)] dark:border-white/10 dark:bg-white/[0.08]">
+    <div className="rounded-xl border border-border/50 bg-card/65 px-3 py-2.5 shadow-inner">
       <div className="mb-1.5 flex items-center justify-between gap-2">
-        <span className="truncate text-[11px] font-medium text-neutral-500 dark:text-neutral-400">
+        <span className="truncate text-[11px] font-medium text-muted-foreground">
           {label}
         </span>
         <Icon className={cn("h-3.5 w-3.5 shrink-0", tone)} />
       </div>
-      <div className="truncate text-[20px] font-semibold leading-6 tracking-normal text-neutral-950 dark:text-white">
+      <div className="truncate text-[20px] font-semibold leading-6 tracking-normal text-foreground">
         {value}
       </div>
     </div>
@@ -59,12 +59,12 @@ function QuotaLine({ label, value, tone }: QuotaLineProps) {
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-3 text-[11px]">
-        <span className="text-neutral-500 dark:text-neutral-400">{label}</span>
-        <span className="font-semibold text-neutral-900 dark:text-neutral-100">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="font-semibold text-foreground">
           {formatPercent(value)}
         </span>
       </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-black/[0.08] dark:bg-white/[0.12]">
+      <div className="h-1.5 overflow-hidden rounded-full bg-muted/60">
         <div className={cn("h-full rounded-full", barTone)} style={{ width: `${normalized}%` }} />
       </div>
     </div>
@@ -92,8 +92,8 @@ export default function TrayPreviewPage() {
   const statusText = isServiceReady ? t("本地服务已连接") : t("等待本地服务");
 
   return (
-    <div className="h-screen overflow-hidden bg-transparent font-sans text-neutral-950 dark:text-neutral-50">
-      <section className="relative h-full overflow-hidden rounded-[18px] border border-black/10 bg-[rgba(246,246,247,0.92)] shadow-[inset_0_1px_0_rgba(255,255,255,0.58)] dark:border-white/[0.12] dark:bg-[rgba(36,36,38,0.9)]">
+    <div className="h-screen overflow-hidden bg-transparent font-sans text-foreground">
+      <section className="relative h-full overflow-hidden rounded-[18px] border border-border/60 bg-card/90 shadow-2xl">
         <div className="flex h-full flex-col p-4">
           <header className="mb-3 flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -104,7 +104,7 @@ export default function TrayPreviewPage() {
                     isServiceReady ? "bg-emerald-500" : "bg-amber-500",
                   )}
                 />
-                <p className="truncate text-[12px] font-medium text-neutral-500 dark:text-neutral-400">
+                <p className="truncate text-[12px] font-medium text-muted-foreground">
                   {statusText}
                 </p>
               </div>
@@ -116,7 +116,7 @@ export default function TrayPreviewPage() {
               type="button"
               size="sm"
               variant="ghost"
-              className="h-8 shrink-0 rounded-full px-2.5 text-[12px] text-neutral-700 hover:bg-black/[0.06] dark:text-neutral-200 dark:hover:bg-white/[0.10]"
+              className="h-8 shrink-0 rounded-full px-2.5 text-[12px] text-foreground/80 hover:bg-accent/70"
               onClick={() => void openMainWindow()}
             >
               <ArrowUpRight className="h-3.5 w-3.5" />
@@ -125,7 +125,7 @@ export default function TrayPreviewPage() {
           </header>
 
           {isLoading ? (
-            <div className="flex flex-1 flex-col items-center justify-center gap-3 text-neutral-500 dark:text-neutral-400">
+            <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin" />
               <p className="text-[12px]">{t("正在同步状态")}</p>
             </div>
@@ -168,17 +168,17 @@ export default function TrayPreviewPage() {
                 />
               </div>
 
-              <div className="rounded-xl border border-black/5 bg-white/45 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.55)] dark:border-white/10 dark:bg-white/[0.07]">
+              <div className="rounded-xl border border-border/50 bg-card/60 p-3 shadow-inner">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-[11px] font-medium text-neutral-500 dark:text-neutral-400">
+                    <p className="text-[11px] font-medium text-muted-foreground">
                       {t("当前活跃账号")}
                     </p>
-                    <p className="truncate text-[13px] font-semibold">
+                    <p className="break-all text-[13px] font-semibold leading-snug [overflow-wrap:anywhere]">
                       {currentAccount?.name || t("暂无可识别的活跃账号")}
                     </p>
                   </div>
-                  <Server className="h-4 w-4 shrink-0 text-neutral-400" />
+                  <Server className="h-4 w-4 shrink-0 text-muted-foreground" />
                 </div>
                 <div className="space-y-3">
                   <QuotaLine

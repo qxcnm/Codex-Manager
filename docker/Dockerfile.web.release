@@ -3,10 +3,12 @@ FROM debian:bookworm-slim
 ARG APP_USER=codexmanager
 ARG APP_UID=10001
 
+ENV TZ=Asia/Shanghai
+
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates wget \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates wget tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid ${APP_UID} ${APP_USER} \
     && useradd --system --uid ${APP_UID} --gid ${APP_UID} --home-dir /app --create-home --shell /usr/sbin/nologin ${APP_USER} \

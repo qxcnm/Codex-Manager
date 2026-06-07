@@ -392,11 +392,7 @@ pub(crate) fn read_member_dashboard_summary(
     };
 
     let key_ids = crate::list_api_key_ids_for_user(&user_id)?;
-    let key_id_set = key_ids.iter().cloned().collect::<HashSet<_>>();
-    let api_keys = apikey_list::read_api_keys()?
-        .into_iter()
-        .filter(|key| key_id_set.contains(&key.id))
-        .collect::<Vec<_>>();
+    let api_keys = apikey_list::read_api_keys_for_ids(&key_ids)?;
     let api_key_summary = build_api_key_summary(&api_keys);
     let wallet = read_member_wallet(&user_id)?;
 
@@ -422,7 +418,7 @@ pub(crate) fn read_member_dashboard_summary(
 
     let usage_trend_7d = read_usage_trend_7d(&user_id, day_start, day_end)?;
     let (top_keys, top_models) =
-        read_member_usage_breakdown(&api_keys, &key_id_set, day_start, day_end)?;
+        read_member_usage_breakdown(&api_keys, &key_ids, day_start, day_end)?;
     let available_models = read_available_models_with_price_summary()?;
     let recent_logs = requestlog_list::read_request_log_page_for_key_ids(
         RequestLogListParams {
@@ -598,30 +594,32 @@ fn read_usage_trend_7d(
 
 fn read_member_usage_breakdown(
     api_keys: &[ApiKeySummary],
-    key_id_set: &HashSet<String>,
+    key_ids: &[String],
     day_start: i64,
     day_end: i64,
 ) -> Result<(Vec<MemberDashboardKeyUsage>, Vec<MemberDashboardModelUsage>), String> {
     let storage =
         storage_helpers::open_storage().ok_or_else(|| "open storage failed".to_string())?;
     let today_usage = storage
-        .summarize_request_token_stats_by_key_and_model(Some(day_start), Some(day_end))
+        .summarize_request_token_stats_by_key_and_model_for_keys(
+            Some(day_start),
+            Some(day_end),
+            key_ids,
+        )
         .map_err(|err| format!("summarize today key usage failed: {err}"))?;
     let total_usage = storage
-        .summarize_request_token_stats_by_key()
+        .summarize_request_token_stats_by_key_for_keys(key_ids)
         .map_err(|err| format!("summarize key usage failed: {err}"))?;
     let seven_day_usage = storage
-        .summarize_request_token_stats_by_key_and_model(
+        .summarize_request_token_stats_by_key_and_model_for_keys(
             Some(day_start.saturating_sub((TREND_DAYS - 1) * (day_end - day_start).max(1))),
             Some(day_end),
+            key_ids,
         )
         .map_err(|err| format!("summarize model usage failed: {err}"))?;
 
     let mut today_by_key: HashMap<String, (i64, f64)> = HashMap::new();
-    for item in today_usage
-        .into_iter()
-        .filter(|item| key_id_set.contains(&item.key_id))
-    {
+    for item in today_usage.into_iter() {
         let entry = today_by_key.entry(item.key_id).or_insert((0, 0.0));
         entry.0 = entry.0.saturating_add(item.total_tokens.max(0));
         entry.1 += item.estimated_cost_usd.max(0.0);
@@ -629,7 +627,6 @@ fn read_member_usage_breakdown(
 
     let total_by_key = total_usage
         .into_iter()
-        .filter(|item| key_id_set.contains(&item.key_id))
         .map(|item| {
             (
                 item.key_id,
@@ -667,10 +664,7 @@ fn read_member_usage_breakdown(
     top_keys.truncate(MEMBER_TOP_KEY_LIMIT);
 
     let mut model_usage = BTreeMap::<String, (i64, f64)>::new();
-    for item in seven_day_usage
-        .into_iter()
-        .filter(|item| key_id_set.contains(&item.key_id))
-    {
+    for item in seven_day_usage.into_iter() {
         let entry = model_usage.entry(item.model).or_insert((0, 0.0));
         entry.0 = entry.0.saturating_add(item.total_tokens.max(0));
         entry.1 += item.estimated_cost_usd.max(0.0);

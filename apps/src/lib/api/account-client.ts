@@ -160,6 +160,33 @@ export interface ManagedModelSourceMappingPayload {
   billingModelSlug?: string | null;
 }
 
+export interface ModelPriceRuleEntry {
+  id: string;
+  provider: string;
+  modelPattern: string;
+  matchType: string;
+  inputPricePer1m: number | null;
+  cachedInputPricePer1m: number | null;
+  outputPricePer1m: number | null;
+  enabled: boolean;
+  priority: number;
+  source: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ModelPriceRuleUpsertPayload {
+  id?: string | null;
+  provider?: string | null;
+  modelPattern: string;
+  matchType?: string | null;
+  inputPricePer1m?: number | null;
+  cachedInputPricePer1m?: number | null;
+  outputPricePer1m?: number | null;
+  enabled?: boolean | null;
+  priority?: number | null;
+}
+
 export interface AggregateApiSupplierModelPayload {
   supplierKey: string;
   providerType: string;
@@ -346,8 +373,8 @@ async function importAccountContents(contents: string[]): Promise<AccountImportR
 }
 
 export const accountClient = {
-  async list(params?: Record<string, unknown>): Promise<AccountListResult> {
-    const result = await invoke<unknown>("service_account_list", withAddr(params));
+  async list(): Promise<AccountListResult> {
+    const result = await invoke<unknown>("service_account_list", withAddr());
     return normalizeAccountList(result);
   },
   delete: (accountId: string) =>
@@ -838,8 +865,13 @@ export const accountClient = {
     if (!item) throw new Error("模型映射保存结果为空");
     return item;
   },
-  deleteManagedModelSourceMapping: (id: string) =>
-    invoke("service_model_source_mapping_delete", withAddr({ id })),
+  deleteManagedModelSourceMapping: (params: {
+    id: string;
+    sourceKind: string;
+    sourceId: string;
+    upstreamModel: string;
+  }) =>
+    invoke("service_model_source_mapping_delete", withAddr({ payload: params })),
   async saveManagedModel(params: ManagedModelPayload): Promise<ManagedModelInfo> {
     const payload = {
       previousSlug: params.previousSlug || null,
@@ -861,6 +893,34 @@ export const accountClient = {
   },
   deleteManagedModel: (slug: string) =>
     invoke("service_model_catalog_delete", withAddr({ slug })),
+  listModelPriceRules: async () => {
+    const result = await invoke<{ items: ModelPriceRuleEntry[] }>(
+      "service_model_price_rules_list",
+      withAddr(),
+    );
+    return result.items;
+  },
+  readModelPriceRule: async (modelPattern: string) => {
+    const result = await invoke<ModelPriceRuleEntry | null>(
+      "service_model_price_rule_read",
+      withAddr({ modelPattern }),
+    );
+    return result;
+  },
+  upsertModelPriceRule: async (payload: ModelPriceRuleUpsertPayload) => {
+    const result = await invoke<ModelPriceRuleEntry>(
+      "service_model_price_rule_upsert",
+      withAddr({ payload }),
+    );
+    return result;
+  },
+  async pruneStaleRemoteManagedModels(): Promise<ManagedModelCatalog> {
+    const result = await invoke<unknown>(
+      "service_model_catalog_prune_stale_remote",
+      withAddr()
+    );
+    return normalizeManagedModelCatalog(result);
+  },
   async readApiKeySecret(keyId: string): Promise<string> {
     const result = await invoke<unknown>(
       "service_apikey_read_secret",

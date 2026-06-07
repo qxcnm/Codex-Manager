@@ -39,6 +39,7 @@ const LAZY_PAGE_COMPONENTS: Record<
   "/account-manager": lazy(() => import("@/app/account-manager/page")),
   "/aggregate-api": lazy(() => import("@/app/aggregate-api/page")),
   "/apikeys": lazy(() => import("@/app/apikeys/page")),
+  "/platform-mode": lazy(() => import("@/app/platform-mode/page")),
   "/models": lazy(() => import("@/app/models/page")),
   "/model-groups": lazy(() => import("@/app/model-groups/page")),
   "/plugins": lazy(() => import("@/app/plugins/page")),

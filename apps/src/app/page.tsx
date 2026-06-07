@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState, type WheelEvent as ReactWheelEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+  type WheelEvent as ReactWheelEvent,
+} from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
@@ -67,6 +73,7 @@ import { useLocalDayRange } from "@/hooks/useLocalDayRange";
 import { useMemberDashboardSummary } from "@/hooks/useMemberDashboardSummary";
 import { usePageTransitionReady } from "@/hooks/usePageTransitionReady";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
+import { useCodexProfileModeStatus } from "@/hooks/useCodexProfileModeStatus";
 import {
   estimateChartYAxisWidth,
   formatCompactTokenAmount,
@@ -432,6 +439,45 @@ function DashboardInitialSkeleton() {
       <div className="grid gap-6 md:grid-cols-2">
         <Skeleton className="h-72 w-full rounded-xl" />
         <Skeleton className="h-72 w-full rounded-xl" />
+      </div>
+    </div>
+  );
+}
+
+function DirectModeUnavailable({
+  active,
+  children,
+  className,
+}: {
+  active: boolean;
+  children: ReactNode;
+  className?: string;
+}) {
+  const { t } = useI18n();
+  if (!active) return <>{children}</>;
+
+  return (
+    <div className={cn("relative overflow-hidden rounded-xl", className)}>
+      <div className="pointer-events-none select-none opacity-60 blur-[1px] grayscale">
+        {children}
+      </div>
+      <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/45 p-4 backdrop-blur-sm">
+        <div className="grid max-w-md justify-items-center gap-3 rounded-2xl border border-amber-500/40 bg-background/80 px-5 py-4 text-center shadow-lg shadow-amber-500/10">
+          <div>
+            <div className="text-sm font-semibold text-amber-700 dark:text-amber-200">
+              {t("账号直连模式下不可用")}
+            </div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              {t("切换到本地网关后可统计请求日志、Token 和费用")}
+            </div>
+          </div>
+          <a
+            href={buildStaticRouteUrl("/platform-mode")}
+            className="inline-flex h-8 items-center justify-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            {t("去切换为本地网关")}
+          </a>
+        </div>
       </div>
     </div>
   );
@@ -975,6 +1021,10 @@ function AdminDashboard() {
   const { t } = useI18n();
   const { stats, currentAccount, recommendations, requestLogs, isLoading, isServiceReady } =
     useDashboardStats();
+  const { isDirectAccountMode } = useCodexProfileModeStatus({
+    enabled: true,
+    refetchIntervalMs: 10_000,
+  });
   const localDayRange = useLocalDayRange();
   const [adminUsageRangePreset, setAdminUsageRangePreset] =
     useState<AdminUsageRangePreset>("7d");
@@ -1046,6 +1096,24 @@ function AdminDashboard() {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-700">
+      {isDirectAccountMode ? (
+        <Alert className="border-amber-500/30 bg-amber-500/10">
+          <AlertTriangle className="size-4" />
+          <AlertTitle>{t("当前为账号直连模式")}</AlertTitle>
+          <AlertDescription className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <span>
+              {t("CodexManager 无法统计 CLI 请求日志和用量。")}
+            </span>
+            <a
+              href={buildStaticRouteUrl("/platform-mode")}
+              className="inline-flex h-7 w-fit items-center justify-center rounded-md border border-amber-500/40 bg-background/70 px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-background"
+            >
+              {t("去切换为本地网关")}
+            </a>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {isLoading ? (
           Array.from({ length: 4 }).map((_, index) => (
@@ -1059,7 +1127,11 @@ function AdminDashboard() {
               icon={Users}
               color="text-blue-500"
               sub={t("池中所有配置账号")}
-              badge={`${t("最近日志")} ${requestLogs.length} ${t("条")}`}
+              badge={
+                isDirectAccountMode
+                  ? t("账号直连模式下不可用")
+                  : `${t("最近日志")} ${requestLogs.length} ${t("条")}`
+              }
             />
 
             <StatProgressCard
@@ -1114,44 +1186,46 @@ function AdminDashboard() {
         )}
       </div>
 
-      <AdminUsageAnalyticsCard
-        summary={adminUsageSummary}
-        isLoading={isLoading || isAdminUsageLoading}
-        isError={isAdminUsageError}
-        rangePreset={adminUsageRangePreset}
-        rangeStartInput={adminUsageRangeStartInput}
-        rangeEndInput={adminUsageRangeEndInput}
-        onRangePresetChange={(preset) => {
-          setAdminUsageRangePreset(preset);
-          if (preset === "custom") {
-            return;
-          }
-          const nextRange = buildAdminUsagePresetRange(
-            preset,
-            localDayRange.dayStartTs,
-            localDayRange.dayEndTs,
-          );
-          setAdminUsageRangeStartInput(nextRange.startInput);
-          setAdminUsageRangeEndInput(nextRange.endInput);
-          setAdminUsageRangeParams(nextRange);
-        }}
-        onRangeStartInputChange={setAdminUsageRangeStartInput}
-        onRangeEndInputChange={setAdminUsageRangeEndInput}
-        onApplyCustomRange={() => {
-          const startTs = parseDateInputStartTs(adminUsageRangeStartInput);
-          const endTs = parseDateInputEndTs(adminUsageRangeEndInput);
-          if (startTs == null || endTs == null || endTs <= startTs) {
-            return;
-          }
-          setAdminUsageRangeParams({
-            startTs,
-            endTs,
-            startInput: adminUsageRangeStartInput,
-            endInput: adminUsageRangeEndInput,
-          });
-        }}
-        isCustomRangeInvalid={isCustomAdminUsageRangeInvalid}
-      />
+      <DirectModeUnavailable active={isDirectAccountMode}>
+        <AdminUsageAnalyticsCard
+          summary={adminUsageSummary}
+          isLoading={isLoading || isAdminUsageLoading}
+          isError={isAdminUsageError}
+          rangePreset={adminUsageRangePreset}
+          rangeStartInput={adminUsageRangeStartInput}
+          rangeEndInput={adminUsageRangeEndInput}
+          onRangePresetChange={(preset) => {
+            setAdminUsageRangePreset(preset);
+            if (preset === "custom") {
+              return;
+            }
+            const nextRange = buildAdminUsagePresetRange(
+              preset,
+              localDayRange.dayStartTs,
+              localDayRange.dayEndTs,
+            );
+            setAdminUsageRangeStartInput(nextRange.startInput);
+            setAdminUsageRangeEndInput(nextRange.endInput);
+            setAdminUsageRangeParams(nextRange);
+          }}
+          onRangeStartInputChange={setAdminUsageRangeStartInput}
+          onRangeEndInputChange={setAdminUsageRangeEndInput}
+          onApplyCustomRange={() => {
+            const startTs = parseDateInputStartTs(adminUsageRangeStartInput);
+            const endTs = parseDateInputEndTs(adminUsageRangeEndInput);
+            if (startTs == null || endTs == null || endTs <= startTs) {
+              return;
+            }
+            setAdminUsageRangeParams({
+              startTs,
+              endTs,
+              startInput: adminUsageRangeStartInput,
+              endInput: adminUsageRangeEndInput,
+            });
+          }}
+          isCustomRangeInvalid={isCustomAdminUsageRangeInvalid}
+        />
+      </DirectModeUnavailable>
 
       <Card className="glass-card overflow-hidden shadow-sm">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -1238,102 +1312,106 @@ function AdminDashboard() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {[
-          {
-            title: t("今日Token"),
-            value: formatCompactTokenAmount(stats.todayTokens),
-            icon: Zap,
-            color: "text-yellow-500",
-            sub: t("输入 + 输出合计"),
-          },
-          {
-            title: t("缓存Token"),
-            value: formatCompactTokenAmount(stats.cachedTokens),
-            icon: Database,
-            color: "text-indigo-500",
-            sub: t("上下文缓存命中"),
-          },
-          {
-            title: t("推理Token"),
-            value: formatCompactTokenAmount(stats.reasoningTokens),
-            icon: BrainCircuit,
-            color: "text-purple-500",
-            sub: t("大模型思考过程"),
-          },
-          {
-            title: t("预计费用"),
-            value: formatUsd(stats.todayCost),
-            icon: DollarSign,
-            color: "text-emerald-500",
-            sub: t("按官价估算"),
-          },
-        ].map((card) =>
-          isLoading ? (
-            <Skeleton key={card.title} className="h-32 w-full rounded-xl" />
-          ) : (
-            <MetricCard key={card.title} {...card} />
-          ),
-        )}
-      </div>
+      <DirectModeUnavailable active={isDirectAccountMode}>
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {[
+            {
+              title: t("今日Token"),
+              value: formatCompactTokenAmount(stats.todayTokens),
+              icon: Zap,
+              color: "text-yellow-500",
+              sub: t("输入 + 输出合计"),
+            },
+            {
+              title: t("缓存Token"),
+              value: formatCompactTokenAmount(stats.cachedTokens),
+              icon: Database,
+              color: "text-indigo-500",
+              sub: t("上下文缓存命中"),
+            },
+            {
+              title: t("推理Token"),
+              value: formatCompactTokenAmount(stats.reasoningTokens),
+              icon: BrainCircuit,
+              color: "text-purple-500",
+              sub: t("大模型思考过程"),
+            },
+            {
+              title: t("预计费用"),
+              value: formatUsd(stats.todayCost),
+              icon: DollarSign,
+              color: "text-emerald-500",
+              sub: t("按官价估算"),
+            },
+          ].map((card) =>
+            isLoading ? (
+              <Skeleton key={card.title} className="h-32 w-full rounded-xl" />
+            ) : (
+              <MetricCard key={card.title} {...card} />
+            ),
+          )}
+        </div>
+      </DirectModeUnavailable>
 
       <div className="grid gap-6 md:grid-cols-2">
-        <Card className="glass-card min-h-[300px] shadow-sm">
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="text-base font-semibold">{t("当前活跃账号")}</CardTitle>
-          </CardHeader>
-          <CardContent className="flex min-h-[200px] flex-col justify-start">
-            {isLoading ? (
-              <div className="space-y-4">
-                <Skeleton className="h-28 w-full rounded-xl" />
-                <div className="grid grid-cols-2 gap-4">
-                  <Skeleton className="h-32 w-full rounded-xl" />
-                  <Skeleton className="h-32 w-full rounded-xl" />
-                </div>
-              </div>
-            ) : currentAccount ? (
-              <div className="space-y-4">
-                <AccountHighlightCard
-                  title={t("当前活跃账号")}
-                  name={currentAccount.name}
-                  subtitle={currentAccount.id}
-                  tone="green"
-                />
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div className="space-y-3 rounded-xl bg-muted/30 p-4">
-                    <p className="text-xs text-muted-foreground">{t("5小时剩余")}</p>
-                    <p className="text-lg font-bold">
-                      {formatPercent(currentAccount.primaryRemainPercent)}
-                    </p>
-                    <PercentBar
-                      label={t("剩余额度")}
-                      value={currentAccount.primaryRemainPercent}
-                      tone="green"
-                    />
-                  </div>
-                  <div className="space-y-3 rounded-xl bg-muted/30 p-4">
-                    <p className="text-xs text-muted-foreground">{t("7天剩余")}</p>
-                    <p className="text-lg font-bold">
-                      {formatPercent(currentAccount.secondaryRemainPercent)}
-                    </p>
-                    <PercentBar
-                      label={t("剩余额度")}
-                      value={currentAccount.secondaryRemainPercent}
-                      tone="blue"
-                    />
+        <DirectModeUnavailable active={isDirectAccountMode}>
+          <Card className="glass-card min-h-[300px] shadow-sm">
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle className="text-base font-semibold">{t("当前活跃账号")}</CardTitle>
+            </CardHeader>
+            <CardContent className="flex min-h-[200px] flex-col justify-start">
+              {isLoading ? (
+                <div className="space-y-4">
+                  <Skeleton className="h-28 w-full rounded-xl" />
+                  <div className="grid grid-cols-2 gap-4">
+                    <Skeleton className="h-32 w-full rounded-xl" />
+                    <Skeleton className="h-32 w-full rounded-xl" />
                   </div>
                 </div>
-              </div>
-            ) : (
-              <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
-                <div className="rounded-full bg-accent/30 p-4 animate-pulse">
-                  <Activity className="h-8 w-8 opacity-20" />
+              ) : currentAccount ? (
+                <div className="space-y-4">
+                  <AccountHighlightCard
+                    title={t("当前活跃账号")}
+                    name={currentAccount.name}
+                    subtitle={currentAccount.id}
+                    tone="green"
+                  />
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div className="space-y-3 rounded-xl bg-muted/30 p-4">
+                      <p className="text-xs text-muted-foreground">{t("5小时剩余")}</p>
+                      <p className="text-lg font-bold">
+                        {formatPercent(currentAccount.primaryRemainPercent)}
+                      </p>
+                      <PercentBar
+                        label={t("剩余额度")}
+                        value={currentAccount.primaryRemainPercent}
+                        tone="green"
+                      />
+                    </div>
+                    <div className="space-y-3 rounded-xl bg-muted/30 p-4">
+                      <p className="text-xs text-muted-foreground">{t("7天剩余")}</p>
+                      <p className="text-lg font-bold">
+                        {formatPercent(currentAccount.secondaryRemainPercent)}
+                      </p>
+                      <PercentBar
+                        label={t("剩余额度")}
+                        value={currentAccount.secondaryRemainPercent}
+                        tone="blue"
+                      />
+                    </div>
+                  </div>
                 </div>
-                <p>{isServiceReady ? t("暂无可识别的活跃账号") : t("正在等待服务连接")}</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+              ) : (
+                <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
+                  <div className="rounded-full bg-accent/30 p-4 animate-pulse">
+                    <Activity className="h-8 w-8 opacity-20" />
+                  </div>
+                  <p>{isServiceReady ? t("暂无可识别的活跃账号") : t("正在等待服务连接")}</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </DirectModeUnavailable>
 
         <Card className="glass-card min-h-[300px] shadow-sm">
           <CardHeader>

@@ -220,17 +220,17 @@ where
 /// # 返回
 /// 返回函数执行结果
 fn build_model_picker_client() -> Client {
-    let mut builder = Client::builder()
+    let builder = Client::builder()
         .connect_timeout(MODEL_PICKER_CONNECT_TIMEOUT)
         .timeout(MODEL_PICKER_TOTAL_TIMEOUT)
         .pool_max_idle_per_host(8)
         .pool_idle_timeout(Some(Duration::from_secs(60)))
         .user_agent(crate::gateway::current_codex_user_agent());
-    if let Some(proxy_url) = crate::gateway::current_upstream_proxy_url() {
-        if let Ok(proxy) = reqwest::Proxy::all(proxy_url.as_str()) {
-            builder = builder.proxy(proxy);
-        }
-    }
+    let builder = crate::gateway::apply_async_upstream_proxy(
+        builder,
+        crate::gateway::current_upstream_proxy_url().as_deref(),
+        "model_picker_proxy_invalid",
+    );
     builder.build().unwrap_or_else(|err| {
         log::warn!("event=model_picker_client_build_failed err={}", err);
         Client::new()

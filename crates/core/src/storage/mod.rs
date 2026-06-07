@@ -12,6 +12,7 @@ mod api_key_quota_limits;
 mod api_keys;
 mod conversation_bindings;
 mod events;
+mod key_id_filters;
 mod model_groups;
 mod model_options;
 mod model_price_rules;
@@ -92,6 +93,15 @@ pub struct ModelSourceMapping {
     pub weight: i64,
     pub billing_model_slug: Option<String>,
     pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelSourceMappingPreference {
+    pub source_kind: String,
+    pub source_id: String,
+    pub upstream_model: String,
+    pub preference: String,
     pub updated_at: i64,
 }
 
@@ -1006,6 +1016,11 @@ impl Storage {
         self.apply_sql_migration(
             "064_drop_gateway_error_logs",
             include_str!("../../migrations/064_drop_gateway_error_logs.sql"),
+        )?;
+        self.apply_sql_or_compat_migration(
+            "065_model_source_mapping_preferences",
+            include_str!("../../migrations/065_model_source_mapping_preferences.sql"),
+            |s| s.ensure_model_source_tables(),
         )?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_aggregate_apis_table()?;

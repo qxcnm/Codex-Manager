@@ -78,6 +78,10 @@
 - `CODEXMANAGER_WEB_ROOT`：web 静态资源目录
 - `CODEXMANAGER_LOGIN_ADDR`：本地 OAuth 回调监听地址
 
+### Docker containers
+
+- `TZ`: container time zone. Docker images default to `Asia/Shanghai`; compose examples use `${TZ:-Asia/Shanghai}`, so they pass through `TZ` from the deployment environment and fall back to `Asia/Shanghai` when unset. Change it to your own IANA time zone when deploying elsewhere.
+
 ### 网关与上游
 
 - `CODEXMANAGER_UPSTREAM_BASE_URL`

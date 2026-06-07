@@ -1199,6 +1199,8 @@ pub(crate) fn complete_login_with_redirect(
         .as_ref()
         .map(|account| account.created_at)
         .unwrap_or(now);
+    let workspace_id_for_log = workspace_id.clone();
+    let chatgpt_account_id_for_log = chatgpt_account_id.clone();
     let account = Account {
         id: account_key.clone(),
         label,
@@ -1232,6 +1234,17 @@ pub(crate) fn complete_login_with_redirect(
         last_refresh: now,
     };
     storage.insert_token(&token).map_err(|e| e.to_string())?;
+
+    let db_path = std::env::var("CODEXMANAGER_DB_PATH").unwrap_or_else(|_| "<unset>".to_string());
+    log::info!(
+        "oauth login persisted account: db_path={} login_id={} account_id={} workspace_id={} chatgpt_account_id={} redirect_uri={}",
+        db_path,
+        state,
+        account_key,
+        workspace_id_for_log.as_deref().unwrap_or("-"),
+        chatgpt_account_id_for_log.as_deref().unwrap_or("-"),
+        redirect_uri
+    );
 
     storage
         .update_login_session_status(state, "success", None)

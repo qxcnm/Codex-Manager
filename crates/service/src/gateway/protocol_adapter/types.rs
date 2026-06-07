@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 pub(crate) enum ResponseAdapter {
     Passthrough,
     AnthropicMessagesFromResponses,
+    ResponsesFromAnthropicMessages,
     ChatCompletionsFromResponses,
     #[allow(dead_code)]
     CompactFromChatCompletions,

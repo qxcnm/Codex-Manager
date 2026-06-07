@@ -59,6 +59,16 @@ CodexManager를 후원해 주신 다음 스폰서께 감사드립니다.
 <table>
   <tr>
     <td align="center" valign="middle" width="180">
+      <a href="https://apikey.fun/register?aff=Codex-Manager">
+        <img src="../../assets/images/sponsors/APIKey.Fun.png" alt="APIKEY.FUN" width="120" />
+      </a>
+    </td>
+    <td valign="top">
+      <strong>APIKEY.FUN</strong> 의 프로젝트 후원에 감사드립니다! APIKEY.FUN 은 기업과 개인 개발자에게 안정적이고 효율적이며 저렴한 AI 모델 API 접속 서비스를 제공하는 전문 엔터프라이즈급 AI 중계 플랫폼입니다. Claude, OpenAI, Gemini 등 주요 인기 모델을 지원하며, 가격은 공식 가격의 7% 수준까지 낮습니다. 이 프로젝트의 <a href="https://apikey.fun/register?aff=Codex-Manager">전용 링크</a>로 가입하면 최대 <strong>충전 영구 5% 할인</strong> 전용 혜택도 받을 수 있습니다.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="middle" width="180">
       <a href="https://gzxsy.vip/register?aff=eapz">
         <img src="../../assets/images/sponsors/xingsiyan.jpg" alt="Xing Si Yan Gateway" width="120" />
       </a>

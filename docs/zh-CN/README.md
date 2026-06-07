@@ -19,6 +19,16 @@
 <table>
   <tr>
     <td align="center" valign="middle" width="180">
+      <a href="https://apikey.fun/register?aff=Codex-Manager">
+        <img src="../../assets/images/sponsors/APIKey.Fun.png" alt="APIKEY.FUN" width="120" />
+      </a>
+    </td>
+    <td valign="top">
+      感谢 <strong>APIKEY.FUN</strong> 赞助本项目！APIKEY.FUN 是一家专业的企业级 AI 中转站，致力于为企业和个人开发者提供稳定、高效、低成本的 AI 模型 API 接入服务。平台支持 Claude、OpenAI、Gemini 等主流热门模型，价格低至官方原价的 7%。通过本项目<a href="https://apikey.fun/register?aff=Codex-Manager">专属链接</a>注册，还可享受最高 <strong>充值永久 95 折</strong> 专属优惠。
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="middle" width="180">
       <a href="https://gzxsy.vip/register?aff=eapz">
         <img src="../../assets/images/sponsors/xingsiyan.jpg" alt="星思研中转站" width="120" />
       </a>

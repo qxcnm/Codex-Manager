@@ -11,6 +11,7 @@ use crate::aggregate_api::{
     AGGREGATE_API_AUTH_APIKEY, AGGREGATE_API_AUTH_USERPASS, AGGREGATE_API_PROVIDER_CLAUDE,
     AGGREGATE_API_PROVIDER_CODEX, AGGREGATE_API_PROVIDER_GEMINI,
 };
+use crate::gateway::protocol_adapter::adapt_openai_responses_to_anthropic_messages;
 use crate::gateway::request_log::RequestLogUsage;
 use serde_json::Value;
 
@@ -144,6 +145,27 @@ fn aggregate_upstream_model_for_log<'a>(
     platform_model: Option<&'a str>,
 ) -> Option<&'a str> {
     candidate.model_override.as_deref().or(platform_model)
+}
+
+fn should_bridge_responses_to_anthropic(candidate: &AggregateApi, path: &str) -> bool {
+    normalize_provider_type_value(candidate.provider_type.as_str()) == AGGREGATE_API_PROVIDER_CLAUDE
+        && (path == "/v1/responses" || path.starts_with("/v1/responses?"))
+}
+
+fn responses_to_anthropic_messages_action_path(candidate: &AggregateApi, path: &str) -> String {
+    if candidate.action.is_some() {
+        return effective_action_path(candidate, path);
+    }
+
+    let base_path = reqwest::Url::parse(candidate.url.as_str())
+        .ok()
+        .map(|url| url.path().trim_end_matches('/').to_string())
+        .unwrap_or_default();
+    if base_path == "/v1" || base_path.ends_with("/v1") {
+        "/messages".to_string()
+    } else {
+        "/v1/messages".to_string()
+    }
 }
 
 fn replace_query_param(mut url: reqwest::Url, name: &str, value: &str) -> reqwest::Url {
@@ -652,6 +674,44 @@ fn build_aggregate_api_request(
     Ok(builder)
 }
 
+fn build_anthropic_bridge_aggregate_api_request(
+    client: &reqwest::blocking::Client,
+    request: &Request,
+    method: &reqwest::Method,
+    url: reqwest::Url,
+    body: &Bytes,
+    secret: &str,
+    auth_config: &AggregateApiAuthConfig,
+    injected_headers: &HashSet<String>,
+    request_deadline: Option<Instant>,
+    is_stream: bool,
+) -> Result<reqwest::blocking::RequestBuilder, String> {
+    let mut builder = build_aggregate_api_request(
+        client,
+        request,
+        method,
+        url,
+        body,
+        secret,
+        auth_config,
+        injected_headers,
+        request_deadline,
+        is_stream,
+    )?;
+    builder = builder.header(
+        HeaderName::from_static("anthropic-version"),
+        HeaderValue::from_static("2023-06-01"),
+    );
+    if matches!(auth_config, AggregateApiAuthConfig::ApiKeyDefaultBearer) {
+        builder = builder.header(
+            HeaderName::from_static("x-api-key"),
+            HeaderValue::from_str(secret.trim())
+                .map_err(|_| "invalid aggregate api secret".to_string())?,
+        );
+    }
+    Ok(builder)
+}
+
 /// 函数 `resolve_aggregate_api_rotation_candidates`
 ///
 /// 作者: gaohongshun
@@ -809,7 +869,17 @@ pub(in super::super) fn proxy_aggregate_request(
             continue;
         };
 
-        let effective_path = effective_action_path(&candidate, path);
+        let bridge_responses_to_anthropic = should_bridge_responses_to_anthropic(&candidate, path);
+        let effective_path = if bridge_responses_to_anthropic {
+            responses_to_anthropic_messages_action_path(&candidate, path)
+        } else {
+            effective_action_path(&candidate, path)
+        };
+        let response_adapter_for_candidate = if bridge_responses_to_anthropic {
+            super::super::super::ResponseAdapter::ResponsesFromAnthropicMessages
+        } else {
+            response_adapter
+        };
         let (auth_config, injected_headers) = match parse_auth_config(&candidate) {
             Ok(value) => value,
             Err(err) => {
@@ -904,18 +974,44 @@ pub(in super::super) fn proxy_aggregate_request(
                 _ => {}
             }
 
-            let builder = build_aggregate_api_request(
-                &client,
-                request.as_ref().expect("request should still be available"),
-                method,
-                url.clone(),
-                &rewrite_body_model_override(body, candidate.model_override.as_deref()),
-                secret.as_str(),
-                &auth_config,
-                &injected_headers,
-                request_deadline,
-                is_stream,
-            )?;
+            let rewritten_body =
+                rewrite_body_model_override(body, candidate.model_override.as_deref());
+            let upstream_body = if bridge_responses_to_anthropic {
+                Bytes::from(adapt_openai_responses_to_anthropic_messages(
+                    rewritten_body.as_ref(),
+                    candidate.model_override.as_deref(),
+                )?)
+            } else {
+                rewritten_body
+            };
+
+            let builder = if bridge_responses_to_anthropic {
+                build_anthropic_bridge_aggregate_api_request(
+                    &client,
+                    request.as_ref().expect("request should still be available"),
+                    method,
+                    url.clone(),
+                    &upstream_body,
+                    secret.as_str(),
+                    &auth_config,
+                    &injected_headers,
+                    request_deadline,
+                    is_stream,
+                )?
+            } else {
+                build_aggregate_api_request(
+                    &client,
+                    request.as_ref().expect("request should still be available"),
+                    method,
+                    url.clone(),
+                    &upstream_body,
+                    secret.as_str(),
+                    &auth_config,
+                    &injected_headers,
+                    request_deadline,
+                    is_stream,
+                )?
+            };
 
             let attempt_started_at = Instant::now();
             let upstream = match builder.send() {
@@ -980,14 +1076,15 @@ pub(in super::super) fn proxy_aggregate_request(
             }
 
             let inflight_guard = super::super::super::acquire_account_inflight(key_id);
-            let passthrough_sse_protocol = resolve_passthrough_sse_protocol(path, response_adapter);
+            let passthrough_sse_protocol =
+                resolve_passthrough_sse_protocol(path, response_adapter_for_candidate);
             let bridge = super::super::super::respond_with_upstream(
                 request
                     .take()
                     .expect("request should be available before bridge"),
                 GatewayUpstreamResponse::Blocking(upstream),
                 inflight_guard,
-                response_adapter,
+                response_adapter_for_candidate,
                 passthrough_sse_protocol,
                 None,
                 path,
@@ -1008,7 +1105,7 @@ pub(in super::super) fn proxy_aggregate_request(
             super::super::super::trace_log::log_bridge_result(
                 super::super::super::trace_log::BridgeResultLog {
                     trace_id,
-                    adapter: format!("{response_adapter:?}").as_str(),
+                    adapter: format!("{response_adapter_for_candidate:?}").as_str(),
                     path,
                     is_stream,
                     stream_terminal_seen: bridge.stream_terminal_seen,
@@ -1066,7 +1163,7 @@ pub(in super::super) fn proxy_aggregate_request(
                     original_path: Some(original_path),
                     adapted_path: Some(path),
                     gateway_mode: gateway_mode_for_log,
-                    response_adapter: Some(response_adapter),
+                    response_adapter: Some(response_adapter_for_candidate),
                     effective_service_tier: effective_service_tier_for_log,
                     aggregate_api_supplier_name: candidate_supplier_name.as_deref(),
                     aggregate_api_url: Some(candidate_url.as_str()),
@@ -1342,8 +1439,9 @@ mod tests {
     use codexmanager_core::storage::{now_ts, AggregateApi, Storage};
 
     use super::{
-        build_upstream_url, effective_action_path, resolve_aggregate_api_rotation_candidates,
-        resolve_passthrough_sse_protocol, rewrite_body_model_override,
+        build_anthropic_bridge_aggregate_api_request, build_upstream_url, effective_action_path,
+        resolve_aggregate_api_rotation_candidates, resolve_passthrough_sse_protocol,
+        responses_to_anthropic_messages_action_path, rewrite_body_model_override,
     };
     use crate::aggregate_api::{
         AGGREGATE_API_AUTH_APIKEY, AGGREGATE_API_PROVIDER_CLAUDE, AGGREGATE_API_PROVIDER_CODEX,
@@ -1426,6 +1524,105 @@ mod tests {
         assert_eq!(
             url.as_str(),
             "https://api.example.com/v1/messages?beta=true"
+        );
+    }
+
+    #[test]
+    fn responses_bridge_uses_messages_suffix_for_anthropic_v1_base_url() {
+        let mut api = aggregate_api_with_action(None);
+        api.url = "https://api.anthropic.com/v1".to_string();
+
+        let path = responses_to_anthropic_messages_action_path(&api, "/v1/responses");
+        let url = build_upstream_url(api.url.as_str(), path.as_str()).expect("build upstream url");
+
+        assert_eq!(url.as_str(), "https://api.anthropic.com/v1/messages");
+    }
+
+    #[test]
+    fn responses_bridge_keeps_v1_messages_for_deepseek_anthropic_base_url() {
+        let mut api = aggregate_api_with_action(None);
+        api.url = "https://api.deepseek.com/anthropic".to_string();
+
+        let path = responses_to_anthropic_messages_action_path(&api, "/v1/responses");
+        let url = build_upstream_url(api.url.as_str(), path.as_str()).expect("build upstream url");
+
+        assert_eq!(
+            url.as_str(),
+            "https://api.deepseek.com/anthropic/v1/messages"
+        );
+    }
+
+    #[test]
+    fn responses_bridge_respects_custom_action_path() {
+        let mut api = aggregate_api_with_action(Some("/messages?beta=true"));
+        api.url = "https://api.anthropic.com/v1".to_string();
+
+        let path = responses_to_anthropic_messages_action_path(&api, "/v1/responses");
+        let url = build_upstream_url(api.url.as_str(), path.as_str()).expect("build upstream url");
+
+        assert_eq!(
+            path.as_str(),
+            "/messages?beta=true",
+            "custom action should remain the upstream bridge action"
+        );
+        assert_eq!(
+            url.as_str(),
+            "https://api.anthropic.com/v1/messages?beta=true"
+        );
+    }
+
+    #[test]
+    fn anthropic_bridge_request_adds_required_messages_headers_with_default_auth() {
+        let request: tiny_http::Request = tiny_http::TestRequest::new()
+            .with_header(
+                tiny_http::Header::from_bytes("Authorization", "Bearer client-key")
+                    .expect("auth header"),
+            )
+            .into();
+        let client = reqwest::blocking::Client::new();
+        let builder = build_anthropic_bridge_aggregate_api_request(
+            &client,
+            &request,
+            &reqwest::Method::POST,
+            reqwest::Url::parse("https://api.anthropic.com/v1/messages").expect("url"),
+            &Bytes::from_static(br#"{"model":"claude-sonnet","messages":[]}"#),
+            "sk-ant-test",
+            &crate::gateway::upstream::protocol::aggregate_api::AggregateApiAuthConfig::ApiKeyDefaultBearer,
+            &std::collections::HashSet::new(),
+            None,
+            true,
+        )
+        .expect("build request")
+        .build()
+        .expect("finalize request");
+
+        assert_eq!(
+            builder
+                .headers()
+                .get("authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer sk-ant-test")
+        );
+        assert_eq!(
+            builder
+                .headers()
+                .get("x-api-key")
+                .and_then(|value| value.to_str().ok()),
+            Some("sk-ant-test")
+        );
+        assert_eq!(
+            builder
+                .headers()
+                .get("anthropic-version")
+                .and_then(|value| value.to_str().ok()),
+            Some("2023-06-01")
+        );
+        assert_eq!(
+            builder
+                .headers()
+                .get("accept")
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
         );
     }
 

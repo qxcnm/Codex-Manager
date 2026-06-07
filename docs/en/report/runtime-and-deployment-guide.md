@@ -90,6 +90,8 @@ You can still set `CODEXMANAGER_WEB_ROOT=/path/to/out` when you intentionally wa
 
 ## Docker deployment
 
+Docker images default to `TZ=Asia/Shanghai`, and compose examples use `TZ=${TZ:-Asia/Shanghai}`: if the deployment environment already sets `TZ`, compose passes it through; otherwise it falls back to `Asia/Shanghai`. If you deploy in another region, set `TZ` or change it under `environment` to your own IANA time zone, for example `Europe/London` or `America/Los_Angeles`.
+
 ### GitHub Packages / GHCR
 - After a Release is published, both `codexmanager-service` and `codexmanager-web` images are pushed to GitHub Packages (GHCR).
 - Pull the corresponding release tag, for example: `docker pull ghcr.io/qxcnm/codexmanager-service:v0.1.15`
@@ -114,6 +116,7 @@ docker run --rm --name codexmanager-service \
   --network-alias codexmanager-service \
   -p 48760:48760 \
   -v codexmanager-data:/data \
+  -e TZ=Asia/Shanghai \
   -e CODEXMANAGER_RPC_TOKEN=replace_with_your_token \
   codexmanager-service
 
@@ -123,6 +126,7 @@ docker run --rm --name codexmanager-web \
   --network codexmanager-net \
   -p 48761:48761 \
   -v codexmanager-data:/data \
+  -e TZ=Asia/Shanghai \
   -e CODEXMANAGER_WEB_NO_SPAWN_SERVICE=1 \
   -e CODEXMANAGER_SERVICE_ADDR=codexmanager-service:48760 \
   -e CODEXMANAGER_RPC_TOKEN=replace_with_your_token \

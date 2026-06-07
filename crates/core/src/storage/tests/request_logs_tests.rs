@@ -480,3 +480,90 @@ fn request_logs_support_time_range_filters() {
     assert_eq!(summary.count, 2);
     assert_eq!(summary.total_tokens, 20);
 }
+
+#[test]
+fn request_logs_for_empty_key_sets_return_empty_results() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let empty_keys = vec![" ".to_string(), String::new()];
+
+    let logs = storage
+        .list_request_logs_paginated_for_keys(None, None, None, None, 0, 20, &empty_keys)
+        .expect("list logs for empty keys");
+    assert!(logs.is_empty());
+
+    let total = storage
+        .count_request_logs_for_keys(None, None, None, None, &empty_keys)
+        .expect("count logs for empty keys");
+    assert_eq!(total, 0);
+
+    let filtered = storage
+        .summarize_request_logs_filtered_for_keys(None, None, None, None, &empty_keys)
+        .expect("summarize logs for empty keys");
+    assert_eq!(filtered.count, 0);
+    assert_eq!(filtered.total_tokens, 0);
+
+    let today = storage
+        .summarize_request_logs_between_for_keys(0, 10_000, &empty_keys)
+        .expect("summarize today for empty keys");
+    assert_eq!(today.input_tokens, 0);
+    assert_eq!(today.estimated_cost_usd, 0.0);
+}
+
+#[test]
+fn request_logs_for_large_key_sets_use_temp_filter() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+
+    let request_log_id = storage
+        .insert_request_log(&RequestLog {
+            trace_id: Some("trc-large-key-filter".to_string()),
+            key_id: Some("key-0949".to_string()),
+            account_id: Some("acc-large-key-filter".to_string()),
+            request_path: "/v1/responses".to_string(),
+            method: "POST".to_string(),
+            status_code: Some(200),
+            created_at: 5_000,
+            ..Default::default()
+        })
+        .expect("insert request log");
+    storage
+        .insert_request_token_stat(&RequestTokenStat {
+            request_log_id,
+            key_id: Some("key-0949".to_string()),
+            account_id: Some("acc-large-key-filter".to_string()),
+            model: Some("gpt-5".to_string()),
+            input_tokens: Some(30),
+            cached_input_tokens: Some(5),
+            output_tokens: Some(10),
+            total_tokens: Some(40),
+            reasoning_output_tokens: Some(2),
+            estimated_cost_usd: Some(0.04),
+            created_at: 5_000,
+        })
+        .expect("insert token stat");
+
+    // More than SQLITE_IN_CLAUSE_BATCH_SIZE keys forces the shared temp-table
+    // path, preventing SQLite host-parameter overflows on member dashboards.
+    let key_ids = (0..950)
+        .map(|index| format!("key-{index:04}"))
+        .collect::<Vec<_>>();
+
+    let total = storage
+        .count_request_logs_for_keys(None, None, None, None, &key_ids)
+        .expect("count logs for large key set");
+    assert_eq!(total, 1);
+
+    let logs = storage
+        .list_request_logs_paginated_for_keys(None, None, None, None, 0, 20, &key_ids)
+        .expect("list logs for large key set");
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].trace_id.as_deref(), Some("trc-large-key-filter"));
+
+    let summary = storage
+        .summarize_request_logs_between_for_keys(4_000, 6_000, &key_ids)
+        .expect("summarize today for large key set");
+    assert_eq!(summary.input_tokens, 30);
+    assert_eq!(summary.output_tokens, 10);
+    assert_eq!(summary.estimated_cost_usd, 0.04);
+}

@@ -1,6 +1,7 @@
 export * from "@/types/account";
 export * from "@/types/api-key";
 export * from "@/types/auth";
+export * from "@/types/codex-profile";
 export * from "@/types/dashboard";
 export * from "@/types/model";
 export * from "@/types/plugin";

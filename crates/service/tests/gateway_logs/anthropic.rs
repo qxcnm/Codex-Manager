@@ -321,6 +321,169 @@ fn gateway_aggregate_messages_passthrough_accepts_message_stop_for_non_claude_pr
     assert_eq!(log.actual_source_id.as_deref(), Some(aggregate_id));
 }
 
+#[test]
+fn gateway_aggregate_responses_bridge_adds_anthropic_headers_and_messages_path() {
+    let _lock = test_env_guard();
+    let dir = new_test_dir("codexmanager-gateway-responses-anthropic-bridge-headers");
+    let db_path: PathBuf = dir.join("codexmanager.db");
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+
+    let anthropic_response = serde_json::json!({
+        "id": "msg_bridge_headers",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-5-sonnet-20241022",
+        "content": [{ "type": "text", "text": "ok" }],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": { "input_tokens": 4, "output_tokens": 1 }
+    });
+    let (upstream_addr, upstream_rx, upstream_join) =
+        start_mock_upstream_sequence_lenient_with_content_types(
+            vec![(
+                200,
+                serde_json::to_string(&anthropic_response).expect("serialize upstream response"),
+                "application/json".to_string(),
+            )],
+            Duration::from_secs(3),
+        );
+
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init db");
+    seed_model_catalog_models(&storage, &["claude-3-5-sonnet-20241022"]);
+    let now = now_ts();
+    let aggregate_id = "agg_claude_responses_bridge_headers";
+    storage
+        .insert_aggregate_api(&AggregateApi {
+            id: aggregate_id.to_string(),
+            provider_type: "claude".to_string(),
+            supplier_name: Some("claude-anthropic-compatible".to_string()),
+            sort: 0,
+            url: format!("http://{upstream_addr}/v1"),
+            auth_type: "apikey".to_string(),
+            auth_params_json: None,
+            action: None,
+            model_override: None,
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+            last_test_at: None,
+            last_test_status: None,
+            last_test_error: None,
+            balance_query_enabled: false,
+            balance_query_template: None,
+            balance_query_base_url: None,
+            balance_query_user_id: None,
+            balance_query_config_json: None,
+            last_balance_at: None,
+            last_balance_status: None,
+            last_balance_error: None,
+            last_balance_json: None,
+        })
+        .expect("insert aggregate api");
+    storage
+        .upsert_aggregate_api_secret(aggregate_id, "upstream-secret")
+        .expect("insert aggregate secret");
+    storage
+        .upsert_model_source_model(&ModelSourceModel {
+            source_kind: "aggregate_api".to_string(),
+            source_id: aggregate_id.to_string(),
+            upstream_model: "claude-3-5-sonnet-20241022".to_string(),
+            display_name: Some("Claude 3.5 Sonnet".to_string()),
+            status: "available".to_string(),
+            discovery_kind: "manual".to_string(),
+            last_synced_at: Some(now),
+            extra_json: "{}".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("insert aggregate source model");
+    storage
+        .upsert_model_source_mapping(&ModelSourceMapping {
+            id: "mapping_claude_responses_bridge_headers".to_string(),
+            platform_model_slug: "claude-3-5-sonnet-20241022".to_string(),
+            source_kind: "aggregate_api".to_string(),
+            source_id: aggregate_id.to_string(),
+            upstream_model: "claude-3-5-sonnet-20241022".to_string(),
+            enabled: true,
+            priority: 0,
+            weight: 1,
+            billing_model_slug: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("insert aggregate source mapping");
+
+    let platform_key = "pk_claude_responses_bridge_headers";
+    storage
+        .insert_api_key(&ApiKey {
+            id: "gk_claude_responses_bridge_headers".to_string(),
+            name: Some("claude-responses-bridge-headers".to_string()),
+            model_slug: Some("claude-3-5-sonnet-20241022".to_string()),
+            reasoning_effort: None,
+            service_tier: None,
+            rotation_strategy: "aggregate_api_rotation".to_string(),
+            aggregate_api_id: Some(aggregate_id.to_string()),
+            account_plan_filter: None,
+            aggregate_api_url: None,
+            client_type: "codex".to_string(),
+            protocol_type: "openai_compat".to_string(),
+            auth_scheme: "x_api_key".to_string(),
+            upstream_base_url: None,
+            static_headers_json: None,
+            key_hash: hash_platform_key_for_test(platform_key),
+            status: "active".to_string(),
+            created_at: now,
+            last_used_at: None,
+        })
+        .expect("insert api key");
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let body = serde_json::json!({
+        "model": "claude-3-5-sonnet-20241022",
+        "input": "hello",
+        "stream": false
+    });
+    let body = serde_json::to_string(&body).expect("serialize request");
+    let (status, response_body) = post_http_raw(
+        &server.addr,
+        "/v1/responses",
+        &body,
+        &[
+            ("Content-Type", "application/json"),
+            ("x-api-key", platform_key),
+        ],
+    );
+    server.join();
+    assert_eq!(status, 200, "gateway response: {response_body}");
+
+    let captured = upstream_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("receive upstream request");
+    upstream_join.join().expect("join mock upstream");
+    assert_eq!(captured.path, "/v1/messages");
+    assert_eq!(
+        captured.headers.get("authorization").map(String::as_str),
+        Some("Bearer upstream-secret")
+    );
+    assert_eq!(
+        captured.headers.get("x-api-key").map(String::as_str),
+        Some("upstream-secret")
+    );
+    assert_eq!(
+        captured
+            .headers
+            .get("anthropic-version")
+            .map(String::as_str),
+        Some("2023-06-01")
+    );
+
+    let upstream_body = decode_upstream_request_body(&captured);
+    let upstream_payload: serde_json::Value =
+        serde_json::from_slice(&upstream_body).expect("parse upstream payload");
+    assert_eq!(upstream_payload["messages"][0]["role"], "user");
+}
+
 /// 函数 `gateway_claude_messages_stay_on_chatgpt_codex_base`
 ///
 /// 作者: gaohongshun

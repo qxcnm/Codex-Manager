@@ -1,5 +1,6 @@
-use rusqlite::{Result, Row};
+use rusqlite::{params_from_iter, Result, Row};
 
+use super::key_id_filters::{key_id_in_clause, normalize_key_ids, SQLITE_IN_CLAUSE_BATCH_SIZE};
 use super::{now_ts, ApiKey, Storage};
 
 const API_KEY_SELECT_SQL: &str = "SELECT
@@ -105,6 +106,36 @@ impl Storage {
         while let Some(row) = rows.next()? {
             out.push(map_api_key_row(row)?);
         }
+        Ok(out)
+    }
+
+    /// 函数 `list_api_keys_for_ids`
+    ///
+    /// 作者: gaohongshun
+    ///
+    /// 时间: 2026-05-28
+    ///
+    /// # 参数
+    /// - self: 参数 self
+    /// - key_ids: 参数 key_ids
+    ///
+    /// # 返回
+    /// 返回函数执行结果
+    pub fn list_api_keys_for_ids(&self, key_ids: &[String]) -> Result<Vec<ApiKey>> {
+        let key_ids = normalize_key_ids(key_ids);
+        if key_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut out = Vec::new();
+        for chunk in key_ids.chunks(SQLITE_IN_CLAUSE_BATCH_SIZE) {
+            out.extend(list_api_keys_for_ids_chunk(self, chunk)?);
+        }
+        out.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
         Ok(out)
     }
 
@@ -674,6 +705,24 @@ impl Storage {
     }
 }
 
+fn list_api_keys_for_ids_chunk(storage: &Storage, key_ids: &[String]) -> Result<Vec<ApiKey>> {
+    let Some((clause, params)) = key_id_in_clause("k.id", key_ids) else {
+        return Ok(Vec::new());
+    };
+    let sql = format!(
+        "{API_KEY_SELECT_SQL}
+         WHERE {clause}
+         ORDER BY k.created_at DESC, k.id ASC"
+    );
+    let mut stmt = storage.conn.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(params.iter()))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(map_api_key_row(row)?);
+    }
+    Ok(out)
+}
+
 /// 函数 `map_api_key_row`
 ///
 /// 作者: gaohongshun
@@ -707,3 +756,7 @@ fn map_api_key_row(row: &Row<'_>) -> Result<ApiKey> {
         last_used_at: row.get(17)?,
     })
 }
+
+#[cfg(test)]
+#[path = "tests/api_keys_tests.rs"]
+mod tests;

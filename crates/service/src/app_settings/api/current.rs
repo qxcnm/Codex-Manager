@@ -1,6 +1,7 @@
 use crate::app_settings::{list_app_settings_map, listener_bind_addr_for_mode};
 use crate::initialize_storage_if_needed;
 use crate::{current_web_auth_mode, distribution_enabled, web_access_password_configured};
+use chrono::Local;
 use codexmanager_core::rpc::types::ModelInfo;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -78,6 +79,28 @@ fn normalize_service_bind_mode_value(raw: Option<&str>) -> &'static str {
     }
 }
 
+fn current_runtime_time_zone_value() -> Value {
+    let env_tz = std::env::var("TZ")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let offset = Local::now().offset().to_string();
+    let source = if env_tz.is_some() { "TZ" } else { "system" };
+    let name = env_tz.unwrap_or_else(|| {
+        if offset == "+00:00" {
+            "UTC".to_string()
+        } else {
+            "Local".to_string()
+        }
+    });
+
+    serde_json::json!({
+        "name": name,
+        "offset": offset,
+        "source": source,
+    })
+}
+
 /// 函数 `current_app_settings_value`
 ///
 /// 作者: gaohongshun
@@ -97,6 +120,7 @@ pub(super) fn current_app_settings_value(
     initialize_storage_if_needed()?;
     sync_runtime_settings_from_storage();
     let background_tasks = current_background_tasks_snapshot_value()?;
+    let runtime_time_zone = current_runtime_time_zone_value();
     let update_auto_check = current_update_auto_check_enabled();
     let persisted_close_to_tray = current_close_to_tray_on_close_setting();
     let close_to_tray = close_to_tray_on_close.unwrap_or(persisted_close_to_tray);
@@ -259,6 +283,7 @@ pub(super) fn current_app_settings_value(
         "webAccessPasswordConfigured": web_access_password_configured(),
     });
     if let Some(object) = result.as_object_mut() {
+        object.insert("runtimeTimeZone".to_string(), runtime_time_zone);
         object.insert("webAuthMode".to_string(), current_web_auth_mode().into());
         object.insert(
             "webAuthModeOptions".to_string(),

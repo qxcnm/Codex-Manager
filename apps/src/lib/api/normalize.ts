@@ -18,6 +18,7 @@ import {
   AppSettings,
   BackgroundTaskSettings,
   QuotaGuardSettings,
+  RuntimeTimeZone,
   DeviceAuthInfo,
   EnvOverrideCatalogItem,
   InstalledPluginSummary,
@@ -81,6 +82,12 @@ const DEFAULT_QUOTA_GUARD: QuotaGuardSettings = {
   primaryMinRemainingPercent: 5,
   secondaryMinRemainingPercent: 10,
   allowAllLowQuotaFallback: true,
+};
+
+const DEFAULT_RUNTIME_TIME_ZONE: RuntimeTimeZone = {
+  name: "Local",
+  offset: "",
+  source: "system",
 };
 
 /**
@@ -1697,6 +1704,15 @@ export function normalizeQuotaGuard(payload: unknown): QuotaGuardSettings {
   };
 }
 
+export function normalizeRuntimeTimeZone(payload: unknown): RuntimeTimeZone {
+  const source = asObject(payload);
+  return {
+    name: asString(source.name) || DEFAULT_RUNTIME_TIME_ZONE.name,
+    offset: asString(source.offset),
+    source: asString(source.source) || DEFAULT_RUNTIME_TIME_ZONE.source,
+  };
+}
+
 export function normalizeEnvOverrideCatalog(payload: unknown): EnvOverrideCatalogItem[] {
   return asArray(payload).reduce<EnvOverrideCatalogItem[]>((result, item) => {
     const source = asObject(item);
@@ -1803,6 +1819,7 @@ export function normalizeAppSettings(payload: unknown): AppSettings {
     upstreamTotalTimeoutMs: asInteger(source.upstreamTotalTimeoutMs, 0, 0),
     sseKeepaliveIntervalMs: asInteger(source.sseKeepaliveIntervalMs, 15_000, 1),
     backgroundTasks: normalizeBackgroundTasks(source.backgroundTasks),
+    runtimeTimeZone: normalizeRuntimeTimeZone(source.runtimeTimeZone),
     envOverrides: normalizeStringRecord(source.envOverrides),
     envOverrideCatalog: normalizeEnvOverrideCatalog(source.envOverrideCatalog),
     envOverrideReservedKeys: asArray(source.envOverrideReservedKeys).map((item) =>

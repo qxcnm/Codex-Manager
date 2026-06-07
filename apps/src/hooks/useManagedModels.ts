@@ -9,6 +9,7 @@ import {
   ManagedModelSourceMappingPayload,
   ManagedModelSourceModelPayload,
   ManagedModelSourceSyncPayload,
+  ModelPriceRuleUpsertPayload,
 } from "@/lib/api/account-client";
 import { serviceClient } from "@/lib/api/service-client";
 import {
@@ -94,7 +95,7 @@ export function useManagedModels() {
     options?: { force?: boolean },
   ): Promise<string | null> => {
     if (!catalog) {
-      return "模型目录为空";
+      return t("模型目录为空");
     }
 
     if (!isDesktopRuntime) {
@@ -102,12 +103,12 @@ export function useManagedModels() {
     }
 
     if (!isServiceReady) {
-      return "服务未连接";
+      return t("服务未连接");
     }
 
     const models = serializeManagedModelCatalogForCodexCache(catalog.items || []);
     if (models.length === 0) {
-      return "模型目录为空";
+      return t("模型目录为空");
     }
 
     const fingerprint = JSON.stringify(models);
@@ -177,6 +178,23 @@ export function useManagedModels() {
     },
     onError: (error: unknown) => {
       toast.error(`${t("刷新模型失败")}: ${getAppErrorMessage(error)}`);
+    },
+  });
+
+  const pruneStaleRemoteMutation = useMutation({
+    mutationFn: () => accountClient.pruneStaleRemoteManagedModels(),
+    onSuccess: async (catalog) => {
+      queryClient.setQueryData(MANAGED_MODEL_QUERY_KEY, catalog);
+      const cacheSyncError = await syncCatalogToCodexCache(catalog);
+      await invalidateAll();
+      if (cacheSyncError) {
+        toast.error(`${t("远端旧模型已清理，但同步 Codex 模型缓存失败")}: ${cacheSyncError}`);
+      } else {
+        toast.success(t("远端旧模型已清理"));
+      }
+    },
+    onError: (error: unknown) => {
+      toast.error(`${t("清理远端旧模型失败")}: ${getAppErrorMessage(error)}`);
     },
   });
 
@@ -352,8 +370,12 @@ export function useManagedModels() {
   });
 
   const sourceMappingDeleteMutation = useMutation({
-    mutationFn: (mappingId: string) =>
-      accountClient.deleteManagedModelSourceMapping(mappingId),
+    mutationFn: (params: {
+      id: string;
+      sourceKind: string;
+      sourceId: string;
+      upstreamModel: string;
+    }) => accountClient.deleteManagedModelSourceMapping(params),
     onSuccess: async () => {
       await reloadManagedRouting();
       await invalidateAll();
@@ -401,9 +423,23 @@ export function useManagedModels() {
       if (!ensureServiceReady("读取模型")) return null;
       return refreshMutation.mutateAsync(false);
     },
+    pruneStaleRemoteModels: async () => {
+      if (!ensureServiceReady("清理远端旧模型")) return null;
+      return pruneStaleRemoteMutation.mutateAsync();
+    },
     saveModel: async (params: ManagedModelPayload) => {
       if (!ensureServiceReady("保存模型")) return null;
       return saveMutation.mutateAsync(params);
+    },
+    saveModelPriceRule: async (params: ModelPriceRuleUpsertPayload) => {
+      if (!ensureServiceReady("保存模型价格")) {
+        throw new Error(t("服务未就绪，无法保存模型价格"));
+      }
+      await accountClient.upsertModelPriceRule(params);
+    },
+    readModelPriceRule: async (modelPattern: string) => {
+      if (!ensureServiceReady("读取模型价格")) return null;
+      return accountClient.readModelPriceRule(modelPattern);
     },
     deleteModel: async (slug: string) => {
       if (!ensureServiceReady("删除模型")) return false;
@@ -433,12 +469,23 @@ export function useManagedModels() {
       if (!ensureServiceReady("保存模型映射")) return null;
       return sourceMappingMutation.mutateAsync(params);
     },
-    deleteSourceMapping: async (mappingId: string) => {
+    deleteSourceMapping: async (
+      mappingId: string,
+      sourceKind: string,
+      sourceId: string,
+      upstreamModel: string,
+    ) => {
       if (!ensureServiceReady("删除模型映射")) return false;
-      await sourceMappingDeleteMutation.mutateAsync(mappingId);
+      await sourceMappingDeleteMutation.mutateAsync({
+        id: mappingId,
+        sourceKind,
+        sourceId,
+        upstreamModel,
+      });
       return true;
     },
     isRefreshing: refreshMutation.isPending,
+    isPruningStaleRemote: pruneStaleRemoteMutation.isPending,
     isSaving: saveMutation.isPending,
     isDeleting: deleteMutation.isPending || batchDeleteMutation.isPending,
     isExporting: exportMutation.isPending,

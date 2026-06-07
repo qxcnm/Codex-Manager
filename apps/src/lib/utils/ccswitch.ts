@@ -1,3 +1,8 @@
+import {
+  buildOpenAiGatewayEndpointFromPublicOrigin,
+  buildOpenAiGatewayEndpointFromServiceAddr,
+} from "../gateway/endpoints";
+
 export const CCSWITCH_PROVIDER_IMPORT_BASE = "ccswitch://v1/import";
 
 export interface CcSwitchProviderImportOptions {
@@ -20,37 +25,11 @@ function normalizeText(value: string | null | undefined): string {
   return String(value || "").trim();
 }
 
-function replaceLoopbackHost(host: string): string {
-  return host === "0.0.0.0" || host === "::" || host === "[::]"
-    ? "localhost"
-    : host;
-}
-
-function appendV1Path(url: URL): string {
-  const path = url.pathname.replace(/\/+$/, "");
-  url.pathname = path.endsWith("/v1") ? path : `${path || ""}/v1`;
-  url.search = "";
-  url.hash = "";
-  return url.toString().replace(/\/$/, "");
-}
-
 export function normalizeCodexManagerGatewayPublicEndpoint(
   publicOrigin?: string | null,
 ): string | null {
-  const raw = normalizeText(publicOrigin);
-  if (!raw) {
-    return null;
-  }
-
-  try {
-    const url = new URL(raw);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return null;
-    }
-    return appendV1Path(url);
-  } catch {
-    return null;
-  }
+  const endpoint = buildOpenAiGatewayEndpointFromPublicOrigin(publicOrigin);
+  return endpoint || null;
 }
 
 export function normalizeCodexManagerGatewayEndpoint(
@@ -66,17 +45,7 @@ export function normalizeCodexManagerGatewayEndpoint(
     }
   }
 
-  const raw = normalizeText(serviceAddr) || "localhost:48760";
-  const value = raw.replace(/^https?:\/\//i, "");
-  const target = value.split("/")[0] || "localhost:48760";
-
-  try {
-    const url = new URL(`http://${target}`);
-    url.hostname = replaceLoopbackHost(url.hostname);
-    return appendV1Path(url);
-  } catch {
-    return "http://localhost:48760/v1";
-  }
+  return buildOpenAiGatewayEndpointFromServiceAddr(serviceAddr);
 }
 
 export function buildCcSwitchProviderName(name?: string | null, id?: string | null): string {

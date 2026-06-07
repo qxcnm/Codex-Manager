@@ -1,0 +1,87 @@
+"use client";
+
+import type { MessageCatalog } from "../types";
+
+export const EN_AGGREGATE_API_MESSAGES: MessageCatalog = {
+  "New API 用户 ID": "New API user ID",
+  "URL": "URL",
+  "action path": "action path",
+  "上游模型名": "Upstream model name",
+  "上游模型覆盖": "Upstream model override",
+  "仅用于额度池归属统计；留空表示该来源对所有 API 可用模型生效。":
+    "Only used for quota pool ownership statistics. Leave blank to make this source available to all API models.",
+  "从供应商模板导入": "Import from supplier template",
+  "余额": "Balance",
+  "余额 Access Token": "Balance access token",
+  "余额倍率必须大于 0": "Balance multiplier must be greater than 0",
+  "余额接口基础地址": "Balance API base URL",
+  "余额刷新完成：{count} 个成功": "Balance refresh completed: {count} succeeded",
+  "余额刷新完成：{success} 个成功，{fail} 个失败":
+    "Balance refresh completed: {success} succeeded, {fail} failed",
+  "余额已刷新": "Balance refreshed",
+  "余额查询失败": "Balance query failed",
+  "余额查询失败 {reason}": "Balance query failed: {reason}",
+  "余额检测": "Balance check",
+  "供应商标识": "Supplier key",
+  "供应商模型": "Supplier models",
+  "供应商模型名": "Supplier model name",
+  "供应商模型已保存": "Supplier model saved",
+  "供应商模型已删除": "Supplier model deleted",
+  "供应商模板": "Supplier template",
+  "保存模板": "Save template",
+  "全部 API 可用模型": "All API-available models",
+  "全部 API 模型": "All API models",
+  "全部测试完成，{count} 个连通": "All tests completed, {count} connected",
+  "删除模板": "Delete template",
+  "刷新余额": "Refresh balance",
+  "同步 /models": "Sync /models",
+  "同步失败": "Sync failed",
+  "套餐": "Plan",
+  "导入到当前模型池": "Import to current model pool",
+  "已在模型池": "Already in model pool",
+  "已导入 {count} 个模型": "Imported {count} models",
+  "已用": "Used",
+  "开启后可在聚合 API 列表手动刷新并显示余额。":
+    "When enabled, balances can be manually refreshed and displayed in the aggregate API list.",
+  "当前模型池": "Current model pool",
+  "当前聚合 API 未启用，启用后才能同步或导入模型。":
+    "The current aggregate API is disabled. Enable it before syncing or importing models.",
+  "总额": "Total",
+  "批量刷新余额失败": "Batch balance refresh failed",
+  "批量测试失败": "Batch test failed",
+  "折算": "Conversion",
+  "暂无供应商模板，可先手动维护模型名":
+    "No supplier templates yet. You can maintain model names manually first.",
+  "暂无可测试的聚合 API": "No aggregate APIs available to test",
+  "暂无已启用余额检测的聚合 API":
+    "No aggregate APIs with balance checking enabled",
+  "暂无模型，先同步 /models 或手动添加":
+    "No models yet. Sync /models or add one manually first.",
+  "最近同步": "Last synced",
+  "未启用": "Disabled",
+  "未查询": "Not queried",
+  "来源模型已添加": "Source model added",
+  "查询失败": "Query failed",
+  "查询模板": "Query template",
+  "模型池": "Model pool",
+  "模型池已同步": "Model pool synced",
+  "模型池配置": "Model pool configuration",
+  "模板": "Template",
+  "测试全部": "Test all",
+  "测试完成：{success} 个连通，{fail} 个失败":
+    "Test completed: {success} connected, {fail} failed",
+  "添加到模型池": "Add to model pool",
+  "用于 API 转发服务要求固定模型名的场景；连接测试和真实转发都会使用该模型。":
+    "Use this when the API forwarding service requires a fixed model name. Connection tests and real forwarding will both use this model.",
+  "留空则从 URL 推断服务根地址": "Leave blank to infer the service root from the URL",
+  "留空则使用上方 URL": "Leave blank to use the URL above",
+  "留空则使用密钥": "Leave blank to use the API key",
+  "留空则使用请求中的模型": "Leave blank to use the requested model",
+  "留空则保持原值或使用密钥":
+    "Leave blank to keep the existing value or use the API key",
+  "请输入余额字段路径": "Enter the balance field path",
+  "请输入自定义余额查询路径": "Enter the custom balance query path",
+  "通用余额": "Generic balance",
+  "额度模型": "Quota models",
+  "额度模型白名单": "Quota model allowlist",
+};

@@ -14,6 +14,7 @@ mod account_manager;
 mod aggregate_api;
 mod apikey;
 mod app_settings;
+mod codex_profile;
 mod dashboard;
 mod gateway;
 mod model_groups;
@@ -282,6 +283,9 @@ pub(crate) fn handle_request_with_actor(req: JsonRpcRequest, actor: RpcActor) ->
         return JsonRpcMessage::Response(resp);
     }
     if let Some(resp) = app_settings::try_handle(&req) {
+        return JsonRpcMessage::Response(resp);
+    }
+    if let Some(resp) = codex_profile::try_handle(&req) {
         return JsonRpcMessage::Response(resp);
     }
     if let Some(resp) = dashboard::try_handle(&req, &actor) {

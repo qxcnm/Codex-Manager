@@ -1,4 +1,4 @@
-use super::{now_ts, ModelSourceMapping, ModelSourceModel, Storage};
+use super::{now_ts, ModelSourceMapping, ModelSourceMappingPreference, ModelSourceModel, Storage};
 use rusqlite::{params, OptionalExtension, Result, Row};
 
 fn map_source_model(row: &Row<'_>) -> Result<ModelSourceModel> {
@@ -74,7 +74,17 @@ impl Storage {
             CREATE INDEX IF NOT EXISTS idx_model_source_mappings_platform
                 ON model_source_mappings(platform_model_slug, enabled, priority DESC);
             CREATE INDEX IF NOT EXISTS idx_model_source_mappings_source
-                ON model_source_mappings(source_kind, source_id, enabled);",
+                ON model_source_mappings(source_kind, source_id, enabled);
+            CREATE TABLE IF NOT EXISTS model_source_mapping_preferences (
+                source_kind     TEXT NOT NULL,
+                source_id       TEXT NOT NULL,
+                upstream_model  TEXT NOT NULL,
+                preference      TEXT NOT NULL CHECK (preference IN ('unlinked', 'disabled')),
+                updated_at      INTEGER NOT NULL,
+                PRIMARY KEY (source_kind, source_id, upstream_model)
+            );
+            CREATE INDEX IF NOT EXISTS idx_model_source_mapping_preferences_source
+                ON model_source_mapping_preferences(source_kind, source_id);",
         )
     }
 
@@ -229,6 +239,13 @@ impl Storage {
                    AND discovery_kind = ?4",
                 params![&source_kind, &source_id, &upstream_model, &discovery_kind],
             )?;
+            self.conn.execute(
+                "DELETE FROM model_source_mapping_preferences
+                 WHERE source_kind = ?1
+                   AND source_id = ?2
+                   AND upstream_model = ?3",
+                params![&source_kind, &source_id, &upstream_model],
+            )?;
         }
         Ok(out)
     }
@@ -340,6 +357,38 @@ impl Storage {
         Ok(())
     }
 
+    pub fn delete_model_source_mapping_with_unlink_preference(
+        &self,
+        id: &str,
+        source_kind: &str,
+        source_id: &str,
+        upstream_model: &str,
+    ) -> Result<()> {
+        let id = normalize_text(id);
+        let source_kind = normalize_text(source_kind);
+        let source_id = normalize_text(source_id);
+        let upstream_model = normalize_text(upstream_model);
+        if source_kind.is_empty() || source_id.is_empty() || upstream_model.is_empty() {
+            return Ok(());
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO model_source_mapping_preferences
+             (source_kind, source_id, upstream_model, preference, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(source_kind, source_id, upstream_model) DO UPDATE SET
+                 preference = excluded.preference,
+                 updated_at = excluded.updated_at",
+            params![&source_kind, &source_id, &upstream_model, "unlinked", now_ts()],
+        )?;
+        tx.execute(
+            "DELETE FROM model_source_mappings WHERE id = ?1",
+            params![&id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn delete_model_source_mapping(&self, id: &str) -> Result<()> {
         self.conn.execute(
             "DELETE FROM model_source_mappings WHERE id = ?1",
@@ -368,4 +417,116 @@ impl Storage {
         )?;
         Ok(())
     }
+
+    pub fn upsert_model_source_mapping_preference(
+        &self,
+        source_kind: &str,
+        source_id: &str,
+        upstream_model: &str,
+        preference: &str,
+    ) -> Result<()> {
+        let source_kind = normalize_text(source_kind);
+        let source_id = normalize_text(source_id);
+        let upstream_model = normalize_text(upstream_model);
+        if source_kind.is_empty() || source_id.is_empty() || upstream_model.is_empty() {
+            return Ok(());
+        }
+        self.conn.execute(
+            "INSERT INTO model_source_mapping_preferences
+             (source_kind, source_id, upstream_model, preference, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(source_kind, source_id, upstream_model) DO UPDATE SET
+                 preference = excluded.preference,
+                 updated_at = excluded.updated_at",
+            params![
+                &source_kind,
+                &source_id,
+                &upstream_model,
+                normalize_text(preference),
+                now_ts(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_model_source_mapping_preference(
+        &self,
+        source_kind: &str,
+        source_id: &str,
+        upstream_model: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM model_source_mapping_preferences
+             WHERE source_kind = ?1 AND source_id = ?2 AND upstream_model = ?3",
+            params![
+                normalize_text(source_kind),
+                normalize_text(source_id),
+                normalize_text(upstream_model),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_model_source_mapping_preferences_for_source(
+        &self,
+        source_kind: &str,
+        source_id: &str,
+    ) -> Result<()> {
+        let source_kind = normalize_text(source_kind);
+        let source_id = normalize_text(source_id);
+        if source_kind.is_empty() || source_id.is_empty() {
+            return Ok(());
+        }
+        self.conn.execute(
+            "DELETE FROM model_source_mapping_preferences
+             WHERE source_kind = ?1 AND source_id = ?2",
+            params![&source_kind, &source_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_model_source_mapping_preferences(
+        &self,
+        source_kind: &str,
+        source_id: &str,
+    ) -> Result<Vec<ModelSourceMappingPreference>> {
+        let source_kind = normalize_text(source_kind);
+        let source_id = normalize_text(source_id);
+        if source_kind.is_empty() || source_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT source_kind, source_id, upstream_model, preference, updated_at
+             FROM model_source_mapping_preferences
+             WHERE source_kind = ?1 AND source_id = ?2",
+        )?;
+        let rows = stmt.query_map(params![&source_kind, &source_id], map_preference)?;
+        rows.collect()
+    }
+
+    pub fn delete_model_source_routes_for_platform_model(
+        &self,
+        platform_model_slug: &str,
+    ) -> Result<()> {
+        let slug = normalize_text(platform_model_slug);
+        if slug.is_empty() {
+            return Ok(());
+        }
+        self.conn.execute(
+            "DELETE FROM model_source_mappings
+             WHERE platform_model_slug = ?1",
+            params![&slug],
+        )?;
+        Ok(())
+    }
+}
+
+fn map_preference(row: &Row<'_>) -> Result<ModelSourceMappingPreference> {
+    Ok(ModelSourceMappingPreference {
+        source_kind: row.get(0)?,
+        source_id: row.get(1)?,
+        upstream_model: row.get(2)?,
+        preference: row.get(3)?,
+        updated_at: row.get(4)?,
+    })
 }

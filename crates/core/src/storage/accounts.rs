@@ -2,12 +2,6 @@ use rusqlite::{params_from_iter, types::Value, Result, Row};
 
 use super::{now_ts, Account, Storage, Token};
 
-#[derive(Clone, Copy)]
-enum AccountUsageQueryMode {
-    ActiveAvailable,
-    LowQuota,
-}
-
 impl Storage {
     /// 函数 `insert_account`
     ///
@@ -110,52 +104,6 @@ impl Storage {
             .query_row(&sql, params_from_iter(params), |row| row.get(0))
     }
 
-    /// 函数 `account_count_active_available`
-    ///
-    /// 作者: gaohongshun
-    ///
-    /// 时间: 2026-04-02
-    ///
-    /// # 参数
-    /// - self: 参数 self
-    /// - query: 参数 query
-    /// - group_name: 参数 group_name
-    ///
-    /// # 返回
-    /// 返回函数执行结果
-    pub fn account_count_active_available(
-        &self,
-        query: Option<&str>,
-        group_name: Option<&str>,
-    ) -> Result<i64> {
-        self.count_accounts_with_usage_mode(
-            query,
-            group_name,
-            AccountUsageQueryMode::ActiveAvailable,
-        )
-    }
-
-    /// 函数 `account_count_low_quota`
-    ///
-    /// 作者: gaohongshun
-    ///
-    /// 时间: 2026-04-02
-    ///
-    /// # 参数
-    /// - self: 参数 self
-    /// - query: 参数 query
-    /// - group_name: 参数 group_name
-    ///
-    /// # 返回
-    /// 返回函数执行结果
-    pub fn account_count_low_quota(
-        &self,
-        query: Option<&str>,
-        group_name: Option<&str>,
-    ) -> Result<i64> {
-        self.count_accounts_with_usage_mode(query, group_name, AccountUsageQueryMode::LowQuota)
-    }
-
     /// 函数 `list_accounts`
     ///
     /// 作者: gaohongshun
@@ -217,62 +165,6 @@ impl Storage {
         self.query_accounts(query, group_name, Some((offset, limit)))
     }
 
-    /// 函数 `list_accounts_active_available`
-    ///
-    /// 作者: gaohongshun
-    ///
-    /// 时间: 2026-04-02
-    ///
-    /// # 参数
-    /// - self: 参数 self
-    /// - query: 参数 query
-    /// - group_name: 参数 group_name
-    /// - pagination: 参数 pagination
-    ///
-    /// # 返回
-    /// 返回函数执行结果
-    pub fn list_accounts_active_available(
-        &self,
-        query: Option<&str>,
-        group_name: Option<&str>,
-        pagination: Option<(i64, i64)>,
-    ) -> Result<Vec<Account>> {
-        self.query_accounts_with_usage_mode(
-            query,
-            group_name,
-            AccountUsageQueryMode::ActiveAvailable,
-            pagination,
-        )
-    }
-
-    /// 函数 `list_accounts_low_quota`
-    ///
-    /// 作者: gaohongshun
-    ///
-    /// 时间: 2026-04-02
-    ///
-    /// # 参数
-    /// - self: 参数 self
-    /// - query: 参数 query
-    /// - group_name: 参数 group_name
-    /// - pagination: 参数 pagination
-    ///
-    /// # 返回
-    /// 返回函数执行结果
-    pub fn list_accounts_low_quota(
-        &self,
-        query: Option<&str>,
-        group_name: Option<&str>,
-        pagination: Option<(i64, i64)>,
-    ) -> Result<Vec<Account>> {
-        self.query_accounts_with_usage_mode(
-            query,
-            group_name,
-            AccountUsageQueryMode::LowQuota,
-            pagination,
-        )
-    }
-
     /// 函数 `list_gateway_candidates`
     ///
     /// 作者: gaohongshun
@@ -285,8 +177,7 @@ impl Storage {
     /// # 返回
     /// 返回函数执行结果
     pub fn list_gateway_candidates(&self) -> Result<Vec<(Account, Token)>> {
-        let availability_clause =
-            account_usage_filter_clause(AccountUsageQueryMode::ActiveAvailable, "a", "lu");
+        let availability_clause = gateway_account_usage_filter_clause("a", "lu");
         let sql = format!(
             "{latest_usage_cte}
              SELECT
@@ -488,6 +379,11 @@ impl Storage {
              WHERE source_kind = 'openai_account' AND source_id = ?1",
             [account_id],
         )?;
+        tx.execute(
+            "DELETE FROM model_source_mapping_preferences
+             WHERE source_kind = 'openai_account' AND source_id = ?1",
+            [account_id],
+        )?;
         tx.execute("DELETE FROM accounts WHERE id = ?1", [account_id])?;
         tx.commit()?;
         Ok(())
@@ -655,101 +551,6 @@ impl Storage {
         Ok(out)
     }
 
-    /// 函数 `query_accounts_with_usage_mode`
-    ///
-    /// 作者: gaohongshun
-    ///
-    /// 时间: 2026-04-02
-    ///
-    /// # 参数
-    /// - self: 参数 self
-    /// - query: 参数 query
-    /// - group_name: 参数 group_name
-    /// - mode: 参数 mode
-    /// - pagination: 参数 pagination
-    ///
-    /// # 返回
-    /// 返回函数执行结果
-    fn query_accounts_with_usage_mode(
-        &self,
-        query: Option<&str>,
-        group_name: Option<&str>,
-        mode: AccountUsageQueryMode,
-        pagination: Option<(i64, i64)>,
-    ) -> Result<Vec<Account>> {
-        let mut params = Vec::new();
-        let mut where_clause = build_account_where_clause(query, group_name, &mut params, "a");
-        append_where_clause(
-            &mut where_clause,
-            account_usage_filter_clause(mode, "a", "lu").as_str(),
-        );
-        let mut sql = format!(
-            "{latest_usage_cte}
-             SELECT {account_select}
-             FROM accounts a
-             LEFT JOIN latest_usage lu
-               ON lu.account_id = a.id
-              AND lu.rn = 1
-             {where_clause}
-             ORDER BY a.sort ASC, a.updated_at DESC",
-            latest_usage_cte = latest_usage_cte_sql(),
-            account_select = account_select_columns("a"),
-        );
-
-        if let Some((offset, limit)) = pagination {
-            sql.push_str(" LIMIT ? OFFSET ?");
-            params.push(Value::Integer(limit.max(1)));
-            params.push(Value::Integer(offset.max(0)));
-        }
-
-        let mut stmt = self.conn.prepare(&sql)?;
-        let mut rows = stmt.query(params_from_iter(params))?;
-        let mut out = Vec::new();
-        while let Some(row) = rows.next()? {
-            out.push(map_account_row(row)?);
-        }
-        Ok(out)
-    }
-
-    /// 函数 `count_accounts_with_usage_mode`
-    ///
-    /// 作者: gaohongshun
-    ///
-    /// 时间: 2026-04-02
-    ///
-    /// # 参数
-    /// - self: 参数 self
-    /// - query: 参数 query
-    /// - group_name: 参数 group_name
-    /// - mode: 参数 mode
-    ///
-    /// # 返回
-    /// 返回函数执行结果
-    fn count_accounts_with_usage_mode(
-        &self,
-        query: Option<&str>,
-        group_name: Option<&str>,
-        mode: AccountUsageQueryMode,
-    ) -> Result<i64> {
-        let mut params = Vec::new();
-        let mut where_clause = build_account_where_clause(query, group_name, &mut params, "a");
-        append_where_clause(
-            &mut where_clause,
-            account_usage_filter_clause(mode, "a", "lu").as_str(),
-        );
-        let sql = format!(
-            "{latest_usage_cte}
-             SELECT COUNT(1)
-             FROM accounts a
-             LEFT JOIN latest_usage lu
-               ON lu.account_id = a.id
-              AND lu.rn = 1
-             {where_clause}",
-            latest_usage_cte = latest_usage_cte_sql(),
-        );
-        self.conn
-            .query_row(&sql, params_from_iter(params), |row| row.get(0))
-    }
 }
 
 /// 函数 `normalize_optional_filter`
@@ -810,30 +611,6 @@ fn build_account_where_clause(
     } else {
         format!(" WHERE {}", clauses.join(" AND "))
     }
-}
-
-/// 函数 `append_where_clause`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - where_clause: 参数 where_clause
-/// - clause: 参数 clause
-///
-/// # 返回
-/// 无
-fn append_where_clause(where_clause: &mut String, clause: &str) {
-    if clause.trim().is_empty() {
-        return;
-    }
-    if where_clause.is_empty() {
-        where_clause.push_str(" WHERE ");
-    } else {
-        where_clause.push_str(" AND ");
-    }
-    where_clause.push_str(clause);
 }
 
 /// 函数 `qualified_column`
@@ -903,46 +680,24 @@ fn available_usage_clause(usage_alias: &str) -> String {
     )
 }
 
-/// 函数 `gateway_available_usage_clause`
+/// 函数 `gateway_account_usage_filter_clause`
 ///
 /// 作者: gaohongshun
 ///
 /// 时间: 2026-04-02
 ///
 /// # 参数
-/// - usage_alias: 参数 usage_alias
-///
-/// # 返回
-/// 返回函数执行结果
-/// 函数 `account_usage_filter_clause`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - mode: 参数 mode
 /// - account_alias: 参数 account_alias
 /// - usage_alias: 参数 usage_alias
 ///
 /// # 返回
 /// 返回函数执行结果
-fn account_usage_filter_clause(
-    mode: AccountUsageQueryMode,
-    account_alias: &str,
-    usage_alias: &str,
-) -> String {
-    match mode {
-        AccountUsageQueryMode::ActiveAvailable => format!(
-            "LOWER(TRIM(COALESCE({account_alias}.status, ''))) NOT IN ('inactive', 'disabled', 'unavailable', 'limited', 'banned')
-             AND ({usage_alias}.account_id IS NULL OR ({}))",
-            available_usage_clause(usage_alias)
-        ),
-        AccountUsageQueryMode::LowQuota => format!(
-            "{usage_alias}.account_id IS NOT NULL
-             AND ({usage_alias}.used_percent >= 80 OR {usage_alias}.secondary_used_percent >= 80)"
-        ),
-    }
+fn gateway_account_usage_filter_clause(account_alias: &str, usage_alias: &str) -> String {
+    format!(
+        "LOWER(TRIM(COALESCE({account_alias}.status, ''))) NOT IN ('inactive', 'disabled', 'unavailable', 'limited', 'banned')
+         AND ({usage_alias}.account_id IS NULL OR ({}))",
+        available_usage_clause(usage_alias)
+    )
 }
 
 /// 函数 `account_select_columns`

@@ -60,3 +60,35 @@ test("compareEnvOverrideItems 将高风险请求语义项排在普通项之后",
     "CODEXMANAGER_STRICT_REQUEST_PARAM_ALLOWLIST",
   ]);
 });
+
+test("formatRuntimeTimeZoneLabel 显示后端传回的时区和偏移", () => {
+  assert.equal(
+    helpers.formatRuntimeTimeZoneLabel({
+      name: "Asia/Shanghai",
+      offset: "+08:00",
+      source: "TZ",
+    }),
+    "Asia/Shanghai (UTC+08:00)"
+  );
+
+  assert.equal(
+    helpers.formatRuntimeTimeZoneLabel({
+      name: "Local",
+      offset: "-05:00",
+      source: "system",
+    }),
+    "服务端本地时区 (UTC-05:00)"
+  );
+
+  assert.equal(
+    helpers.formatRuntimeTimeZoneLabel(
+      {
+        name: "Local",
+        offset: "+01:00",
+        source: "system",
+      },
+      "Server local time zone"
+    ),
+    "Server local time zone (UTC+01:00)"
+  );
+});

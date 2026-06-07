@@ -551,18 +551,9 @@ pub fn list_api_key_ids_for_user(user_id: &str) -> Result<Vec<String>, String> {
     }
     crate::initialize_storage_if_needed()?;
     let storage = open_storage_or_error()?;
-    let mut key_ids = storage
-        .list_api_key_owners()
-        .map_err(|err| format!("list api key owners failed: {err}"))?
-        .into_values()
-        .filter(|owner| {
-            owner.owner_kind == "user"
-                && owner.owner_user_id.as_deref().map(str::trim) == Some(user_id)
-        })
-        .map(|owner| owner.key_id)
-        .collect::<Vec<_>>();
-    key_ids.sort();
-    Ok(key_ids)
+    storage
+        .list_api_key_ids_for_user(user_id)
+        .map_err(|err| format!("list api key ids for user failed: {err}"))
 }
 
 pub fn api_key_belongs_to_user(key_id: &str, user_id: &str) -> Result<bool, String> {

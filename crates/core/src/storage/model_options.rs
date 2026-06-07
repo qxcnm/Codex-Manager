@@ -170,6 +170,7 @@ impl Storage {
             return Ok(());
         }
 
+        self.prune_default_model_group_models_not_in_catalog()?;
         let now = now_ts();
         self.conn.execute(
             "INSERT OR IGNORE INTO model_group_models (

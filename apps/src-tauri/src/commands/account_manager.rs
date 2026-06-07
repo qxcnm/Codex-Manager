@@ -62,6 +62,15 @@ pub async fn service_account_manager_user_update(
 }
 
 #[tauri::command]
+pub async fn service_account_manager_user_delete(
+    addr: Option<String>,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({ "id": id });
+    rpc_call_in_background("accountManager/users/delete", addr, Some(params)).await
+}
+
+#[tauri::command]
 pub async fn service_account_manager_wallet_top_up(
     addr: Option<String>,
     owner_kind: String,
@@ -76,6 +85,23 @@ pub async fn service_account_manager_wallet_top_up(
         "note": note,
     });
     rpc_call_in_background("accountManager/wallet/topUp", addr, Some(params)).await
+}
+
+#[tauri::command]
+pub async fn service_account_manager_wallet_set_available(
+    addr: Option<String>,
+    owner_kind: String,
+    owner_id: String,
+    available_credit_micros: i64,
+    note: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({
+        "ownerKind": owner_kind,
+        "ownerId": owner_id,
+        "availableCreditMicros": available_credit_micros,
+        "note": note,
+    });
+    rpc_call_in_background("accountManager/wallet/setAvailable", addr, Some(params)).await
 }
 
 #[tauri::command]
@@ -103,9 +129,7 @@ pub async fn service_account_manager_api_key_owner_set(
 }
 
 #[tauri::command]
-pub async fn service_model_groups_list(
-    addr: Option<String>,
-) -> Result<serde_json::Value, String> {
+pub async fn service_model_groups_list(addr: Option<String>) -> Result<serde_json::Value, String> {
     rpc_call_in_background("modelGroups/list", addr, None).await
 }
 

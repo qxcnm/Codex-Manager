@@ -1180,7 +1180,7 @@ fn observability_storage_compaction_migration_rolls_up_and_prunes_legacy_rows() 
                 "DELETE FROM schema_migrations WHERE version = '062_observability_storage_compaction'",
                 [],
             )
-            .expect("remove 057 marker");
+            .expect("remove 062 marker");
 
         storage
             .conn

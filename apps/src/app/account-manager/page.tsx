@@ -82,6 +82,8 @@ import { cn } from "@/lib/utils";
 import { formatCompactNumber } from "@/lib/utils/usage";
 import type { AccountManagerStatus, AppUser, MemberDashboardSummary } from "@/types";
 
+type TranslateFn = ReturnType<typeof useI18n>["t"];
+
 const ACCOUNT_MANAGER_QUERY_KEYS = {
   status: ["account-manager", "status"] as const,
   users: ["account-manager", "users"] as const,
@@ -137,6 +139,19 @@ function formatTokenAmount(value: number | null | undefined): string {
     return normalized.toLocaleString("zh-CN");
   }
   return formatCompactNumber(normalized, "0.00", 2, true);
+}
+
+function fitLongTextClassName(
+  value: string | null | undefined,
+  baseClassName: string,
+  defaultSizeClassName: string,
+): string {
+  const length = Array.from(String(value || "")).length;
+  if (length > 96) return cn(baseClassName, "text-[8px] leading-tight");
+  if (length > 72) return cn(baseClassName, "text-[9px] leading-snug");
+  if (length > 40) return cn(baseClassName, "text-[10px] leading-snug");
+  if (length > 24) return cn(baseClassName, "text-[11px] leading-snug");
+  return cn(baseClassName, defaultSizeClassName);
 }
 
 function parseCreditInput(value: string): number | null {
@@ -317,7 +332,7 @@ function UserUsageTrendLine({ summary }: { summary: MemberDashboardSummary }) {
                       </span>
                     </div>
                     <div className="flex items-center justify-between gap-3 text-muted-foreground">
-                      <span>Cost</span>
+                      <span>{t("费用")}</span>
                       <span>{formatUsd(row.estimatedCostUsd)}</span>
                     </div>
                   </div>
@@ -403,8 +418,26 @@ function UserUsageDetail({
                   className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 text-xs"
                 >
                   <div className="min-w-0">
-                    <div className="truncate font-medium">{item.name || item.keyId}</div>
-                    <div className="truncate text-muted-foreground">{item.modelSlug || "auto"}</div>
+                    <div
+                      className={fitLongTextClassName(
+                        item.name || item.keyId,
+                        "break-all font-medium [overflow-wrap:anywhere]",
+                        "text-xs",
+                      )}
+                      title={item.name || item.keyId}
+                    >
+                      {item.name || item.keyId}
+                    </div>
+                    <div
+                      className={fitLongTextClassName(
+                        item.modelSlug || "auto",
+                        "break-all text-muted-foreground [overflow-wrap:anywhere]",
+                        "text-xs",
+                      )}
+                      title={item.modelSlug || "auto"}
+                    >
+                      {item.modelSlug || "auto"}
+                    </div>
                   </div>
                   <div className="text-right font-semibold">
                     {formatTokenAmount(item.todayTokens || item.totalTokens)}
@@ -432,7 +465,16 @@ function UserUsageDetail({
                   key={item.model}
                   className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 text-xs"
                 >
-                  <div className="truncate font-mono font-medium">{item.model}</div>
+                  <div
+                    className={fitLongTextClassName(
+                      item.model,
+                      "break-all font-mono font-medium [overflow-wrap:anywhere]",
+                      "text-xs",
+                    )}
+                    title={item.model}
+                  >
+                    {item.model}
+                  </div>
                   <div className="text-right font-semibold">
                     {formatTokenAmount(item.totalTokens)}
                   </div>
@@ -828,10 +870,26 @@ export default function AccountManagerPage() {
                 users.map((user) => (
                   <TableRow key={user.id}>
                     <TableCell className="px-4">
-                      <div className="flex flex-col gap-1">
-                        <span className="font-medium">{user.username}</span>
+                      <div className="flex min-w-0 flex-col gap-1">
+                        <span
+                          className={fitLongTextClassName(
+                            user.username,
+                            "break-all font-medium [overflow-wrap:anywhere]",
+                            "text-sm",
+                          )}
+                          title={user.username}
+                        >
+                          {user.username}
+                        </span>
                         {user.displayName ? (
-                          <span className="text-xs text-muted-foreground">
+                          <span
+                            className={fitLongTextClassName(
+                              user.displayName,
+                              "break-all text-muted-foreground [overflow-wrap:anywhere]",
+                              "text-xs",
+                            )}
+                            title={user.displayName}
+                          >
                             {user.displayName}
                           </span>
                         ) : null}

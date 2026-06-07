@@ -27,6 +27,8 @@ mod images;
 mod openai_responses;
 #[path = "stream_readers/passthrough.rs"]
 mod passthrough;
+#[path = "stream_readers/responses_from_anthropic.rs"]
+mod responses_from_anthropic;
 
 pub(crate) use anthropic::AnthropicSseReader;
 pub(crate) use chat_completions::ChatCompletionsFromResponsesSseReader;
@@ -43,6 +45,7 @@ pub(crate) use gemini::GeminiSseReader;
 pub(crate) use images::ImagesFromResponsesSseReader;
 pub(crate) use openai_responses::OpenAIResponsesPassthroughSseReader;
 pub(crate) use passthrough::PassthroughSseUsageReader;
+pub(crate) use responses_from_anthropic::ResponsesFromAnthropicSseReader;
 
 /// 函数 `reload_from_env`
 ///

@@ -1,13 +1,44 @@
 "use client";
 
 import type { MessageCatalog } from "./types";
+import { KO_ACCESS_CONTROL_MESSAGES } from "./sections/ko-access-control";
+import { KO_ACCOUNT_MANAGER_MESSAGES } from "./sections/ko-account-manager";
+import { KO_ACCOUNTS_MESSAGES } from "./sections/ko-accounts";
+import { KO_API_KEYS_MESSAGES } from "./sections/ko-api-keys";
+import { KO_AGGREGATE_API_MESSAGES } from "./sections/ko-aggregate-api";
+import { KO_DASHBOARD_MESSAGES } from "./sections/ko-dashboard";
+import { KO_DYNAMIC_UI_MESSAGES } from "./sections/ko-dynamic-ui";
+import { KO_MODEL_CATALOG_MESSAGES } from "./sections/ko-model-catalog";
+import { KO_MODEL_GROUPS_MESSAGES } from "./sections/ko-model-groups";
+import { KO_MODELS_MESSAGES } from "./sections/ko-models";
+import { KO_PLATFORM_MODE_MESSAGES } from "./sections/ko-platform-mode";
+import { KO_RUNTIME_UI_MESSAGES } from "./sections/ko-runtime-ui";
 
 export const KO_MESSAGES: MessageCatalog = {
   仪表盘: "대시보드",
   概览: "개요",
+  平台接入: "플랫폼 연결",
+  平台配置: "플랫폼 설정",
+  ...KO_ACCESS_CONTROL_MESSAGES,
+  ...KO_ACCOUNT_MANAGER_MESSAGES,
+  ...KO_ACCOUNTS_MESSAGES,
+  ...KO_API_KEYS_MESSAGES,
+  ...KO_AGGREGATE_API_MESSAGES,
+  ...KO_DASHBOARD_MESSAGES,
+  ...KO_DYNAMIC_UI_MESSAGES,
+  ...KO_MODEL_CATALOG_MESSAGES,
+  ...KO_MODEL_GROUPS_MESSAGES,
+  ...KO_MODELS_MESSAGES,
+  ...KO_PLATFORM_MODE_MESSAGES,
+  ...KO_RUNTIME_UI_MESSAGES,
+  模型与路由: "모델 및 라우팅",
+  成员管理: "멤버 관리",
+  运行观测: "운영 관측",
+  系统: "시스템",
   资源接入: "리소스 연결",
   模型路由: "모델 라우팅",
   用户与密钥: "사용자 및 키",
+  用户管理: "사용자 관리",
   运行监控: "실행 모니터링",
   我的概览: "내 개요",
   我的密钥: "내 키",
@@ -89,6 +120,8 @@ export const KO_MESSAGES: MessageCatalog = {
   详情: "자세히",
   我知道了: "확인",
   "账号池 · 用量管理": "계정 풀 · 사용량 관리",
+  "接入模式 · 用量观测": "연결 모드 · 사용량 관측",
+  "接入配置 · 请求观测": "연결 설정 · 요청 관측",
   收起侧边栏: "사이드바 접기",
   展开侧边栏: "사이드바 펼치기",
   基础设置: "기본 설정",
@@ -98,6 +131,7 @@ export const KO_MESSAGES: MessageCatalog = {
   服务监听: "서비스 바인딩",
   监听地址: "바인딩 주소",
   当前访问地址: "현재 접속 주소",
+  默认网关: "기본 게이트웨이",
   实际监听地址: "실제 바인딩 주소",
   界面语言: "인터페이스 언어",
   "切换应用界面语言，设置后会立即生效并持久化保存。":
@@ -172,7 +206,13 @@ export const KO_MESSAGES: MessageCatalog = {
   "导入 ccswitch": "ccswitch로 가져오기",
   "已唤起 ccswitch，请在确认窗口完成导入":
     "ccswitch를 열었습니다. 확인 창에서 가져오기를 완료하세요.",
-  "唤起 ccswitch 失败": "ccswitch 열기 실패",
+"唤起 ccswitch 失败": "ccswitch 열기 실패",
+  "当前为账号直连，Codex CLI 直连 OpenAI，CodexManager 无法统计 CLI 请求日志和用量。":
+    "현재 계정 직결 모드입니다. Codex CLI가 OpenAI에 직접 연결되므로 CodexManager는 CLI 요청 로그나 사용량을 집계할 수 없습니다.",
+  "当前为本地网关，Codex CLI 经过 CodexManager 转发，请求日志、Token 和费用统计可用。":
+    "현재 로컬 게이트웨이 모드입니다. Codex CLI 요청이 CodexManager를 통해 전달되므로 요청 로그, 토큰, 비용 통계를 사용할 수 있습니다.",
+  "选择账号直连或本地网关后，CodexManager 会接管该 Codex profile 的 auth.json / config.toml。":
+    "계정 직결 또는 로컬 게이트웨이 모드를 선택하면 CodexManager가 해당 Codex profile의 auth.json과 config.toml을 관리합니다.",
   删除密钥: "키 삭제",
   全部: "전체",
   低配额: "낮은 할당량",
@@ -377,10 +417,18 @@ export const KO_MESSAGES: MessageCatalog = {
   "已生成登录链接，正在等待授权完成...":
     "로그인 링크가 생성되었습니다. 인증 완료를 기다리는 중...",
   登录成功: "로그인 성공",
+  "登录成功，但账号同步失败": "로그인은 성공했지만 계정 동기화에 실패했습니다",
   "登录失败，请重试": "로그인에 실패했습니다. 다시 시도하세요",
   登录失败: "로그인 실패",
   "登录超时，请重试或使用下方手动解析回调。":
     "로그인 시간이 초과되었습니다. 다시 시도하거나 아래의 수동 콜백 파싱을 사용하세요.",
+  "授权完成，正在同步账号列表...": "인증이 완료되었습니다. 계정 목록을 동기화하는 중입니다...",
+  "授权已完成，但账号列表暂未出现该账号":
+    "인증은 완료되었지만 계정 목록에 아직 해당 계정이 나타나지 않았습니다.",
+  "授权已完成，但当前服务没有返回已登录账号":
+    "인증은 완료되었지만 현재 서비스가 로그인된 계정을 반환하지 않았습니다.",
+  "授权已完成，但账号列表暂未同步成功":
+    "인증은 완료되었지만 계정 목록 동기화가 아직 성공하지 않았습니다.",
   开始登录授权: "로그인 인증 시작",
   设备验证码: "디바이스 코드",
   "正在等待授权完成...": "인증 완료 대기 중...",
@@ -474,6 +522,9 @@ export const KO_MESSAGES: MessageCatalog = {
   网关策略: "게이트웨이 정책",
   后台任务线程: "백그라운드 작업 스레드",
   "Worker 并发参数": "Worker 동시성 설정",
+  "计划按服务端时区 {timeZone} 执行。多个计划用 | 分隔。":
+    "예약은 서버 시간대 {timeZone} 기준으로 실행됩니다. 여러 예약은 | 로 구분하세요.",
+  服务端本地时区: "서버 로컬 시간대",
   当前档位: "현재 프리셋",
   自定义: "사용자 지정",
   "搜索变量...": "변수 검색...",
@@ -1024,6 +1075,8 @@ export const KO_MESSAGES: MessageCatalog = {
   "中 (medium)": "중간 (medium)",
   总费用: "총 비용",
   "总使用 Token": "총 Token 사용량",
+  最近调用: "최근 호출",
+  从未调用: "호출 없음",
   "走 Claude 语义，": "Claude 의미 사용,",
   "Fast 会映射为上游 priority；未设置时跟随请求。":
     "Fast는 업스트림 priority로 매핑되며, 미설정 시 요청을 따릅니다.",
@@ -1269,4 +1322,40 @@ export const KO_MESSAGES: MessageCatalog = {
     "로컬 게이트웨이 주소입니다. 기본적으로 CodexManager가 노출한 48760 포트를 사용합니다.",
   "与本软件网关对接时使用 responses 协议":
     "이 앱의 게이트웨이와 연결할 때는 `responses` 프로토콜을 사용합니다.",
+"个人资料已更新": "프로필이 업데이트되었습니다",
+  "密码已更新": "비밀번호가 업데이트되었습니다",
+  "个人设置": "개인 설정",
+  "管理你的账号资料、登录密码和界面偏好": "계정 프로필, 로그인 비밀번호, 인터페이스 환경설정을 관리합니다",
+  "账号资料": "계정 프로필",
+  "当前登录账号": "현재 로그인 계정",
+  "保存资料": "프로필 저장",
+  "登录密码": "로그인 비밀번호",
+  "修改当前账号的登录密码": "현재 계정의 로그인 비밀번호를 변경합니다",
+  "当前密码": "현재 비밀번호",
+  "修改密码": "비밀번호 변경",
+  "界面偏好": "인터페이스 환경설정",
+  "这些偏好只影响当前浏览器会话": "이 설정은 현재 브라우저 세션에만 적용됩니다",
+  "请输入 0-100 之间的百分比": "0에서 100 사이의 백분율을 입력하세요",
+  "Cron 表达式需要 5 段，或带秒的 6 段": "Cron 식은 5개 필드 또는 초를 포함한 6개 필드여야 합니다",
+  "额度保护": "쿼터 보호",
+  "低于保留百分比的账号会从网关路由和远端模型刷新候选中跳过。": "보존 비율 아래의 계정은 게이트웨이 라우팅과 원격 모델 새로고침 후보에서 제외됩니다.",
+  "5 小时窗口保留 (%)": "5시간 창 보존 (%)",
+  "周窗口保留 (%)": "주간 창 보존 (%)",
+  "全部低额度时兜底": "모든 쿼터가 낮을 때 폴백",
+  "关闭后如果所有账号都低于阈值，网关会返回无可用账号。": "이 옵션을 끄면 모든 계정이 임계값 아래일 때 게이트웨이는 사용 가능한 계정이 없다고 반환합니다.",
+  "请先填写 Cron 表达式": "먼저 Cron 식을 입력하세요",
+  "定时账号预热": "예약 계정 예열",
+  "Cron 表达式": "Cron 식",
+  "网关模式": "게이트웨이 모드",
+  "转发路径": "전달 경로",
+  "上游模型": "업스트림 모델",
+  "实际来源": "실제 소스",
+  "账号直连模式不会产生新的 CodexManager 请求日志": "계정 직결 모드에서는 새로운 CodexManager 요청 로그가 생성되지 않습니다",
+  "这里仅展示历史网关请求；如需记录请求，请切换到本地网关模式。": "여기에는 과거 게이트웨이 요청만 표시됩니다. 요청 로그가 필요하면 로컬 게이트웨이 모드로 전환하세요.",
+  "去切换为本地网关": "로컬 게이트웨이로 전환",
+  "仅网关流量": "게이트웨이 트래픽만",
+  "账号直连模式下不会产生请求日志，如需记录请求请切换到本地网关模式。": "계정 직결 모드에서는 요청 로그가 생성되지 않습니다. 로그가 필요하면 로컬 게이트웨이 모드로 전환하세요.",
+  未分配: "미할당",
+  "按我的平台密钥累计": "내 플랫폼 키 기준 누적",
+  归属成员: "소유 멤버",
 };

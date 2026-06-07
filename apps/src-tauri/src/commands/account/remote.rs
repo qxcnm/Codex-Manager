@@ -1,58 +1,5 @@
+use crate::app_storage::apply_runtime_storage_env;
 use crate::commands::shared::rpc_call_in_background;
-
-/// 函数 `account_list_payload`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - page: 参数 page
-/// - page_size: 参数 page_size
-/// - query: 参数 query
-/// - filter: 参数 filter
-/// - group_filter: 参数 group_filter
-///
-/// # 返回
-/// 返回函数执行结果
-fn account_list_payload(
-    page: Option<i64>,
-    page_size: Option<i64>,
-    query: Option<String>,
-    filter: Option<String>,
-    group_filter: Option<String>,
-) -> Option<serde_json::Value> {
-    let mut params = serde_json::Map::new();
-    if let Some(value) = page {
-        params.insert("page".to_string(), serde_json::json!(value));
-    }
-    if let Some(value) = page_size {
-        params.insert("pageSize".to_string(), serde_json::json!(value));
-    }
-    if let Some(value) = query {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            params.insert("query".to_string(), serde_json::json!(trimmed));
-        }
-    }
-    if let Some(value) = filter {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            params.insert("filter".to_string(), serde_json::json!(trimmed));
-        }
-    }
-    if let Some(value) = group_filter {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() && trimmed != "all" {
-            params.insert("groupFilter".to_string(), serde_json::json!(trimmed));
-        }
-    }
-    if params.is_empty() {
-        None
-    } else {
-        Some(serde_json::Value::Object(params))
-    }
-}
 
 /// 函数 `account_update_payload`
 ///
@@ -133,31 +80,15 @@ fn account_update_payload(
 ///
 /// 时间: 2026-04-02
 ///
-/// # 参数
-/// - addr: 参数 addr
-/// - page: 参数 page
-/// - page_size: 参数 page_size
-/// - query: 参数 query
-/// - filter: 参数 filter
-/// - group_filter: 参数 group_filter
-///
 /// # 返回
 /// 返回函数执行结果
 #[tauri::command]
 pub async fn service_account_list(
+    app: tauri::AppHandle,
     addr: Option<String>,
-    page: Option<i64>,
-    page_size: Option<i64>,
-    query: Option<String>,
-    filter: Option<String>,
-    group_filter: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    rpc_call_in_background(
-        "account/list",
-        addr,
-        account_list_payload(page, page_size, query, filter, group_filter),
-    )
-    .await
+    apply_runtime_storage_env(&app);
+    rpc_call_in_background("account/list", addr, None).await
 }
 
 /// 函数 `service_account_delete`

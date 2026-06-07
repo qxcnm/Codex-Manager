@@ -1032,6 +1032,37 @@ fn app_settings_get_defaults_codex_cli_guide_to_false() {
     });
 }
 
+#[test]
+fn app_settings_get_exposes_runtime_time_zone_from_tz_env() {
+    with_temp_db(|_| {
+        let _tz = override_env_vars(&[("TZ", Some("Asia/Shanghai"))]);
+
+        let snapshot = codexmanager_service::app_settings_get().expect("get app settings");
+        let runtime_time_zone = snapshot
+            .get("runtimeTimeZone")
+            .and_then(|value| value.as_object())
+            .expect("runtime time zone object");
+
+        assert_eq!(
+            runtime_time_zone.get("name").and_then(|value| value.as_str()),
+            Some("Asia/Shanghai")
+        );
+        assert_eq!(
+            runtime_time_zone
+                .get("source")
+                .and_then(|value| value.as_str()),
+            Some("TZ")
+        );
+        assert!(
+            runtime_time_zone
+                .get("offset")
+                .and_then(|value| value.as_str())
+                .is_some_and(|value| !value.is_empty()),
+            "runtime time zone should include an offset: {runtime_time_zone:?}"
+        );
+    });
+}
+
 /// 函数 `sync_runtime_settings_from_storage_applies_saved_runtime_values`
 ///
 /// 作者: gaohongshun

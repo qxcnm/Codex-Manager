@@ -51,6 +51,25 @@ test("resolveGatewayOrigin 在桌面模式下使用服务地址并补齐协议",
   );
 });
 
+test("normalizeGatewayServiceOrigin 统一处理 loopback 与路径碎片", () => {
+  assert.equal(
+    endpoints.normalizeGatewayServiceOrigin("0.0.0.0:48760/v1"),
+    "http://localhost:48760",
+  );
+  assert.equal(
+    endpoints.normalizeGatewayServiceOrigin("http://127.0.0.1:48760/proxy"),
+    "http://127.0.0.1:48760",
+  );
+});
+
+test("normalizeGatewayPublicOrigin 仅接受 http/https", () => {
+  assert.equal(
+    endpoints.normalizeGatewayPublicOrigin("https://cm.example.com/"),
+    "https://cm.example.com",
+  );
+  assert.equal(endpoints.normalizeGatewayPublicOrigin("tauri://localhost"), "");
+});
+
 test("buildOpenAiGatewayEndpoint 只追加一次 /v1", () => {
   assert.equal(
     endpoints.buildOpenAiGatewayEndpoint("http://localhost:48760"),
@@ -59,6 +78,24 @@ test("buildOpenAiGatewayEndpoint 只追加一次 /v1", () => {
   assert.equal(
     endpoints.buildOpenAiGatewayEndpoint("http://localhost:48760/v1"),
     "http://localhost:48760/v1",
+  );
+});
+
+test("buildOpenAiGatewayEndpointFromServiceAddr 复用统一地址规范化", () => {
+  assert.equal(
+    endpoints.buildOpenAiGatewayEndpointFromServiceAddr("0.0.0.0:48760"),
+    "http://localhost:48760/v1",
+  );
+});
+
+test("buildOpenAiGatewayEndpointFromPublicOrigin 过滤非法公开 origin", () => {
+  assert.equal(
+    endpoints.buildOpenAiGatewayEndpointFromPublicOrigin("https://cm.example.com/path"),
+    "https://cm.example.com/path/v1",
+  );
+  assert.equal(
+    endpoints.buildOpenAiGatewayEndpointFromPublicOrigin("tauri://localhost"),
+    "",
   );
 });
 

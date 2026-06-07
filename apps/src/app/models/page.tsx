@@ -34,7 +34,6 @@ import {
 } from "@/components/ui/dialog";
 import {
   Empty,
-  EmptyDescription,
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty";
@@ -68,7 +67,7 @@ import {
 import { useManagedModels } from "@/hooks/useManagedModels";
 import { usePageTransitionReady } from "@/hooks/usePageTransitionReady";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
-import { accountClient } from "@/lib/api/account-client";
+import { accountClient, ModelPriceRuleEntry } from "@/lib/api/account-client";
 import { findBestMatchingModel } from "@/lib/api/model-catalog";
 import { useI18n } from "@/lib/i18n/provider";
 import { formatTsFromSeconds } from "@/lib/utils/usage";
@@ -132,13 +131,17 @@ export default function ModelsPage() {
     isLoading,
     isServiceReady,
     refreshRemote,
+    pruneStaleRemoteModels,
     saveModel,
+    saveModelPriceRule,
+    readModelPriceRule,
     deleteModel,
     deleteModels,
     exportCodexCache,
     routing,
     canExportCodexCache,
     isRefreshing,
+    isPruningStaleRemote,
     isSaving,
     isDeleting,
     isExporting,
@@ -159,6 +162,7 @@ export default function ModelsPage() {
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
   const [selectedSlugs, setSelectedSlugs] = useState<string[]>([]);
   const [deleteSlugs, setDeleteSlugs] = useState<string[]>([]);
+  const [editingPriceRule, setEditingPriceRule] = useState<ModelPriceRuleEntry | null>(null);
   const [activeModelSlug, setActiveModelSlug] = useState<string>("");
   const [routingDialogOpen, setRoutingDialogOpen] = useState(false);
   const [sourceDraft, setSourceDraft] = useState({
@@ -243,6 +247,28 @@ export default function ModelsPage() {
     () => findBestMatchingModel(models, editingSlug || ""),
     [editingSlug, models]
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    const slug = editingModel?.slug;
+    if (!slug) {
+      setEditingPriceRule(null);
+      return;
+    }
+    setEditingPriceRule(null);
+    readModelPriceRule(slug)
+      .then((result) => {
+        if (!cancelled) setEditingPriceRule(result);
+      })
+      .catch((err) => {
+        console.warn("读取模型价格失败", err);
+        if (!cancelled) setEditingPriceRule(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingModel]);
 
   const nextSortIndex = useMemo(
     () => models.reduce((maxValue, item) => Math.max(maxValue, item.sortIndex), -1) + 1,
@@ -612,12 +638,24 @@ export default function ModelsPage() {
                     <Button
                       variant="outline"
                       onClick={() => void refreshRemote()}
-                      disabled={isRefreshing}
+                      disabled={isRefreshing || isPruningStaleRemote}
                     >
                       <RefreshCw
                         className={`mr-2 h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`}
                       />
                       {t("远端并入")}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      onClick={() => void pruneStaleRemoteModels()}
+                      disabled={isRefreshing || isPruningStaleRemote}
+                      title={t("仅删除未本地覆写且不再出现在远端目录中的远端模型，不会删除自定义模型。")}
+                    >
+                      <Trash2
+                        className={`mr-2 h-4 w-4 ${isPruningStaleRemote ? "animate-pulse" : ""}`}
+                      />
+                      {t("清理远端旧模型")}
                     </Button>
                     {canExportCodexCache ? (
                       <Button
@@ -1087,7 +1125,14 @@ export default function ModelsPage() {
                                     size="icon"
                                     aria-label={t("删除映射")}
                                     disabled={isRoutingSaving}
-                                    onClick={() => void deleteSourceMapping(mapping.id)}
+                                    onClick={() =>
+                                      void deleteSourceMapping(
+                                        mapping.id,
+                                        mapping.sourceKind,
+                                        mapping.sourceId,
+                                        mapping.upstreamModel,
+                                      )
+                                    }
                                   >
                                     <Unlink className="h-4 w-4" />
                                   </Button>
@@ -1410,6 +1455,8 @@ export default function ModelsPage() {
         nextSortIndex={nextSortIndex}
         isSaving={isSaving}
         onSave={saveModel}
+        onSavePriceRule={saveModelPriceRule}
+        priceRule={editingPriceRule}
       />
       ) : null}
 

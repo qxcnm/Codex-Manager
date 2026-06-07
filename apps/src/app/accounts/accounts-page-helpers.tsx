@@ -27,6 +27,19 @@ export type AccountSizeSortMode = "large-first" | "small-first";
 
 const ACCOUNT_SORT_STEP = 5;
 
+export function fitLongTextClassName(
+  value: string,
+  baseClassName: string,
+  defaultSizeClassName: string,
+): string {
+  const length = Array.from(String(value || "")).length;
+  if (length > 96) return cn(baseClassName, "text-[8px] leading-tight");
+  if (length > 72) return cn(baseClassName, "text-[9px] leading-snug");
+  if (length > 40) return cn(baseClassName, "text-[10px] leading-snug");
+  if (length > 24) return cn(baseClassName, "text-[11px] leading-snug");
+  return cn(baseClassName, defaultSizeClassName);
+}
+
 export type TranslateFn = (
   key: string,
   values?: Record<string, string | number>,
@@ -165,7 +178,14 @@ function QuotaProgress({
             <span>{label}</span>
           </div>
           {caption ? (
-            <div className="truncate text-[9px] text-muted-foreground/80">
+            <div
+              className={fitLongTextClassName(
+                caption,
+                "max-w-full break-all text-muted-foreground/80 [overflow-wrap:anywhere]",
+                "text-[9px]",
+              )}
+              title={caption}
+            >
               {caption}
             </div>
           ) : null}
@@ -192,13 +212,22 @@ export function QuotaOverviewCell({ items }: { items: QuotaSummaryItem[] }) {
 
   return (
     <Tooltip>
-      <TooltipTrigger render={<div />} className="block cursor-help">
+      <TooltipTrigger render={<div />} className="block min-w-0 cursor-help">
         <div className="rounded-xl border border-primary/5 bg-accent/10 px-3 py-2">
           <div className="flex items-center gap-3">
             {summaryItems.map((item) => (
               <div key={item.id} className="min-w-0 flex-1 space-y-1">
                 <div className="flex items-center justify-between text-[10px]">
-                  <span className="truncate text-muted-foreground">{item.label}</span>
+                  <span
+                    className={fitLongTextClassName(
+                      item.label,
+                      "min-w-0 max-w-full break-words text-muted-foreground [overflow-wrap:anywhere]",
+                      "text-[10px]",
+                    )}
+                    title={item.label}
+                  >
+                    {item.label}
+                  </span>
                   <span className="font-medium text-foreground/80">
                     {item.remainPercent == null
                       ? (item.emptyText ?? "--")
@@ -231,13 +260,22 @@ export function QuotaOverviewCell({ items }: { items: QuotaSummaryItem[] }) {
                 key={`${item.id}-reset`}
                 className="flex min-w-0 items-center justify-between gap-2"
               >
-                <span className="min-w-0 truncate">
+                <span
+                  className={fitLongTextClassName(
+                    formatTsFromSeconds(
+                      item.resetsAt,
+                      item.emptyResetText ?? t("未知"),
+                    ),
+                    "min-w-0 break-words [overflow-wrap:anywhere]",
+                    "text-[10px]",
+                  )}
+                >
                   {formatTsFromSeconds(
                     item.resetsAt,
                     item.emptyResetText ?? t("未知"),
                   )}
                 </span>
-                <span className="shrink-0">
+                <span className="shrink-0 whitespace-nowrap">
                   {formatRemainingDurationFromSeconds(
                     item.resetsAt,
                     item.id.endsWith("-primary") ? "hours" : "days",
@@ -378,9 +416,9 @@ export function AccountStatusCell({ account }: { account: Account }) {
 
   return (
     <Tooltip>
-      <TooltipTrigger render={<div />} className="inline-flex cursor-help">
+      <TooltipTrigger render={<div />} className="block min-w-0 cursor-help">
         <div className="flex min-w-0 flex-col gap-1">
-          <div className="flex items-center gap-1.5">
+          <div className="flex min-w-0 items-center gap-1.5">
             <div
               className={cn(
                 "h-1.5 w-1.5 shrink-0 rounded-full",
@@ -399,7 +437,14 @@ export function AccountStatusCell({ account }: { account: Account }) {
             </span>
           </div>
           {statusReasonLabel ? (
-            <span className="max-w-[180px] truncate text-[10px] text-muted-foreground">
+            <span
+              className={fitLongTextClassName(
+                statusReasonLabel,
+                "block max-w-[180px] whitespace-normal break-words text-muted-foreground [overflow-wrap:anywhere]",
+                "text-[10px] leading-snug",
+              )}
+              title={statusReasonLabel}
+            >
               {statusReasonLabel}
             </span>
           ) : null}
@@ -648,10 +693,20 @@ export function AccountInfoCell({
 
   return (
     <Tooltip>
-      <TooltipTrigger render={<div />} className="block cursor-help text-left">
-        <div className="flex flex-col overflow-hidden">
-          <div className="flex items-center gap-2 overflow-hidden">
-            <span className="truncate text-sm font-semibold">
+      <TooltipTrigger
+        render={<div />}
+        className="block min-w-0 max-w-full cursor-help text-left"
+      >
+        <div className="flex min-w-0 flex-col whitespace-normal">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <span
+              className={fitLongTextClassName(
+                account.name,
+                "inline-block min-w-0 max-w-full break-words font-semibold [overflow-wrap:anywhere]",
+                "text-sm",
+              )}
+              title={account.name}
+            >
               {account.name}
             </span>
             {accountPlanLabel ? (
@@ -674,8 +729,15 @@ export function AccountInfoCell({
               </Badge>
             ) : null}
           </div>
-          <span className="truncate font-mono text-[10px] uppercase text-muted-foreground opacity-60">
-            {account.id.slice(0, 16)}...
+          <span
+            className={fitLongTextClassName(
+              account.id,
+              "mt-0.5 block max-w-full break-all font-mono uppercase text-muted-foreground opacity-60 [overflow-wrap:anywhere]",
+              "text-[10px]",
+            )}
+            title={account.id}
+          >
+            {account.id}
           </span>
           <span className="mt-1 text-[10px] text-muted-foreground">
             {t("最近刷新")}:{" "}

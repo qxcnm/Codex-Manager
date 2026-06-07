@@ -21,6 +21,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { accountClient } from "@/lib/api/account-client";
+import { CODEX_PROFILE_CANDIDATES_QUERY_KEY } from "@/lib/api/codex-profile-client";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
 import { useI18n } from "@/lib/i18n/provider";
 import { useAppStore } from "@/lib/store/useAppStore";
@@ -32,6 +33,10 @@ import { FileUp, Info, LogIn, Clipboard, ExternalLink, Hash } from "lucide-react
 interface AddAccountModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 /**
@@ -267,6 +272,7 @@ export function AddAccountModal({ open, onOpenChange }: AddAccountModalProps) {
       queryClient.invalidateQueries({ queryKey: ["accounts"] }),
       queryClient.invalidateQueries({ queryKey: ["usage"] }),
       queryClient.invalidateQueries({ queryKey: ["startup-snapshot"] }),
+      queryClient.invalidateQueries({ queryKey: CODEX_PROFILE_CANDIDATES_QUERY_KEY }),
     ]);
   };
 
@@ -303,7 +309,37 @@ export function AddAccountModal({ open, onOpenChange }: AddAccountModalProps) {
    * # 返回
    * 返回函数执行结果
    */
+  const syncLoggedInAccountToList = async (): Promise<string> => {
+    let lastError = "";
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        const [currentAccountResult, latestAccounts] = await Promise.all([
+          accountClient.readCurrentAccessTokenAccount(false),
+          accountClient.list(),
+        ]);
+        queryClient.setQueryData(["accounts", "list"], latestAccounts);
+        const currentAccountId = currentAccountResult.account?.accountId || "";
+        if (
+          currentAccountId &&
+          latestAccounts.items.some((account) => account.id === currentAccountId)
+        ) {
+          return currentAccountId;
+        }
+        lastError = currentAccountId
+          ? t("授权已完成，但账号列表暂未出现该账号")
+          : t("授权已完成，但当前服务没有返回已登录账号");
+      } catch (error: unknown) {
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+      if (attempt < 3) {
+        await delay(800);
+      }
+    }
+    throw new Error(lastError || t("授权已完成，但账号列表暂未同步成功"));
+  };
+
   const completeLoginSuccess = async (message: string) => {
+    await syncLoggedInAccountToList();
     await invalidateLoginQueries();
     toast.success(message);
     resetModalState();
@@ -365,7 +401,15 @@ export function AddAccountModal({ open, onOpenChange }: AddAccountModalProps) {
 
         const status = String(result.status || "").trim().toLowerCase();
         if (status === "success") {
-          await completeLoginSuccess(t("登录成功"));
+          setLoginHint(t("授权完成，正在同步账号列表..."));
+          try {
+            await completeLoginSuccess(t("登录成功"));
+          } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+            setIsPollingLogin(false);
+            setLoginHint(`${t("登录成功，但账号同步失败")}：${message}`);
+            toast.error(`${t("登录成功，但账号同步失败")}：${message}`);
+          }
           return;
         }
         if (status === "failed") {
@@ -468,6 +512,7 @@ export function AddAccountModal({ open, onOpenChange }: AddAccountModalProps) {
       const redirectUri = `${url.origin}${url.pathname}`;
       
       await accountClient.completeLogin(state, code, redirectUri);
+      setLoginHint(t("授权完成，正在同步账号列表..."));
       await completeLoginSuccess(t("登录成功"));
     } catch (err: unknown) {
       setLoginHint(`${t("解析失败")}: ${err instanceof Error ? err.message : String(err)}`);
@@ -508,6 +553,7 @@ export function AddAccountModal({ open, onOpenChange }: AddAccountModalProps) {
         queryClient.invalidateQueries({ queryKey: ["accounts"] }),
         queryClient.invalidateQueries({ queryKey: ["usage"] }),
         queryClient.invalidateQueries({ queryKey: ["startup-snapshot"] }),
+        queryClient.invalidateQueries({ queryKey: CODEX_PROFILE_CANDIDATES_QUERY_KEY }),
       ]);
       resetModalState();
       onOpenChange(false);

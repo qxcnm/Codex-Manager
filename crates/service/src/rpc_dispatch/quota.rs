@@ -1,4 +1,4 @@
-use codexmanager_core::rpc::types::{JsonRpcRequest, JsonRpcResponse};
+use codexmanager_core::rpc::types::{JsonRpcRequest, JsonRpcResponse, ModelPriceRuleUpsertInput};
 
 use crate::quota::read::{self, BillingRuleUpsertInput, QuotaRefreshSourcesInput};
 
@@ -80,6 +80,37 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                 super::i64_param(req, "primaryWindowTokens"),
                 super::i64_param(req, "secondaryWindowTokens"),
             ))
+        }
+        "quota/modelPriceRules/list" => super::value_or_error(read::list_model_price_rules()),
+        "quota/modelPriceRule/read" => {
+            let model_pattern = super::str_param(req, "modelPattern").unwrap_or("");
+            super::value_or_error(read::read_model_price_rule(model_pattern))
+        }
+        "quota/modelPriceRule/upsert" => {
+            let input = ModelPriceRuleUpsertInput {
+                id: super::string_param(req, "id"),
+                provider: super::string_param(req, "provider"),
+                model_pattern: super::str_param(req, "modelPattern").unwrap_or("").to_string(),
+                match_type: super::string_param(req, "matchType"),
+                input_price_per_1m: req
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.get("inputPricePer1m"))
+                    .and_then(|v| v.as_f64()),
+                cached_input_price_per_1m: req
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.get("cachedInputPricePer1m"))
+                    .and_then(|v| v.as_f64()),
+                output_price_per_1m: req
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.get("outputPricePer1m"))
+                    .and_then(|v| v.as_f64()),
+                enabled: super::bool_param(req, "enabled"),
+                priority: super::i64_param(req, "priority"),
+            };
+            super::value_or_error(read::upsert_model_price_rule(input))
         }
         "quota/refreshSources" => {
             super::value_or_error(read::refresh_quota_sources(QuotaRefreshSourcesInput {

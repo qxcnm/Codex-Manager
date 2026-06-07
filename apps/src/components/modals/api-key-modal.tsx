@@ -25,6 +25,7 @@ import {
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
 import { accountClient } from "@/lib/api/account-client";
 import { appClient } from "@/lib/api/app-client";
+import { CODEX_PROFILE_CANDIDATES_QUERY_KEY } from "@/lib/api/codex-profile-client";
 import { useAppStore } from "@/lib/store/useAppStore";
 import { useI18n } from "@/lib/i18n/provider";
 import { copyTextToClipboard } from "@/lib/utils/clipboard";
@@ -361,6 +362,7 @@ export function ApiKeyModal({
         }),
         queryClient.invalidateQueries({ queryKey: ["startup-snapshot"] }),
         queryClient.invalidateQueries({ queryKey: ["dashboard", "member-summary"] }),
+        queryClient.invalidateQueries({ queryKey: CODEX_PROFILE_CANDIDATES_QUERY_KEY }),
       ]);
       if (apiKey?.id) onOpenChange(false);
     } catch (err: unknown) {

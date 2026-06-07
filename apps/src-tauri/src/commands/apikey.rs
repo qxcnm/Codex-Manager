@@ -177,9 +177,14 @@ pub async fn service_model_catalog_delete(
 }
 
 #[tauri::command]
-pub async fn service_model_routing(
+pub async fn service_model_catalog_prune_stale_remote(
     addr: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    rpc_call_in_background("apikey/modelCatalogPruneStaleRemote", addr, None).await
+}
+
+#[tauri::command]
+pub async fn service_model_routing(addr: Option<String>) -> Result<serde_json::Value, String> {
     rpc_call_in_background("apikey/modelRouting", addr, None).await
 }
 
@@ -210,10 +215,9 @@ pub async fn service_model_source_mapping_save(
 #[tauri::command]
 pub async fn service_model_source_mapping_delete(
     addr: Option<String>,
-    id: String,
+    payload: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let params = serde_json::json!({ "id": id });
-    rpc_call_in_background("apikey/modelSourceMappingDelete", addr, Some(params)).await
+    rpc_call_in_background("apikey/modelSourceMappingDelete", addr, Some(payload)).await
 }
 
 /// 函数 `service_apikey_usage_stats`
@@ -346,4 +350,28 @@ pub async fn service_apikey_enable(
 ) -> Result<serde_json::Value, String> {
     let params = serde_json::json!({ "id": key_id });
     rpc_call_in_background("apikey/enable", addr, Some(params)).await
+}
+
+#[tauri::command]
+pub async fn service_model_price_rules_list(
+    addr: Option<String>,
+) -> Result<serde_json::Value, String> {
+    rpc_call_in_background("quota/modelPriceRules/list", addr, None).await
+}
+
+#[tauri::command]
+pub async fn service_model_price_rule_read(
+    addr: Option<String>,
+    model_pattern: String,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({ "modelPattern": model_pattern });
+    rpc_call_in_background("quota/modelPriceRule/read", addr, Some(params)).await
+}
+
+#[tauri::command]
+pub async fn service_model_price_rule_upsert(
+    addr: Option<String>,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    rpc_call_in_background("quota/modelPriceRule/upsert", addr, Some(payload)).await
 }

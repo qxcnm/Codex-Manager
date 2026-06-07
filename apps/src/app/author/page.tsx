@@ -293,7 +293,7 @@ export default function AuthorPage() {
                       {t(item.description)}
                     </p>
                   </div>
-                  <div className="mt-4 overflow-hidden rounded-xl border border-border/50 bg-white p-3">
+                  <div className="mt-4 overflow-hidden rounded-xl border border-border/50 bg-card/80 p-3 shadow-inner">
                     <img
                       src={item.src}
                       alt={t(item.title)}

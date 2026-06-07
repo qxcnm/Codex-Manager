@@ -1,6 +1,8 @@
 use super::*;
 use codexmanager_core::rpc::types::{JsonRpcMessage, JsonRpcResponse};
-use codexmanager_core::storage::{ModelGroupModel, RequestLog, RequestTokenStat};
+use codexmanager_core::storage::{
+    ModelCatalogModelRecord, ModelGroupModel, RequestLog, RequestTokenStat,
+};
 
 /// 函数 `response_result`
 ///
@@ -110,23 +112,29 @@ fn unknown_method_returns_jsonrpc_error() {
 
 #[test]
 fn member_actor_cannot_call_admin_only_rpc() {
-    let req = JsonRpcRequest {
-        id: 21.into(),
-        method: "accountManager/users/list".to_string(),
-        params: None,
-        trace: None,
-    };
+    for method in [
+        "accountManager/users/list",
+        "codexProfile/repairHistory",
+        "codexProfile/pruneHistoryBackups",
+    ] {
+        let req = JsonRpcRequest {
+            id: 21.into(),
+            method: method.to_string(),
+            params: None,
+            trace: None,
+        };
 
-    let resp = response_result(handle_request_with_actor(
-        req,
-        RpcActor::from_parts(Some(ROLE_MEMBER), Some("user-1")),
-    ));
-    let err = resp
-        .result
-        .get("error")
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
-    assert!(err.contains("permission_denied"));
+        let resp = response_result(handle_request_with_actor(
+            req,
+            RpcActor::from_parts(Some(ROLE_MEMBER), Some("user-1")),
+        ));
+        let err = resp
+            .result
+            .get("error")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        assert!(err.contains("permission_denied"), "{method}: {err}");
+    }
 }
 
 #[test]
@@ -176,7 +184,12 @@ fn password_mode_can_call_admin_and_model_source_rpcs() {
         ),
         (
             "apikey/modelSourceMappingDelete",
-            serde_json::json!({ "id": "map_test" }),
+            serde_json::json!({
+                "id": "map_test",
+                "sourceKind": "openai_account",
+                "sourceId": "acc_test",
+                "upstreamModel": "gpt-test",
+            }),
         ),
     ] {
         let resp = response_result(handle_request_with_actor(
@@ -189,6 +202,27 @@ fn password_mode_can_call_admin_and_model_source_rpcs() {
             "{method} unexpectedly denied: {err}"
         );
     }
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn password_mode_member_cannot_prune_stale_remote_catalog() {
+    let _guard = test_env_guard();
+    let db_path = setup_dashboard_test_db("codexmanager-member-prune-stale-remote-denied");
+    set_web_access_password(Some("password123")).expect("set web password");
+    set_web_auth_mode("password").expect("enable password mode");
+
+    let resp = response_result(handle_request_with_actor(
+        rpc_request("apikey/modelCatalogPruneStaleRemote", serde_json::json!({})),
+        RpcActor::from_parts(Some(ROLE_MEMBER), Some("member-user")),
+    ));
+
+    assert!(
+        rpc_error(&resp).contains("permission_denied"),
+        "{:?}",
+        resp.result
+    );
 
     let _ = std::fs::remove_file(db_path);
 }
@@ -318,6 +352,49 @@ fn create_owned_test_api_key(user_id: &str, name: &str, model: &str) -> String {
     created.id
 }
 
+fn seed_test_catalog_model(slug: &str) {
+    let storage = storage_helpers::open_storage().expect("open storage");
+    let now = codexmanager_core::storage::now_ts();
+    storage
+        .upsert_model_catalog_models(&[ModelCatalogModelRecord {
+            scope: "default".to_string(),
+            slug: slug.to_string(),
+            display_name: slug.to_string(),
+            source_kind: "remote".to_string(),
+            user_edited: false,
+            description: None,
+            default_reasoning_level: None,
+            shell_type: None,
+            visibility: Some("list".to_string()),
+            supported_in_api: Some(true),
+            priority: Some(0),
+            availability_nux_json: None,
+            upgrade_json: None,
+            base_instructions: None,
+            model_messages_json: None,
+            supports_reasoning_summaries: None,
+            default_reasoning_summary: None,
+            support_verbosity: None,
+            default_verbosity_json: None,
+            apply_patch_tool_type: None,
+            web_search_tool_type: None,
+            truncation_mode: None,
+            truncation_limit: None,
+            truncation_extra_json: None,
+            supports_parallel_tool_calls: None,
+            supports_image_detail_original: None,
+            context_window: None,
+            auto_compact_token_limit: None,
+            effective_context_window_percent: None,
+            minimal_client_version_json: None,
+            supports_search_tool: None,
+            extra_json: "{}".to_string(),
+            sort_index: 0,
+            updated_at: now,
+        }])
+        .expect("seed catalog model");
+}
+
 fn insert_test_request_log(
     key_id: &str,
     trace_id: &str,
@@ -374,6 +451,7 @@ fn wallet_charge_uses_model_group_billing_model_override() {
     set_distribution_enabled(true).expect("enable distribution");
     let user = create_test_member("member-model-group-billing", Some(1_000_000));
     let key_id = create_owned_test_api_key(&user.id, "member model group key", "gpt-5-mini");
+    seed_test_catalog_model("gpt-5-mini");
     let storage = storage_helpers::open_storage().expect("open storage");
     let group_id = storage
         .default_model_group_id()
@@ -943,6 +1021,62 @@ fn member_cannot_read_or_mutate_other_user_api_key() {
         "member two private key"
     );
     assert_eq!(member_two_list.result["items"][0]["status"], "active");
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn member_api_key_usage_stats_filter_to_owned_keys() {
+    let _guard = test_env_guard();
+    let db_path = setup_dashboard_test_db("codexmanager-member-apikey-usage-filter");
+    let day_start = 1_700_000_000;
+    let user_one = create_test_member("apikey-usage-one", Some(2_000_000));
+    let user_two = create_test_member("apikey-usage-two", Some(2_000_000));
+    let key_one = create_owned_test_api_key(&user_one.id, "usage one key", "gpt-5-mini");
+    let key_two = create_owned_test_api_key(&user_two.id, "usage two key", "gpt-5");
+
+    insert_test_request_log(
+        &key_one,
+        "trace-usage-one",
+        "gpt-5-mini",
+        200,
+        80,
+        10,
+        40,
+        0.08,
+        day_start + 10,
+    );
+    insert_test_request_log(
+        &key_two,
+        "trace-usage-two",
+        "gpt-5",
+        200,
+        800,
+        0,
+        500,
+        0.8,
+        day_start + 20,
+    );
+
+    let member_stats = response_result(handle_request_with_actor(
+        rpc_request("apikey/usageStats", serde_json::json!({})),
+        RpcActor::from_parts(Some(ROLE_MEMBER), Some(&user_one.id)),
+    ));
+    assert!(
+        member_stats.result.get("error").is_none(),
+        "{:?}",
+        member_stats.result
+    );
+    let member_items = member_stats.result["items"].as_array().unwrap();
+    assert_eq!(member_items.len(), 1);
+    assert_eq!(member_items[0]["keyId"], key_one);
+    assert_eq!(member_items[0]["totalTokens"], 120);
+
+    let admin_stats = response_result(handle_request_with_actor(
+        rpc_request("apikey/usageStats", serde_json::json!({})),
+        RpcActor::system_admin(),
+    ));
+    assert_eq!(admin_stats.result["items"].as_array().unwrap().len(), 2);
 
     let _ = std::fs::remove_file(db_path);
 }

@@ -126,17 +126,17 @@ fn normalize_warmup_message(message: &str) -> String {
 }
 
 fn build_warmup_client() -> Result<Client, String> {
-    let mut builder = Client::builder()
+    let builder = Client::builder()
         .connect_timeout(WARMUP_CONNECT_TIMEOUT)
         .timeout(WARMUP_TOTAL_TIMEOUT)
         .pool_max_idle_per_host(4)
         .pool_idle_timeout(Some(Duration::from_secs(60)))
         .user_agent(crate::gateway::current_codex_user_agent());
-    if let Some(proxy_url) = crate::gateway::current_upstream_proxy_url() {
-        let proxy = reqwest::Proxy::all(proxy_url.as_str())
-            .map_err(|err| format!("invalid upstream proxy url: {err}"))?;
-        builder = builder.proxy(proxy);
-    }
+    let builder = crate::gateway::apply_blocking_upstream_proxy(
+        builder,
+        crate::gateway::current_upstream_proxy_url().as_deref(),
+        "warmup_http_proxy_invalid",
+    );
     builder
         .build()
         .map_err(|err| format!("build warmup client failed: {err}"))

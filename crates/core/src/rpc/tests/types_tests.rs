@@ -1,5 +1,5 @@
 use super::{
-    AccountListParams, AccountListResult, AccountSummary, ApiKeyUsageStatSummary,
+    AccountListResult, AccountSummary, ApiKeyUsageStatSummary,
     DashboardAdminUsageSummaryResult, DashboardDailyUsagePoint, DashboardSourceUsageSummary,
     DashboardTokenUsageResult, DashboardUserUsageSummary, RequestLogFilterSummaryResult,
     RequestLogListParams, RequestLogListResult, RequestLogSummary,
@@ -61,27 +61,6 @@ fn account_summary_serialization_matches_compact_contract() {
     for key in ["workspaceId", "workspaceName", "updatedAt"] {
         assert!(!obj.contains_key(key), "unexpected key: {key}");
     }
-}
-
-/// 函数 `account_list_params_default_to_first_page_with_five_items`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// 无
-///
-/// # 返回
-/// 无
-#[test]
-fn account_list_params_default_to_first_page_with_five_items() {
-    let params: AccountListParams =
-        serde_json::from_value(serde_json::json!({})).expect("deserialize params");
-    let normalized = params.normalized();
-
-    assert_eq!(normalized.page, 1);
-    assert_eq!(normalized.page_size, 5);
 }
 
 /// 函数 `account_list_result_serialization_includes_pagination_fields`

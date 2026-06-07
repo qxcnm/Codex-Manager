@@ -1,10 +1,8 @@
-use codexmanager_core::rpc::types::{
-    AccountListParams, StartupSnapshotResult, UsageAggregateSummaryResult,
-};
+use codexmanager_core::rpc::types::{StartupSnapshotResult, UsageAggregateSummaryResult};
 
 use crate::{
     account_list, apikey_list, apikey_models, gateway, requestlog_list, requestlog_today_summary,
-    usage_aggregate, usage_list, RpcActor,
+    storage_helpers, usage_aggregate, RpcActor,
 };
 
 /// 函数 `read_startup_snapshot`
@@ -23,9 +21,27 @@ pub(crate) fn read_startup_snapshot(
     day_start_ts: Option<i64>,
     day_end_ts: Option<i64>,
 ) -> Result<StartupSnapshotResult, String> {
-    let accounts = account_list::read_accounts(AccountListParams::default(), false)?.items;
-    let usage_snapshots = usage_list::read_usage_snapshots()?;
-    let usage_aggregate_summary = usage_aggregate::read_usage_aggregate_summary()?;
+    let storage =
+        storage_helpers::open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let accounts = storage
+        .list_accounts()
+        .map_err(|err| format!("list accounts failed: {err}"))?;
+    let db_path = std::env::var("CODEXMANAGER_DB_PATH").unwrap_or_else(|_| "<unset>".to_string());
+    log::info!(
+        "startup/snapshot read: db_path={} account_count={}",
+        db_path,
+        accounts.len()
+    );
+    let account_context = account_list::build_account_summary_context(&storage, &accounts)?;
+    let usage_aggregate_summary = usage_aggregate::compute_usage_aggregate_summary(
+        &accounts,
+        &account_context.usage_snapshots,
+    );
+    let usage_snapshots = account_context
+        .usage_snapshots
+        .into_iter()
+        .map(crate::usage_read::usage_snapshot_result_from_record)
+        .collect();
     let api_keys = apikey_list::read_api_keys()?;
     let api_models = apikey_models::read_model_options(false)?;
     let manual_preferred_account_id = gateway::manual_preferred_account();
@@ -34,7 +50,7 @@ pub(crate) fn read_startup_snapshot(
     let request_logs = requestlog_list::read_request_logs(None, request_log_limit)?;
 
     Ok(StartupSnapshotResult {
-        accounts,
+        accounts: account_context.items,
         usage_snapshots,
         usage_aggregate_summary,
         api_keys,
@@ -59,7 +75,7 @@ pub(crate) fn read_startup_snapshot_for_actor(
         .as_deref()
         .ok_or_else(|| "permission_denied: startup requires user session".to_string())?;
     let key_ids = crate::list_api_key_ids_for_user(user_id)?;
-    let api_keys = apikey_list::read_api_keys_for_actor(actor)?;
+    let api_keys = apikey_list::read_api_keys_for_ids(&key_ids)?;
     let api_models = apikey_models::read_model_options(false)?;
     let request_log_today_summary =
         requestlog_today_summary::read_requestlog_today_summary_for_key_ids(

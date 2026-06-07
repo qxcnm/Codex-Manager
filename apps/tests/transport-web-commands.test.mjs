@@ -7,29 +7,69 @@ import { pathToFileURL } from "node:url";
 import ts from "../node_modules/typescript/lib/typescript.js";
 
 const appsRoot = path.resolve(import.meta.dirname, "..");
-const sourcePath = path.join(
-  appsRoot,
-  "src",
-  "lib",
-  "api",
-  "transport-web-commands.ts"
-);
+const sourcePath = path.join(appsRoot, "src", "lib", "api", "transport-web-commands.ts");
+const modulePaths = [
+  path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "account.ts"),
+  path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "aggregate-api.ts"),
+  path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "apikey.ts"),
+  path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "browser-direct.ts"),
+  path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "codex-profile.ts"),
+  path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "gateway.ts"),
+  path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "login.ts"),
+  path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "misc.ts"),
+  path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "quota.ts"),
+  path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "shared.ts"),
+];
 
-async function loadTransportWebCommandsModule() {
-  const source = await fs.readFile(sourcePath, "utf8");
+function rewriteImports(outputText) {
+  return outputText
+    .replaceAll('./transport-web-commands/account', './transport-web-commands/account.js')
+    .replaceAll('./transport-web-commands/aggregate-api', './transport-web-commands/aggregate-api.js')
+    .replaceAll('./transport-web-commands/apikey', './transport-web-commands/apikey.js')
+    .replaceAll('./transport-web-commands/browser-direct', './transport-web-commands/browser-direct.js')
+    .replaceAll('./transport-web-commands/codex-profile', './transport-web-commands/codex-profile.js')
+    .replaceAll('./transport-web-commands/gateway', './transport-web-commands/gateway.js')
+    .replaceAll('./transport-web-commands/login', './transport-web-commands/login.js')
+    .replaceAll('./transport-web-commands/misc', './transport-web-commands/misc.js')
+    .replaceAll('./transport-web-commands/quota', './transport-web-commands/quota.js')
+    .replaceAll('./transport-web-commands/shared', './transport-web-commands/shared.js')
+    .replaceAll('./shared', './shared.js')
+    .replaceAll('./browser-direct', './browser-direct.js')
+    .replaceAll('../../utils/request', '../../utils/request.js');
+}
+
+async function writeCompiledModule(inputPath, outputPath) {
+  const source = await fs.readFile(inputPath, "utf8");
   const compiled = ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.ES2022,
       target: ts.ScriptTarget.ES2022,
     },
-    fileName: sourcePath,
+    fileName: inputPath,
   });
+  await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  await fs.writeFile(outputPath, rewriteImports(compiled.outputText), "utf8");
+}
 
-  const tempDir = await fs.mkdtemp(
-    path.join(os.tmpdir(), "codexmanager-transport-web-commands-")
+async function ensureRequestUtils(tempDir) {
+  const requestTempFile = path.join(tempDir, "utils", "request.js");
+  await fs.mkdir(path.dirname(requestTempFile), { recursive: true });
+  await fs.writeFile(
+    requestTempFile,
+    'export async function fetchWithRetry() { throw new Error("not used in this test"); }\nexport async function runWithControl(fn) { return await fn(); }\n',
+    "utf8",
   );
+}
+
+async function loadTransportWebCommandsModule() {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codexmanager-transport-web-commands-"));
   const tempFile = path.join(tempDir, "transport-web-commands.mjs");
-  await fs.writeFile(tempFile, compiled.outputText, "utf8");
+  await writeCompiledModule(sourcePath, tempFile);
+  for (const modulePath of modulePaths) {
+    const outputPath = path.join(tempDir, "transport-web-commands", `${path.basename(modulePath, ".ts")}.js`);
+    await writeCompiledModule(modulePath, outputPath);
+  }
+  await ensureRequestUtils(tempDir);
   return import(pathToFileURL(tempFile).href);
 }
 
@@ -70,6 +110,33 @@ test("createWebCommandMap 为账号预热命令提供 Web RPC 映射", () => {
   });
 });
 
+test("createWebCommandMap 为 Codex profile 管理提供 Web RPC 映射", () => {
+  assert.deepEqual(commandMap.service_codex_profile_get, {
+    rpcMethod: "codexProfile/get",
+  });
+  assert.deepEqual(commandMap.service_codex_profile_set_config, {
+    rpcMethod: "codexProfile/setConfig",
+  });
+  assert.deepEqual(commandMap.service_codex_profile_list_candidates, {
+    rpcMethod: "codexProfile/listCandidates",
+  });
+  assert.deepEqual(commandMap.service_codex_profile_apply_direct_account, {
+    rpcMethod: "codexProfile/applyDirectAccount",
+  });
+  assert.deepEqual(commandMap.service_codex_profile_apply_gateway, {
+    rpcMethod: "codexProfile/applyGateway",
+  });
+  assert.deepEqual(commandMap.service_codex_profile_restore, {
+    rpcMethod: "codexProfile/restore",
+  });
+  assert.deepEqual(commandMap.service_codex_profile_repair_history, {
+    rpcMethod: "codexProfile/repairHistory",
+  });
+  assert.deepEqual(commandMap.service_codex_profile_prune_history_backups, {
+    rpcMethod: "codexProfile/pruneHistoryBackups",
+  });
+});
+
 test("createWebCommandMap 为按状态清理账号提供 Web RPC 映射", () => {
   const cleanup = commandMap.service_account_delete_by_statuses;
   assert.deepEqual(cleanup, {
@@ -101,16 +168,8 @@ test("createWebCommandMap 为普通用户仪表盘汇总提供 Web RPC 映射", 
   assert.equal(summary.rpcMethod, "dashboard/memberSummary");
   assert.ok(summary.mapParams);
   assert.deepEqual(
-    summary.mapParams({
-      user_id: "usr-1",
-      day_start_ts: 100,
-      day_end_ts: 200,
-    }),
-    {
-      userId: "usr-1",
-      dayStartTs: 100,
-      dayEndTs: 200,
-    },
+    summary.mapParams({ user_id: "usr-1", day_start_ts: 100, day_end_ts: 200 }),
+    { userId: "usr-1", dayStartTs: 100, dayEndTs: 200 },
   );
 });
 
@@ -118,16 +177,10 @@ test("createWebCommandMap 为管理员用量分析提供 Web RPC 映射", () => 
   const summary = commandMap.service_dashboard_admin_usage_summary;
   assert.equal(summary.rpcMethod, "dashboard/adminUsageSummary");
   assert.ok(summary.mapParams);
-  assert.deepEqual(
-    summary.mapParams({
-      start_ts: 100,
-      end_ts: 200,
-    }),
-    {
-      startTs: 100,
-      endTs: 200,
-    },
-  );
+  assert.deepEqual(summary.mapParams({ start_ts: 100, end_ts: 200 }), {
+    startTs: 100,
+    endTs: 200,
+  });
 });
 
 test("createWebCommandMap 为模型来源映射命令提供 Web RPC 映射", () => {
@@ -146,38 +199,16 @@ test("createWebCommandMap 为模型来源映射命令提供 Web RPC 映射", () 
   assert.equal(saveMapping.rpcMethod, "apikey/modelSourceMappingSave");
   assert.ok(saveMapping.mapParams);
   assert.deepEqual(
-    saveMapping.mapParams({
-      payload: {
-        platformModelSlug: "gpt-platform",
-        sourceKind: "openai_account",
-        sourceId: "acc-1",
-        upstreamModel: "gpt-upstream",
-      },
-    }),
-    {
-      platformModelSlug: "gpt-platform",
-      sourceKind: "openai_account",
-      sourceId: "acc-1",
-      upstreamModel: "gpt-upstream",
-    },
+    saveMapping.mapParams({ payload: { platformModelSlug: "gpt-platform", sourceKind: "openai_account", sourceId: "acc-1", upstreamModel: "gpt-upstream" } }),
+    { platformModelSlug: "gpt-platform", sourceKind: "openai_account", sourceId: "acc-1", upstreamModel: "gpt-upstream" },
   );
 
   const saveSupplier = commandMap.service_aggregate_api_supplier_model_save;
   assert.equal(saveSupplier.rpcMethod, "aggregateApi/supplierModels/save");
   assert.ok(saveSupplier.mapParams);
   assert.deepEqual(
-    saveSupplier.mapParams({
-      payload: {
-        supplierKey: "Provider",
-        providerType: "codex",
-        upstreamModel: "provider-model",
-      },
-    }),
-    {
-      supplierKey: "Provider",
-      providerType: "codex",
-      upstreamModel: "provider-model",
-    },
+    saveSupplier.mapParams({ payload: { supplierKey: "Provider", providerType: "codex", upstreamModel: "provider-model" } }),
+    { supplierKey: "Provider", providerType: "codex", upstreamModel: "provider-model" },
   );
 
   assert.deepEqual(commandMap.service_aggregate_api_supplier_models_import, {
@@ -193,12 +224,7 @@ test("createWebCommandMap 为外部协议跳转提供当前窗口回退", async 
   try {
     const openExternalUrl = commandMap.open_external_url;
     assert.ok(openExternalUrl.direct);
-    assert.deepEqual(
-      await openExternalUrl.direct({
-        url: " ccswitch://v1/import?resource=provider ",
-      }),
-      { ok: true }
-    );
+    assert.deepEqual(await openExternalUrl.direct({ url: " ccswitch://v1/import?resource=provider " }), { ok: true });
     assert.equal(location.href, "ccswitch://v1/import?resource=provider");
   } finally {
     if (previousWindow === undefined) {

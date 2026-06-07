@@ -8,20 +8,37 @@ import ts from "../node_modules/typescript/lib/typescript.js";
 
 const appsRoot = path.resolve(import.meta.dirname, "..");
 const sourcePath = path.join(appsRoot, "src", "lib", "utils", "ccswitch.ts");
+const endpointSourcePath = path.join(
+  appsRoot,
+  "src",
+  "lib",
+  "gateway",
+  "endpoints.ts",
+);
 
-async function loadCcSwitchModule() {
-  const source = await fs.readFile(sourcePath, "utf8");
+async function writeCompiledModule(inputPath, outputPath) {
+  const source = await fs.readFile(inputPath, "utf8");
   const compiled = ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.ES2022,
       target: ts.ScriptTarget.ES2022,
     },
-    fileName: sourcePath,
+    fileName: inputPath,
   });
+  const outputText = compiled.outputText.replace(
+    "../gateway/endpoints",
+    "../gateway/endpoints.js",
+  );
+  await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  await fs.writeFile(outputPath, outputText, "utf8");
+}
 
+async function loadCcSwitchModule() {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codexmanager-ccswitch-"));
-  const tempFile = path.join(tempDir, "ccswitch.mjs");
-  await fs.writeFile(tempFile, compiled.outputText, "utf8");
+  const tempFile = path.join(tempDir, "lib", "utils", "ccswitch.mjs");
+  const endpointTempFile = path.join(tempDir, "lib", "gateway", "endpoints.js");
+  await writeCompiledModule(sourcePath, tempFile);
+  await writeCompiledModule(endpointSourcePath, endpointTempFile);
   return import(pathToFileURL(tempFile).href);
 }
 

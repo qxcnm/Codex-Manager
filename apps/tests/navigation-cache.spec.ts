@@ -120,7 +120,7 @@ test.beforeEach(async ({ page }) => {
       body: JSON.stringify({
         jsonrpc: "2.0",
         id,
-        result: resultByMethod[method],
+        result: resultByMethod[method as keyof typeof resultByMethod],
       }),
     });
   });

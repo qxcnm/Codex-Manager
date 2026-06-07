@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
-use rusqlite::{OptionalExtension, Result};
+use rusqlite::{params_from_iter, OptionalExtension, Result};
 
+use super::key_id_filters::{key_id_in_clause, normalize_key_ids, SQLITE_IN_CLAUSE_BATCH_SIZE};
 use super::{now_ts, Storage};
 
 impl Storage {
@@ -55,6 +56,22 @@ impl Storage {
         let mut out = HashMap::new();
         while let Some(row) = rows.next()? {
             out.insert(row.get(0)?, row.get(1)?);
+        }
+        Ok(out)
+    }
+
+    pub fn list_api_key_quota_limits_for_ids(
+        &self,
+        key_ids: &[String],
+    ) -> Result<HashMap<String, i64>> {
+        let key_ids = normalize_key_ids(key_ids);
+        if key_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let mut out = HashMap::new();
+        for chunk in key_ids.chunks(SQLITE_IN_CLAUSE_BATCH_SIZE) {
+            out.extend(list_api_key_quota_limits_for_ids_chunk(self, chunk)?);
         }
         Ok(out)
     }
@@ -122,4 +139,26 @@ impl Storage {
         )?;
         Ok(())
     }
+}
+
+fn list_api_key_quota_limits_for_ids_chunk(
+    storage: &Storage,
+    key_ids: &[String],
+) -> Result<HashMap<String, i64>> {
+    let Some((clause, params)) = key_id_in_clause("key_id", key_ids) else {
+        return Ok(HashMap::new());
+    };
+    let sql = format!(
+        "SELECT key_id, quota_limit_tokens
+         FROM api_key_quota_limits
+         WHERE quota_limit_tokens > 0
+           AND {clause}"
+    );
+    let mut stmt = storage.conn.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(params.iter()))?;
+    let mut out = HashMap::new();
+    while let Some(row) = rows.next()? {
+        out.insert(row.get(0)?, row.get(1)?);
+    }
+    Ok(out)
 }

@@ -45,7 +45,7 @@ fn serialize_models_response_outputs_codex_and_api_shapes() {
         .get("data")
         .and_then(Value::as_array)
         .expect("OpenAI-compatible data array");
-    assert_eq!(data.len(), 3);
+    assert_eq!(data.len(), 2);
     assert_eq!(
         data[0].get("id").and_then(Value::as_str),
         Some("gpt-5.3-codex")
@@ -56,15 +56,11 @@ fn serialize_models_response_outputs_codex_and_api_shapes() {
         Some("codexmanager")
     );
     assert_eq!(data[1].get("id").and_then(Value::as_str), Some("gpt-4o"));
-    assert_eq!(
-        data[2].get("id").and_then(Value::as_str),
-        Some("gpt-image-2")
-    );
     let models = value
         .get("models")
         .and_then(Value::as_array)
         .expect("models array");
-    assert_eq!(models.len(), 3);
+    assert_eq!(models.len(), 2);
     assert_eq!(
         models[0].get("slug").and_then(Value::as_str),
         Some("gpt-5.3-codex")
@@ -80,10 +76,6 @@ fn serialize_models_response_outputs_codex_and_api_shapes() {
     assert_eq!(
         models[1].get("visibility").and_then(Value::as_str),
         Some("list")
-    );
-    assert_eq!(
-        models[2].get("slug").and_then(Value::as_str),
-        Some("gpt-image-2")
     );
     assert_eq!(value.as_object().map(|object| object.len()), Some(3));
     assert!(value.get("etag").is_none());
@@ -113,7 +105,7 @@ fn serialize_models_response_preserves_description_for_codex_clients() {
         .get("data")
         .and_then(Value::as_array)
         .expect("OpenAI-compatible data array");
-    assert_eq!(models.len(), 2);
+    assert_eq!(models.len(), 1);
     assert_eq!(
         models[0].get("description").and_then(Value::as_str),
         Some("Latest frontier agentic coding model.")
@@ -125,11 +117,11 @@ fn serialize_models_response_preserves_description_for_codex_clients() {
 }
 
 #[test]
-fn serialize_models_response_appends_codex_image_tool_model_once() {
+fn serialize_models_response_does_not_invent_codex_image_tool_model() {
     let items = ModelsResponse {
         models: vec![ModelInfo {
-            slug: "gpt-image-2".to_string(),
-            display_name: "GPT Image 2".to_string(),
+            slug: "gpt-5.4-mini".to_string(),
+            display_name: "GPT-5.4 Mini".to_string(),
             supported_in_api: true,
             visibility: Some("list".to_string()),
             ..Default::default()
@@ -147,7 +139,7 @@ fn serialize_models_response_appends_codex_image_tool_model_once() {
     assert_eq!(models.len(), 1);
     assert_eq!(
         models[0].get("slug").and_then(Value::as_str),
-        Some("gpt-image-2")
+        Some("gpt-5.4-mini")
     );
 }
 
@@ -185,7 +177,6 @@ fn serialize_models_response_filters_api_data_to_supported_models() {
         .collect::<Vec<_>>();
 
     assert!(ids.contains(&"gpt-supported"));
-    assert!(ids.contains(&"gpt-image-2"));
     assert!(!ids.contains(&"gpt-hidden"));
 }
 

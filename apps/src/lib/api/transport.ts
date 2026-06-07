@@ -3,7 +3,6 @@ import { fetchWithRetry, runWithControl, RequestOptions } from "../utils/request
 import { DEFAULT_UNSUPPORTED_WEB_REASON } from "../runtime/runtime-capabilities";
 import { useAppStore } from "../store/useAppStore";
 import {
-  getAppErrorMessage,
   isCommandMissingError,
   unwrapRpcPayload,
 } from "./transport-errors";
@@ -12,7 +11,6 @@ import { createWebCommandMap } from "./transport-web-commands";
 import type { InvokeParams, WebCommandDescriptor } from "./transport-web-commands";
 import { postJsonRpc } from "./rpc-http";
 import {
-  getCachedRuntimeCapabilities,
   isTauriRuntime,
   loadRuntimeCapabilities,
 } from "./transport-runtime";

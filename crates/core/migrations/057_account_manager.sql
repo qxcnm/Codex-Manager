@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS app_wallet_ledger_entries (
 
 CREATE INDEX IF NOT EXISTS idx_app_wallet_ledger_wallet_created ON app_wallet_ledger_entries(wallet_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_wallet_ledger_api_key ON app_wallet_ledger_entries(api_key_id);
+CREATE INDEX IF NOT EXISTS idx_app_wallet_ledger_request_log_kind ON app_wallet_ledger_entries(request_log_id, entry_kind);
 
 CREATE TABLE IF NOT EXISTS api_key_owners (
     key_id TEXT PRIMARY KEY REFERENCES api_keys(id) ON DELETE CASCADE,

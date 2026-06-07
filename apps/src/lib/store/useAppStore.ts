@@ -124,6 +124,11 @@ export const useAppStore = create<AppState>((set) => ({
       warmupCronEnabled: false,
       warmupCronExpression: "",
     },
+    runtimeTimeZone: {
+      name: "Local",
+      offset: "",
+      source: "system",
+    },
     envOverrides: {},
     envOverrideCatalog: [],
     envOverrideReservedKeys: [],

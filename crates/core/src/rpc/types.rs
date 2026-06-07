@@ -198,67 +198,6 @@ pub struct AccountSummary {
     pub quota_capacity_secondary_window_tokens: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct AccountListParams {
-    pub page: i64,
-    pub page_size: i64,
-    pub query: Option<String>,
-    pub filter: Option<String>,
-    pub group_filter: Option<String>,
-}
-
-impl Default for AccountListParams {
-    /// 函数 `default`
-    ///
-    /// 作者: gaohongshun
-    ///
-    /// 时间: 2026-04-02
-    ///
-    /// # 参数
-    /// 无
-    ///
-    /// # 返回
-    /// 返回函数执行结果
-    fn default() -> Self {
-        Self {
-            page: 1,
-            page_size: 5,
-            query: None,
-            filter: None,
-            group_filter: None,
-        }
-    }
-}
-
-impl AccountListParams {
-    /// 函数 `normalized`
-    ///
-    /// 作者: gaohongshun
-    ///
-    /// 时间: 2026-04-02
-    ///
-    /// # 参数
-    /// - self: 参数 self
-    ///
-    /// # 返回
-    /// 返回函数执行结果
-    pub fn normalized(self) -> Self {
-        // 中文注释：分页参数小于 1 时回退到默认值，避免出现负偏移或零页大小。
-        Self {
-            page: if self.page < 1 { 1 } else { self.page },
-            page_size: if self.page_size < 1 {
-                5
-            } else {
-                self.page_size
-            },
-            query: self.query,
-            filter: self.filter,
-            group_filter: self.group_filter,
-        }
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountListResult {
@@ -1592,6 +1531,60 @@ pub struct MemberDashboardSummaryResult {
     pub recent_logs: Vec<RequestLogSummary>,
     #[serde(default)]
     pub alerts: Vec<MemberDashboardAlert>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelPriceRuleEntry {
+    pub id: String,
+    pub provider: String,
+    pub model_pattern: String,
+    pub match_type: String,
+    #[serde(default)]
+    pub input_price_per_1m: Option<f64>,
+    #[serde(default)]
+    pub cached_input_price_per_1m: Option<f64>,
+    #[serde(default)]
+    pub output_price_per_1m: Option<f64>,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub priority: i64,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub created_at: i64,
+    #[serde(default)]
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelPriceRuleListResult {
+    #[serde(default)]
+    pub items: Vec<ModelPriceRuleEntry>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelPriceRuleUpsertInput {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    pub model_pattern: String,
+    #[serde(default)]
+    pub match_type: Option<String>,
+    #[serde(default)]
+    pub input_price_per_1m: Option<f64>,
+    #[serde(default)]
+    pub cached_input_price_per_1m: Option<f64>,
+    #[serde(default)]
+    pub output_price_per_1m: Option<f64>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub priority: Option<i64>,
 }
 
 #[cfg(test)]

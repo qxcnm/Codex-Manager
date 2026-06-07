@@ -59,6 +59,16 @@ Thanks to the following sponsors for supporting CodexManager.
 <table>
   <tr>
     <td align="center" valign="middle" width="180">
+      <a href="https://apikey.fun/register?aff=Codex-Manager">
+        <img src="../../assets/images/sponsors/APIKey.Fun.png" alt="APIKEY.FUN" width="120" />
+      </a>
+    </td>
+    <td valign="top">
+      Thanks to <strong>APIKEY.FUN</strong> for sponsoring this project! APIKEY.FUN is a professional enterprise-grade AI API gateway dedicated to providing stable, efficient, and low-cost AI model API access for businesses and individual developers. The platform supports popular mainstream models including Claude, OpenAI, and Gemini, with pricing as low as 7% of the official price. Register through this project's <a href="https://apikey.fun/register?aff=Codex-Manager">exclusive link</a> to receive an exclusive benefit of up to <strong>permanent 5% off top-ups</strong>.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="middle" width="180">
       <a href="https://gzxsy.vip/register?aff=eapz">
         <img src="../../assets/images/sponsors/xingsiyan.jpg" alt="Xing Si Yan Gateway" width="120" />
       </a>
