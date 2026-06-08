@@ -910,6 +910,64 @@ mod tests {
     }
 
     #[test]
+    fn codex_responses_probe_uses_responses_input_text_content_type() {
+        let server = Server::http("127.0.0.1:0").expect("start mock server");
+        let base_url = format!("http://{}", server.server_addr());
+        let (tx, rx) = mpsc::channel();
+        let join = thread::spawn(move || {
+            let mut request = server
+                .recv_timeout(Duration::from_secs(2))
+                .expect("receive responses request")
+                .expect("responses request present");
+            let mut body = String::new();
+            request
+                .as_reader()
+                .read_to_string(&mut body)
+                .expect("read request body");
+            let parsed: Value = serde_json::from_str(body.as_str()).expect("parse body");
+            let content_type = parsed
+                .pointer("/input/0/content/0/type")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            tx.send((
+                request.method().as_str().to_string(),
+                request.url().to_string(),
+                content_type,
+            ))
+            .expect("send responses request");
+            let response = if parsed.pointer("/input/0/content/0/type")
+                == Some(&Value::String("input_text".to_string()))
+            {
+                Response::from_string(r#"{"id":"resp_probe","object":"response"}"#)
+            } else {
+                Response::from_string(r#"{"error":{"message":"invalid content type"}}"#)
+                    .with_status_code(StatusCode(400))
+            };
+            request.respond(response).expect("respond responses");
+        });
+
+        let mut api = aggregate_api_with_action(None);
+        api.url = base_url;
+        api.model_override = Some("gpt-5.5".to_string());
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("build client");
+
+        let status = probe_codex_endpoint(&client, &api, "secret").expect("probe succeeds");
+
+        assert_eq!(status, 200);
+        let captured = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("captured request");
+        join.join().expect("join mock server");
+        assert_eq!(captured.0, "POST");
+        assert_eq!(captured.1, "/v1/responses");
+        assert_eq!(captured.2, "input_text");
+    }
+
+    #[test]
     fn claude_probe_uses_discovered_model_before_fallbacks() {
         let server = Server::http("127.0.0.1:0").expect("start mock server");
         let base_url = format!("http://{}", server.server_addr());
@@ -1818,7 +1876,7 @@ fn build_codex_probe_body() -> serde_json::Value {
         "input": [{
             "role": "user",
             "content": [{
-                "type": "text",
+                "type": "input_text",
                 "text": "Who are you?"
             }]
         }],
