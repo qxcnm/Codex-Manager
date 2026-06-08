@@ -3,7 +3,7 @@
 import type { MessageCatalog } from "../types";
 
 export const RU_PLATFORM_MODE_MESSAGES: MessageCatalog = {
-  平台模式选择: "Выбор режима платформы",
+  平台模式选择: "Режим платформы",
   "选择 Codex CLI 直连账号，或通过 CodexManager 本地网关接入。":
     "Выберите прямое подключение аккаунта Codex CLI или работу через локальный шлюз CodexManager.",
   写入位置说明: "Куда будут записаны изменения",
