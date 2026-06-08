@@ -68,7 +68,7 @@ function PagePanelFallback({ title }: { title: string }) {
               <Loader2 className="size-7 animate-spin" />
             </div>
             <div className="flex flex-col gap-2">
-              <p className="text-xl font-semibold tracking-tight text-foreground">{title}</p>
+              <p className="text-xl font-semibold tracking-tight text-foreground">{t(title)}</p>
               <p className="text-sm text-muted-foreground">
                 {t("正在恢复页面内容，请稍候...")}
               </p>
