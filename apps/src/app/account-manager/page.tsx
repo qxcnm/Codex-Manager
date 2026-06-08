@@ -256,7 +256,7 @@ function StatCard({
 }
 
 function UserUsageTrendLine({ summary }: { summary: MemberDashboardSummary }) {
-  const { locale } = useI18n();
+  const { t, locale } = useI18n();
   const chartConfig = {
     totalTokens: {
       label: "Token",
@@ -501,7 +501,16 @@ function UserUsageDetail({
                 className="grid gap-2 py-2 text-xs sm:grid-cols-[minmax(0,1fr)_auto]"
               >
                 <div className="min-w-0">
-                  <div className="truncate font-mono font-medium">{log.model || "unknown"}</div>
+                  <div
+                    className={fitLongTextClassName(
+                      log.model || "unknown",
+                      "break-all font-mono font-medium [overflow-wrap:anywhere]",
+                      "text-xs",
+                    )}
+                    title={log.model || "unknown"}
+                  >
+                    {log.model || "unknown"}
+                  </div>
                   <div className="truncate text-muted-foreground">{formatTime(log.createdAt, t, locale)}</div>
                 </div>
                 <div className="flex gap-3 text-muted-foreground sm:justify-end">
@@ -911,8 +920,17 @@ export default function AccountManagerPage() {
                       )}
                     </TableCell>
                     <TableCell>{formatTime(user.lastLoginAt, t, locale)}</TableCell>
-                    <TableCell className="max-w-[180px] truncate font-mono text-xs text-muted-foreground">
-                      {user.id}
+                    <TableCell className="max-w-[180px]">
+                      <span
+                        className={fitLongTextClassName(
+                          user.id,
+                          "block break-all font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]",
+                          "text-xs",
+                        )}
+                        title={user.id}
+                      >
+                        {user.id}
+                      </span>
                     </TableCell>
                     <TableCell className="pr-4 text-right">
                       <div className="flex flex-wrap justify-end gap-2">

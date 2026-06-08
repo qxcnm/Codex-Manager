@@ -69,6 +69,7 @@ import {
   estimateQuotaLimitUsd,
   formatQuotaLimitUsd,
 } from "@/lib/utils/api-key-quota";
+import { formatLocalMinuteFromSeconds } from "@/lib/utils/time";
 import { formatCompactNumber } from "@/lib/utils/usage";
 import type { ApiKeyOwner, AppUser } from "@/types";
 
@@ -657,6 +658,7 @@ export default function ApiKeysPage() {
                 <TableHead>{t("协议")}</TableHead>
                 <TableHead>{t("轮转策略")}</TableHead>
                 <TableHead>{t("绑定模型")}</TableHead>
+                <TableHead>{t("最近调用")}</TableHead>
                 <TableHead>{t("Token / 金额")}</TableHead>
                 <TableHead>{t("状态")}</TableHead>
                 <TableHead className="table-sticky-action-head w-[144px] text-center">
@@ -676,6 +678,7 @@ export default function ApiKeysPage() {
                       <TableCell><Skeleton className="h-4 w-20" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-20" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-28" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-28" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-20" /></TableCell>
                       <TableCell><Skeleton className="h-6 w-16 rounded-full" /></TableCell>
                       <TableCell className="table-sticky-action-cell text-center">
@@ -685,7 +688,7 @@ export default function ApiKeysPage() {
                 ))
               ) : apiKeys.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={showMemberOwnership ? 9 : 8} className="h-48 text-center">
+                  <TableCell colSpan={showMemberOwnership ? 10 : 9} className="h-48 text-center">
                     <div className="flex flex-col items-center justify-center gap-2 text-muted-foreground">
                       <Plus className="h-8 w-8 opacity-20" />
                       <p>{t("创建密钥")}</p>
@@ -799,10 +802,13 @@ export default function ApiKeysPage() {
                         {key.model ? (
                           key.model
                         ) : (
-                          <span title="跟随请求表示使用请求体里的实际 model；请求日志展示的是最终生效模型。">
+                          <span title={t("跟随请求表示使用请求体里的实际 model；请求日志展示的是最终生效模型。")}>
                             {t("跟随请求")}
                           </span>
                         )}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {formatLocalMinuteFromSeconds(key.lastUsedAt, t("从未调用"))}
                       </TableCell>
                       <TableCell className="font-mono text-xs">
                         <div className="space-y-1">

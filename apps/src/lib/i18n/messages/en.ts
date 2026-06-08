@@ -203,6 +203,8 @@ export const EN_MESSAGES: MessageCatalog = {
   留空则自动生成: "Leave empty to generate automatically",
   "用于复用固定 OPENAI_API_KEY；填写后将按该值创建平台密钥，留空则继续随机生成。":
     "Use this to reuse a fixed OPENAI_API_KEY. When filled, the platform key is created with this value; leave it empty to keep random generation.",
+  "对应环境变量，修改后会应用到相关模块。":
+    "Related environment variables. Changes will be applied to the corresponding modules after editing.",
   "密钥 / ID": "Key / ID",
   名称: "Name",
   账号轮转: "Account rotation",
