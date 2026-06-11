@@ -74,7 +74,7 @@ pub(crate) fn read_managed_model_catalog(
         storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     let cached_catalog = read_managed_model_catalog_from_storage(&storage)?;
     let cached = managed_catalog_to_models_response(&cached_catalog);
-    if !refresh_remote && !cached.is_empty() {
+    if !refresh_remote {
         return Ok(cached_catalog);
     }
 
@@ -864,11 +864,16 @@ fn read_account_pool_platform_catalog(
     }
 
     if allow_remote_catalog_fetch {
-        if let Ok(models) = gateway::fetch_models_for_picker() {
-            let catalog = merge_managed_model_catalog(cached_catalog.clone(), models);
-            if !catalog.items.is_empty() {
-                save_managed_model_catalog_with_storage(storage, &catalog)?;
-                return Ok(catalog);
+        let scope_record = storage
+            .get_model_catalog_scope(MODEL_CACHE_SCOPE_DEFAULT)
+            .map_err(|e| e.to_string())?;
+        if scope_record.is_none() {
+            if let Ok(models) = gateway::fetch_models_for_picker() {
+                let catalog = merge_managed_model_catalog(cached_catalog.clone(), models);
+                if !catalog.items.is_empty() {
+                    save_managed_model_catalog_with_storage(storage, &catalog)?;
+                    return Ok(catalog);
+                }
             }
         }
     }
@@ -1794,6 +1799,16 @@ fn replace_model_catalog_entry(
 }
 
 fn delete_model_catalog_entry(storage: &Storage, slug: &str) -> Result<(), String> {
+    if let Ok(mappings) = storage.list_model_source_mappings(Some(slug)) {
+        for mapping in &mappings {
+            let _ = storage.upsert_model_source_mapping_preference(
+                &mapping.source_kind,
+                &mapping.source_id,
+                &mapping.upstream_model,
+                "unlinked",
+            );
+        }
+    }
     storage
         .delete_model_group_model_references(slug)
         .map_err(|e| e.to_string())?;
