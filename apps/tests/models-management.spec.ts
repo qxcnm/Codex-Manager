@@ -77,7 +77,7 @@ test("models page supports creating and deleting a managed model", async ({ page
     },
   ];
 
-  await page.route("**/api/runtime", async (route) => {
+  await page.route("**/api/runtime**", async (route) => {
     await route.fulfill({
       contentType: "application/json; charset=utf-8",
       body: JSON.stringify({
@@ -93,7 +93,7 @@ test("models page supports creating and deleting a managed model", async ({ page
     });
   });
 
-  await page.route("**/api/rpc", async (route) => {
+  await page.route("**/api/rpc**", async (route) => {
     const payload = route.request().postDataJSON();
     const method = typeof payload?.method === "string" ? payload.method : "";
     const id = payload?.id ?? 1;
@@ -120,6 +120,16 @@ test("models page supports creating and deleting a managed model", async ({ page
         codexHome: "C:/Users/Test/.codex",
         platformFamily: "windows",
         platformOs: "windows",
+      });
+      return;
+    }
+    if (method === "accountManager/session/current") {
+      await ok({
+        mode: "none",
+        currentUser: null,
+        role: "system_admin",
+        permissions: ["system:admin"],
+        billingModeLock: { locked: false, reason: null },
       });
       return;
     }

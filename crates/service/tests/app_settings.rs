@@ -1044,7 +1044,9 @@ fn app_settings_get_exposes_runtime_time_zone_from_tz_env() {
             .expect("runtime time zone object");
 
         assert_eq!(
-            runtime_time_zone.get("name").and_then(|value| value.as_str()),
+            runtime_time_zone
+                .get("name")
+                .and_then(|value| value.as_str()),
             Some("Asia/Shanghai")
         );
         assert_eq!(

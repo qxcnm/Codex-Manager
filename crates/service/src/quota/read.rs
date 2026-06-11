@@ -13,9 +13,9 @@ use codexmanager_core::rpc::types::{
     QuotaSystemPoolResult, QuotaTodayUsageResult,
 };
 use codexmanager_core::storage::{
-    now_ts, Account, AccountQuotaCapacityOverride, AccountQuotaCapacityTemplate, AccountSubscription,
-    AggregateApi, ApiKey, BillingRule, ModelPriceRule, QuotaSourceModelAssignment, Token,
-    UsageSnapshotRecord,
+    now_ts, Account, AccountQuotaCapacityOverride, AccountQuotaCapacityTemplate,
+    AccountSubscription, AggregateApi, ApiKey, BillingRule, ModelPriceRule,
+    QuotaSourceModelAssignment, Token, UsageSnapshotRecord,
 };
 use rand::RngCore;
 use serde_json::Value;
@@ -1526,13 +1526,11 @@ pub(crate) fn upsert_model_price_rule(
         .unwrap_or_else(|| format!("user-{}", model_pattern));
     let rule = ModelPriceRule {
         id,
-        provider: input
-            .provider
-            .unwrap_or_else(|| crate::quota::model_pricing::infer_provider(&model_pattern).to_string()),
+        provider: input.provider.unwrap_or_else(|| {
+            crate::quota::model_pricing::infer_provider(&model_pattern).to_string()
+        }),
         model_pattern,
-        match_type: input
-            .match_type
-            .unwrap_or_else(|| "exact".to_string()),
+        match_type: input.match_type.unwrap_or_else(|| "exact".to_string()),
         billing_mode: "standard".to_string(),
         currency: "USD".to_string(),
         unit: "per_1m_tokens".to_string(),

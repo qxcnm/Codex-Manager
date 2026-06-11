@@ -22,6 +22,7 @@ pub(crate) fn delete_account(account_id: &str) -> Result<(), String> {
     storage
         .delete_account(account_id)
         .map_err(|e| e.to_string())?;
+    crate::gateway::invalidate_account_proxy_cache(account_id);
     let _ = storage.insert_event(&Event {
         account_id: Some(account_id.to_string()),
         event_type: "account_delete".to_string(),

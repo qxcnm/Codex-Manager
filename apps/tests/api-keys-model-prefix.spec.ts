@@ -190,7 +190,7 @@ test("api key modal reuses prefix model metadata for long model slugs", async ({
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("heading", { name: "编辑平台密钥" })).toBeVisible();
   await dialog.getByText("GPT-5.3 Codex", { exact: true }).click();
-  await expect(page.getByText("GPT-5.3 Codex", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("GPT-5.3 Codex", { exact: true }).first()).toBeVisible();
 });
 
 test("api key modal displays and submits hybrid rotation", async ({ page }) => {

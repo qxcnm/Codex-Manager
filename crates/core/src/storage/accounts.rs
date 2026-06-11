@@ -359,6 +359,10 @@ impl Storage {
             "DELETE FROM account_subscriptions WHERE account_id = ?1",
             [account_id],
         )?;
+        tx.execute(
+            "DELETE FROM account_proxy_settings WHERE account_id = ?1",
+            [account_id],
+        )?;
         tx.execute("DELETE FROM tokens WHERE account_id = ?1", [account_id])?;
         tx.execute(
             "DELETE FROM usage_snapshots WHERE account_id = ?1",
@@ -550,7 +554,6 @@ impl Storage {
         }
         Ok(out)
     }
-
 }
 
 /// 函数 `normalize_optional_filter`

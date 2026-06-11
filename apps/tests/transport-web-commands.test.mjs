@@ -63,6 +63,11 @@ async function ensureRequestUtils(tempDir) {
 
 async function loadTransportWebCommandsModule() {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codexmanager-transport-web-commands-"));
+  await fs.writeFile(
+    path.join(tempDir, "package.json"),
+    '{"type":"module"}\n',
+    "utf8",
+  );
   const tempFile = path.join(tempDir, "transport-web-commands.mjs");
   await writeCompiledModule(sourcePath, tempFile);
   for (const modulePath of modulePaths) {

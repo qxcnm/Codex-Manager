@@ -6,6 +6,7 @@ import { useAccounts } from "@/hooks/useAccounts";
 import { useDesktopPageActive } from "@/hooks/useDesktopPageActive";
 import { usePageTransitionReady } from "@/hooks/usePageTransitionReady";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
+import type { AccountProxySettings } from "@/lib/api/account-client";
 import { useI18n } from "@/lib/i18n/provider";
 import {
   buildAccountsBySizeOrder,
@@ -76,6 +77,13 @@ export default function AccountsPage() {
     setPreferredAccount,
     clearPreferredAccount,
     isUpdatingPreferred,
+    getAccountProxySettings,
+    setAccountProxySettings,
+    clearAccountProxySettings,
+    testAccountProxySettings,
+    isSavingAccountProxy,
+    isClearingAccountProxy,
+    isTestingAccountProxy,
     reorderAccounts,
     isReorderingAccounts,
     updateAccountProfile,
@@ -106,6 +114,11 @@ export default function AccountsPage() {
   const [modelWhitelistDraft, setModelWhitelistDraft] = useState("");
   const [quotaPrimaryDraft, setQuotaPrimaryDraft] = useState("");
   const [quotaSecondaryDraft, setQuotaSecondaryDraft] = useState("");
+  const [proxyDialogAccount, setProxyDialogAccount] = useState<Account | null>(null);
+  const [proxySettings, setProxySettings] = useState<AccountProxySettings | null>(null);
+  const [isProxySettingsLoading, setIsProxySettingsLoading] = useState(false);
+  const [proxyEnabledDraft, setProxyEnabledDraft] = useState(false);
+  const [proxyUrlDraft, setProxyUrlDraft] = useState("");
   const [accountEditorState, setAccountEditorState] =
     useState<AccountEditorState | null>(null);
   const [deleteDialogState, setDeleteDialogState] =
@@ -430,6 +443,101 @@ const toggleCleanupStatus = (rawStatus: string) => {
     setDeleteDialogState({ kind: "single", account });
   };
 
+  const openProxyDialog = async (account: Account) => {
+    setProxyDialogAccount(account);
+    setProxySettings(null);
+    setProxyEnabledDraft(false);
+    setProxyUrlDraft("");
+    setIsProxySettingsLoading(true);
+    try {
+      const settings = await getAccountProxySettings(account.id);
+      setProxySettings(settings);
+      setProxyEnabledDraft(settings.enabled);
+      setProxyUrlDraft(settings.proxyUrl || "");
+    } catch (error) {
+      toast.error(`${t("读取账号代理失败")}: ${error instanceof Error ? error.message : String(error)}`);
+      setProxyDialogAccount(null);
+    } finally {
+      setIsProxySettingsLoading(false);
+    }
+  };
+
+  const handleProxyDialogOpenChange = (open: boolean) => {
+    if (open) return;
+    if (isSavingAccountProxy || isClearingAccountProxy || isTestingAccountProxy) {
+      return;
+    }
+    setProxyDialogAccount(null);
+    setProxySettings(null);
+    setProxyEnabledDraft(false);
+    setProxyUrlDraft("");
+  };
+
+  const handleSaveProxySettings = async () => {
+    if (!proxyDialogAccount) return;
+    try {
+      const isTested = proxySettings && proxySettings.proxyUrl === proxyUrlDraft;
+      const settings = await setAccountProxySettings({
+        accountId: proxyDialogAccount.id,
+        enabled: proxyEnabledDraft,
+        proxyUrl: proxyUrlDraft,
+        ...(isTested
+          ? {
+              status: proxySettings.status,
+              latencyMs: proxySettings.latencyMs,
+              lastError: proxySettings.lastError,
+              ip: proxySettings.ip,
+              countryCode: proxySettings.countryCode,
+              countryName: proxySettings.countryName,
+              regionName: proxySettings.regionName,
+              cityName: proxySettings.cityName,
+              geoCheckedAt: proxySettings.geoCheckedAt,
+              geoError: proxySettings.geoError,
+            }
+          : {}),
+      });
+      if (settings) {
+        setProxySettings(settings);
+        setProxyEnabledDraft(settings.enabled);
+        setProxyUrlDraft(settings.proxyUrl || "");
+      }
+    } catch {
+      // hook handles toast
+    }
+  };
+
+  const handleClearProxySettings = async () => {
+    if (!proxyDialogAccount) return;
+    try {
+      const settings = await clearAccountProxySettings(proxyDialogAccount.id);
+      if (settings) {
+        setProxySettings(settings);
+        setProxyEnabledDraft(settings.enabled);
+        setProxyUrlDraft(settings.proxyUrl || "");
+      }
+    } catch {
+      // hook handles toast
+    }
+  };
+
+  const handleTestProxySettings = async () => {
+    if (!proxyDialogAccount) return;
+    try {
+      const settings = await testAccountProxySettings({
+        accountId: proxyDialogAccount.id,
+        enabled: proxyEnabledDraft,
+        proxyUrl: proxyUrlDraft,
+      });
+      if (settings) {
+        setProxySettings(settings);
+        setProxyEnabledDraft(settings.enabled);
+        setProxyUrlDraft(settings.proxyUrl || "");
+      }
+    } catch {
+      // hook handles toast
+    }
+  };
+
   const openAccountEditor = (account: Account) => {
     setAccountEditorState({
       accountId: account.id,
@@ -643,6 +751,11 @@ const toggleCleanupStatus = (rawStatus: string) => {
       cleanupDialogOpen={cleanupDialogOpen}
       cleanupStatusDraft={cleanupStatusDraft}
       cleanupStatusOptions={cleanupStatusOptions}
+      proxyDialogAccount={proxyDialogAccount}
+      proxySettings={proxySettings}
+      isProxySettingsLoading={isProxySettingsLoading}
+      proxyEnabledDraft={proxyEnabledDraft}
+      proxyUrlDraft={proxyUrlDraft}
       currentEditingAccount={currentEditingAccount}
       labelDraft={labelDraft}
       tagsDraft={tagsDraft}
@@ -660,6 +773,9 @@ const toggleCleanupStatus = (rawStatus: string) => {
       isDeletingMany={isDeletingMany}
       isCleaningAccountsByStatus={isCleaningAccountsByStatus}
       isUpdatingPreferred={isUpdatingPreferred}
+      isSavingAccountProxy={isSavingAccountProxy}
+      isClearingAccountProxy={isClearingAccountProxy}
+      isTestingAccountProxy={isTestingAccountProxy}
       isReorderingAccounts={isReorderingAccounts}
       isUpdatingProfileAccountId={isUpdatingProfileAccountId}
       isUpdatingStatusAccountId={isUpdatingStatusAccountId}
@@ -673,6 +789,8 @@ const toggleCleanupStatus = (rawStatus: string) => {
       setExportModeDraft={setExportModeDraft}
       setDeleteDialogState={setDeleteDialogState}
       setCleanupDialogOpen={setCleanupDialogOpen}
+      setProxyEnabledDraft={setProxyEnabledDraft}
+      setProxyUrlDraft={setProxyUrlDraft}
       setAccountEditorState={setAccountEditorState}
       setLabelDraft={setLabelDraft}
       setTagsDraft={setTagsDraft}
@@ -698,6 +816,11 @@ const toggleCleanupStatus = (rawStatus: string) => {
       openExportDialog={openExportDialog}
       handleConfirmExport={handleConfirmExport}
       handleDeleteSingle={handleDeleteSingle}
+      openProxyDialog={openProxyDialog}
+      handleProxyDialogOpenChange={handleProxyDialogOpenChange}
+      handleSaveProxySettings={handleSaveProxySettings}
+      handleClearProxySettings={handleClearProxySettings}
+      handleTestProxySettings={handleTestProxySettings}
       openAccountEditor={openAccountEditor}
       handleMoveAccount={handleMoveAccount}
       handleApplyAccountSizeSort={handleApplyAccountSizeSort}

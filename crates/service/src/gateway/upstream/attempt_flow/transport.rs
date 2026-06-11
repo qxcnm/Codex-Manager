@@ -643,7 +643,7 @@ pub(in super::super) fn send_upstream_request(
     auth_token: &str,
     account: &Account,
     strip_session_affinity: bool,
-) -> Result<GatewayUpstreamResponse, reqwest::Error> {
+) -> Result<GatewayUpstreamResponse, String> {
     send_upstream_request_with_compression_override(
         client,
         method,
@@ -683,7 +683,7 @@ pub(in super::super) fn send_upstream_request_without_compression(
     auth_token: &str,
     account: &Account,
     strip_session_affinity: bool,
-) -> Result<GatewayUpstreamResponse, reqwest::Error> {
+) -> Result<GatewayUpstreamResponse, String> {
     send_upstream_request_with_compression_override(
         client,
         method,
@@ -724,7 +724,7 @@ fn send_upstream_request_with_compression_override(
     account: &Account,
     strip_session_affinity: bool,
     compression_override: Option<RequestCompression>,
-) -> Result<GatewayUpstreamResponse, reqwest::Error> {
+) -> Result<GatewayUpstreamResponse, String> {
     let attempt_started_at = Instant::now();
     let is_compact_request = is_compact_request_path(request_ctx.request_path);
     let chatgpt_account_header = resolve_chatgpt_account_header(account, target_url);
@@ -964,7 +964,10 @@ fn send_upstream_request_with_compression_override(
         Ok(r)
     } else if use_async_stream_transport {
         let async_client =
-            super::super::super::async_upstream_client_for_account(account.id.as_str());
+            match super::super::super::async_upstream_client_for_account(account.id.as_str()) {
+                Ok(client) => client,
+                Err(err) => return Err(err),
+            };
         match send_async_stream_request(
             &async_client,
             method,
@@ -977,9 +980,12 @@ fn send_upstream_request_with_compression_override(
         ) {
             Ok(resp) => Ok(GatewayUpstreamResponse::Stream(resp)),
             Err(first_err) => {
-                let fresh_async = super::super::super::fresh_async_upstream_client_for_account(
+                let fresh_async = match super::super::super::fresh_async_upstream_client_for_account(
                     account.id.as_str(),
-                );
+                ) {
+                    Ok(client) => client,
+                    Err(err) => return Err(err),
+                };
                 if should_retry_transport_without_compression(
                     target_url,
                     request_ctx.request_path,
@@ -1021,7 +1027,7 @@ fn send_upstream_request_with_compression_override(
                                 first_err,
                                 second_err
                             );
-                            Err(second_err)
+                            Err(second_err.to_string())
                         }
                     }
                 } else {
@@ -1053,7 +1059,7 @@ fn send_upstream_request_with_compression_override(
                                 first_err,
                                 second_err
                             );
-                            Err(second_err)
+                            Err(second_err.to_string())
                         }
                     }
                 }
@@ -1063,8 +1069,12 @@ fn send_upstream_request_with_compression_override(
         match build_request(client, upstream_headers.as_slice(), &body_for_request).send() {
             Ok(resp) => Ok(resp.into()),
             Err(first_err) => {
-                let fresh =
-                    super::super::super::fresh_upstream_client_for_account(account.id.as_str());
+                let fresh = match super::super::super::fresh_upstream_client_for_account(
+                    account.id.as_str(),
+                ) {
+                    Ok(client) => client,
+                    Err(err) => return Err(err),
+                };
                 if should_retry_transport_without_compression(
                     target_url,
                     request_ctx.request_path,
@@ -1099,7 +1109,7 @@ fn send_upstream_request_with_compression_override(
                                 first_err,
                                 second_err
                             );
-                            Err(second_err)
+                            Err(second_err.to_string())
                         }
                     }
                 } else {
@@ -1124,7 +1134,7 @@ fn send_upstream_request_with_compression_override(
                                 first_err,
                                 second_err
                             );
-                            Err(second_err)
+                            Err(second_err.to_string())
                         }
                     }
                 }

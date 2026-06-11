@@ -32,6 +32,7 @@ pub(crate) use account::export as account_export;
 pub(crate) use account::import as account_import;
 pub(crate) use account::list as account_list;
 pub(crate) use account::plan as account_plan;
+pub(crate) use account::proxy as account_proxy;
 pub(crate) use account::status as account_status;
 pub(crate) use account::update as account_update;
 pub(crate) use account::warmup as account_warmup;

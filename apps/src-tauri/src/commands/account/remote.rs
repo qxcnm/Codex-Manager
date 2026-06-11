@@ -248,6 +248,54 @@ pub async fn service_account_warmup(
     rpc_call_in_background("account/warmup", addr, Some(params)).await
 }
 
+#[tauri::command]
+pub async fn service_account_proxy_get(
+    addr: Option<String>,
+    account_id: String,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({ "accountId": account_id });
+    rpc_call_in_background("account/proxy/get", addr, Some(params)).await
+}
+
+#[tauri::command]
+pub async fn service_account_proxy_set(
+    addr: Option<String>,
+    account_id: String,
+    enabled: bool,
+    proxy_url: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({
+        "accountId": account_id,
+        "enabled": enabled,
+        "proxyUrl": proxy_url,
+    });
+    rpc_call_in_background("account/proxy/set", addr, Some(params)).await
+}
+
+#[tauri::command]
+pub async fn service_account_proxy_clear(
+    addr: Option<String>,
+    account_id: String,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({ "accountId": account_id });
+    rpc_call_in_background("account/proxy/clear", addr, Some(params)).await
+}
+
+#[tauri::command]
+pub async fn service_account_proxy_test(
+    addr: Option<String>,
+    account_id: String,
+    enabled: Option<bool>,
+    proxy_url: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({
+        "accountId": account_id,
+        "enabled": enabled,
+        "proxyUrl": proxy_url,
+    });
+    rpc_call_in_background("account/proxy/test", addr, Some(params)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::account_update_payload;

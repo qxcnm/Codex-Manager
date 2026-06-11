@@ -90,7 +90,9 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
             let input = ModelPriceRuleUpsertInput {
                 id: super::string_param(req, "id"),
                 provider: super::string_param(req, "provider"),
-                model_pattern: super::str_param(req, "modelPattern").unwrap_or("").to_string(),
+                model_pattern: super::str_param(req, "modelPattern")
+                    .unwrap_or("")
+                    .to_string(),
                 match_type: super::string_param(req, "matchType"),
                 input_price_per_1m: req
                     .params

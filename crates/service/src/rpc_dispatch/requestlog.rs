@@ -1,9 +1,7 @@
 use codexmanager_core::rpc::types::{JsonRpcRequest, JsonRpcResponse, RequestLogListParams};
 
 use crate::RpcActor;
-use crate::{
-    requestlog_clear, requestlog_list, requestlog_summary, requestlog_today_summary,
-};
+use crate::{requestlog_clear, requestlog_list, requestlog_summary, requestlog_today_summary};
 
 fn actor_key_ids(actor: &RpcActor) -> Result<Vec<String>, String> {
     if actor.is_admin() {

@@ -379,7 +379,13 @@ impl Storage {
              ON CONFLICT(source_kind, source_id, upstream_model) DO UPDATE SET
                  preference = excluded.preference,
                  updated_at = excluded.updated_at",
-            params![&source_kind, &source_id, &upstream_model, "unlinked", now_ts()],
+            params![
+                &source_kind,
+                &source_id,
+                &upstream_model,
+                "unlinked",
+                now_ts()
+            ],
         )?;
         tx.execute(
             "DELETE FROM model_source_mappings WHERE id = ?1",

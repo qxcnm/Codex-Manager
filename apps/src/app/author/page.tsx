@@ -61,12 +61,12 @@ const AUTHOR_PARTNER_IMAGE_BY_KEY: Record<string, string> = {
 function PartnerTable({
   items,
   onOpenLink,
-  translate,
+  t,
   emptyVisualLabel,
 }: {
   items: readonly SponsorLinkItem[];
   onOpenLink: (url: string) => Promise<void>;
-  translate: (message: string) => string;
+  t: (message: string) => string;
   emptyVisualLabel: string;
 }) {
   return (
@@ -83,13 +83,13 @@ function PartnerTable({
                   {AUTHOR_PARTNER_IMAGE_BY_KEY[item.key] || item.imageSrc ? (
                     <img
                       src={AUTHOR_PARTNER_IMAGE_BY_KEY[item.key] || item.imageSrc}
-                      alt={translate(item.imageAlt ?? item.name)}
+                      alt={t(item.imageAlt ?? item.name)}
                       className="max-h-20 w-auto object-contain"
                     />
                   ) : (
                     <div className="flex h-20 w-full max-w-[180px] items-center justify-center rounded-xl bg-gradient-to-br from-primary/15 via-background to-primary/5 px-4 text-center">
                       <span className="text-lg font-semibold tracking-tight text-foreground">
-                        {translate(emptyVisualLabel)}
+                        {t(emptyVisualLabel)}
                       </span>
                     </div>
                   )}
@@ -99,10 +99,10 @@ function PartnerTable({
                 <div className="space-y-3">
                   <div className="space-y-1">
                     <h3 className="text-base font-semibold text-foreground">
-                      {translate(item.name)}
+                      {t(item.name)}
                     </h3>
                     <p className="text-sm leading-7 text-muted-foreground">
-                      {translate(item.description)}
+                      {t(item.description)}
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-3">
@@ -114,7 +114,7 @@ function PartnerTable({
                       }}
                       className="rounded-full"
                     >
-                      {translate(item.actionLabel)}
+                      {t(item.actionLabel)}
                       <ExternalLink data-icon="inline-end" />
                     </Button>
                   </div>
@@ -229,7 +229,7 @@ export default function AuthorPage() {
                 <PartnerTable
                   items={visibleSponsors}
                   onOpenLink={handleOpenLink}
-                  translate={t}
+                  t={t}
                   emptyVisualLabel="Sponsor"
                 />
               </CardContent>
@@ -251,7 +251,7 @@ export default function AuthorPage() {
                 <PartnerTable
                   items={visibleServerRecommendations}
                   onOpenLink={handleOpenLink}
-                  translate={t}
+                  t={t}
                   emptyVisualLabel="RackNerd"
                 />
               </CardContent>

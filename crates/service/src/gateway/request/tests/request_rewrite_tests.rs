@@ -1220,6 +1220,7 @@ fn responses_official_allowlist_drops_stream_passthrough() {
 #[test]
 fn responses_dynamic_tools_are_mapped_to_tools_for_codex_backend() {
     let _guard = crate::test_env_guard();
+    let _inject_guard = RuntimeEnvGuard::set(CODEX_IMAGE_GENERATION_AUTO_INJECT_TOOL_ENV, "1");
     let body = json!({
         "model": "gpt-5.3-codex",
         "input": "hello",

@@ -12,9 +12,9 @@ async function readSource(relativePath) {
 function readConstFunctionBody(source, functionName) {
   const start = source.indexOf(`const ${functionName} = async () => {`);
   assert.notEqual(start, -1, `${functionName} not found`);
-  const end = source.indexOf("\n  };\n", start);
+  const end = source.slice(start).search(/\r?\n[\t ]*\};\r?\n/);
   assert.notEqual(end, -1, `${functionName} body end not found`);
-  return source.slice(start, end);
+  return source.slice(start, start + end);
 }
 
 test("账号实体列表不会被用量刷新路径自动打空", async () => {

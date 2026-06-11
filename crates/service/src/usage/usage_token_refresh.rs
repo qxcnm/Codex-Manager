@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::auth_tokens::obtain_api_key;
 use crate::usage_http::{
-    refresh_access_token, refresh_token_auth_error_reason_from_message, RefreshTokenAuthErrorReason,
+    log_account_data_route, refresh_access_token, refresh_access_token_with_explicit_proxy,
+    refresh_token_auth_error_reason_from_message, RefreshTokenAuthErrorReason,
 };
 
 pub(crate) const DEFAULT_TOKEN_REFRESH_AHEAD_SECS: i64 = 3600;
@@ -52,7 +53,29 @@ pub(crate) fn refresh_and_persist_access_token(
     }
 
     let refresh_client_id = token_refresh_client_id(token, client_id);
-    let refreshed = match refresh_access_token(issuer, &refresh_client_id, &token.refresh_token) {
+    let proxy_mode = crate::account_proxy::resolve_account_proxy_mode(token.account_id.as_str());
+    log_account_data_route(
+        "token_refresh",
+        token.account_id.as_str(),
+        &proxy_mode,
+        "refresh_token",
+        true,
+    );
+    let refreshed = match &proxy_mode {
+        crate::account_proxy::AccountProxyMode::Disabled => {
+            refresh_access_token(issuer, &refresh_client_id, &token.refresh_token)
+        }
+        crate::account_proxy::AccountProxyMode::Explicit { proxy_url } => {
+            refresh_access_token_with_explicit_proxy(
+                issuer,
+                &refresh_client_id,
+                &token.refresh_token,
+                proxy_url,
+            )
+        }
+        crate::account_proxy::AccountProxyMode::Invalid { error, .. } => Err(error.clone()),
+    };
+    let refreshed = match refreshed {
         Ok(refreshed) => refreshed,
         Err(err) => {
             if recover_refresh_race_from_latest_token(

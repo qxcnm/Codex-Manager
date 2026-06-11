@@ -6,7 +6,9 @@ use codexmanager_core::storage::{now_ts, Account, Storage, Token};
 
 use crate::account_status::mark_account_unavailable_for_auth_error;
 use crate::auth_tokens;
-use crate::usage_http::refresh_access_token;
+use crate::usage_http::{
+    log_account_data_route, refresh_access_token, refresh_access_token_with_explicit_proxy,
+};
 
 const ACCOUNT_TOKEN_EXCHANGE_LOCK_TTL_SECS: i64 = 30 * 60;
 const ACCOUNT_TOKEN_EXCHANGE_LOCK_CLEANUP_INTERVAL_SECS: i64 = 60;
@@ -266,7 +268,32 @@ pub(super) fn resolve_openai_bearer_token(
         Ok(token) => return Ok(token),
         Err(exchange_err) => {
             if !token.refresh_token.trim().is_empty() {
-                match refresh_access_token(&issuer, &client_id, &token.refresh_token) {
+                let proxy_mode =
+                    crate::account_proxy::resolve_account_proxy_mode(account.id.as_str());
+                log_account_data_route(
+                    "api_key_token_exchange",
+                    account.id.as_str(),
+                    &proxy_mode,
+                    "refresh_token",
+                    true,
+                );
+                let refresh_result = match &proxy_mode {
+                    crate::account_proxy::AccountProxyMode::Disabled => {
+                        refresh_access_token(&issuer, &client_id, &token.refresh_token)
+                    }
+                    crate::account_proxy::AccountProxyMode::Explicit { proxy_url } => {
+                        refresh_access_token_with_explicit_proxy(
+                            &issuer,
+                            &client_id,
+                            &token.refresh_token,
+                            proxy_url,
+                        )
+                    }
+                    crate::account_proxy::AccountProxyMode::Invalid { error, .. } => {
+                        Err(error.clone())
+                    }
+                };
+                match refresh_result {
                     Ok(refreshed) => {
                         token.access_token = refreshed.access_token;
                         if let Some(refresh_token) = refreshed.refresh_token {

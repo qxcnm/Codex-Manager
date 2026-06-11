@@ -1,8 +1,8 @@
 use codexmanager_core::{
     rpc::types::{AccountListResult, AccountSummary},
     storage::{
-        Account, AccountMetadata, AccountQuotaCapacityOverride, AccountSubscription, Token,
-        UsageSnapshotRecord,
+        Account, AccountMetadata, AccountProxySettings, AccountQuotaCapacityOverride,
+        AccountSubscription, Token, UsageSnapshotRecord,
     },
 };
 use std::collections::HashMap;
@@ -49,6 +49,7 @@ struct AccountSummarySetup {
     subscriptions: HashMap<String, AccountSubscription>,
     model_slugs_by_account: HashMap<String, Vec<String>>,
     quota_overrides: HashMap<String, AccountQuotaCapacityOverride>,
+    proxy_settings: HashMap<String, AccountProxySettings>,
 }
 
 impl From<&Account> for AccountSummaryParts {
@@ -156,6 +157,23 @@ fn to_account_summary_with_reason(
         model_slugs,
         quota_capacity_primary_window_tokens,
         quota_capacity_secondary_window_tokens,
+        proxy_enabled: None,
+        proxy_status: None,
+        proxy_url: None,
+        proxy_ip: None,
+        proxy_country_code: None,
+        proxy_country_name: None,
+        proxy_region_name: None,
+        proxy_city_name: None,
+        proxy_geo_checked_at: None,
+        proxy_asn: None,
+        proxy_as_org: None,
+        proxy_isp: None,
+        proxy_as_domain: None,
+        proxy_timezone_id: None,
+        proxy_timezone_utc: None,
+        proxy_flag_img_url: None,
+        proxy_flag_emoji: None,
     }
 }
 
@@ -248,6 +266,13 @@ fn load_account_summary_setup(
         .into_iter()
         .map(|item| (item.account_id.clone(), item))
         .collect::<HashMap<String, AccountQuotaCapacityOverride>>();
+    let proxy_settings = storage
+        .list_account_proxy_settings()
+        .map_err(|err| format!("load account proxy settings failed: {err}"))?
+        .into_iter()
+        .map(|item| (item.account_id.clone(), item))
+        .collect::<HashMap<String, AccountProxySettings>>();
+
     Ok(AccountSummarySetup {
         preferred_account_id,
         status_reasons,
@@ -257,6 +282,7 @@ fn load_account_summary_setup(
         subscriptions,
         model_slugs_by_account,
         quota_overrides,
+        proxy_settings,
     })
 }
 
@@ -286,6 +312,7 @@ where
                 &setup.subscriptions,
                 &setup.model_slugs_by_account,
                 &setup.quota_overrides,
+                &setup.proxy_settings,
             )
         })
         .collect()
@@ -316,6 +343,7 @@ fn map_account_summary<A>(
     subscriptions: &HashMap<String, AccountSubscription>,
     model_slugs_by_account: &HashMap<String, Vec<String>>,
     quota_overrides: &HashMap<String, AccountQuotaCapacityOverride>,
+    proxy_settings: &HashMap<String, AccountProxySettings>,
 ) -> AccountSummary
 where
     A: Into<AccountSummaryParts>,
@@ -343,13 +371,14 @@ where
         .cloned()
         .unwrap_or_default();
     let quota_override = quota_overrides.get(&account_id);
+    let proxy_setting = proxy_settings.get(&account_id);
     let (fallback_plan_type, plan_type_raw) = match plan {
         Some(value) => (Some(value.normalized), value.raw),
         None => (None, None),
     };
     let subscription_plan = subscription.and_then(|value| value.plan_type.clone());
     let plan_type = fallback_plan_type;
-    to_account_summary_with_reason(
+    let mut summary = to_account_summary_with_reason(
         AccountSummaryParts {
             id: account_id,
             label,
@@ -371,5 +400,27 @@ where
         model_slugs,
         quota_override.and_then(|value| value.primary_window_tokens),
         quota_override.and_then(|value| value.secondary_window_tokens),
-    )
+    );
+
+    if let Some(proxy) = proxy_setting {
+        summary.proxy_enabled = Some(proxy.enabled);
+        summary.proxy_status = Some(proxy.status.clone());
+        summary.proxy_url = proxy.proxy_url.clone();
+        summary.proxy_ip = proxy.ip.clone();
+        summary.proxy_country_code = proxy.country_code.clone();
+        summary.proxy_country_name = proxy.country_name.clone();
+        summary.proxy_region_name = proxy.region_name.clone();
+        summary.proxy_city_name = proxy.city_name.clone();
+        summary.proxy_geo_checked_at = proxy.geo_checked_at;
+        summary.proxy_asn = proxy.asn;
+        summary.proxy_as_org = proxy.as_org.clone();
+        summary.proxy_isp = proxy.isp.clone();
+        summary.proxy_as_domain = proxy.as_domain.clone();
+        summary.proxy_timezone_id = proxy.timezone_id.clone();
+        summary.proxy_timezone_utc = proxy.timezone_utc.clone();
+        summary.proxy_flag_img_url = proxy.flag_img_url.clone();
+        summary.proxy_flag_emoji = proxy.flag_emoji.clone();
+    }
+
+    summary
 }

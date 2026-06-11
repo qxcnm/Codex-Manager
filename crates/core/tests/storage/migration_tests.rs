@@ -331,6 +331,15 @@ fn init_tracks_schema_migrations_and_is_idempotent() {
         )
         .expect("count 068 migration");
     assert_eq!(applied_068, 1);
+    let applied_069: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM schema_migrations WHERE version = '069_account_proxy_settings'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count 069 migration");
+    assert_eq!(applied_069, 1);
 
     assert!(!storage
         .has_column("accounts", "note")
@@ -437,6 +446,33 @@ fn init_tracks_schema_migrations_and_is_idempotent() {
     assert!(storage
         .has_column("account_subscriptions", "expires_at")
         .expect("check account_subscriptions.expires_at"));
+    assert!(storage
+        .has_table("account_proxy_settings")
+        .expect("check account_proxy_settings table"));
+    assert!(storage
+        .has_column("account_proxy_settings", "enabled")
+        .expect("check account_proxy_settings.enabled"));
+    assert!(storage
+        .has_column("account_proxy_settings", "proxy_url")
+        .expect("check account_proxy_settings.proxy_url"));
+    assert!(storage
+        .has_column("account_proxy_settings", "status")
+        .expect("check account_proxy_settings.status"));
+    assert!(storage
+        .has_column("account_proxy_settings", "latency_ms")
+        .expect("check account_proxy_settings.latency_ms"));
+    assert!(storage
+        .has_column("account_proxy_settings", "last_check_at")
+        .expect("check account_proxy_settings.last_check_at"));
+    assert!(storage
+        .has_column("account_proxy_settings", "last_error")
+        .expect("check account_proxy_settings.last_error"));
+    assert!(storage
+        .has_column("account_proxy_settings", "created_at")
+        .expect("check account_proxy_settings.created_at"));
+    assert!(storage
+        .has_column("account_proxy_settings", "updated_at")
+        .expect("check account_proxy_settings.updated_at"));
     assert!(storage
         .has_column("account_subscriptions", "renews_at")
         .expect("check account_subscriptions.renews_at"));
@@ -1234,6 +1270,16 @@ fn observability_storage_compaction_migration_rolls_up_and_prunes_legacy_rows() 
             "054_aggregate_api_balance_query",
             "055_model_price_rules",
             "056_quota_pools",
+            "057_account_manager",
+            "058_model_source_mappings",
+            "059_aggregate_api_supplier_models",
+            "060_request_logs_route_details",
+            "061_model_groups",
+            "062_observability_storage_compaction",
+            "063_account_subscriptions_account_plan_type",
+            "064_drop_gateway_error_logs",
+            "065_model_source_mapping_preferences",
+            "066_account_proxy_settings",
         ] {
             storage
                 .conn

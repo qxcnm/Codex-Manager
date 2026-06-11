@@ -14,7 +14,10 @@ use crate::account_plan::resolve_effective_account_plan;
 use crate::account_status::mark_account_unavailable_for_auth_error;
 use crate::app_settings::{get_persisted_app_setting, save_persisted_app_setting};
 use crate::storage_helpers::open_storage;
-use crate::usage_http::fetch_account_subscription;
+use crate::usage_http::{
+    fetch_account_subscription, fetch_account_subscription_with_explicit_proxy,
+    log_account_data_route,
+};
 use crate::usage_token_refresh::{refresh_and_persist_access_token, token_refresh_ahead_secs};
 
 const CURRENT_AUTH_ACCOUNT_ID_KEY: &str = "auth.current_account_id";
@@ -330,12 +333,35 @@ pub(crate) fn refresh_current_chatgpt_auth_tokens(
     let plan_type_resolution = resolve_plan_type_resolution(&token, access_claims.as_ref());
     let base_url = std::env::var("CODEXMANAGER_USAGE_BASE_URL")
         .unwrap_or_else(|_| "https://chatgpt.com".to_string());
-    let subscription = fetch_account_subscription(
-        &base_url,
-        &token.access_token,
-        &chatgpt_account_id,
-        workspace_id.as_deref(),
-    )?;
+    let proxy_mode =
+        crate::account_proxy::resolve_account_proxy_mode(refreshed_account.id.as_str());
+    log_account_data_route(
+        "subscription",
+        refreshed_account.id.as_str(),
+        &proxy_mode,
+        "accounts_check",
+        false,
+    );
+    let subscription = match &proxy_mode {
+        crate::account_proxy::AccountProxyMode::Disabled => fetch_account_subscription(
+            &base_url,
+            &token.access_token,
+            &chatgpt_account_id,
+            workspace_id.as_deref(),
+        )?,
+        crate::account_proxy::AccountProxyMode::Explicit { proxy_url } => {
+            fetch_account_subscription_with_explicit_proxy(
+                &base_url,
+                &token.access_token,
+                &chatgpt_account_id,
+                workspace_id.as_deref(),
+                proxy_url,
+            )?
+        }
+        crate::account_proxy::AccountProxyMode::Invalid { error, .. } => {
+            return Err(error.clone());
+        }
+    };
     storage
         .upsert_account_subscription(
             &refreshed_account.id,

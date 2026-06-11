@@ -4,7 +4,6 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::Serialize;
 use serde_json::json;
 use std::io::{BufRead, BufReader, Read};
-use std::time::Duration;
 use std::time::Instant;
 
 use crate::account_status::mark_account_unavailable_for_auth_error;
@@ -17,8 +16,6 @@ const DEFAULT_WARMUP_MESSAGE: &str = "hi";
 const FALLBACK_WARMUP_MESSAGE: &str = "你好";
 const WARMUP_UPSTREAM_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 const DEFAULT_WARMUP_MODEL: &str = "gpt-5.3-codex";
-const WARMUP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const WARMUP_TOTAL_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,13 +57,24 @@ pub(crate) fn warmup_accounts(
         return Err("no account available for warmup".to_string());
     }
 
-    let client = build_warmup_client()?;
     let warmup_message = normalize_warmup_message(message);
     let warmup_model = resolve_warmup_model_slug(&storage);
     let mut results = Vec::with_capacity(accounts.len());
     let mut succeeded = 0usize;
 
     for account in accounts.drain(..) {
+        let client = match build_warmup_client_for_account(&account.id) {
+            Ok(client) => client,
+            Err(err) => {
+                results.push(AccountWarmupItemResult {
+                    account_id: account.id,
+                    account_name: account.label,
+                    ok: false,
+                    message: err,
+                });
+                continue;
+            }
+        };
         let item = warmup_single_account(
             &storage,
             &client,
@@ -125,20 +133,12 @@ fn normalize_warmup_message(message: &str) -> String {
     }
 }
 
-fn build_warmup_client() -> Result<Client, String> {
-    let builder = Client::builder()
-        .connect_timeout(WARMUP_CONNECT_TIMEOUT)
-        .timeout(WARMUP_TOTAL_TIMEOUT)
-        .pool_max_idle_per_host(4)
-        .pool_idle_timeout(Some(Duration::from_secs(60)))
-        .user_agent(crate::gateway::current_codex_user_agent());
-    let builder = crate::gateway::apply_blocking_upstream_proxy(
-        builder,
-        crate::gateway::current_upstream_proxy_url().as_deref(),
-        "warmup_http_proxy_invalid",
-    );
-    builder
-        .build()
+fn build_warmup_client_for_account(account_id: &str) -> Result<Client, String> {
+    let normalized = account_id.trim();
+    if normalized.is_empty() {
+        return Err("build warmup client failed: missing account id".to_string());
+    }
+    crate::gateway::fresh_upstream_client_for_account(normalized)
         .map_err(|err| format!("build warmup client failed: {err}"))
 }
 

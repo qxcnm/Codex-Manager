@@ -607,6 +607,37 @@ mod tests {
     use std::time::Duration;
     use tiny_http::{Response, Server, StatusCode};
 
+    struct EnvGuard {
+        key: &'static str,
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.original {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    struct RuntimeConfigReloadGuard;
+
+    impl Drop for RuntimeConfigReloadGuard {
+        fn drop(&mut self) {
+            let _ = std::panic::catch_unwind(crate::gateway::reload_runtime_config_from_env);
+        }
+    }
+
     /// 函数 `build_account`
     ///
     /// 作者: gaohongshun
@@ -771,6 +802,12 @@ mod tests {
 
     #[test]
     fn chatgpt_challenge_on_last_candidate_retries_without_same_account_failover() {
+        let _env_lock = crate::test_env_guard();
+        let _reload_guard = RuntimeConfigReloadGuard;
+        let _proxy_guard = EnvGuard::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "");
+        let _proxy_list_guard = EnvGuard::set("CODEXMANAGER_PROXY_LIST", "");
+        crate::gateway::reload_runtime_config_from_env();
+
         let storage = Storage::open_in_memory().expect("open storage");
         storage.init().expect("init storage");
         let now = now_ts();
@@ -871,6 +908,12 @@ mod tests {
 
     #[test]
     fn chatgpt_cloudflare_challenge_directly_failovers_without_same_account_retry() {
+        let _env_lock = crate::test_env_guard();
+        let _reload_guard = RuntimeConfigReloadGuard;
+        let _proxy_guard = EnvGuard::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "");
+        let _proxy_list_guard = EnvGuard::set("CODEXMANAGER_PROXY_LIST", "");
+        crate::gateway::reload_runtime_config_from_env();
+
         let storage = Storage::open_in_memory().expect("open storage");
         storage.init().expect("init storage");
         let now = now_ts();
@@ -964,6 +1007,12 @@ mod tests {
 
     #[test]
     fn cloudflare_cf_ray_directly_failovers_without_same_account_retry() {
+        let _env_lock = crate::test_env_guard();
+        let _reload_guard = RuntimeConfigReloadGuard;
+        let _proxy_guard = EnvGuard::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "");
+        let _proxy_list_guard = EnvGuard::set("CODEXMANAGER_PROXY_LIST", "");
+        crate::gateway::reload_runtime_config_from_env();
+
         let storage = Storage::open_in_memory().expect("open storage");
         storage.init().expect("init storage");
         let now = now_ts();

@@ -80,10 +80,27 @@ export function formatRemainingDurationFromSeconds(
   timestamp: number | null | undefined,
   mode: "hours" | "days" = "hours",
   emptyLabel = "未知",
+  locale = "zh-CN",
 ): string {
   if (!timestamp) return emptyLabel;
   const diffSeconds = Math.max(0, timestamp - Math.floor(Date.now() / 1000));
   const totalMinutes = Math.ceil(diffSeconds / 60);
+  const normalizedLocale = String(locale || "")
+    .trim()
+    .toLowerCase();
+  const unitLabels =
+    normalizedLocale === "ru" || normalizedLocale === "ru-ru"
+      ? { day: "д", hour: "ч", minute: "мин", second: "с" }
+      : normalizedLocale === "en" || normalizedLocale === "en-us" || normalizedLocale === "en-gb"
+        ? { day: "d", hour: "h", minute: "min", second: "s" }
+        : normalizedLocale === "ko" || normalizedLocale === "ko-kr"
+          ? { day: "일", hour: "시간", minute: "분", second: "초" }
+          : { day: "天", hour: "时", minute: "分", second: "秒" };
+  const formatUnit = (
+    value: number,
+    unit: keyof typeof unitLabels,
+    pad = false,
+  ) => `${pad ? String(value).padStart(2, "0") : String(value)} ${unitLabels[unit]}`;
 
   if (diffSeconds < 10 * 60) {
     const minutes = Math.floor(diffSeconds / 60);
@@ -92,20 +109,24 @@ export function formatRemainingDurationFromSeconds(
       const hours = Math.floor(minutes / MINUTES_PER_HOUR);
       const remainMinutes = minutes % MINUTES_PER_HOUR;
       if (hours > 0) {
-        return `${hours}h${remainMinutes}min${seconds}s`;
+        return [
+          formatUnit(hours, "hour"),
+          formatUnit(remainMinutes, "minute", true),
+          formatUnit(seconds, "second", true),
+        ].join(" ");
       }
-      return `${remainMinutes}min${seconds}s`;
+      return [formatUnit(remainMinutes, "minute"), formatUnit(seconds, "second", true)].join(" ");
     }
     if (minutes > 0) {
-      return `${minutes}min${seconds}s`;
+      return [formatUnit(minutes, "minute"), formatUnit(seconds, "second", true)].join(" ");
     }
-    return `${seconds}s`;
+    return formatUnit(seconds, "second");
   }
 
   if (mode === "hours") {
     const hours = Math.floor(totalMinutes / MINUTES_PER_HOUR);
     const minutes = totalMinutes % MINUTES_PER_HOUR;
-    return `${hours}h${String(minutes).padStart(2, "0")}min`;
+    return [formatUnit(hours, "hour"), formatUnit(minutes, "minute", true)].join(" ");
   }
 
   const days = Math.floor(totalMinutes / MINUTES_PER_DAY);
@@ -114,18 +135,18 @@ export function formatRemainingDurationFromSeconds(
   const parts: string[] = [];
 
   if (days > 0) {
-    parts.push(`${days}d`);
+    parts.push(formatUnit(days, "day"));
   }
   if (hours > 0) {
-    parts.push(`${hours}h`);
+    parts.push(formatUnit(hours, "hour", days > 0));
   }
   if (parts.length > 0) {
-    parts.push(`${String(minutes).padStart(2, "0")}min`);
+    parts.push(formatUnit(minutes, "minute", true));
   } else {
-    parts.push(`${minutes}min`);
+    parts.push(formatUnit(minutes, "minute"));
   }
 
-  return parts.join("");
+  return parts.join(" ");
 }
 
 /**

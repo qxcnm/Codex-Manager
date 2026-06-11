@@ -196,6 +196,23 @@ pub struct AccountSummary {
     pub model_slugs: Vec<String>,
     pub quota_capacity_primary_window_tokens: Option<i64>,
     pub quota_capacity_secondary_window_tokens: Option<i64>,
+    pub proxy_enabled: Option<bool>,
+    pub proxy_status: Option<String>,
+    pub proxy_url: Option<String>,
+    pub proxy_ip: Option<String>,
+    pub proxy_country_code: Option<String>,
+    pub proxy_country_name: Option<String>,
+    pub proxy_region_name: Option<String>,
+    pub proxy_city_name: Option<String>,
+    pub proxy_geo_checked_at: Option<i64>,
+    pub proxy_asn: Option<i64>,
+    pub proxy_as_org: Option<String>,
+    pub proxy_isp: Option<String>,
+    pub proxy_as_domain: Option<String>,
+    pub proxy_timezone_id: Option<String>,
+    pub proxy_timezone_utc: Option<String>,
+    pub proxy_flag_img_url: Option<String>,
+    pub proxy_flag_emoji: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -76,6 +76,7 @@ pub(crate) fn delete_accounts(account_ids: Vec<String>) -> Result<DeleteManyResu
 
         match storage.delete_account(&account_id) {
             Ok(_) => {
+                crate::gateway::invalidate_account_proxy_cache(account_id.as_str());
                 let _ = storage.insert_event(&Event {
                     account_id: Some(account_id.clone()),
                     event_type: "account_delete_many".to_string(),

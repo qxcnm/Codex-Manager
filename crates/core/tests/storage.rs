@@ -115,6 +115,224 @@ fn storage_can_find_token_and_account_by_account_id() {
 }
 
 #[test]
+fn storage_can_persist_account_proxy_settings() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init schema");
+    let now = now_ts();
+
+    storage
+        .insert_account(&Account {
+            id: "acc-proxy-1".to_string(),
+            label: "proxy".to_string(),
+            issuer: "https://auth.openai.com".to_string(),
+            chatgpt_account_id: None,
+            workspace_id: None,
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("insert account");
+
+    storage
+        .upsert_account_proxy_settings(
+            "acc-proxy-1",
+            true,
+            Some("http://127.0.0.1:7891"),
+            "unchecked",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("upsert proxy settings");
+
+    let stored = storage
+        .find_account_proxy_settings("acc-proxy-1")
+        .expect("find proxy settings")
+        .expect("proxy settings exist");
+    assert!(stored.enabled);
+    assert_eq!(stored.proxy_url.as_deref(), Some("http://127.0.0.1:7891"));
+    assert_eq!(stored.status, "unchecked");
+    assert_eq!(stored.latency_ms, None);
+    assert_eq!(stored.last_check_at, None);
+    assert_eq!(stored.last_error, None);
+
+    let listed = storage
+        .list_account_proxy_settings()
+        .expect("list proxy settings");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].account_id, "acc-proxy-1");
+}
+
+#[test]
+fn storage_can_update_and_clear_account_proxy_settings() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init schema");
+    let now = now_ts();
+
+    storage
+        .insert_account(&Account {
+            id: "acc-proxy-2".to_string(),
+            label: "proxy".to_string(),
+            issuer: "https://auth.openai.com".to_string(),
+            chatgpt_account_id: None,
+            workspace_id: None,
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("insert account");
+
+    storage
+        .upsert_account_proxy_settings(
+            "acc-proxy-2",
+            true,
+            Some("socks5h://127.0.0.1:7892"),
+            "checking",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("seed proxy settings");
+    storage
+        .update_account_proxy_check_status(
+            "acc-proxy-2",
+            "ok",
+            Some(184),
+            Some(1_760_000_000),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("update proxy check status");
+
+    let stored = storage
+        .find_account_proxy_settings("acc-proxy-2")
+        .expect("find proxy settings")
+        .expect("proxy settings exist");
+    assert_eq!(stored.status, "ok");
+    assert_eq!(stored.latency_ms, Some(184));
+    assert_eq!(stored.last_check_at, Some(1_760_000_000));
+    assert_eq!(stored.last_error, None);
+
+    storage
+        .clear_account_proxy_settings("acc-proxy-2")
+        .expect("clear proxy settings");
+    assert!(storage
+        .find_account_proxy_settings("acc-proxy-2")
+        .expect("find cleared proxy settings")
+        .is_none());
+}
+
+#[test]
+fn deleting_account_cleans_up_account_proxy_settings() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init schema");
+    let now = now_ts();
+
+    storage
+        .insert_account(&Account {
+            id: "acc-proxy-delete".to_string(),
+            label: "proxy".to_string(),
+            issuer: "https://auth.openai.com".to_string(),
+            chatgpt_account_id: None,
+            workspace_id: None,
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("insert account");
+    storage
+        .upsert_account_proxy_settings(
+            "acc-proxy-delete",
+            false,
+            None,
+            "not_configured",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("upsert proxy settings");
+
+    let mut storage = storage;
+    storage
+        .delete_account("acc-proxy-delete")
+        .expect("delete account");
+
+    assert!(storage
+        .find_account_proxy_settings("acc-proxy-delete")
+        .expect("find deleted proxy settings")
+        .is_none());
+}
+
+#[test]
 fn storage_can_upsert_and_resolve_model_source_mappings() {
     let storage = Storage::open_in_memory().expect("open in memory");
     storage.init().expect("init schema");
