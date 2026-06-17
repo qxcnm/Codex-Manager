@@ -58,6 +58,54 @@ const AUTHOR_PARTNER_IMAGE_BY_KEY: Record<string, string> = {
   racknerd: "/sponsors/racknerd.gif",
 };
 
+function normalizeAuthorPartnerImageSrc(item: SponsorLinkItem): string | undefined {
+  const normalizedKey = item.key.toLowerCase();
+  const normalizedName = item.name.toLowerCase();
+  const keyedImage =
+    AUTHOR_PARTNER_IMAGE_BY_KEY[normalizedKey] ||
+    (normalizedName.includes("aixiamo")
+      ? AUTHOR_PARTNER_IMAGE_BY_KEY.aixiamo
+      : undefined);
+  const rawSrc = keyedImage || item.imageSrc?.trim();
+  if (!rawSrc) return undefined;
+
+  if (/^https?:\/\//i.test(rawSrc) || rawSrc.startsWith("/")) {
+    return rawSrc;
+  }
+
+  const normalized = rawSrc.replace(/\\/g, "/");
+  const publicSponsorPrefix = "assets/images/sponsors/";
+  if (normalized.startsWith(publicSponsorPrefix)) {
+    return `/sponsors/${normalized.slice(publicSponsorPrefix.length)}`;
+  }
+
+  return `/${normalized.replace(/^public\//, "")}`;
+}
+
+function splitMarkdownLines(markdown: string): string[] {
+  return markdown
+    .replace(/\r\n/g, "\n")
+    .replace(/ {2,}\n/g, "\n")
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function renderInlineMarkdown(line: string) {
+  const parts = line.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, index) => {
+    const strongMatch = part.match(/^\*\*([^*]+)\*\*$/);
+    if (strongMatch) {
+      return (
+        <strong key={`${part}-${index}`} className="font-semibold text-foreground">
+          {strongMatch[1]}
+        </strong>
+      );
+    }
+    return part;
+  });
+}
+
 function PartnerTable({
   items,
   onOpenLink,
@@ -98,7 +146,7 @@ function PartnerLogo({
   translate: (message: string) => string;
   emptyVisualLabel: string;
 }) {
-  const imageSrc = AUTHOR_PARTNER_IMAGE_BY_KEY[item.key] || item.imageSrc;
+  const imageSrc = normalizeAuthorPartnerImageSrc(item);
   const [imageFailed, setImageFailed] = useState(false);
   const fallbackLabel = translate(
     item.imageAlt ?? (item.name || emptyVisualLabel),
@@ -109,7 +157,7 @@ function PartnerLogo({
       <img
         src={imageSrc}
         alt={fallbackLabel}
-        className="max-h-20 w-auto object-contain"
+        className="max-h-20 max-w-full object-contain"
         onError={() => setImageFailed(true)}
       />
     );
@@ -137,11 +185,7 @@ function PartnerTableRow({
 }) {
   const translatedName = translate(item.name);
   const descriptionLines = useMemo(
-    () =>
-      translate(item.description)
-        .split(/\n+/)
-        .map((line) => line.trim())
-        .filter(Boolean),
+    () => splitMarkdownLines(translate(item.description)),
     [item.description, translate],
   );
 
@@ -170,7 +214,7 @@ function PartnerTableRow({
                 key={line}
                 className="whitespace-normal break-words [overflow-wrap:anywhere]"
               >
-                {line}
+                {renderInlineMarkdown(line)}
               </p>
             ))}
           </div>

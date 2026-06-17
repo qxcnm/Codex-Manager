@@ -143,9 +143,9 @@ async function mockRuntimeAndRpc(
                   key: "remote-sponsor",
                   name: "远程赞助商",
                   description:
-                    "感谢 **AIXiamo官方网站｜Codex / ChatGPT Pro** 赞助 CodexManager。 AIXiamo 面向 Codex CLI、 Claude Code、 Gemini CLI 等开发者场景，提供 ChatGPT Plus、ChatGPT Pro 5x / 20x、Codex 相关服务、Claude、Gemini、Grok 等 AI 会员开通与使用协助。",
+                    "感谢 **AIXiamo官方网站｜Codex / ChatGPT Pro** 赞助 CodexManager。  \nAIXiamo 面向 Codex CLI、 Claude Code、 Gemini CLI 等开发者场景，提供 ChatGPT Plus、ChatGPT Pro 5x / 20x、Codex 相关服务、Claude、Gemini、Grok 等 AI 会员开通与使用协助。",
                   href: "https://example.com/sponsor",
-                  imageSrc: "https://example.com/sponsor.png",
+                  imageSrc: "assets/images/sponsors/aixiamo.jpg",
                   imageAlt: "远程赞助商",
                   actionLabel: "立即查看",
                 },
@@ -239,9 +239,18 @@ test("author page splits sponsor content and contact content into two tabs", asy
     "author-partner-description-remote-sponsor",
   );
   await expect(sponsorDescription).toBeVisible();
+  await expect(
+    sponsorDescription.locator("strong", {
+      hasText: "AIXiamo官方网站｜Codex / ChatGPT Pro",
+    }),
+  ).toBeVisible();
+  await expect(sponsorDescription.locator("p")).toHaveCount(2);
+  await expect(
+    page.getByRole("img", { name: "远程赞助商" }),
+  ).toHaveAttribute("src", /\/sponsors\/aixiamo\.jpg$/);
 
   const sponsorDescriptionMetrics = await sponsorDescription.evaluate((node) => {
-    const paragraph = node.querySelector("p");
+    const paragraph = node.querySelectorAll("p")[1];
     return {
       clientWidth: node.clientWidth,
       scrollWidth: node.scrollWidth,
