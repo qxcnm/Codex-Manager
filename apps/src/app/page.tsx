@@ -974,7 +974,7 @@ function AdminUsageAnalyticsCard({
                 {isTodayOnlyRange ? t("输入 / 输出") : t("区间输入 / 输出")}
               </div>
               <div className="mt-1 font-semibold">
-                {formatCompactTokenAmount(rangeUsage.inputTokens)} /{" "}
+                {formatCompactTokenAmount(rangeUsage.inputTokens - rangeUsage.cachedInputTokens)} /{" "}
                 {formatCompactTokenAmount(rangeUsage.outputTokens)}
               </div>
             </div>
