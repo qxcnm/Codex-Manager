@@ -1,9 +1,13 @@
 CREATE TABLE IF NOT EXISTS account_proxy_settings (
   account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
   enabled INTEGER NOT NULL DEFAULT 0,
+  proxy_source TEXT,
+  proxy_profile_id TEXT REFERENCES proxy_profiles(id) ON DELETE SET NULL,
   proxy_url TEXT,
   status TEXT NOT NULL DEFAULT 'unchecked',
   latency_ms INTEGER,
+  last_download_mbps REAL,
+  last_upload_mbps REAL,
   last_check_at INTEGER,
   last_error TEXT,
   ip TEXT,
@@ -28,3 +32,6 @@ CREATE TABLE IF NOT EXISTS account_proxy_settings (
 
 CREATE INDEX IF NOT EXISTS idx_account_proxy_settings_updated_at
   ON account_proxy_settings(updated_at DESC, account_id ASC);
+
+CREATE INDEX IF NOT EXISTS idx_account_proxy_settings_proxy_profile_id
+  ON account_proxy_settings(proxy_profile_id);

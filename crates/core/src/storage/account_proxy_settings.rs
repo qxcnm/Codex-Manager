@@ -7,6 +7,8 @@ impl Storage {
         &self,
         account_id: &str,
         enabled: bool,
+        proxy_source: Option<&str>,
+        proxy_profile_id: Option<&str>,
         proxy_url: Option<&str>,
         status: &str,
         latency_ms: Option<i64>,
@@ -39,9 +41,13 @@ impl Storage {
             "INSERT INTO account_proxy_settings (
                 account_id,
                 enabled,
+                proxy_source,
+                proxy_profile_id,
                 proxy_url,
                 status,
                 latency_ms,
+                last_download_mbps,
+                last_upload_mbps,
                 last_check_at,
                 last_error,
                 ip,
@@ -65,13 +71,17 @@ impl Storage {
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
-                ?21, ?22, ?23, ?24, ?25
+                ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
             )
             ON CONFLICT(account_id) DO UPDATE SET
                 enabled = excluded.enabled,
+                proxy_source = excluded.proxy_source,
+                proxy_profile_id = excluded.proxy_profile_id,
                 proxy_url = excluded.proxy_url,
                 status = excluded.status,
                 latency_ms = excluded.latency_ms,
+                last_download_mbps = COALESCE(excluded.last_download_mbps, account_proxy_settings.last_download_mbps),
+                last_upload_mbps = COALESCE(excluded.last_upload_mbps, account_proxy_settings.last_upload_mbps),
                 last_check_at = excluded.last_check_at,
                 last_error = excluded.last_error,
                 ip = excluded.ip,
@@ -94,9 +104,13 @@ impl Storage {
             rusqlite::params![
                 account_id,
                 if enabled { 1 } else { 0 },
+                normalize_proxy_source(proxy_source),
+                normalize_optional_text(proxy_profile_id),
                 normalize_optional_text(proxy_url),
                 normalize_status(status),
                 latency_ms,
+                Option::<f64>::None,
+                Option::<f64>::None,
                 last_check_at,
                 normalize_optional_text(last_error),
                 normalize_optional_text(ip),
@@ -198,6 +212,40 @@ impl Storage {
         Ok(())
     }
 
+    pub fn update_account_proxy_test_result(
+        &self,
+        account_id: &str,
+        status: &str,
+        latency_ms: Option<i64>,
+        last_download_mbps: Option<f64>,
+        last_upload_mbps: Option<f64>,
+        last_check_at: Option<i64>,
+        last_error: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE account_proxy_settings
+             SET status = ?2,
+                 latency_ms = ?3,
+                 last_download_mbps = ?4,
+                 last_upload_mbps = ?5,
+                 last_check_at = ?6,
+                 last_error = ?7,
+                 updated_at = ?8
+             WHERE account_id = ?1",
+            rusqlite::params![
+                account_id,
+                normalize_status(status),
+                latency_ms,
+                last_download_mbps,
+                last_upload_mbps,
+                last_check_at,
+                normalize_optional_text(last_error),
+                now_ts(),
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn clear_account_proxy_settings(&self, account_id: &str) -> Result<()> {
         self.conn.execute(
             "DELETE FROM account_proxy_settings WHERE account_id = ?1",
@@ -214,9 +262,13 @@ impl Storage {
             "SELECT
                 account_id,
                 enabled,
+                proxy_source,
+                proxy_profile_id,
                 proxy_url,
                 status,
                 latency_ms,
+                last_download_mbps,
+                last_upload_mbps,
                 last_check_at,
                 last_error,
                 ip,
@@ -270,9 +322,13 @@ impl Storage {
             "SELECT
                 account_id,
                 enabled,
+                proxy_source,
+                proxy_profile_id,
                 proxy_url,
                 status,
                 latency_ms,
+                last_download_mbps,
+                last_upload_mbps,
                 last_check_at,
                 last_error,
                 ip,
@@ -304,14 +360,50 @@ impl Storage {
         Ok(out)
     }
 
+    pub fn list_account_ids_bound_to_proxy_profile(
+        &self,
+        proxy_profile_id: &str,
+    ) -> Result<Vec<String>> {
+        if !self.has_table("account_proxy_settings")?
+            || !self.has_column("account_proxy_settings", "proxy_profile_id")?
+        {
+            return Ok(Vec::new());
+        }
+
+        let sql = if self.has_column("account_proxy_settings", "proxy_source")? {
+            "SELECT account_id
+             FROM account_proxy_settings
+             WHERE proxy_profile_id = ?1
+               AND proxy_source = 'profile'
+             ORDER BY account_id ASC"
+        } else {
+            "SELECT account_id
+             FROM account_proxy_settings
+             WHERE proxy_profile_id = ?1
+             ORDER BY account_id ASC"
+        };
+
+        let mut stmt = self.conn.prepare(sql)?;
+        let mut rows = stmt.query([proxy_profile_id.trim()])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            out.push(row.get(0)?);
+        }
+        Ok(out)
+    }
+
     pub(super) fn ensure_account_proxy_settings_table(&self) -> Result<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS account_proxy_settings (
                 account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
                 enabled INTEGER NOT NULL DEFAULT 0,
+                proxy_source TEXT,
+                proxy_profile_id TEXT,
                 proxy_url TEXT,
                 status TEXT NOT NULL DEFAULT 'unchecked',
                 latency_ms INTEGER,
+                last_download_mbps REAL,
+                last_upload_mbps REAL,
                 last_check_at INTEGER,
                 last_error TEXT,
                 ip TEXT,
@@ -334,13 +426,17 @@ impl Storage {
                 updated_at INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_account_proxy_settings_updated_at
-                ON account_proxy_settings(updated_at DESC, account_id ASC);",
+                ON account_proxy_settings(updated_at DESC, account_id ASC);
+            CREATE INDEX IF NOT EXISTS idx_account_proxy_settings_proxy_profile_id
+                ON account_proxy_settings(proxy_profile_id);",
         )?;
         self.ensure_column(
             "account_proxy_settings",
             "enabled",
             "INTEGER NOT NULL DEFAULT 0",
         )?;
+        self.ensure_column("account_proxy_settings", "proxy_source", "TEXT")?;
+        self.ensure_column("account_proxy_settings", "proxy_profile_id", "TEXT")?;
         self.ensure_column("account_proxy_settings", "proxy_url", "TEXT")?;
         self.ensure_column(
             "account_proxy_settings",
@@ -348,6 +444,8 @@ impl Storage {
             "TEXT NOT NULL DEFAULT 'unchecked'",
         )?;
         self.ensure_column("account_proxy_settings", "latency_ms", "INTEGER")?;
+        self.ensure_column("account_proxy_settings", "last_download_mbps", "REAL")?;
+        self.ensure_column("account_proxy_settings", "last_upload_mbps", "REAL")?;
         self.ensure_column("account_proxy_settings", "last_check_at", "INTEGER")?;
         self.ensure_column("account_proxy_settings", "last_error", "TEXT")?;
         self.ensure_column("account_proxy_settings", "ip", "TEXT")?;
@@ -457,6 +555,15 @@ fn normalize_country_code(value: Option<&str>) -> Option<String> {
     normalize_optional_text(value).map(|text| text.to_ascii_uppercase())
 }
 
+fn normalize_proxy_source(value: Option<&str>) -> Option<String> {
+    match value.map(str::trim).filter(|text| !text.is_empty()) {
+        Some(value) if value.eq_ignore_ascii_case("profile") => Some("profile".to_string()),
+        Some(value) if value.eq_ignore_ascii_case("custom") => Some("custom".to_string()),
+        Some(value) => Some(value.to_ascii_lowercase()),
+        None => None,
+    }
+}
+
 fn normalize_status(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -470,28 +577,32 @@ fn map_account_proxy_settings_row(row: &Row<'_>) -> Result<AccountProxySettings>
     Ok(AccountProxySettings {
         account_id: row.get(0)?,
         enabled: row.get::<_, i64>(1)? != 0,
-        proxy_url: row.get(2)?,
-        status: row.get(3)?,
-        latency_ms: row.get(4)?,
-        last_check_at: row.get(5)?,
-        last_error: row.get(6)?,
-        ip: row.get(7)?,
-        country_code: row.get(8)?,
-        country_name: row.get(9)?,
-        region_name: row.get(10)?,
-        city_name: row.get(11)?,
-        geo_checked_at: row.get(12)?,
-        geo_error: row.get(13)?,
-        asn: row.get(14)?,
-        as_org: row.get(15)?,
-        isp: row.get(16)?,
-        as_domain: row.get(17)?,
-        timezone_id: row.get(18)?,
-        timezone_offset: row.get(19)?,
-        timezone_utc: row.get(20)?,
-        flag_img_url: row.get(21)?,
-        flag_emoji: row.get(22)?,
-        created_at: row.get(23)?,
-        updated_at: row.get(24)?,
+        proxy_source: row.get(2)?,
+        proxy_profile_id: row.get(3)?,
+        proxy_url: row.get(4)?,
+        status: row.get(5)?,
+        latency_ms: row.get(6)?,
+        last_download_mbps: row.get(7)?,
+        last_upload_mbps: row.get(8)?,
+        last_check_at: row.get(9)?,
+        last_error: row.get(10)?,
+        ip: row.get(11)?,
+        country_code: row.get(12)?,
+        country_name: row.get(13)?,
+        region_name: row.get(14)?,
+        city_name: row.get(15)?,
+        geo_checked_at: row.get(16)?,
+        geo_error: row.get(17)?,
+        asn: row.get(18)?,
+        as_org: row.get(19)?,
+        isp: row.get(20)?,
+        as_domain: row.get(21)?,
+        timezone_id: row.get(22)?,
+        timezone_offset: row.get(23)?,
+        timezone_utc: row.get(24)?,
+        flag_img_url: row.get(25)?,
+        flag_emoji: row.get(26)?,
+        created_at: row.get(27)?,
+        updated_at: row.get(28)?,
     })
 }

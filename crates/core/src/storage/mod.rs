@@ -19,6 +19,8 @@ mod model_options;
 mod model_price_rules;
 mod model_sources;
 mod plugins;
+mod proxy_profiles;
+mod proxy_tests;
 mod quota_pools;
 mod request_log_query;
 mod request_logs;
@@ -26,6 +28,8 @@ mod request_token_stats;
 mod settings;
 mod tokens;
 mod usage;
+
+pub use proxy_profiles::derive_proxy_profile_url_metadata;
 
 #[derive(Debug, Clone)]
 pub struct Account {
@@ -64,9 +68,13 @@ pub struct AccountSubscription {
 pub struct AccountProxySettings {
     pub account_id: String,
     pub enabled: bool,
+    pub proxy_source: Option<String>,
+    pub proxy_profile_id: Option<String>,
     pub proxy_url: Option<String>,
     pub status: String,
     pub latency_ms: Option<i64>,
+    pub last_download_mbps: Option<f64>,
+    pub last_upload_mbps: Option<f64>,
     pub last_check_at: Option<i64>,
     pub last_error: Option<String>,
     pub ip: Option<String>,
@@ -87,6 +95,220 @@ pub struct AccountProxySettings {
     pub flag_emoji: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyProfile {
+    pub id: String,
+    pub name: String,
+    pub proxy_url: String,
+    pub proxy_url_redacted: String,
+    pub scheme: Option<String>,
+    pub host: Option<String>,
+    pub port: Option<i64>,
+    pub enabled: bool,
+    pub status: String,
+    pub last_error: Option<String>,
+    pub last_url_latency_ms: Option<i64>,
+    pub last_download_mbps: Option<f64>,
+    pub last_upload_mbps: Option<f64>,
+    pub last_tested_at: Option<i64>,
+    pub ip: Option<String>,
+    pub country_code: Option<String>,
+    pub country_name: Option<String>,
+    pub region_name: Option<String>,
+    pub city_name: Option<String>,
+    pub asn: Option<i64>,
+    pub as_org: Option<String>,
+    pub isp: Option<String>,
+    pub as_domain: Option<String>,
+    pub flag_img_url: Option<String>,
+    pub flag_emoji: Option<String>,
+    pub timezone_id: Option<String>,
+    pub timezone_offset: Option<i64>,
+    pub timezone_utc: Option<String>,
+    pub tags_json: Option<String>,
+    pub notes: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyProfileCreateInput {
+    pub id: String,
+    pub name: String,
+    pub proxy_url: String,
+    pub enabled: bool,
+    pub tags_json: Option<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyProfileUpdateInput {
+    pub id: String,
+    pub name: Option<String>,
+    pub proxy_url: Option<String>,
+    pub enabled: Option<bool>,
+    pub status: Option<String>,
+    pub last_error: Option<String>,
+    pub last_url_latency_ms: Option<i64>,
+    pub last_download_mbps: Option<f64>,
+    pub last_upload_mbps: Option<f64>,
+    pub last_tested_at: Option<i64>,
+    pub ip: Option<String>,
+    pub country_code: Option<String>,
+    pub country_name: Option<String>,
+    pub region_name: Option<String>,
+    pub city_name: Option<String>,
+    pub asn: Option<i64>,
+    pub as_org: Option<String>,
+    pub isp: Option<String>,
+    pub as_domain: Option<String>,
+    pub flag_img_url: Option<String>,
+    pub flag_emoji: Option<String>,
+    pub timezone_id: Option<String>,
+    pub timezone_offset: Option<i64>,
+    pub timezone_utc: Option<String>,
+    pub tags_json: Option<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyProfileUrlTest {
+    pub id: i64,
+    pub proxy_profile_id: String,
+    pub status: String,
+    pub url_latency_ms: Option<i64>,
+    pub status_code: Option<i64>,
+    pub test_url: String,
+    pub final_url: Option<String>,
+    pub redirected: bool,
+    pub tested_at: i64,
+    pub error_code: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyProfileUrlTestInsertInput {
+    pub proxy_profile_id: String,
+    pub status: String,
+    pub url_latency_ms: Option<i64>,
+    pub status_code: Option<i64>,
+    pub test_url: String,
+    pub final_url: Option<String>,
+    pub redirected: bool,
+    pub tested_at: i64,
+    pub error_code: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxyProfileUrlMetadata {
+    pub proxy_url_redacted: String,
+    pub scheme: Option<String>,
+    pub host: Option<String>,
+    pub port: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxySpeedTest {
+    pub id: i64,
+    pub scope: String,
+    pub proxy_profile_id: Option<String>,
+    pub account_id: Option<String>,
+    pub status: String,
+    pub provider: String,
+    pub observed_ip: Option<String>,
+    pub observed_country: Option<String>,
+    pub observed_colo: Option<String>,
+    pub max_payload_bytes: Option<i64>,
+    pub samples_json: Option<String>,
+    pub download_summary_json: Option<String>,
+    pub upload_summary_json: Option<String>,
+    pub started_at: i64,
+    pub finished_at: i64,
+    pub error_code: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxySpeedTestInsertInput {
+    pub scope: String,
+    pub proxy_profile_id: Option<String>,
+    pub account_id: Option<String>,
+    pub status: String,
+    pub provider: String,
+    pub observed_ip: Option<String>,
+    pub observed_country: Option<String>,
+    pub observed_colo: Option<String>,
+    pub max_payload_bytes: Option<i64>,
+    pub samples_json: Option<String>,
+    pub download_summary_json: Option<String>,
+    pub upload_summary_json: Option<String>,
+    pub started_at: i64,
+    pub finished_at: i64,
+    pub error_code: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyDiagnosticTest {
+    pub id: i64,
+    pub scope: String,
+    pub proxy_profile_id: Option<String>,
+    pub account_id: Option<String>,
+    pub status: String,
+    pub provider: String,
+    pub file_size_id: String,
+    pub downloaded_bytes: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub mbps: Option<f64>,
+    pub tested_at: i64,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyDiagnosticTestInsertInput {
+    pub scope: String,
+    pub proxy_profile_id: Option<String>,
+    pub account_id: Option<String>,
+    pub status: String,
+    pub provider: String,
+    pub file_size_id: String,
+    pub downloaded_bytes: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub mbps: Option<f64>,
+    pub tested_at: i64,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AccountProxyUrlTest {
+    pub id: i64,
+    pub account_id: String,
+    pub status: String,
+    pub url_latency_ms: Option<i64>,
+    pub status_code: Option<i64>,
+    pub test_url: String,
+    pub final_url: Option<String>,
+    pub redirected: bool,
+    pub tested_at: i64,
+    pub error_code: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AccountProxyUrlTestInsertInput {
+    pub account_id: String,
+    pub status: String,
+    pub url_latency_ms: Option<i64>,
+    pub status_code: Option<i64>,
+    pub test_url: String,
+    pub final_url: Option<String>,
+    pub redirected: bool,
+    pub tested_at: i64,
+    pub error_code: Option<String>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1079,6 +1301,21 @@ impl Storage {
             include_str!("../../migrations/069_account_proxy_settings.sql"),
             |s| s.ensure_account_proxy_settings_table(),
         )?;
+        self.apply_sql_or_compat_migration(
+            "070_proxy_profiles",
+            include_str!("../../migrations/070_proxy_profiles.sql"),
+            |s| s.ensure_proxy_profiles_table(),
+        )?;
+        self.apply_sql_or_compat_migration(
+            "072_proxy_profile_url_tests",
+            include_str!("../../migrations/072_proxy_profile_url_tests.sql"),
+            |s| s.ensure_proxy_profile_url_tests_table(),
+        )?;
+        self.apply_sql_or_compat_migration(
+            "074_proxy_history",
+            include_str!("../../migrations/074_proxy_history.sql"),
+            |s| s.ensure_proxy_history_tables(),
+        )?;
         self.ensure_api_key_rotation_columns()?;
 
         self.ensure_aggregate_apis_table()?;
@@ -1098,6 +1335,9 @@ impl Storage {
         self.ensure_model_catalog_models_table()?;
         self.ensure_account_subscriptions_table()?;
         self.ensure_account_proxy_settings_table()?;
+        self.ensure_proxy_profiles_table()?;
+        self.ensure_proxy_profile_url_tests_table()?;
+        self.ensure_proxy_history_tables()?;
         self.ensure_quota_pool_tables()?;
         self.ensure_account_manager_tables()?;
         self.ensure_model_source_tables()?;

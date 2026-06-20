@@ -363,6 +363,18 @@ impl Storage {
             "DELETE FROM account_proxy_settings WHERE account_id = ?1",
             [account_id],
         )?;
+        tx.execute(
+            "DELETE FROM account_proxy_url_tests WHERE account_id = ?1",
+            [account_id],
+        )?;
+        tx.execute(
+            "DELETE FROM proxy_speed_tests WHERE account_id = ?1",
+            [account_id],
+        )?;
+        tx.execute(
+            "DELETE FROM proxy_diagnostics_history WHERE account_id = ?1",
+            [account_id],
+        )?;
         tx.execute("DELETE FROM tokens WHERE account_id = ?1", [account_id])?;
         tx.execute(
             "DELETE FROM usage_snapshots WHERE account_id = ?1",

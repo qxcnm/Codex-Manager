@@ -340,6 +340,37 @@ fn init_tracks_schema_migrations_and_is_idempotent() {
         )
         .expect("count 069 migration");
     assert_eq!(applied_069, 1);
+    let applied_070: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM schema_migrations WHERE version = '070_proxy_profiles'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count 070 migration");
+    assert_eq!(applied_070, 1);
+    let applied_072: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM schema_migrations WHERE version = '072_proxy_profile_url_tests'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count 072 migration");
+    assert_eq!(applied_072, 1);
+    let applied_074: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM schema_migrations WHERE version = '074_proxy_history'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count 074 migration");
+    assert_eq!(applied_074, 1);
+
+    assert!(storage.has_table("proxy_speed_tests").expect("proxy_speed_tests"));
+    assert!(storage.has_table("proxy_diagnostics_history").expect("proxy_diagnostics_history"));
+    assert!(storage.has_table("account_proxy_url_tests").expect("account_proxy_url_tests"));
 
     assert!(!storage
         .has_column("accounts", "note")
@@ -453,6 +484,12 @@ fn init_tracks_schema_migrations_and_is_idempotent() {
         .has_column("account_proxy_settings", "enabled")
         .expect("check account_proxy_settings.enabled"));
     assert!(storage
+        .has_column("account_proxy_settings", "proxy_source")
+        .expect("check account_proxy_settings.proxy_source"));
+    assert!(storage
+        .has_column("account_proxy_settings", "proxy_profile_id")
+        .expect("check account_proxy_settings.proxy_profile_id"));
+    assert!(storage
         .has_column("account_proxy_settings", "proxy_url")
         .expect("check account_proxy_settings.proxy_url"));
     assert!(storage
@@ -461,6 +498,12 @@ fn init_tracks_schema_migrations_and_is_idempotent() {
     assert!(storage
         .has_column("account_proxy_settings", "latency_ms")
         .expect("check account_proxy_settings.latency_ms"));
+    assert!(storage
+        .has_column("account_proxy_settings", "last_download_mbps")
+        .expect("check account_proxy_settings.last_download_mbps"));
+    assert!(storage
+        .has_column("account_proxy_settings", "last_upload_mbps")
+        .expect("check account_proxy_settings.last_upload_mbps"));
     assert!(storage
         .has_column("account_proxy_settings", "last_check_at")
         .expect("check account_proxy_settings.last_check_at"));
@@ -473,6 +516,95 @@ fn init_tracks_schema_migrations_and_is_idempotent() {
     assert!(storage
         .has_column("account_proxy_settings", "updated_at")
         .expect("check account_proxy_settings.updated_at"));
+    assert!(storage
+        .has_table("proxy_profiles")
+        .expect("check proxy_profiles table"));
+    for column in [
+        "id",
+        "name",
+        "proxy_url",
+        "proxy_url_redacted",
+        "scheme",
+        "host",
+        "port",
+        "enabled",
+        "status",
+        "last_error",
+        "last_url_latency_ms",
+        "last_download_mbps",
+        "last_upload_mbps",
+        "last_tested_at",
+        "ip",
+        "country_code",
+        "country_name",
+        "region_name",
+        "city_name",
+        "asn",
+        "as_org",
+        "tags_json",
+        "notes",
+        "created_at",
+        "updated_at",
+    ] {
+        assert!(
+            storage
+                .has_column("proxy_profiles", column)
+                .unwrap_or_else(|_| panic!("check proxy_profiles.{column}")),
+            "proxy_profiles.{column} should exist"
+        );
+    }
+    for index in ["idx_proxy_profiles_status", "idx_proxy_profiles_enabled"] {
+        let index_count: i64 = storage
+            .conn
+            .query_row(
+                "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                [index],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| panic!("check {index}"));
+        assert_eq!(index_count, 1, "{index} should exist");
+    }
+    let account_proxy_binding_index: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = 'idx_account_proxy_settings_proxy_profile_id'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("check idx_account_proxy_settings_proxy_profile_id");
+    assert_eq!(account_proxy_binding_index, 1);
+    assert!(storage
+        .has_table("proxy_profile_url_tests")
+        .expect("check proxy_profile_url_tests table"));
+    for column in [
+        "id",
+        "proxy_profile_id",
+        "status",
+        "url_latency_ms",
+        "status_code",
+        "test_url",
+        "final_url",
+        "redirected",
+        "tested_at",
+        "error_code",
+        "error",
+    ] {
+        assert!(
+            storage
+                .has_column("proxy_profile_url_tests", column)
+                .unwrap_or_else(|_| panic!("check proxy_profile_url_tests.{column}")),
+            "proxy_profile_url_tests.{column} should exist"
+        );
+    }
+    let proxy_url_tests_index: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = 'idx_proxy_profile_url_tests_profile_tested_at'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("check idx_proxy_profile_url_tests_profile_tested_at");
+    assert_eq!(proxy_url_tests_index, 1);
     assert!(storage
         .has_column("account_subscriptions", "renews_at")
         .expect("check account_subscriptions.renews_at"));
