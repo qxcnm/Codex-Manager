@@ -26,6 +26,8 @@ import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
 import { useCodexProfileModeStatus } from "@/hooks/useCodexProfileModeStatus";
 import { useI18n } from "@/lib/i18n/provider";
 import { useAppStore } from "@/lib/store/useAppStore";
+import { DASHBOARD_ADMIN_USAGE_QUERY_KEY } from "@/hooks/useDashboardAdminUsageSummary";
+import { MEMBER_DASHBOARD_SUMMARY_QUERY_KEY } from "@/hooks/useMemberDashboardSummary";
 import { RequestLogsTabContent } from "./page-sections";
 import {
   buildFixedTimePreset,
@@ -177,6 +179,8 @@ function LogsPageContent() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["logs"] }),
         queryClient.invalidateQueries({ queryKey: ["today-summary"] }),
+        queryClient.invalidateQueries({ queryKey: DASHBOARD_ADMIN_USAGE_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: MEMBER_DASHBOARD_SUMMARY_QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: ["startup-snapshot"] }),
       ]);
       toast.success(t("日志已清空"));
