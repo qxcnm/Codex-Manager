@@ -225,14 +225,16 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
       await queryClient.prefetchQuery({
         queryKey: buildStartupSnapshotQueryKey(
           addr,
-          STARTUP_SNAPSHOT_REQUEST_LOG_LIMIT,
+          0,
           localDayRange.dayStartTs,
+          false,
         ),
         queryFn: () =>
           serviceClient.getStartupSnapshot({
-            requestLogLimit: STARTUP_SNAPSHOT_REQUEST_LOG_LIMIT,
+            requestLogLimit: 0,
             dayStartTs: localDayRange.dayStartTs,
             dayEndTs: localDayRange.dayEndTs,
+            includeApiModels: false,
           }),
         staleTime: STARTUP_SNAPSHOT_STALE_TIME,
       });
