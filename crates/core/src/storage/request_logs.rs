@@ -695,6 +695,9 @@ impl Storage {
         end_ts: i64,
         key_ids: &[String],
     ) -> Result<RequestLogTodaySummary> {
+        if end_ts <= start_ts {
+            return Ok(empty_request_log_today_summary());
+        }
         let Some(key_filter) = PairedKeyIdSqlFilter::create(self, "s.key_id", "h.key_id", key_ids)?
         else {
             return Ok(empty_request_log_today_summary());

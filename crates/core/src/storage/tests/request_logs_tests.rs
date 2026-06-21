@@ -707,6 +707,22 @@ fn request_logs_for_empty_key_sets_return_empty_results() {
 }
 
 #[test]
+fn request_log_today_summary_for_keys_short_circuits_empty_range() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+
+    let today = storage
+        .summarize_request_logs_between_for_keys(10_000, 10_000, &["key-a".to_string()])
+        .expect("summarize today for empty range");
+
+    assert_eq!(today.input_tokens, 0);
+    assert_eq!(today.cached_input_tokens, 0);
+    assert_eq!(today.output_tokens, 0);
+    assert_eq!(today.reasoning_output_tokens, 0);
+    assert_eq!(today.estimated_cost_usd, 0.0);
+}
+
+#[test]
 fn request_log_today_summary_for_small_key_sets_filters_raw_and_hourly_usage() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
