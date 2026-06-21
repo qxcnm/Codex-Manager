@@ -6,6 +6,7 @@ pub(super) struct RequestLogSqlFilters {
     pub(super) where_clause: String,
     pub(super) params: Vec<Value>,
     pub(super) uses_token_stats: bool,
+    pub(super) uses_account_lookup: bool,
 }
 
 pub(super) fn build_request_log_filters(
@@ -20,9 +21,11 @@ pub(super) fn build_request_log_filters(
     let mut clauses = Vec::new();
     let mut params = Vec::new();
 
+    let query = request_log_query::parse_request_log_query(query);
+    let uses_account_lookup = request_log_query_uses_account_lookup(&query, include_account_lookup);
     let uses_token_stats = append_request_log_query_clause(
-        request_log_query::parse_request_log_query(query),
-        include_account_lookup,
+        query,
+        uses_account_lookup,
         include_route_detail_fields,
         &mut clauses,
         &mut params,
@@ -39,6 +42,7 @@ pub(super) fn build_request_log_filters(
         },
         params,
         uses_token_stats,
+        uses_account_lookup,
     }
 }
 
@@ -68,6 +72,19 @@ fn append_key_filter_clause(
     };
     clauses.push(key_filter.condition().to_string());
     params.extend_from_slice(key_filter.params());
+}
+
+fn request_log_query_uses_account_lookup(
+    query: &request_log_query::RequestLogQuery,
+    include_account_lookup: bool,
+) -> bool {
+    include_account_lookup
+        && matches!(
+            query,
+            request_log_query::RequestLogQuery::AccountLike(_)
+                | request_log_query::RequestLogQuery::AccountExact(_)
+                | request_log_query::RequestLogQuery::GlobalLike(_)
+        )
 }
 
 fn is_route_detail_query_column(column: &str) -> bool {
@@ -274,9 +291,21 @@ mod tests {
             true,
         );
         assert!(!exact_filters.uses_token_stats);
+        assert!(!exact_filters.uses_account_lookup);
 
         let global_filters =
-            build_request_log_filters(Some("42"), None, None, None, false, None, true);
+            build_request_log_filters(Some("42"), None, None, None, true, None, true);
         assert!(global_filters.uses_token_stats);
+        assert!(global_filters.uses_account_lookup);
+
+        let account_filters =
+            build_request_log_filters(Some("account:team"), None, None, None, true, None, true);
+        assert!(!account_filters.uses_token_stats);
+        assert!(account_filters.uses_account_lookup);
+
+        let account_without_table_filters =
+            build_request_log_filters(Some("account:team"), None, None, None, false, None, true);
+        assert!(!account_without_table_filters.uses_token_stats);
+        assert!(!account_without_table_filters.uses_account_lookup);
     }
 }

@@ -325,12 +325,7 @@ impl Storage {
             None,
             true,
         );
-        self.list_request_logs_with_filter(
-            filters,
-            include_account_lookup,
-            normalized_offset,
-            normalized_limit,
-        )
+        self.list_request_logs_with_filter(filters, normalized_offset, normalized_limit)
     }
 
     pub fn list_request_logs_paginated_for_keys(
@@ -361,21 +356,16 @@ impl Storage {
             Some(&key_filter),
             false,
         );
-        self.list_request_logs_with_filter(
-            filters,
-            include_account_lookup,
-            normalized_offset,
-            normalized_limit,
-        )
+        self.list_request_logs_with_filter(filters, normalized_offset, normalized_limit)
     }
 
     fn list_request_logs_with_filter(
         &self,
         filters: RequestLogSqlFilters,
-        include_account_lookup: bool,
         offset: i64,
         limit: i64,
     ) -> Result<Vec<RequestLog>> {
+        let account_join = account_join_clause(filters.uses_account_lookup);
         let sql = if filters.uses_token_stats {
             format!(
                 "SELECT
@@ -390,7 +380,7 @@ impl Storage {
              {where_clause}
              ORDER BY r.created_at DESC, r.id DESC
              LIMIT ? OFFSET ?",
-                account_join = account_join_clause(include_account_lookup),
+                account_join = account_join,
                 where_clause = filters.where_clause
             )
         } else {
@@ -413,7 +403,7 @@ impl Storage {
                  JOIN request_logs r ON r.id = p.id
                  LEFT JOIN request_token_stats t ON t.request_log_id = r.id
                  ORDER BY r.created_at DESC, r.id DESC",
-                account_join = account_join_clause(include_account_lookup),
+                account_join = account_join,
                 where_clause = filters.where_clause
             )
         };
@@ -466,7 +456,7 @@ impl Storage {
              {account_join}
              {token_stats_join}
              {where_clause}",
-            account_join = account_join_clause(include_account_lookup),
+            account_join = account_join_clause(filters.uses_account_lookup),
             token_stats_join = token_stats_join_clause(filters.uses_token_stats),
             where_clause = filters.where_clause
         );
@@ -503,7 +493,7 @@ impl Storage {
              {account_join}
              {token_stats_join}
              {where_clause}",
-            account_join = account_join_clause(include_account_lookup),
+            account_join = account_join_clause(filters.uses_account_lookup),
             token_stats_join = token_stats_join_clause(filters.uses_token_stats),
             where_clause = filters.where_clause
         );
@@ -565,7 +555,7 @@ impl Storage {
              {account_join}
              LEFT JOIN request_token_stats t ON t.request_log_id = r.id
              {where_clause}",
-            account_join = account_join_clause(include_account_lookup),
+            account_join = account_join_clause(filters.uses_account_lookup),
             where_clause = filters.where_clause
         );
         self.conn
@@ -623,7 +613,7 @@ impl Storage {
              {account_join}
              LEFT JOIN request_token_stats t ON t.request_log_id = r.id
              {where_clause}",
-            account_join = account_join_clause(include_account_lookup),
+            account_join = account_join_clause(filters.uses_account_lookup),
             where_clause = filters.where_clause
         );
         self.conn

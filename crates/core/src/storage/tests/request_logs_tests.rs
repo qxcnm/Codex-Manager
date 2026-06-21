@@ -1,4 +1,5 @@
 use super::{RequestLog, RequestTokenStat, Storage};
+use crate::storage::request_log_filters;
 
 /// 函数 `collect_query_plan_details`
 ///
@@ -169,6 +170,41 @@ fn count_query_without_token_search_avoids_token_stats_join() {
     assert!(!details
         .iter()
         .any(|detail| detail.contains("request_token_stats")));
+}
+
+#[test]
+fn request_log_status_count_does_not_join_accounts_when_account_fields_are_unused() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let count = storage
+        .count_request_logs(None, Some("2xx"), Some(1000), Some(2000))
+        .expect("count request logs");
+    assert_eq!(count, 0);
+
+    let filters = request_log_filters::build_request_log_filters(
+        None,
+        Some("2xx"),
+        Some(1000),
+        Some(2000),
+        storage.has_table("accounts").expect("check accounts table"),
+        None,
+        true,
+    );
+    assert!(!filters.uses_account_lookup);
+
+    let details = collect_query_plan_details(
+        &storage,
+        "EXPLAIN QUERY PLAN
+         SELECT COUNT(1)
+         FROM request_logs r
+         WHERE r.status_code >= 200 AND r.status_code <= 299
+           AND r.created_at >= 1000
+           AND r.created_at < 2000",
+    );
+    assert!(
+        !details.iter().any(|detail| detail.contains("accounts")),
+        "status-only request log count should not join accounts, got {details:?}"
+    );
 }
 
 #[test]
