@@ -5141,3 +5141,37 @@
   - Continue SQLite work only when production SQL/helper/EXPLAIN alignment or a real query-plan issue is visible.
   - Continue client reuse only if a production/request/frequent background path repeatedly constructs a stable-config client.
   - Continue feature removal only with current call-site evidence plus tests proving it is safe.
+## 2026-06-22 tail marker - account status count SQL helper alignment
+
+- Latest completed slice in this continuation:
+  - Migration registration audit after the preferred-index commit found no ordinary SQL migration files missing from `Storage::init`.
+  - `049_model_catalog_string_items.sql` is intentionally handled by `apply_model_catalog_string_items_migration()` because it migrates legacy tables before marking the same version.
+  - File touched: `crates/core/src/storage/accounts.rs`.
+  - Added storage-local SQL helper for normalized status count aggregation:
+    - `account_status_counts_sql()`
+  - Updated production method `account_status_counts(...)` to use the helper without changing behavior.
+  - Expanded EXPLAIN coverage:
+    - `account_status_counts_aggregates_normalized_statuses` now verifies normalized status counts use `idx_accounts_cleanup_status_lookup`.
+- Validation:
+  - `cargo test -p codexmanager-core account_status_counts_aggregates_normalized_statuses -- --nocapture` passed:
+    - 1 matching core library test.
+  - `cargo fmt` passed.
+  - `cargo fmt --check` passed.
+  - `cargo test -p codexmanager-core accounts -- --nocapture` passed:
+    - 74 matching core library tests.
+    - 2 matching storage integration tests.
+  - `cargo test -p codexmanager-core` passed:
+    - 338 core library tests.
+    - 7 auth integration tests.
+    - 29 storage integration tests.
+    - 1 usage integration test.
+    - 1 version integration test.
+    - doc-tests with 0 tests.
+- Notes:
+  - No SQLite migration or new index was added; this path already had a matching expression index.
+  - No feature removal was attempted; no current safe-removal proof was found.
+- Next continuation constraints:
+  - Goal remains active.
+  - Continue SQLite work only when production SQL/helper/EXPLAIN alignment or a real query-plan issue is visible.
+  - Continue client reuse only if a production/request/frequent background path repeatedly constructs a stable-config client.
+  - Continue feature removal only with current call-site evidence plus tests proving it is safe.

@@ -106,12 +106,7 @@ impl Storage {
     }
 
     pub fn account_status_counts(&self) -> Result<Vec<AccountStatusCount>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT LOWER(TRIM(COALESCE(status, ''))), COUNT(1)
-             FROM accounts
-             GROUP BY LOWER(TRIM(COALESCE(status, '')))
-             ORDER BY COUNT(1) DESC, LOWER(TRIM(COALESCE(status, ''))) ASC",
-        )?;
+        let mut stmt = self.conn.prepare(account_status_counts_sql())?;
         let rows = stmt.query_map([], |row| {
             Ok(AccountStatusCount {
                 status: row.get(0)?,
@@ -1453,6 +1448,13 @@ fn account_count_sql() -> &'static str {
 
 fn max_account_sort_sql() -> &'static str {
     "SELECT MAX(sort) FROM accounts"
+}
+
+fn account_status_counts_sql() -> &'static str {
+    "SELECT LOWER(TRIM(COALESCE(status, ''))), COUNT(1)
+     FROM accounts
+     GROUP BY LOWER(TRIM(COALESCE(status, '')))
+     ORDER BY COUNT(1) DESC, LOWER(TRIM(COALESCE(status, ''))) ASC"
 }
 
 fn account_direct_auth_profile_by_id_sql() -> &'static str {
@@ -3392,6 +3394,15 @@ mod tests {
         assert_eq!(counts[0].count, 2);
         assert_eq!(counts[1].status, "disabled");
         assert_eq!(counts[1].count, 1);
+
+        let plan = collect_query_plan(
+            &storage,
+            &format!("EXPLAIN QUERY PLAN {}", account_status_counts_sql()),
+        );
+        assert!(
+            plan.contains("idx_accounts_cleanup_status_lookup"),
+            "expected normalized status counts to use cleanup status expression index, got {plan}"
+        );
     }
 
     #[test]
