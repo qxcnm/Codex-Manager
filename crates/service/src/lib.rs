@@ -79,6 +79,7 @@ pub(crate) use usage::keepalive as usage_keepalive;
 pub(crate) use usage::list as usage_list;
 pub(crate) use usage::read as usage_read;
 pub(crate) use usage::refresh as usage_refresh;
+pub(crate) use usage::reset as usage_reset;
 pub(crate) use usage::scheduler as usage_scheduler;
 pub(crate) use usage::snapshot_store as usage_snapshot_store;
 pub(crate) use usage::token_refresh as usage_token_refresh;

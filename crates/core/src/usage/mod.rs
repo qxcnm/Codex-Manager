@@ -174,6 +174,16 @@ pub fn usage_endpoint(base_url: &str) -> String {
     }
 }
 
+pub fn rate_limit_reset_credits_endpoint(base_url: &str) -> String {
+    let base = normalize_base_url(base_url);
+    format!("{base}/wham/rate-limit-reset-credits")
+}
+
+pub fn rate_limit_reset_credits_consume_endpoint(base_url: &str) -> String {
+    let base = normalize_base_url(base_url);
+    format!("{base}/wham/rate-limit-reset-credits/consume")
+}
+
 /// 函数 `subscription_endpoint`
 ///
 /// 作者: gaohongshun

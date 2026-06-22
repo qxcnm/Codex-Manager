@@ -28,6 +28,9 @@ type AccountExportPayload = Parameters<typeof accountClient.export>[0];
 type ExportResult = Awaited<ReturnType<typeof accountClient.export>>;
 type WarmupPayload = Parameters<typeof accountClient.warmup>[0];
 type WarmupResult = Awaited<ReturnType<typeof accountClient.warmup>>;
+type ResetCreditsResult = Awaited<
+  ReturnType<typeof accountClient.consumeRateLimitResetCredits>
+>;
 type RefreshAllRtResult = Awaited<
   ReturnType<typeof accountClient.refreshAllChatgptAuthTokens>
 >;
@@ -477,6 +480,48 @@ export function useAccounts() {
     },
   });
 
+  const resetCreditsMutation = useMutation({
+    mutationFn: async (accountId: string): Promise<{
+      canceled?: boolean;
+      skipped?: boolean;
+      availableCount?: number;
+      result?: ResetCreditsResult;
+    }> => {
+      const credits = await accountClient.readRateLimitResetCredits(accountId);
+      const availableCount = Number(credits?.availableCount || 0);
+      if (availableCount <= 0) {
+        return { skipped: true, availableCount };
+      }
+      const confirmed =
+        typeof window === "undefined" ||
+        window.confirm(
+          t("当前账号有 {count} 次免费重置可用，确定消耗 1 次并刷新用量吗？", {
+            count: availableCount,
+          }),
+        );
+      if (!confirmed) {
+        return { canceled: true, availableCount };
+      }
+      const result = await accountClient.consumeRateLimitResetCredits(accountId);
+      return { result, availableCount };
+    },
+    onSuccess: async (payload) => {
+      if (payload?.canceled) {
+        toast.info(t("已取消免费重置"));
+        return;
+      }
+      if (payload?.skipped) {
+        toast.info(t("当前账号没有可用免费重置"));
+        return;
+      }
+      await invalidateUsageData();
+      toast.success(t("免费重置已触发，账号用量已刷新"));
+    },
+    onError: (error: unknown) => {
+      toast.error(`${t("免费重置失败")}: ${getAppErrorMessage(error)}`);
+    },
+  });
+
   const refreshAccountRtMutation = useMutation({
     mutationFn: (accountId: string) =>
       accountClient.refreshChatgptAuthTokens(accountId),
@@ -826,6 +871,15 @@ export function useAccounts() {
       }
       refreshAccountRtMutation.mutate(targetAccountId);
     },
+    resetAccountUsage: (accountId: string) => {
+      if (!ensureServiceReady("免费重置")) return;
+      const targetAccountId = accountId.trim();
+      if (!targetAccountId) {
+        toast.error(t("未找到当前账号，请刷新后重试"));
+        return;
+      }
+      resetCreditsMutation.mutate(targetAccountId);
+    },
     refreshAllAccountRt: () => {
       if (!ensureServiceReady("刷新 AT/RT")) return;
       if (!accounts.length) {
@@ -918,6 +972,10 @@ export function useAccounts() {
     isRefreshingAccountId:
       refreshAccountMutation.isPending && typeof refreshAccountMutation.variables === "string"
         ? refreshAccountMutation.variables
+        : "",
+    isResettingAccountId:
+      resetCreditsMutation.isPending && typeof resetCreditsMutation.variables === "string"
+        ? resetCreditsMutation.variables
         : "",
     isRefreshingRtAccountId:
       refreshAccountRtMutation.isPending &&

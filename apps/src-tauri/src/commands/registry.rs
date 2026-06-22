@@ -115,6 +115,8 @@ macro_rules! invoke_handler {
             crate::commands::usage::service_usage_list,
             crate::commands::usage::service_usage_aggregate,
             crate::commands::usage::service_usage_refresh,
+            crate::commands::usage::service_usage_reset_credits_read,
+            crate::commands::usage::service_usage_reset_credits_consume,
             // api key
             crate::commands::aggregate_api::service_aggregate_api_list,
             crate::commands::aggregate_api::service_aggregate_api_read_secret,

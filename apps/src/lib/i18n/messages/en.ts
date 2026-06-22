@@ -1034,6 +1034,14 @@ export const EN_MESSAGES: MessageCatalog = {
   账号用量已刷新: "Account usage refreshed",
   "账号长期未登录，refresh 已过期，已改为不可用状态":
     "Account inactive for a long time; refresh expired and marked unavailable.",
+  "当前账号有 {count} 次免费重置可用，确定消耗 1 次并刷新用量吗？":
+    "This account has {count} free reset(s). Consume 1 reset and refresh usage?",
+  已取消免费重置: "Free reset canceled",
+  当前账号没有可用免费重置: "This account has no available free reset.",
+  "免费重置已触发，账号用量已刷新":
+    "Free reset triggered and account usage refreshed.",
+  免费重置失败: "Free reset failed",
+  免费重置: "Free reset",
   "正在等待服务连接。": "Waiting for service connection.",
   "正在刷新...": "Refreshing...",
   "正在推导...": "Deriving...",
@@ -1374,6 +1382,7 @@ export const EN_MESSAGES: MessageCatalog = {
   "刷新 AT/RT": "Refresh AT/RT",
   "刷新全部 AT/RT": "Refresh all AT/RT",
   "刷新用量": "Refresh usage",
+  触发免费重置: "Trigger free reset",
   "路由策略": "Routing strategy",
   "路由来源": "Routing source",
   "客户端模型": "Client model",
