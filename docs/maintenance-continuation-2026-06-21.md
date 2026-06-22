@@ -5208,3 +5208,36 @@
   - Continue SQLite work only when production SQL/helper/EXPLAIN alignment or a real query-plan issue is visible.
   - Continue client reuse only if a production/request/frequent background path repeatedly constructs a stable-config client.
   - Continue feature removal only with current call-site evidence plus tests proving it is safe.
+## 2026-06-22 tail marker - model group direct lookup SQL helper alignment
+
+- Latest completed slice in this continuation:
+  - Continued `model_groups` storage scan after the default model group helper slice.
+  - `user_model_group_assignment_count()` was inspected and left unchanged because it is a simple full-table count without a useful existing lookup/order index assertion.
+  - File touched: `crates/core/src/storage/model_groups.rs`.
+  - Added storage-local SQL helper:
+    - `model_group_by_id_sql()`
+  - Updated production method `find_model_group(...)` to use the helper without changing behavior.
+  - Expanded EXPLAIN coverage:
+    - `list_model_groups_uses_list_order_index` now also verifies direct model group lookup uses `sqlite_autoindex_model_groups_1`.
+- Validation:
+  - `cargo test -p codexmanager-core list_model_groups_uses_list_order_index -- --nocapture` passed:
+    - 1 matching core library test.
+  - `cargo fmt` passed.
+  - `cargo fmt --check` passed.
+  - `cargo test -p codexmanager-core model_groups -- --nocapture` passed:
+    - 10 matching core library tests.
+  - `cargo test -p codexmanager-core` passed:
+    - 338 core library tests.
+    - 7 auth integration tests.
+    - 29 storage integration tests.
+    - 1 usage integration test.
+    - 1 version integration test.
+    - doc-tests with 0 tests.
+- Notes:
+  - No SQLite migration or new index was added; direct lookup already uses the model group primary-key index.
+  - No feature removal was attempted; no current safe-removal proof was found.
+- Next continuation constraints:
+  - Goal remains active.
+  - Continue SQLite work only when production SQL/helper/EXPLAIN alignment or a real query-plan issue is visible.
+  - Continue client reuse only if a production/request/frequent background path repeatedly constructs a stable-config client.
+  - Continue feature removal only with current call-site evidence plus tests proving it is safe.

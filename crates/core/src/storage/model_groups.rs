@@ -59,6 +59,13 @@ fn model_group_models_list_sql() -> &'static str {
      ORDER BY group_id ASC, platform_model_slug ASC"
 }
 
+fn model_group_by_id_sql() -> &'static str {
+    "SELECT id, name, description, status, sort, is_default,
+            rate_multiplier_millis, created_at, updated_at
+     FROM model_groups
+     WHERE id = ?1"
+}
+
 fn model_group_models_for_group_sql() -> &'static str {
     "SELECT group_id, platform_model_slug, enabled, rate_multiplier_millis,
             billing_model_slug, note, created_at, updated_at
@@ -288,14 +295,7 @@ impl Storage {
 
     pub fn find_model_group(&self, id: &str) -> Result<Option<ModelGroup>> {
         self.conn
-            .query_row(
-                "SELECT id, name, description, status, sort, is_default,
-                        rate_multiplier_millis, created_at, updated_at
-                 FROM model_groups
-                 WHERE id = ?1",
-                [id],
-                map_model_group,
-            )
+            .query_row(model_group_by_id_sql(), [id], map_model_group)
             .optional()
     }
 
@@ -731,6 +731,13 @@ mod tests {
             &storage,
             &format!("EXPLAIN QUERY PLAN {}", default_model_group_id_sql()),
         );
+        let by_id_plan = collect_query_plan(
+            &storage,
+            &format!(
+                "EXPLAIN QUERY PLAN {}",
+                model_group_by_id_sql().replace("?1", "'mg_default'")
+            ),
+        );
 
         assert!(
             plan.contains("idx_model_groups_list_order"),
@@ -739,6 +746,10 @@ mod tests {
         assert!(
             default_plan.contains("idx_model_groups_default"),
             "expected default model group lookup to use default-group index, got {default_plan}"
+        );
+        assert!(
+            by_id_plan.contains("sqlite_autoindex_model_groups_1"),
+            "expected model group direct lookup to use primary-key index, got {by_id_plan}"
         );
         assert!(
             !plan.contains("USE TEMP B-TREE FOR ORDER BY"),
