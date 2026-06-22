@@ -6251,3 +6251,22 @@
   - No SQLite migration or new index was added; existing query-plan and filter-behavior assertions were preserved unchanged in the moved test files.
   - No feature removal was attempted in this slice.
   - Goal remains active after this slice.
+## 2026-06-22 continuation - codex profile service tests module split
+
+- Latest completed slice in this continuation:
+  - Switched back to service-layer modularity after finishing the core/storage inline test cleanup sweep.
+  - Re-scanned service large files and confirmed `crates/service/src/codex_profile.rs` had an EOF `#[cfg(test)] mod tests` block containing pure profile/config/history repair test code.
+  - Files touched:
+    - `crates/service/src/codex_profile.rs`
+    - `crates/service/src/codex_profile_tests.rs`
+  - Moved the inline Codex profile tests into `codex_profile_tests.rs` and left the parent module with `#[path = "codex_profile_tests.rs"] mod tests;`.
+  - No Codex profile production logic, TOML/history repair behavior, or SQLite history repair SQL was changed; tests remain a child module and still access private helpers through `super`.
+- Validation passed so far:
+  - `cargo fmt` passed after the split.
+  - `cargo test -p codexmanager-service codex_profile -- --nocapture` passed: 15 matching service library tests.
+  - `cargo fmt --check` passed.
+  - `git diff --check` passed with only LF-to-CRLF warnings and exit code 0.
+- Notes:
+  - Client scan was re-run for service/web `reqwest::Client` constructors; the inspected stable production paths are still cached/runtime-scoped or startup scoped, so no client reuse edit was made in this slice.
+  - No feature removal was attempted in this slice.
+  - Goal remains active after this slice.
