@@ -5625,3 +5625,25 @@
   - No SQLite migration or new index was added; the existing status/time composite index is now guarded for summary queries as well as count queries.
   - No feature removal was attempted; no current safe-removal proof was found.
   - Goal remains active after this slice.
+
+## 2026-06-22 tail marker - request token by-key summary SQL helper
+
+- Latest completed slice in this continuation:
+  - Continued request token stats storage scan after request log summary SQL helper slice.
+  - Confirmed `summarize_request_token_stats_by_key(...)` / selected-key variants are used by API key usage and dashboard read paths, and `query_request_token_stats_by_key(...)` still built its final by-key summary SQL inline.
+  - Files touched:
+    - `crates/core/src/storage/request_token_stats.rs`
+    - `crates/core/src/storage/tests/request_token_stats_tests.rs`
+  - Added storage-local SQL helper:
+    - `request_token_stats_by_key_sql(combined_selects, key_filter_clauses)`
+  - Updated production method `query_request_token_stats_by_key(...)` to use the helper while preserving raw/hourly/legacy usage aggregation and ordering semantics.
+  - Added EXPLAIN coverage in `by_key_usage_summary_query_includes_raw_hourly_and_legacy_sources` to verify the helper-backed by-key query still includes raw token stats, hourly rollups, and legacy rollups.
+- Validation passed for this slice:
+  - `cargo test -p codexmanager-core by_key_usage_summary_query_includes_raw_hourly_and_legacy_sources -- --nocapture`
+  - `cargo test -p codexmanager-core summaries_for_selected_keys_include_rollups_and_respect_time_ranges -- --nocapture`
+  - `cargo fmt --check`
+  - `cargo test -p codexmanager-core request_token_stats -- --nocapture`
+  - `cargo test -p codexmanager-core` passed with 341 core library tests, 7 auth integration tests, 29 storage integration tests, 1 usage integration test, 1 version integration test, and 0 doc-tests.- Notes:
+  - No SQLite migration or new index was added; this slice centralizes existing by-key usage SQL and guards against accidentally dropping one of the usage sources.
+  - No feature removal was attempted; no current safe-removal proof was found.
+  - Goal remains active after this slice.

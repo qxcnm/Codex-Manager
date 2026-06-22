@@ -307,6 +307,26 @@ fn key_filter_sql_clauses(key_filter: Option<&TempKeyIdFilter<'_>>) -> KeyFilter
     }
 }
 
+fn request_token_stats_by_key_sql(
+    combined_selects: &str,
+    key_filter_clauses: &KeyFilterSqlClauses,
+) -> String {
+    format!(
+        "WITH combined AS (
+            {combined_selects}
+         )
+         SELECT
+            s.key_id,
+            IFNULL(SUM(IFNULL(s.total_tokens, 0)), 0) AS total_tokens,
+            IFNULL(SUM(s.estimated_cost_usd), 0.0) AS estimated_cost_usd
+         FROM combined s
+         WHERE s.key_id IS NOT NULL AND TRIM(s.key_id) <> ''{outer_key_filter_clause}
+         GROUP BY s.key_id
+         ORDER BY total_tokens DESC, s.key_id ASC",
+        outer_key_filter_clause = key_filter_clauses.outer,
+    )
+}
+
 fn raw_token_rollup_select(
     select_prefix: &str,
     where_clause: &str,
@@ -800,20 +820,8 @@ impl Storage {
             "GROUP BY key_id",
         );
         let combined_selects = union_all_selects([raw, hourly, legacy]);
-        let mut stmt = self.conn.prepare(&format!(
-            "WITH combined AS (
-                {combined_selects}
-             )
-             SELECT
-                s.key_id,
-                IFNULL(SUM(IFNULL(s.total_tokens, 0)), 0) AS total_tokens,
-                IFNULL(SUM(s.estimated_cost_usd), 0.0) AS estimated_cost_usd
-             FROM combined s
-             WHERE s.key_id IS NOT NULL AND TRIM(s.key_id) <> ''{outer_key_filter_clause}
-             GROUP BY s.key_id
-             ORDER BY total_tokens DESC, s.key_id ASC",
-            outer_key_filter_clause = key_filter_clauses.outer,
-        ))?;
+        let sql = request_token_stats_by_key_sql(&combined_selects, &key_filter_clauses);
+        let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query([])?;
         let mut items = Vec::new();
         while let Some(row) = rows.next()? {

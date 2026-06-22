@@ -812,6 +812,52 @@ fn hourly_rollup_report_queries_match_existing_lookup_indexes() {
 }
 
 #[test]
+fn by_key_usage_summary_query_includes_raw_hourly_and_legacy_sources() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let key_filter_clauses = super::key_filter_sql_clauses(None);
+    let raw = super::raw_key_usage_select(
+        "",
+        "t.key_id IS NOT NULL AND TRIM(t.key_id) <> ''",
+        "GROUP BY t.key_id",
+    );
+    let hourly = super::hourly_key_usage_select(
+        "",
+        "NULLIF(TRIM(h.key_id), '') IS NOT NULL",
+        "GROUP BY key_id",
+    );
+    let legacy = super::legacy_key_usage_select(
+        "",
+        "NULLIF(TRIM(r.key_id), '') IS NOT NULL",
+        "GROUP BY key_id",
+    );
+    let combined_selects = super::union_all_selects([raw, hourly, legacy]);
+    let sql = super::request_token_stats_by_key_sql(&combined_selects, &key_filter_clauses);
+
+    let details = collect_query_plan_details_with_params(
+        &storage,
+        &format!("EXPLAIN QUERY PLAN {sql}"),
+        Vec::new(),
+    );
+
+    assert_uses_index(
+        &details,
+        "idx_request_token_stats_key_model_created_at",
+        "by-key raw usage summary",
+    );
+    assert_uses_index(
+        &details,
+        "idx_request_token_stat_hourly_rollups_key_bucket",
+        "by-key hourly usage summary",
+    );
+    assert_uses_index(
+        &details,
+        "idx_request_token_stat_rollups_key_id",
+        "by-key legacy usage summary",
+    );
+}
+
+#[test]
 fn summarize_request_token_stats_between_short_circuits_empty_range() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
