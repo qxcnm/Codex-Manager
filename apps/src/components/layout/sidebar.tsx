@@ -13,6 +13,7 @@ import {
   Route,
   Settings,
   UserRound,
+  Globe,
   ChevronLeft,
   ChevronRight,
   type LucideIcon,
@@ -49,6 +50,7 @@ const NAV_ITEM_BY_PATH = new Map<TopLevelRoutePath, { icon: LucideIcon }>([
   ["/plugins", { icon: Puzzle }],
   ["/logs", { icon: FileText }],
   ["/settings", { icon: Settings }],
+  ["/proxy-settings", { icon: Globe }],
   ["/author", { icon: UserRound }],
 ]);
 

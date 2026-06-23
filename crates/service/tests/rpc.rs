@@ -1,6 +1,7 @@
 use codexmanager_core::rpc::types::JsonRpcRequest;
 use codexmanager_core::storage::{
-    now_ts, Account, Event, RequestLog, RequestTokenStat, Storage, Token, UsageSnapshotRecord,
+    now_ts, Account, Event, ProxyProfileCreateInput, RequestLog, RequestTokenStat, Storage, Token,
+    UsageSnapshotRecord,
 };
 use std::fs;
 use std::io::{Read, Write};
@@ -201,6 +202,75 @@ fn post_rpc(addr: &str, body: &str) -> serde_json::Value {
     );
     assert_eq!(status, 200, "unexpected status {status}: {body}");
     serde_json::from_str(&body).expect("parse response")
+}
+
+fn post_rpc_method(
+    addr: &str,
+    id: i64,
+    method: &str,
+    params: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let req = JsonRpcRequest {
+        id: id.into(),
+        method: method.to_string(),
+        params,
+        trace: None,
+    };
+    let json = serde_json::to_string(&req).expect("serialize rpc request");
+    post_rpc(addr, &json)
+}
+
+fn wait_for_proxy_test_job(job_id: &str) -> serde_json::Value {
+    for idx in 0..120 {
+        let server = codexmanager_service::start_one_shot_server().expect("start server");
+        let resp = post_rpc_method(
+            &server.addr,
+            9_000 + idx,
+            "system/proxy/test-job",
+            Some(serde_json::json!({ "jobId": job_id })),
+        );
+        let result = resp
+            .get("result")
+            .cloned()
+            .expect("job result payload");
+        let status = result
+            .get("status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if matches!(status, "completed" | "failed" | "cancelled") {
+            return result;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    panic!("proxy test job did not reach terminal state: {job_id}");
+}
+
+fn wait_for_account_proxy_test_job(account_id: &str, job_id: &str) -> serde_json::Value {
+    for idx in 0..120 {
+        let server = codexmanager_service::start_one_shot_server().expect("start server");
+        let resp = post_rpc_method(
+            &server.addr,
+            10_000 + idx,
+            "account/proxy/test-job",
+            Some(serde_json::json!({
+                "accountId": account_id,
+                "jobId": job_id,
+            })),
+        );
+        let result = resp
+            .get("result")
+            .cloned()
+            .expect("job result payload");
+        let status = result
+            .get("status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if matches!(status, "completed" | "failed" | "cancelled") {
+            return result;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    panic!("account proxy test job did not reach terminal state: {job_id}");
 }
 
 /// 函数 `encode_base64url`
@@ -535,6 +605,116 @@ fn start_mock_device_login_server() -> (
         }
     });
     (addr, rx, handle)
+}
+
+fn start_mock_proxy_response_server(
+    response: &'static str,
+) -> (
+    String,
+    std::sync::mpsc::Receiver<String>,
+    thread::JoinHandle<()>,
+) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind fake proxy");
+    let addr = format!("http://{}", listener.local_addr().expect("fake proxy addr"));
+    // Set nonblocking so accept() returns WouldBlock instead of blocking forever.
+    listener.set_nonblocking(true).expect("set nonblocking");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = thread::spawn(move || {
+        // Accept up to 15 connections: warmup + 10 latency samples + spare attempts.
+        // Only the first request is forwarded through `tx`; all subsequent connections
+        // silently receive the same response so the latency job finishes its sample loop.
+        let mut first_sent = false;
+        let mut accepted = 0usize;
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while accepted < 15 && std::time::Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    accepted += 1;
+                    // Switch the accepted stream to blocking mode for reliable reads.
+                    // On Windows, sockets accepted from a nonblocking listener are also
+                    // nonblocking, so we must explicitly switch before calling read().
+                    let _ = stream.set_nonblocking(false);
+                    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                    let mut buffer = vec![0_u8; 8192];
+                    if let Ok(size) = stream.read(&mut buffer) {
+                        if size > 0 {
+                            let req = String::from_utf8_lossy(&buffer[..size]).to_string();
+                            if !first_sent {
+                                let _ = tx.send(req);
+                                first_sent = true;
+                            }
+                        }
+                    }
+                    let _ = stream.write_all(response.as_bytes());
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    (addr, rx, handle)
+}
+
+
+fn start_mock_proxy_speed_server(
+    download_response: &'static str,
+    download_body: &'static [u8],
+    upload_response: &'static str,
+) -> (
+    String,
+    std::sync::mpsc::Receiver<String>,
+    std::sync::mpsc::Receiver<String>,
+    thread::JoinHandle<()>,
+) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind fake proxy");
+    let addr = format!("http://{}", listener.local_addr().expect("fake proxy addr"));
+    let (download_tx, download_rx) = std::sync::mpsc::channel();
+    let (upload_tx, upload_rx) = std::sync::mpsc::channel();
+    let handle = thread::spawn(move || {
+        let (mut download_stream, _) = listener.accept().expect("accept download connection");
+        let mut download_buffer = vec![0_u8; 8192];
+        let download_size = download_stream
+            .read(&mut download_buffer)
+            .expect("read download request");
+        download_tx
+            .send(String::from_utf8_lossy(&download_buffer[..download_size]).to_string())
+            .expect("send download request");
+        download_stream
+            .write_all(download_response.as_bytes())
+            .expect("write download response");
+        download_stream
+            .write_all(download_body)
+            .expect("write download body");
+
+        let (mut upload_stream, _) = listener.accept().expect("accept upload connection");
+        let mut upload_buffer = vec![0_u8; 8192];
+        let upload_size = upload_stream
+            .read(&mut upload_buffer)
+            .expect("read upload request");
+        upload_tx
+            .send(String::from_utf8_lossy(&upload_buffer[..upload_size]).to_string())
+            .expect("send upload request");
+        let mut body_tail = Vec::new();
+        let mut drain = [0_u8; 4096];
+        loop {
+            let size = upload_stream.read(&mut drain).unwrap_or(0);
+            if size == 0 {
+                break;
+            }
+            body_tail.extend_from_slice(&drain[..size]);
+            if body_tail.windows(5).any(|window| window == b"0\r\n\r\n") {
+                break;
+            }
+            if body_tail.len() > 10 {
+                let keep_from = body_tail.len() - 10;
+                body_tail.drain(0..keep_from);
+            }
+        }
+        let _ = upload_stream.write_all(upload_response.as_bytes());
+    });
+    (addr, download_rx, upload_rx, handle)
 }
 
 /// 函数 `rpc_initialize_roundtrip`
@@ -979,6 +1159,712 @@ fn rpc_account_update_profile_updates_label_note_tags_and_sort() {
         .expect("metadata exists");
     assert_eq!(metadata.note.as_deref(), Some("团队共享主号"));
     assert_eq!(metadata.tags.as_deref(), Some("高频,团队A"));
+}
+
+#[test]
+fn rpc_system_proxy_crud_roundtrip() {
+    let _ctx = RpcTestContext::new("rpc-system-proxy-crud");
+
+    let create_server = codexmanager_service::start_one_shot_server().expect("start server");
+    let create_req = JsonRpcRequest {
+        id: 79.into(),
+        method: "system/proxy/create".to_string(),
+        params: Some(serde_json::json!({
+            "name": "RPC Proxy",
+            "proxyUrl": "http://user:pass@example.com:8080/private",
+            "enabled": true,
+            "tagsJson": "[\"rpc\"]",
+            "notes": "Created via rpc"
+        })),
+        trace: None,
+    };
+    let create_json = serde_json::to_string(&create_req).expect("serialize create");
+    let create_resp = post_rpc(&create_server.addr, &create_json);
+    let create_result = create_resp.get("result").expect("create result");
+    assert_eq!(
+        create_result.get("status").and_then(|value| value.as_str()),
+        Some("unchecked")
+    );
+    assert_eq!(
+        create_result
+            .get("proxyUrlRedacted")
+            .and_then(|value| value.as_str()),
+        Some("http://example.com:8080")
+    );
+    let proxy_id = create_result
+        .get("id")
+        .and_then(|value| value.as_str())
+        .expect("proxy id")
+        .to_string();
+
+    let list_server = codexmanager_service::start_one_shot_server().expect("start server");
+    let list_req = JsonRpcRequest {
+        id: 80.into(),
+        method: "system/proxy/list".to_string(),
+        params: Some(serde_json::json!({})),
+        trace: None,
+    };
+    let list_json = serde_json::to_string(&list_req).expect("serialize list");
+    let list_resp = post_rpc(&list_server.addr, &list_json);
+    let items = list_resp["result"]["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["id"], proxy_id);
+
+    let update_server = codexmanager_service::start_one_shot_server().expect("start server");
+    let update_req = JsonRpcRequest {
+        id: 81.into(),
+        method: "system/proxy/update".to_string(),
+        params: Some(serde_json::json!({
+            "id": proxy_id,
+            "name": "RPC Proxy Updated",
+            "proxyUrl": "socks5h://proxy.example:1080",
+            "enabled": false
+        })),
+        trace: None,
+    };
+    let update_json = serde_json::to_string(&update_req).expect("serialize update");
+    let update_resp = post_rpc(&update_server.addr, &update_json);
+    let update_result = update_resp.get("result").expect("update result");
+    assert_eq!(
+        update_result.get("name").and_then(|value| value.as_str()),
+        Some("RPC Proxy Updated")
+    );
+    assert_eq!(
+        update_result
+            .get("proxyUrlRedacted")
+            .and_then(|value| value.as_str()),
+        Some("socks5h://proxy.example:1080")
+    );
+    assert_eq!(
+        update_result
+            .get("enabled")
+            .and_then(|value| value.as_bool()),
+        Some(false)
+    );
+
+    let delete_server = codexmanager_service::start_one_shot_server().expect("start server");
+    let delete_req = JsonRpcRequest {
+        id: 82.into(),
+        method: "system/proxy/delete".to_string(),
+        params: Some(serde_json::json!({ "id": proxy_id })),
+        trace: None,
+    };
+    let delete_json = serde_json::to_string(&delete_req).expect("serialize delete");
+    let delete_resp = post_rpc(&delete_server.addr, &delete_json);
+    assert_eq!(delete_resp["result"]["ok"].as_bool(), Some(true));
+}
+
+#[test]
+fn rpc_system_proxy_test_presets_returns_expected_defaults_and_upload_status() {
+    let _ctx = RpcTestContext::new("rpc-system-proxy-test-presets");
+    std::env::set_var(
+        "CODEXMANAGER_PROXY_TEST_UPLOAD_URL",
+        "https://upload.example.com/proxy-test",
+    );
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let req = JsonRpcRequest {
+        id: 87.into(),
+        method: "system/proxy/test-presets".to_string(),
+        params: Some(serde_json::json!({})),
+        trace: None,
+    };
+    let json = serde_json::to_string(&req).expect("serialize test-presets");
+    let resp = post_rpc(&server.addr, &json);
+    let result = resp.get("result").expect("result");
+
+    assert_eq!(
+        result["defaults"]["latencyPresetId"].as_str(),
+        Some("google_gstatic_204")
+    );
+    assert_eq!(
+        result["defaults"]["speedProviderId"].as_str(),
+        Some("cloudflare_http_rust")
+    );
+    assert_eq!(result["defaults"]["fileSizeId"].as_str(), Some("size_25mb"));
+
+    let cachefly = result["speedProviders"]
+        .as_array()
+        .expect("speed providers")
+        .iter()
+        .find(|item| item["id"].as_str() == Some("cachefly"))
+        .expect("cachefly preset");
+    assert_eq!(
+        cachefly["files"].as_array().map(|items| items.len()),
+        Some(3)
+    );
+
+    let hetzner = result["speedProviders"]
+        .as_array()
+        .expect("speed providers")
+        .iter()
+        .find(|item| item["id"].as_str() == Some("hetzner_fsn1"))
+        .expect("hetzner preset");
+    let hetzner_cap = hetzner["files"]
+        .as_array()
+        .expect("hetzner files")
+        .iter()
+        .find(|item| item["fileSizeId"].as_str() == Some("size_500mb_cap"))
+        .expect("hetzner 500mb cap");
+    assert_eq!(hetzner_cap["readLimitBytes"].as_i64(), Some(500_000_000));
+    assert_eq!(
+        hetzner_cap["downloadUrl"].as_str(),
+        Some("https://fsn1-speed.hetzner.com/1GB.bin")
+    );
+
+    let upload = result["uploadEndpoint"]
+        .as_object()
+        .expect("upload endpoint");
+    assert_eq!(
+        upload.get("configured").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert_eq!(upload.get("source").and_then(|v| v.as_str()), Some("env"));
+    assert_eq!(
+        upload.get("url").and_then(|v| v.as_str()),
+        Some("https://upload.example.com/proxy-test")
+    );
+
+    std::env::remove_var("CODEXMANAGER_PROXY_TEST_UPLOAD_URL");
+}
+
+#[test]
+fn rpc_system_proxy_speed_test_fails_when_upload_not_configured() {
+    let ctx = RpcTestContext::new("rpc-system-proxy-speed-test-no-upload");
+    let storage = Storage::open(ctx.db_path()).expect("open db");
+    storage.init().expect("init schema");
+
+    std::env::remove_var("CODEXMANAGER_PROXY_TEST_UPLOAD_URL");
+
+    storage
+        .create_proxy_profile(&ProxyProfileCreateInput {
+            id: "pp_speed_fail".to_string(),
+            name: "Speed Fail".to_string(),
+            proxy_url: "http://127.0.0.1:3128".to_string(),
+            enabled: true,
+            tags_json: None,
+            notes: None,
+        })
+        .expect("create proxy profile");
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let resp = post_rpc_method(
+        &server.addr,
+        90,
+        "system/proxy/speed-test",
+        Some(serde_json::json!({
+            "id": "pp_speed_fail",
+            "providerId": "cachefly"
+        })),
+    );
+
+    let result = resp.get("result").expect("should return result");
+    let job_id = result
+        .get("jobId")
+        .and_then(|value| value.as_str())
+        .expect("speed test should return job id");
+    let final_job = wait_for_proxy_test_job(job_id);
+    let error = final_job
+        .get("error")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+
+    assert_eq!(final_job.get("status").and_then(|value| value.as_str()), Some("failed"));
+    assert!(
+        error.contains("upload_endpoint_not_configured")
+            || error.contains("not configured"),
+        "error: {error}"
+    );
+
+    let updated = storage
+        .find_proxy_profile("pp_speed_fail")
+        .expect("find proxy profile")
+        .expect("proxy exists");
+    assert_eq!(updated.status, "failed");
+    assert!(updated.last_error.unwrap_or_default().contains("Upload endpoint is not configured"));
+}
+
+#[test]
+fn rpc_system_proxy_test_latency_204_success_updates_profile_and_history() {
+    let ctx = RpcTestContext::new("rpc-system-proxy-test-latency-ok");
+    let storage = Storage::open(ctx.db_path()).expect("open db");
+    storage.init().expect("init schema");
+    let (proxy_url, rx, handle) = start_mock_proxy_response_server(
+        "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
+    storage
+        .create_proxy_profile(&ProxyProfileCreateInput {
+            id: "pp_latency_ok".to_string(),
+            name: "Latency OK".to_string(),
+            proxy_url: proxy_url.clone(),
+            enabled: true,
+            tags_json: None,
+            notes: None,
+        })
+        .expect("create proxy profile");
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let resp = post_rpc_method(
+        &server.addr,
+        88,
+        "system/proxy/test-latency",
+        Some(serde_json::json!({
+            "id": "pp_latency_ok",
+        })),
+    );
+    let result = resp.get("result").expect("latency test result");
+    let job_id = result
+        .get("jobId")
+        .and_then(|value| value.as_str())
+        .expect("latency test should return job id");
+
+    let request_line = rx.recv().expect("proxy request");
+    handle.join().expect("join fake proxy");
+    let final_job = wait_for_proxy_test_job(job_id);
+
+    assert!(request_line.starts_with("GET http://cp.cloudflare.com/generate_204 HTTP/1.1"));
+    assert_eq!(result["status"].as_str(), Some("queued"));
+    assert_eq!(final_job["status"].as_str(), Some("completed"));
+    assert_eq!(final_job["kind"].as_str(), Some("latency"));
+    assert!(final_job["latencyMs"].as_i64().is_some());
+
+    let updated = storage
+        .find_proxy_profile("pp_latency_ok")
+        .expect("find updated proxy")
+        .expect("proxy exists");
+    assert_eq!(updated.status, "ok");
+    assert_eq!(updated.last_error, None);
+    assert_eq!(updated.last_url_latency_ms, final_job["latencyMs"].as_i64());
+    assert!(updated.last_tested_at.is_some());
+
+    let history = storage
+        .list_proxy_profile_url_tests("pp_latency_ok", 10)
+        .expect("list proxy url tests");
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].status, "ok");
+    assert_eq!(history[0].status_code, Some(204));
+    assert_eq!(history[0].test_url, "http://cp.cloudflare.com/generate_204");
+    assert!(!history[0].redirected);
+    assert_eq!(history[0].error_code, None);
+}
+
+#[test]
+fn rpc_system_proxy_test_latency_reports_redirect_and_persists_history() {
+    let ctx = RpcTestContext::new("rpc-system-proxy-test-latency-redirect");
+    let storage = Storage::open(ctx.db_path()).expect("open db");
+    storage.init().expect("init schema");
+    let (proxy_url, _rx, handle) = start_mock_proxy_response_server(
+        "HTTP/1.1 302 Found\r\nLocation: /login\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
+    storage
+        .create_proxy_profile(&ProxyProfileCreateInput {
+            id: "pp_latency_redirect".to_string(),
+            name: "Latency Redirect".to_string(),
+            proxy_url: proxy_url,
+            enabled: true,
+            tags_json: None,
+            notes: None,
+        })
+        .expect("create proxy profile");
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let resp = post_rpc_method(
+        &server.addr,
+        89,
+        "system/proxy/test-latency",
+        Some(serde_json::json!({
+            "id": "pp_latency_redirect",
+        })),
+    );
+    let result = resp.get("result").expect("latency test result");
+    let job_id = result
+        .get("jobId")
+        .and_then(|value| value.as_str())
+        .expect("latency test should return job id");
+
+    handle.join().expect("join fake proxy");
+    let final_job = wait_for_proxy_test_job(job_id);
+
+    assert_eq!(result["status"].as_str(), Some("queued"));
+    assert_eq!(final_job["status"].as_str(), Some("failed"));
+    assert_eq!(final_job["kind"].as_str(), Some("latency"));
+
+    let updated = storage
+        .find_proxy_profile("pp_latency_redirect")
+        .expect("find updated proxy")
+        .expect("proxy exists");
+    assert_eq!(updated.status, "failed");
+    assert_eq!(
+        updated.last_error.as_deref(),
+        Some("redirect detected: http://cp.cloudflare.com/login")
+    );
+    assert!(updated.last_tested_at.is_some());
+    assert!(updated.last_url_latency_ms.is_some());
+
+    let history = storage
+        .list_proxy_profile_url_tests("pp_latency_redirect", 10)
+        .expect("list proxy url tests");
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].status, "failed");
+    assert_eq!(history[0].status_code, Some(302));
+    assert!(history[0].redirected);
+    assert_eq!(
+        history[0].final_url.as_deref(),
+        Some("http://cp.cloudflare.com/login")
+    );
+    assert_eq!(history[0].error_code.as_deref(), Some("redirect_detected"));
+}
+
+#[test]
+fn rpc_account_proxy_can_bind_proxy_profile_and_fail_closed_when_profile_disabled() {
+    let ctx = RpcTestContext::new("rpc-account-proxy-profile-binding");
+    ctx.seed_accounts(1);
+
+    let create_proxy_server = codexmanager_service::start_one_shot_server().expect("start server");
+    let create_proxy_req = JsonRpcRequest {
+        id: 83.into(),
+        method: "system/proxy/create".to_string(),
+        params: Some(serde_json::json!({
+            "name": "Account Bound Proxy",
+            "proxyUrl": "http://127.0.0.1:7891",
+            "enabled": true
+        })),
+        trace: None,
+    };
+    let create_proxy_json =
+        serde_json::to_string(&create_proxy_req).expect("serialize proxy create");
+    let create_proxy_resp = post_rpc(&create_proxy_server.addr, &create_proxy_json);
+    let proxy_id = create_proxy_resp["result"]["id"]
+        .as_str()
+        .expect("proxy id")
+        .to_string();
+
+    let set_proxy_server = codexmanager_service::start_one_shot_server().expect("start server");
+    let set_proxy_req = JsonRpcRequest {
+        id: 84.into(),
+        method: "account/proxy/set".to_string(),
+        params: Some(serde_json::json!({
+            "accountId": "acc-0",
+            "enabled": true,
+            "source": "profile",
+            "proxyProfileId": proxy_id,
+            "proxyUrl": "http://127.0.0.1:7999"
+        })),
+        trace: None,
+    };
+    let set_proxy_json = serde_json::to_string(&set_proxy_req).expect("serialize account proxy");
+    let set_proxy_resp = post_rpc(&set_proxy_server.addr, &set_proxy_json);
+    let set_result = set_proxy_resp.get("result").expect("set result");
+    assert_eq!(
+        set_result.get("source").and_then(|value| value.as_str()),
+        Some("profile")
+    );
+    assert_eq!(
+        set_result
+            .get("proxyProfileId")
+            .and_then(|value| value.as_str()),
+        Some(proxy_id.as_str())
+    );
+    assert_eq!(
+        set_result
+            .get("proxyUrlRedacted")
+            .and_then(|value| value.as_str()),
+        Some("http://127.0.0.1:7891")
+    );
+
+    let disable_proxy_server = codexmanager_service::start_one_shot_server().expect("start server");
+    let disable_proxy_req = JsonRpcRequest {
+        id: 85.into(),
+        method: "system/proxy/update".to_string(),
+        params: Some(serde_json::json!({
+            "id": proxy_id,
+            "enabled": false
+        })),
+        trace: None,
+    };
+    let disable_proxy_json =
+        serde_json::to_string(&disable_proxy_req).expect("serialize proxy disable");
+    let disable_proxy_resp = post_rpc(&disable_proxy_server.addr, &disable_proxy_json);
+    assert_eq!(
+        disable_proxy_resp["result"]["enabled"].as_bool(),
+        Some(false)
+    );
+
+    let test_proxy_server = codexmanager_service::start_one_shot_server().expect("start server");
+    let test_proxy_req = JsonRpcRequest {
+        id: 86.into(),
+        method: "account/proxy/test".to_string(),
+        params: Some(serde_json::json!({
+            "accountId": "acc-0",
+            "enabled": true,
+            "source": "profile",
+            "proxyProfileId": proxy_id
+        })),
+        trace: None,
+    };
+    let test_proxy_json =
+        serde_json::to_string(&test_proxy_req).expect("serialize account proxy test");
+    let test_proxy_resp = post_rpc(&test_proxy_server.addr, &test_proxy_json);
+    let test_result = test_proxy_resp.get("result").expect("test result");
+    assert_eq!(
+        test_result.get("status").and_then(|value| value.as_str()),
+        Some("invalid_url")
+    );
+    let last_error = test_result
+        .get("lastError")
+        .and_then(|value| value.as_str())
+        .expect("lastError");
+    assert!(last_error.contains("fail-closed"), "{last_error}");
+    assert!(last_error.contains("disabled"), "{last_error}");
+}
+
+#[test]
+fn rpc_account_proxy_latency_test_uses_profile_binding_and_keeps_system_history_separate() {
+    let ctx = RpcTestContext::new("rpc-account-proxy-latency-profile");
+    ctx.seed_accounts(1);
+    let storage = Storage::open(ctx.db_path()).expect("open db");
+    storage.init().expect("init schema");
+
+    let (proxy_url, rx, handle) = start_mock_proxy_response_server(
+        "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
+
+    storage
+        .create_proxy_profile(&ProxyProfileCreateInput {
+            id: "pp_account_latency".to_string(),
+            name: "Account Latency".to_string(),
+            proxy_url,
+            enabled: true,
+            tags_json: None,
+            notes: None,
+        })
+        .expect("create proxy profile");
+    storage
+        .upsert_account_proxy_settings(
+            "acc-0",
+            true,
+            Some("profile"),
+            Some("pp_account_latency"),
+            None,
+            "unchecked",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("set account proxy settings");
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let resp = post_rpc_method(
+        &server.addr,
+        186,
+        "account/proxy/latency-test",
+        Some(serde_json::json!({
+            "accountId": "acc-0",
+            "presetId": "custom",
+            "customUrl": "http://example.test/generate_204",
+        })),
+    );
+    let result = resp.get("result").expect("latency test result");
+    let job_id = result
+        .get("jobId")
+        .and_then(|value| value.as_str())
+        .expect("latency test should return job id");
+
+    let final_job = wait_for_account_proxy_test_job("acc-0", job_id);
+    let request_line = rx.recv().expect("proxy request");
+    handle.join().expect("join fake proxy");
+
+    assert!(request_line.starts_with("GET http://cp.cloudflare.com/generate_204 HTTP/1.1"));
+    assert_eq!(final_job["scope"].as_str(), Some("account_proxy"));
+    assert_eq!(final_job["kind"].as_str(), Some("latency"));
+    assert_eq!(final_job["status"].as_str(), Some("completed"));
+    assert!(final_job["latencyMs"].as_i64().is_some());
+
+    let updated = storage
+        .find_account_proxy_settings("acc-0")
+        .expect("find account proxy settings")
+        .expect("account proxy settings exist");
+    assert_eq!(updated.status, "ok");
+    assert!(updated.latency_ms.is_some());
+    assert_eq!(updated.last_download_mbps, None);
+    assert_eq!(updated.last_upload_mbps, None);
+    assert!(updated.last_check_at.is_some());
+
+    let profile = storage
+        .find_proxy_profile("pp_account_latency")
+        .expect("find proxy profile")
+        .expect("proxy profile exists");
+    assert_eq!(profile.status, "unchecked");
+    let history = storage
+        .list_proxy_profile_url_tests("pp_account_latency", 10)
+        .expect("list system history");
+    assert!(history.is_empty(), "account tests must not write system history");
+}
+
+#[test]
+fn rpc_account_proxy_speed_test_uses_custom_proxy_and_updates_latest_only_fields() {
+    let ctx = RpcTestContext::new("rpc-account-proxy-speed-custom");
+    ctx.seed_accounts(1);
+    let storage = Storage::open(ctx.db_path()).expect("open db");
+    storage.init().expect("init schema");
+
+    let _upload_guard = EnvGuard::set(
+        "CODEXMANAGER_PROXY_TEST_UPLOAD_URL",
+        "http://example.test/proxy-test-upload",
+    );
+    let (proxy_url, download_rx, upload_rx, handle) = start_mock_proxy_speed_server(
+        "HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n",
+        b"abcdefghij",
+        "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n",
+    );
+
+    storage
+        .upsert_account_proxy_settings(
+            "acc-0",
+            true,
+            Some("custom"),
+            None,
+            Some(proxy_url.as_str()),
+            "unchecked",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("set custom account proxy");
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let resp = post_rpc_method(
+        &server.addr,
+        187,
+        "account/proxy/speed-test",
+        Some(serde_json::json!({
+            "accountId": "acc-0",
+            "providerId": "cachefly",
+            "fileSizeId": "size_1mb",
+        })),
+    );
+    let result = resp.get("result").expect("speed test result");
+    let job_id = result
+        .get("jobId")
+        .and_then(|value| value.as_str())
+        .expect("speed test should return job id");
+
+    let final_job = wait_for_account_proxy_test_job("acc-0", job_id);
+    let download_request = download_rx.recv().expect("download request");
+    let upload_request = upload_rx.recv().expect("upload request");
+    handle.join().expect("join fake proxy");
+
+    assert!(download_request.contains("GET http://cachefly.cachefly.net/1mb.test"));
+    assert!(upload_request.contains("POST http://example.test/proxy-test-upload"));
+    assert_eq!(final_job["scope"].as_str(), Some("account_proxy"));
+    assert_eq!(final_job["kind"].as_str(), Some("speed"));
+    assert_eq!(final_job["status"].as_str(), Some("completed"));
+    assert!(final_job["downloadMbps"].as_f64().unwrap_or_default() > 0.0);
+    assert!(final_job["uploadMbps"].as_f64().unwrap_or_default() > 0.0);
+
+    let updated = storage
+        .find_account_proxy_settings("acc-0")
+        .expect("find account proxy settings")
+        .expect("account proxy settings exist");
+    assert_eq!(updated.status, "ok");
+    assert!(updated.last_download_mbps.unwrap_or_default() > 0.0);
+    assert!(updated.last_upload_mbps.unwrap_or_default() > 0.0);
+    assert!(updated.last_check_at.is_some());
+}
+
+#[test]
+fn rpc_account_proxy_latency_test_fails_closed_for_disabled_profile() {
+    let ctx = RpcTestContext::new("rpc-account-proxy-latency-disabled-profile");
+    ctx.seed_accounts(1);
+    let storage = Storage::open(ctx.db_path()).expect("open db");
+    storage.init().expect("init schema");
+
+    storage
+        .create_proxy_profile(&ProxyProfileCreateInput {
+            id: "pp_account_disabled".to_string(),
+            name: "Disabled".to_string(),
+            proxy_url: "http://127.0.0.1:7891".to_string(),
+            enabled: false,
+            tags_json: None,
+            notes: None,
+        })
+        .expect("create disabled proxy profile");
+    storage
+        .upsert_account_proxy_settings(
+            "acc-0",
+            true,
+            Some("profile"),
+            Some("pp_account_disabled"),
+            None,
+            "unchecked",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("set profile-based account proxy");
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let resp = post_rpc_method(
+        &server.addr,
+        188,
+        "account/proxy/latency-test",
+        Some(serde_json::json!({
+            "accountId": "acc-0",
+        })),
+    );
+    let error = resp["result"]["error"]
+        .as_str()
+        .expect("latency test error");
+    assert!(error.contains("fail-closed"), "{error}");
+    assert!(error.contains("disabled"), "{error}");
 }
 
 /// 函数 `rpc_app_settings_set_invalid_payload_returns_structured_error`
@@ -3173,4 +4059,132 @@ fn rpc_account_manager_assigns_key_and_bills_wallet() {
         .as_str()
         .expect("auth mode error")
         .contains("account_billing_mode_locked"));
+}
+
+fn start_mock_proxy_slow_server(
+    response: &'static str,
+    delay: Duration,
+) -> (
+    String,
+    std::sync::mpsc::Receiver<String>,
+    thread::JoinHandle<()>,
+) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind fake proxy");
+    let addr = format!("http://{}", listener.local_addr().expect("fake proxy addr"));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept proxy connection");
+        let mut buffer = vec![0_u8; 8192];
+        let size = stream.read(&mut buffer).expect("read proxy request");
+        tx.send(String::from_utf8_lossy(&buffer[..size]).to_string())
+            .expect("send proxy request");
+        thread::sleep(delay);
+        let _ = stream.write_all(response.as_bytes());
+    });
+    (addr, rx, handle)
+}
+
+#[test]
+fn rpc_system_proxy_jobs_flow() {
+    let ctx = RpcTestContext::new("rpc-system-proxy-jobs");
+    let storage = Storage::open(ctx.db_path()).expect("open db");
+    storage.init().expect("init schema");
+
+    let call_rpc = |id: i64, method: &str, params: Option<serde_json::Value>| {
+        let server = codexmanager_service::start_one_shot_server().expect("start server");
+        let req = JsonRpcRequest {
+            id: id.into(),
+            method: method.to_string(),
+            params,
+            trace: None,
+        };
+        let json = serde_json::to_string(&req).expect("serialize");
+        post_rpc(&server.addr, &json)
+    };
+
+    // 1. Создаем прокси профиль
+    let create_resp = call_rpc(
+        1,
+        "system/proxy/create",
+        Some(serde_json::json!({
+            "name": "Test Proxy",
+            "proxyUrl": "http://127.0.0.1:12345",
+            "enabled": true
+        })),
+    );
+    let result = create_resp.get("result").expect("create result");
+    let profile_id = result.get("id").unwrap().as_str().unwrap().to_string();
+
+    // Запускаем медленный фейковый прокси
+    let (proxy_addr, _rx, proxy_handle) = start_mock_proxy_slow_server(
+        "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n",
+        Duration::from_millis(300),
+    );
+
+    // Обновляем прокси URL на правильный адрес фейкового прокси
+    let update_resp = call_rpc(
+        2,
+        "system/proxy/update",
+        Some(serde_json::json!({
+            "id": &profile_id,
+            "proxyUrl": &proxy_addr
+        })),
+    );
+    assert!(update_resp.get("result").is_some());
+
+    // 2. Запускаем latency test
+    let test_resp = call_rpc(
+        3,
+        "system/proxy/test-latency",
+        Some(serde_json::json!({
+            "id": &profile_id,
+        })),
+    );
+    let test_result = test_resp.get("result").expect("test result");
+    let job_id = test_result.get("jobId").unwrap().as_str().unwrap().to_string();
+    assert!(job_id.starts_with("job_lat_"));
+
+    // 3. Сразу опрашиваем состояние - джоба должна быть либо queued, либо running
+    let job_resp = call_rpc(
+        4,
+        "system/proxy/test-job",
+        Some(serde_json::json!({
+            "jobId": &job_id
+        })),
+    );
+    let job_state = job_resp.get("result").expect("job state");
+    let status = job_state.get("status").unwrap().as_str().unwrap();
+    assert!(status == "queued" || status == "running");
+
+    // 4. Отменяем джобу
+    let cancel_resp = call_rpc(
+        5,
+        "system/proxy/cancel-test",
+        Some(serde_json::json!({
+            "jobId": &job_id
+        })),
+    );
+    assert!(cancel_resp.get("result").is_some());
+
+    // 5. Проверяем, что статус стал cancelled
+    let mut cancelled = false;
+    for idx in 0..30 {
+        thread::sleep(Duration::from_millis(100));
+        let job_resp2 = call_rpc(
+            6 + idx,
+            "system/proxy/test-job",
+            Some(serde_json::json!({
+                "jobId": &job_id
+            })),
+        );
+        let job_state2 = job_resp2.get("result").expect("job state");
+        let status2 = job_state2.get("status").unwrap().as_str().unwrap();
+        if status2 == "cancelled" {
+            cancelled = true;
+            break;
+        }
+    }
+    assert!(cancelled, "Job was not cancelled successfully");
+
+    let _ = proxy_handle.join();
 }

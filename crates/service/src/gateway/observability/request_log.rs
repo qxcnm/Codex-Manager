@@ -295,7 +295,6 @@ fn resolve_value_source<'a>(
         (None, None) => Some("unset"),
     }
 }
-
 fn resolve_route_details(
     storage: &Storage,
     trace_context: &RequestLogTraceContext<'_>,

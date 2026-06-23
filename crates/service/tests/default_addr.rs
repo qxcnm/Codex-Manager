@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod support;
-use support::test_env_guard;
+use support::{test_env_guard, EnvGuard};
 
 /// 函数 `unique_temp_db_path`
 ///
@@ -39,8 +39,7 @@ fn unique_temp_db_path() -> PathBuf {
 fn with_bind_mode(mode: Option<&str>, test: impl FnOnce()) {
     let _guard = test_env_guard();
     let db_path = unique_temp_db_path();
-    let previous_db_path = std::env::var("CODEXMANAGER_DB_PATH").ok();
-    std::env::set_var("CODEXMANAGER_DB_PATH", &db_path);
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
 
     let storage = Storage::open(&db_path).expect("open storage");
     storage.init().expect("init storage");
@@ -57,11 +56,6 @@ fn with_bind_mode(mode: Option<&str>, test: impl FnOnce()) {
 
     test();
 
-    if let Some(value) = previous_db_path {
-        std::env::set_var("CODEXMANAGER_DB_PATH", value);
-    } else {
-        std::env::remove_var("CODEXMANAGER_DB_PATH");
-    }
     let _ = std::fs::remove_file(&db_path);
 }
 
@@ -235,12 +229,10 @@ fn default_web_listener_addr_tracks_service_bind_mode() {
 #[test]
 fn default_web_listener_addr_tracks_service_port_offset() {
     let _guard = test_env_guard();
-    let previous_db_path = std::env::var("CODEXMANAGER_DB_PATH").ok();
-    let previous_service_addr = std::env::var("CODEXMANAGER_SERVICE_ADDR").ok();
+    let _service_addr_guard = EnvGuard::set("CODEXMANAGER_SERVICE_ADDR", "localhost:49760");
 
     let db_path = unique_temp_db_path();
-    std::env::set_var("CODEXMANAGER_DB_PATH", &db_path);
-    std::env::set_var("CODEXMANAGER_SERVICE_ADDR", "localhost:49760");
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
 
     let storage = Storage::open(&db_path).expect("open storage");
     storage.init().expect("init storage");
@@ -258,16 +250,6 @@ fn default_web_listener_addr_tracks_service_port_offset() {
         "0.0.0.0:49761"
     );
 
-    if let Some(value) = previous_service_addr {
-        std::env::set_var("CODEXMANAGER_SERVICE_ADDR", value);
-    } else {
-        std::env::remove_var("CODEXMANAGER_SERVICE_ADDR");
-    }
-    if let Some(value) = previous_db_path {
-        std::env::set_var("CODEXMANAGER_DB_PATH", value);
-    } else {
-        std::env::remove_var("CODEXMANAGER_DB_PATH");
-    }
     let _ = std::fs::remove_file(&db_path);
 }
 

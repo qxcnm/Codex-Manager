@@ -35,6 +35,7 @@ rhai = "1"
 sysinfo = "0.30"
 
 [dev-dependencies]
+rcgen = "0.13"
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"

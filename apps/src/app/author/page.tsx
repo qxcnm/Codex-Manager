@@ -109,12 +109,12 @@ function renderInlineMarkdown(line: string) {
 function PartnerTable({
   items,
   onOpenLink,
-  translate,
+  t,
   emptyVisualLabel,
 }: {
   items: readonly SponsorLinkItem[];
   onOpenLink: (url: string) => Promise<void>;
-  translate: (message: string) => string;
+  t: (message: string) => string;
   emptyVisualLabel: string;
 }) {
   return (
@@ -128,7 +128,7 @@ function PartnerTable({
             key={item.key}
             item={item}
             onOpenLink={onOpenLink}
-            translate={translate}
+            translate={t}
             emptyVisualLabel={emptyVisualLabel}
           />
         ))}
@@ -360,7 +360,7 @@ export default function AuthorPage() {
                 <PartnerTable
                   items={visibleSponsors}
                   onOpenLink={handleOpenLink}
-                  translate={t}
+                  t={t}
                   emptyVisualLabel="Sponsor"
                 />
               </CardContent>
@@ -382,7 +382,7 @@ export default function AuthorPage() {
                 <PartnerTable
                   items={visibleServerRecommendations}
                   onOpenLink={handleOpenLink}
-                  translate={t}
+                  t={t}
                   emptyVisualLabel="RackNerd"
                 />
               </CardContent>

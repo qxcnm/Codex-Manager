@@ -4,8 +4,6 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::Serialize;
 use serde_json::json;
 use std::io::{BufRead, BufReader, Read};
-use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
 use std::time::Instant;
 
 use crate::account_status::mark_account_unavailable_for_auth_error;
@@ -17,21 +15,6 @@ const DEFAULT_WARMUP_MESSAGE: &str = "hi";
 const FALLBACK_WARMUP_MESSAGE: &str = "你好";
 const WARMUP_UPSTREAM_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 const DEFAULT_WARMUP_MODEL: &str = "gpt-5.3-codex";
-const WARMUP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const WARMUP_TOTAL_TIMEOUT: Duration = Duration::from_secs(90);
-static WARMUP_HTTP_CLIENT: OnceLock<Mutex<Option<WarmupClientCacheEntry>>> = OnceLock::new();
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct WarmupClientConfig {
-    user_agent: String,
-    proxy_url: Option<String>,
-}
-
-#[derive(Clone)]
-struct WarmupClientCacheEntry {
-    config: WarmupClientConfig,
-    client: Client,
-}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,17 +61,28 @@ pub(crate) fn warmup_accounts(
         return Err("no account available for warmup".to_string());
     }
 
-    let client = warmup_client()?;
     let warmup_message = normalize_warmup_message(message);
     let warmup_model = resolve_warmup_model_slug(&storage);
     let mut results = Vec::with_capacity(accounts.len());
     let mut succeeded = 0usize;
 
-    for account in accounts.drain(..) {
+    for target in accounts.drain(..) {
+        let client = match build_warmup_client_for_account(&target.account.id) {
+            Ok(client) => client,
+            Err(err) => {
+                results.push(AccountWarmupItemResult {
+                    account_id: target.account.id,
+                    account_name: target.account.label,
+                    ok: false,
+                    message: err,
+                });
+                continue;
+            }
+        };
         let item = warmup_single_account(
             &storage,
             &client,
-            account,
+            target,
             warmup_model.as_str(),
             warmup_message.as_str(),
         );
@@ -139,69 +133,13 @@ fn normalize_warmup_message(message: &str) -> String {
     }
 }
 
-fn current_warmup_client_config() -> WarmupClientConfig {
-    WarmupClientConfig {
-        user_agent: crate::gateway::current_codex_user_agent(),
-        proxy_url: crate::gateway::current_upstream_proxy_url(),
+fn build_warmup_client_for_account(account_id: &str) -> Result<Client, String> {
+    let normalized = account_id.trim();
+    if normalized.is_empty() {
+        return Err("build warmup client failed: missing account id".to_string());
     }
-}
-
-fn warmup_client() -> Result<Client, String> {
-    let config = current_warmup_client_config();
-    let cache = WARMUP_HTTP_CLIENT.get_or_init(|| Mutex::new(None));
-    let mut guard = cache
-        .lock()
-        .map_err(|_| "warmup client cache lock poisoned".to_string())?;
-    if let Some(entry) = guard.as_ref() {
-        if entry.config == config {
-            return Ok(entry.client.clone());
-        }
-    }
-    let client = build_warmup_client_for_config(&config)?;
-    *guard = Some(WarmupClientCacheEntry {
-        config,
-        client: client.clone(),
-    });
-    Ok(client)
-}
-
-fn build_warmup_client_for_config(config: &WarmupClientConfig) -> Result<Client, String> {
-    #[cfg(test)]
-    WARMUP_CLIENT_BUILD_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-    let builder = Client::builder()
-        .connect_timeout(WARMUP_CONNECT_TIMEOUT)
-        .timeout(WARMUP_TOTAL_TIMEOUT)
-        .pool_max_idle_per_host(4)
-        .pool_idle_timeout(Some(Duration::from_secs(60)))
-        .user_agent(config.user_agent.as_str());
-    let builder = crate::gateway::apply_blocking_upstream_proxy(
-        builder,
-        config.proxy_url.as_deref(),
-        "warmup_http_proxy_invalid",
-    );
-    builder
-        .build()
+    crate::gateway::fresh_upstream_client_for_account(normalized)
         .map_err(|err| format!("build warmup client failed: {err}"))
-}
-
-#[cfg(test)]
-static WARMUP_CLIENT_BUILD_COUNT: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
-#[cfg(test)]
-fn reset_warmup_client_cache_for_test() {
-    if let Some(cache) = WARMUP_HTTP_CLIENT.get() {
-        if let Ok(mut guard) = cache.lock() {
-            *guard = None;
-        }
-    }
-    WARMUP_CLIENT_BUILD_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
-}
-
-#[cfg(test)]
-fn warmup_client_build_count_for_test() -> usize {
-    WARMUP_CLIENT_BUILD_COUNT.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 fn warmup_single_account(

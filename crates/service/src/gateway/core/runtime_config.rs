@@ -1,7 +1,9 @@
 use codexmanager_core::auth::DEFAULT_ORIGINATOR;
 use codexmanager_core::auth::{DEFAULT_CLIENT_ID, DEFAULT_ISSUER};
+use codexmanager_core::storage::Storage;
 use reqwest::blocking::Client;
 use reqwest::Proxy;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
@@ -11,11 +13,14 @@ static ASYNC_UPSTREAM_CLIENT: OnceLock<RwLock<reqwest::Client>> = OnceLock::new(
 static RETRY_UPSTREAM_CLIENT: OnceLock<RwLock<Client>> = OnceLock::new();
 static ASYNC_RETRY_UPSTREAM_CLIENT: OnceLock<RwLock<reqwest::Client>> = OnceLock::new();
 static UPSTREAM_CLIENT_POOL: OnceLock<RwLock<UpstreamClientPool>> = OnceLock::new();
+static ACCOUNT_PROXY_CLIENTS: OnceLock<RwLock<HashMap<String, AccountProxyClientCacheEntry>>> =
+    OnceLock::new();
+static CONFIG_LOAD_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static CONFIG_IS_LOADED: AtomicBool = AtomicBool::new(false);
 #[cfg(test)]
 static UPSTREAM_CLIENT_BUILD_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static ASYNC_UPSTREAM_CLIENT_BUILD_COUNT: AtomicUsize = AtomicUsize::new(0);
-static RUNTIME_CONFIG_LOADED: OnceLock<()> = OnceLock::new();
 static REQUEST_GATE_WAIT_TIMEOUT_MS: AtomicU64 =
     AtomicU64::new(DEFAULT_REQUEST_GATE_WAIT_TIMEOUT_MS);
 static TRACE_BODY_PREVIEW_MAX_BYTES: AtomicUsize =
@@ -109,6 +114,20 @@ struct UpstreamClientPool {
     async_retry_clients: Vec<reqwest::Client>,
 }
 
+#[derive(Clone)]
+enum AccountProxyClientCacheEntry {
+    NotConfigured,
+    Invalid {
+        proxy_url: String,
+        error: String,
+    },
+    Ready {
+        proxy_url: String,
+        blocking_client: Client,
+        async_client: reqwest::Client,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ModelForwardRule {
     pub from_pattern: String,
@@ -193,13 +212,17 @@ pub(crate) fn upstream_client() -> Client {
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(crate) fn upstream_client_for_account(account_id: &str) -> Client {
+pub(crate) fn upstream_client_for_account(account_id: &str) -> Result<Client, String> {
     ensure_runtime_config_loaded();
-    let cached =
-        crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool")
-            .client_for_account(account_id)
-            .cloned();
-    cached.unwrap_or_else(upstream_client)
+    match account_proxy_client_cache_entry(account_id) {
+        AccountProxyClientCacheEntry::Ready {
+            blocking_client, ..
+        } => Ok(blocking_client),
+        AccountProxyClientCacheEntry::Invalid { proxy_url, error } => Err(format!(
+            "account explicit proxy for {account_id} is invalid and fail-closed: {proxy_url}. {error}"
+        )),
+        AccountProxyClientCacheEntry::NotConfigured => fallback_blocking_client_for_account(account_id),
+    }
 }
 
 /// 函数 `fresh_upstream_client_for_account`
@@ -213,44 +236,63 @@ pub(crate) fn upstream_client_for_account(account_id: &str) -> Client {
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(crate) fn fresh_upstream_client_for_account(account_id: &str) -> Client {
+pub(crate) fn fresh_upstream_client_for_account(account_id: &str) -> Result<Client, String> {
     ensure_runtime_config_loaded();
-    let cached =
-        crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool")
-            .retry_client_for_account(account_id)
-            .cloned();
-    cached.unwrap_or_else(retry_upstream_client)
+    match account_proxy_client_cache_entry(account_id) {
+        AccountProxyClientCacheEntry::Ready { proxy_url, .. } => {
+            build_blocking_client_with_proxy_strict(Some(proxy_url.as_str()))
+        }
+        AccountProxyClientCacheEntry::Invalid { proxy_url, error } => Err(format!(
+            "account explicit proxy for {account_id} is invalid and fail-closed: {proxy_url}. {error}"
+        )),
+        AccountProxyClientCacheEntry::NotConfigured => {
+            fresh_fallback_blocking_client_for_account(account_id)
+        }
+    }
 }
 
-pub(crate) fn async_upstream_client_for_account(account_id: &str) -> reqwest::Client {
+pub(crate) fn async_upstream_client_for_account(
+    account_id: &str,
+) -> Result<reqwest::Client, String> {
     ensure_runtime_config_loaded();
-    let cached =
-        crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool")
-            .async_client_for_account(account_id)
-            .cloned();
-    cached.unwrap_or_else(async_upstream_client)
+    match account_proxy_client_cache_entry(account_id) {
+        AccountProxyClientCacheEntry::Ready { async_client, .. } => Ok(async_client),
+        AccountProxyClientCacheEntry::Invalid { proxy_url, error } => Err(format!(
+            "account explicit proxy for {account_id} is invalid and fail-closed: {proxy_url}. {error}"
+        )),
+        AccountProxyClientCacheEntry::NotConfigured => fallback_async_client_for_account(account_id),
+    }
 }
 
-fn async_upstream_client() -> reqwest::Client {
-    crate::lock_utils::read_recover(async_upstream_client_lock(), "async_upstream_client").clone()
-}
-
-pub(crate) fn fresh_async_upstream_client_for_account(account_id: &str) -> reqwest::Client {
+pub(crate) fn fresh_async_upstream_client_for_account(
+    account_id: &str,
+) -> Result<reqwest::Client, String> {
     ensure_runtime_config_loaded();
-    let cached =
-        crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool")
-            .async_retry_client_for_account(account_id)
-            .cloned();
-    cached.unwrap_or_else(async_retry_upstream_client)
+    match account_proxy_client_cache_entry(account_id) {
+        AccountProxyClientCacheEntry::Ready { proxy_url, .. } => {
+            build_async_client_with_proxy_strict(Some(proxy_url.as_str()))
+        }
+        AccountProxyClientCacheEntry::Invalid { proxy_url, error } => Err(format!(
+            "account explicit proxy for {account_id} is invalid and fail-closed: {proxy_url}. {error}"
+        )),
+        AccountProxyClientCacheEntry::NotConfigured => fresh_fallback_async_client_for_account(account_id),
+    }
 }
 
 pub(crate) fn upstream_proxy_url_for_account(account_id: &str) -> Option<String> {
     ensure_runtime_config_loaded();
-    let pool = crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool");
-    if let Some(proxy_url) = pool.proxy_for_account(account_id) {
-        return Some(proxy_url.to_string());
+    match account_proxy_client_cache_entry(account_id) {
+        AccountProxyClientCacheEntry::Ready { proxy_url, .. }
+        | AccountProxyClientCacheEntry::Invalid { proxy_url, .. } => {
+            return Some(proxy_url);
+        }
+        AccountProxyClientCacheEntry::NotConfigured => {}
     }
-    current_upstream_proxy_url()
+    let pool = crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool");
+    if let Some(proxy_url) = current_upstream_proxy_url() {
+        return Some(proxy_url);
+    }
+    pool.proxy_for_account(account_id).map(ToString::to_string)
 }
 
 /// 函数 `upstream_connect_timeout_cached`
@@ -294,24 +336,6 @@ fn build_async_upstream_client() -> reqwest::Client {
     build_async_upstream_client_with_proxy(proxy_url.as_deref())
 }
 
-pub(crate) fn apply_blocking_upstream_proxy(
-    mut builder: reqwest::blocking::ClientBuilder,
-    proxy_url: Option<&str>,
-    invalid_event: &str,
-) -> reqwest::blocking::ClientBuilder {
-    if let Some(proxy_url) = proxy_url.map(str::trim).filter(|value| !value.is_empty()) {
-        match Proxy::all(proxy_url) {
-            Ok(proxy) => {
-                builder = builder.proxy(proxy);
-            }
-            Err(err) => {
-                log::warn!("event={} proxy={} err={}", invalid_event, proxy_url, err);
-            }
-        }
-    }
-    builder
-}
-
 pub(crate) fn apply_async_upstream_proxy(
     mut builder: reqwest::ClientBuilder,
     proxy_url: Option<&str>,
@@ -328,6 +352,39 @@ pub(crate) fn apply_async_upstream_proxy(
         }
     }
     builder
+}
+
+fn build_blocking_client_with_proxy_strict(proxy_url: Option<&str>) -> Result<Client, String> {
+    let mut builder = Client::builder()
+        .timeout(None::<Duration>)
+        .connect_timeout(upstream_connect_timeout_cached())
+        .pool_max_idle_per_host(32)
+        .pool_idle_timeout(Some(Duration::from_secs(90)))
+        .tcp_keepalive(Some(Duration::from_secs(30)));
+    if let Some(proxy_url) = proxy_url.map(str::trim).filter(|value| !value.is_empty()) {
+        let proxy = Proxy::all(proxy_url).map_err(|err| format!("invalid proxy url: {err}"))?;
+        builder = builder.proxy(proxy);
+    }
+    builder
+        .build()
+        .map_err(|err| format!("build upstream client failed: {err}"))
+}
+
+fn build_async_client_with_proxy_strict(
+    proxy_url: Option<&str>,
+) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(upstream_connect_timeout_cached())
+        .pool_max_idle_per_host(32)
+        .pool_idle_timeout(Some(Duration::from_secs(90)))
+        .tcp_keepalive(Some(Duration::from_secs(30)));
+    if let Some(proxy_url) = proxy_url.map(str::trim).filter(|value| !value.is_empty()) {
+        let proxy = Proxy::all(proxy_url).map_err(|err| format!("invalid proxy url: {err}"))?;
+        builder = builder.proxy(proxy);
+    }
+    builder
+        .build()
+        .map_err(|err| format!("build async upstream client failed: {err}"))
 }
 /// 函数 `build_upstream_client_with_proxy`
 ///
@@ -1243,6 +1300,7 @@ pub(super) fn reload_from_env() {
         crate::lock_utils::write_recover(upstream_proxy_url_cell(), "upstream_proxy_url");
     *cached_proxy_url = converted_proxy;
     drop(cached_proxy_url);
+    clear_account_proxy_client_cache();
 
     let free_account_max_model = env_non_empty(ENV_FREE_ACCOUNT_MAX_MODEL)
         .and_then(|value| normalize_model_slug(value.as_str()).ok())
@@ -1352,6 +1410,7 @@ pub(super) fn reload_from_env() {
     drop(cached_residency);
 
     refresh_upstream_clients_from_runtime_config();
+    CONFIG_IS_LOADED.store(true, Ordering::Release);
 }
 
 /// 函数 `ensure_runtime_config_loaded`
@@ -1366,7 +1425,12 @@ pub(super) fn reload_from_env() {
 /// # 返回
 /// 无
 fn ensure_runtime_config_loaded() {
-    let _ = RUNTIME_CONFIG_LOADED.get_or_init(|| reload_from_env());
+    if !CONFIG_IS_LOADED.load(Ordering::Acquire) {
+        let _guard = CONFIG_LOAD_MUTEX.lock().unwrap();
+        if !CONFIG_IS_LOADED.load(Ordering::Acquire) {
+            reload_from_env();
+        }
+    }
 }
 
 /// 函数 `upstream_client_lock`
@@ -1423,6 +1487,10 @@ fn upstream_client_pool_lock() -> &'static RwLock<UpstreamClientPool> {
     UPSTREAM_CLIENT_POOL.get_or_init(|| RwLock::new(build_upstream_client_pool()))
 }
 
+fn account_proxy_clients_lock() -> &'static RwLock<HashMap<String, AccountProxyClientCacheEntry>> {
+    ACCOUNT_PROXY_CLIENTS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
 /// 函数 `refresh_upstream_clients_from_runtime_config`
 ///
 /// 作者: gaohongshun
@@ -1465,6 +1533,26 @@ fn refresh_upstream_clients_from_runtime_config() {
     let mut pool_lock =
         crate::lock_utils::write_recover(upstream_client_pool_lock(), "upstream_client_pool");
     *pool_lock = pool;
+}
+
+pub(crate) fn invalidate_account_proxy_client_cache(account_id: &str) {
+    let normalized = account_id.trim();
+    if normalized.is_empty() {
+        return;
+    }
+    let mut cache = crate::lock_utils::write_recover(
+        account_proxy_clients_lock(),
+        "account_proxy_client_cache",
+    );
+    cache.remove(normalized);
+}
+
+pub(crate) fn clear_account_proxy_client_cache() {
+    let mut cache = crate::lock_utils::write_recover(
+        account_proxy_clients_lock(),
+        "account_proxy_client_cache",
+    );
+    cache.clear();
 }
 
 /// 函数 `build_upstream_client_pool`
@@ -1689,6 +1777,165 @@ fn residency_requirement_cell() -> &'static RwLock<Option<String>> {
 /// 返回函数执行结果
 fn current_upstream_proxy_url() -> Option<String> {
     crate::lock_utils::read_recover(upstream_proxy_url_cell(), "upstream_proxy_url").clone()
+}
+
+fn fallback_blocking_client_for_account(account_id: &str) -> Result<Client, String> {
+    if let Some(proxy_url) = current_upstream_proxy_url() {
+        let _ = proxy_url;
+        return Ok(upstream_client());
+    }
+
+    let pool = crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool");
+    if let Some(proxy_url) = pool.proxy_for_account(account_id) {
+        return Ok(pool
+            .client_for_account(account_id)
+            .cloned()
+            .unwrap_or_else(|| build_upstream_client_with_proxy(Some(proxy_url))));
+    }
+
+    Ok(upstream_client())
+}
+
+fn fresh_fallback_blocking_client_for_account(account_id: &str) -> Result<Client, String> {
+    if current_upstream_proxy_url().is_some() {
+        return Ok(retry_upstream_client());
+    }
+
+    let pool = crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool");
+    if let Some(proxy_url) = pool.proxy_for_account(account_id) {
+        return Ok(pool
+            .retry_client_for_account(account_id)
+            .cloned()
+            .unwrap_or_else(|| build_upstream_client_with_proxy(Some(proxy_url))));
+    }
+
+    Ok(retry_upstream_client())
+}
+
+fn async_upstream_client() -> reqwest::Client {
+    crate::lock_utils::read_recover(async_upstream_client_lock(), "async_upstream_client").clone()
+}
+
+fn fallback_async_client_for_account(account_id: &str) -> Result<reqwest::Client, String> {
+    if current_upstream_proxy_url().is_some() {
+        return Ok(async_upstream_client());
+    }
+
+    let pool = crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool");
+    if let Some(proxy_url) = pool.proxy_for_account(account_id) {
+        return Ok(pool
+            .async_client_for_account(account_id)
+            .cloned()
+            .unwrap_or_else(|| build_async_upstream_client_with_proxy(Some(proxy_url))));
+    }
+
+    Ok(async_upstream_client())
+}
+
+fn fresh_fallback_async_client_for_account(account_id: &str) -> Result<reqwest::Client, String> {
+    if current_upstream_proxy_url().is_some() {
+        return Ok(async_retry_upstream_client());
+    }
+
+    let pool = crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool");
+    if let Some(proxy_url) = pool.proxy_for_account(account_id) {
+        return Ok(pool
+            .async_retry_client_for_account(account_id)
+            .cloned()
+            .unwrap_or_else(|| build_async_upstream_client_with_proxy(Some(proxy_url))));
+    }
+
+    Ok(async_retry_upstream_client())
+}
+
+fn account_proxy_client_cache_entry(account_id: &str) -> AccountProxyClientCacheEntry {
+    let normalized = account_id.trim();
+    if normalized.is_empty() {
+        return AccountProxyClientCacheEntry::NotConfigured;
+    }
+
+    {
+        let cache = crate::lock_utils::read_recover(
+            account_proxy_clients_lock(),
+            "account_proxy_client_cache",
+        );
+        if let Some(entry) = cache.get(normalized) {
+            return entry.clone();
+        }
+    }
+
+    let entry = load_account_proxy_client_cache_entry(normalized);
+    let mut cache = crate::lock_utils::write_recover(
+        account_proxy_clients_lock(),
+        "account_proxy_client_cache",
+    );
+    cache.insert(normalized.to_string(), entry.clone());
+    entry
+}
+
+fn load_account_proxy_client_cache_entry(account_id: &str) -> AccountProxyClientCacheEntry {
+    let Some(storage) = crate::storage_helpers::open_storage() else {
+        return AccountProxyClientCacheEntry::NotConfigured;
+    };
+    load_account_proxy_client_cache_entry_from_storage(&storage, account_id)
+}
+
+fn load_account_proxy_client_cache_entry_from_storage(
+    storage: &Storage,
+    account_id: &str,
+) -> AccountProxyClientCacheEntry {
+    let proxy_url =
+        match crate::account_proxy::resolve_account_proxy_mode_from_storage(storage, account_id) {
+            crate::account_proxy::AccountProxyMode::Disabled => {
+                return AccountProxyClientCacheEntry::NotConfigured;
+            }
+            crate::account_proxy::AccountProxyMode::Invalid {
+                proxy_url, error, ..
+            } => {
+                return AccountProxyClientCacheEntry::Invalid {
+                    proxy_url: proxy_url.unwrap_or_default(),
+                    error,
+                };
+            }
+            crate::account_proxy::AccountProxyMode::Explicit { proxy_url, .. } => proxy_url,
+        };
+
+    let normalized_proxy_url = match normalize_upstream_proxy_url(Some(proxy_url.as_str())) {
+        Ok(Some(proxy_url)) => proxy_url,
+        Ok(None) => return AccountProxyClientCacheEntry::NotConfigured,
+        Err(err) => {
+            return AccountProxyClientCacheEntry::Invalid {
+                proxy_url,
+                error: err,
+            };
+        }
+    };
+    let blocking_client =
+        match build_blocking_client_with_proxy_strict(Some(normalized_proxy_url.as_str())) {
+            Ok(client) => client,
+            Err(err) => {
+                return AccountProxyClientCacheEntry::Invalid {
+                    proxy_url: normalized_proxy_url,
+                    error: err,
+                };
+            }
+        };
+    let async_client =
+        match build_async_client_with_proxy_strict(Some(normalized_proxy_url.as_str())) {
+            Ok(client) => client,
+            Err(err) => {
+                return AccountProxyClientCacheEntry::Invalid {
+                    proxy_url: normalized_proxy_url,
+                    error: err,
+                };
+            }
+        };
+
+    AccountProxyClientCacheEntry::Ready {
+        proxy_url: normalized_proxy_url,
+        blocking_client,
+        async_client,
+    }
 }
 
 /// 函数 `token_exchange_client_id_cell`
@@ -2257,9 +2504,7 @@ fn rewrite_socks_proxy_url(proxy_url: &str) -> String {
     } else if let Some(rest) = normalized.strip_prefix("https://socks") {
         normalized = format!("socks{rest}");
     }
-    if normalized.starts_with("socks5://") {
-        normalized = normalized.replacen("socks5://", "socks5h://", 1);
-    } else if normalized.starts_with("socks://") {
+    if normalized.starts_with("socks://") {
         normalized = normalized.replacen("socks://", "socks5h://", 1);
     }
     normalized

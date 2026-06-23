@@ -91,7 +91,17 @@ pub(crate) fn json_response(req: &JsonRpcRequest, result: Value) -> JsonRpcRespo
 /// 无
 fn plugin_scheduler_loop() {
     loop {
+        if crate::shutdown_requested() {
+            break;
+        }
         let sleep_secs = scheduler::run_due_tasks_once();
-        thread::sleep(Duration::from_secs(sleep_secs));
+        let start = std::time::Instant::now();
+        let delay = Duration::from_secs(sleep_secs);
+        while start.elapsed() < delay {
+            if crate::shutdown_requested() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
     }
 }

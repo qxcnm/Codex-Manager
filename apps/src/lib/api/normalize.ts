@@ -1,94 +1,113 @@
 "use client";
 
+import { normalizeAccountProxySummaryFields } from "./account-proxy-normalize";
+
 import {
-  Account,
-  AccountListResult,
-  AccountUsage,
-  AggregateApi,
-  AggregateApiBalanceRefreshResult,
-  AggregateApiBalanceSnapshot,
-  AggregateApiCreateResult,
-  AggregateApiSecretResult,
-  AggregateApiSupplierModel,
-  AggregateApiSupplierModelImportResult,
-  AggregateApiTestResult,
-  ApiKey,
-  ApiKeyCreateResult,
-  ApiKeyUsageStat,
-  AppSettings,
-  BackgroundTaskSettings,
-  QuotaGuardSettings,
-  RuntimeTimeZone,
-  DeviceAuthInfo,
-  EnvOverrideCatalogItem,
-  InstalledPluginSummary,
-  LoginStartResult,
-  ManagedModelCatalog,
-  ManagedModelInfo,
-  ManagedModelRouting,
-  ManagedModelSourceMapping,
-  ManagedModelSourceModel,
-  ModelCatalog,
-  ModelInfo,
-  ModelReasoningLevel,
-  ModelTruncationPolicy,
-  PluginCatalogEntry,
-  PluginCatalogResult,
-  PluginCatalogTask,
-  PluginRunLogSummary,
-  PluginTaskSummary,
-  RequestLog,
-  RequestLogFilterSummary,
-  RequestLogListResult,
-  RequestLogListWithSummaryResult,
-  RequestLogTodaySummary,
-  StartupSnapshot,
-  UsageAggregateSummary,
+	Account,
+	AccountListResult,
+	AccountUsage,
+	AggregateApi,
+	AggregateApiBalanceRefreshResult,
+	AggregateApiBalanceSnapshot,
+	AggregateApiCreateResult,
+	AggregateApiSecretResult,
+	AggregateApiSupplierModel,
+	AggregateApiSupplierModelImportResult,
+	AggregateApiTestResult,
+	ApiKey,
+	ApiKeyCreateResult,
+	ApiKeyUsageStat,
+	AppSettings,
+	BackgroundTaskSettings,
+	QuotaGuardSettings,
+	RuntimeTimeZone,
+	DeviceAuthInfo,
+	EnvOverrideCatalogItem,
+	InstalledPluginSummary,
+	LoginStartResult,
+	ManagedModelCatalog,
+	ManagedModelInfo,
+	ManagedModelRouting,
+	ManagedModelSourceMapping,
+	ManagedModelSourceModel,
+	ModelCatalog,
+	ModelInfo,
+	ModelReasoningLevel,
+	ModelTruncationPolicy,
+	PluginCatalogEntry,
+	PluginCatalogResult,
+	PluginCatalogTask,
+	PluginRunLogSummary,
+	PluginTaskSummary,
+	ProxyProfile,
+	ProxyProfileListResult,
+	ProxyTestPresetsResult,
+	ProxyTestJobState,
+	CfStyleResult,
+	CfStyleStatus,
+	ThroughputDirection,
+	CfStyleRunStatus,
+	CfStyleThroughputResult,
+	ProxyProfileUrlTestResult,
+	ProxyProfileUrlTestListResult,
+	ProxySpeedTestListResult,
+	ProxySpeedTestEntry,
+	ProxyDiagnosticTestListResult,
+	ProxyDiagnosticTestEntry,
+	AccountProxyUrlTestListResult,
+	AccountProxyUrlTestEntry,
+	RequestLog,
+	RequestLogFilterSummary,
+	RequestLogListResult,
+	RequestLogListWithSummaryResult,
+	RequestLogTodaySummary,
+	StartupSnapshot,
+	UsageAggregateSummary,
 } from "@/types";
 import {
-  DEFAULT_CODEX_ORIGINATOR,
-  DEFAULT_CODEX_USER_AGENT_VERSION,
+	DEFAULT_CODEX_ORIGINATOR,
+	DEFAULT_CODEX_USER_AGENT_VERSION,
 } from "@/lib/constants/codex";
 import {
-  DEFAULT_AUTHOR_SERVER_RECOMMENDATIONS,
-  DEFAULT_AUTHOR_SPONSORS,
-  normalizeSponsorLinkItems,
+	DEFAULT_AUTHOR_SERVER_RECOMMENDATIONS,
+	DEFAULT_AUTHOR_SPONSORS,
+	normalizeSponsorLinkItems,
 } from "@/lib/sponsor-links";
 import {
-  calcAvailability,
-  getUsageDisplayBuckets,
-  isLowQuotaUsage,
-  toNullableNumber,
+	calcAvailability,
+	getUsageDisplayBuckets,
+	isLowQuotaUsage,
+	toNullableNumber,
 } from "@/lib/utils/usage";
 import { readBillingModeLock } from "./billing-mode-lock";
 
 const DEFAULT_BACKGROUND_TASKS: BackgroundTaskSettings = {
-  usagePollingEnabled: true,
-  usagePollIntervalSecs: 600,
-  gatewayKeepaliveEnabled: true,
-  gatewayKeepaliveIntervalSecs: 180,
-  tokenRefreshPollingEnabled: true,
-  tokenRefreshPollIntervalSecs: 60,
-  usageRefreshWorkers: 4,
-  httpWorkerFactor: 4,
-  httpWorkerMin: 8,
-  httpStreamWorkerFactor: 1,
-  httpStreamWorkerMin: 2,
-  warmupCronEnabled: false,
-  warmupCronExpression: "",
+	usagePollingEnabled: true,
+	usagePollIntervalSecs: 600,
+	gatewayKeepaliveEnabled: true,
+	gatewayKeepaliveIntervalSecs: 180,
+	tokenRefreshPollingEnabled: true,
+	tokenRefreshPollIntervalSecs: 60,
+	usageRefreshWorkers: 4,
+	httpWorkerFactor: 4,
+	httpWorkerMin: 8,
+	httpStreamWorkerFactor: 1,
+	httpStreamWorkerMin: 2,
+	warmupCronEnabled: false,
+	warmupCronExpression: "",
 };
 
 const DEFAULT_QUOTA_GUARD: QuotaGuardSettings = {
-  enabled: true,
-  primaryMinRemainingPercent: 5,
-  secondaryMinRemainingPercent: 10,
-  allowAllLowQuotaFallback: true,
+	enabled: true,
+	primaryMinRemainingPercent: 5,
+	secondaryMinRemainingPercent: 10,
+	allowAllLowQuotaFallback: true,
 };
 
 const DEFAULT_RUNTIME_TIME_ZONE: RuntimeTimeZone = {
-  name: "Local",
-  offset: "",
-  source: "system",
+	name: "Local",
+	offset: "",
+	source: "system",
 };
 
 /**
@@ -105,9 +124,9 @@ const DEFAULT_RUNTIME_TIME_ZONE: RuntimeTimeZone = {
  * 返回函数执行结果
  */
 function asObject(payload: unknown): Record<string, unknown> {
-  return payload && typeof payload === "object" && !Array.isArray(payload)
-    ? (payload as Record<string, unknown>)
-    : {};
+	return payload && typeof payload === "object" && !Array.isArray(payload)
+		? (payload as Record<string, unknown>)
+		: {};
 }
 
 /**
@@ -124,7 +143,7 @@ function asObject(payload: unknown): Record<string, unknown> {
  * 返回函数执行结果
  */
 function asArray<T = unknown>(payload: unknown): T[] {
-  return Array.isArray(payload) ? payload : [];
+	return Array.isArray(payload) ? payload : [];
 }
 
 /**
@@ -142,7 +161,7 @@ function asArray<T = unknown>(payload: unknown): T[] {
  * 返回函数执行结果
  */
 function asString(value: unknown, fallback = ""): string {
-  return typeof value === "string" ? value.trim() : fallback;
+	return typeof value === "string" ? value.trim() : fallback;
 }
 
 /**
@@ -160,24 +179,24 @@ function asString(value: unknown, fallback = ""): string {
  * 返回函数执行结果
  */
 function asBoolean(value: unknown, fallback = false): boolean {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value !== 0;
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (["1", "true", "yes", "on"].includes(normalized)) return true;
-    if (["0", "false", "no", "off"].includes(normalized)) return false;
-  }
-  return fallback;
+	if (typeof value === "boolean") return value;
+	if (typeof value === "number") return value !== 0;
+	if (typeof value === "string") {
+		const normalized = value.trim().toLowerCase();
+		if (["1", "true", "yes", "on"].includes(normalized)) return true;
+		if (["0", "false", "no", "off"].includes(normalized)) return false;
+	}
+	return fallback;
 }
 
 function toNullableBoolean(value: unknown): boolean | null {
-  if (typeof value === "boolean") return value;
-  return null;
+	if (typeof value === "boolean") return value;
+	return null;
 }
 
 function toNullableObject(value: unknown): Record<string, unknown> | null {
-  const object = asObject(value);
-  return Object.keys(object).length > 0 ? object : null;
+	const object = asObject(value);
+	return Object.keys(object).length > 0 ? object : null;
 }
 
 /**
@@ -196,9 +215,9 @@ function toNullableObject(value: unknown): Record<string, unknown> | null {
  * 返回函数执行结果
  */
 function asInteger(value: unknown, fallback: number, min = 0): number {
-  const parsed = toNullableNumber(value);
-  if (parsed == null) return fallback;
-  return Math.max(min, Math.trunc(parsed));
+	const parsed = toNullableNumber(value);
+	if (parsed == null) return fallback;
+	return Math.max(min, Math.trunc(parsed));
 }
 
 /**
@@ -215,11 +234,14 @@ function asInteger(value: unknown, fallback: number, min = 0): number {
  * 返回函数执行结果
  */
 function normalizeStringRecord(payload: unknown): Record<string, string> {
-  const source = asObject(payload);
-  return Object.entries(source).reduce<Record<string, string>>((result, [key, value]) => {
-    result[key] = asString(value);
-    return result;
-  }, {});
+	const source = asObject(payload);
+	return Object.entries(source).reduce<Record<string, string>>(
+		(result, [key, value]) => {
+			result[key] = asString(value);
+			return result;
+		},
+		{},
+	);
 }
 
 /**
@@ -236,18 +258,18 @@ function normalizeStringRecord(payload: unknown): Record<string, string> {
  * 返回函数执行结果
  */
 function asStringArray(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => asString(item))
-      .filter((item) => item.length > 0);
-  }
-  if (typeof value === "string") {
-    return value
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-  return [];
+	if (Array.isArray(value)) {
+		return value
+			.map((item) => asString(item))
+			.filter((item) => item.length > 0);
+	}
+	if (typeof value === "string") {
+		return value
+			.split(",")
+			.map((item) => item.trim())
+			.filter(Boolean);
+	}
+	return [];
 }
 
 /**
@@ -264,28 +286,32 @@ function asStringArray(value: unknown): string[] {
  * 返回函数执行结果
  */
 export function normalizeUsageSnapshot(payload: unknown): AccountUsage | null {
-  const source = asObject(payload);
-  const accountId = asString(source.accountId ?? source.account_id);
-  if (!accountId) return null;
+	const source = asObject(payload);
+	const accountId = asString(source.accountId ?? source.account_id);
+	if (!accountId) return null;
 
-  return {
-    accountId,
-    availabilityStatus: asString(source.availabilityStatus ?? source.availability_status),
-    usedPercent: toNullableNumber(source.usedPercent ?? source.used_percent),
-    windowMinutes: toNullableNumber(source.windowMinutes ?? source.window_minutes),
-    resetsAt: toNullableNumber(source.resetsAt ?? source.resets_at),
-    secondaryUsedPercent: toNullableNumber(
-      source.secondaryUsedPercent ?? source.secondary_used_percent
-    ),
-    secondaryWindowMinutes: toNullableNumber(
-      source.secondaryWindowMinutes ?? source.secondary_window_minutes
-    ),
-    secondaryResetsAt: toNullableNumber(
-      source.secondaryResetsAt ?? source.secondary_resets_at
-    ),
-    creditsJson: asString(source.creditsJson ?? source.credits_json) || null,
-    capturedAt: toNullableNumber(source.capturedAt ?? source.captured_at),
-  };
+	return {
+		accountId,
+		availabilityStatus: asString(
+			source.availabilityStatus ?? source.availability_status,
+		),
+		usedPercent: toNullableNumber(source.usedPercent ?? source.used_percent),
+		windowMinutes: toNullableNumber(
+			source.windowMinutes ?? source.window_minutes,
+		),
+		resetsAt: toNullableNumber(source.resetsAt ?? source.resets_at),
+		secondaryUsedPercent: toNullableNumber(
+			source.secondaryUsedPercent ?? source.secondary_used_percent,
+		),
+		secondaryWindowMinutes: toNullableNumber(
+			source.secondaryWindowMinutes ?? source.secondary_window_minutes,
+		),
+		secondaryResetsAt: toNullableNumber(
+			source.secondaryResetsAt ?? source.secondary_resets_at,
+		),
+		creditsJson: asString(source.creditsJson ?? source.credits_json) || null,
+		capturedAt: toNullableNumber(source.capturedAt ?? source.captured_at),
+	};
 }
 
 /**
@@ -302,11 +328,11 @@ export function normalizeUsageSnapshot(payload: unknown): AccountUsage | null {
  * 返回函数执行结果
  */
 export function normalizeUsageList(payload: unknown): AccountUsage[] {
-  const source = asObject(payload);
-  const items = asArray(source.items ?? payload);
-  return items
-    .map((item) => normalizeUsageSnapshot(item))
-    .filter((item): item is AccountUsage => Boolean(item));
+	const source = asObject(payload);
+	const items = asArray(source.items ?? payload);
+	return items
+		.map((item) => normalizeUsageSnapshot(item))
+		.filter((item): item is AccountUsage => Boolean(item));
 }
 
 /**
@@ -322,8 +348,10 @@ export function normalizeUsageList(payload: unknown): AccountUsage[] {
  * # 返回
  * 返回函数执行结果
  */
-export function buildUsageMap(usages: AccountUsage[]): Map<string, AccountUsage> {
-  return new Map(usages.map((item) => [item.accountId, item]));
+export function buildUsageMap(
+	usages: AccountUsage[],
+): Map<string, AccountUsage> {
+	return new Map(usages.map((item) => [item.accountId, item]));
 }
 
 /**
@@ -339,18 +367,20 @@ export function buildUsageMap(usages: AccountUsage[]): Map<string, AccountUsage>
  * # 返回
  * 返回函数执行结果
  */
-export function normalizeUsageAggregateSummary(payload: unknown): UsageAggregateSummary {
-  const source = asObject(payload);
-  return {
-    primaryBucketCount: asInteger(source.primaryBucketCount, 0, 0),
-    primaryKnownCount: asInteger(source.primaryKnownCount, 0, 0),
-    primaryUnknownCount: asInteger(source.primaryUnknownCount, 0, 0),
-    primaryRemainPercent: toNullableNumber(source.primaryRemainPercent),
-    secondaryBucketCount: asInteger(source.secondaryBucketCount, 0, 0),
-    secondaryKnownCount: asInteger(source.secondaryKnownCount, 0, 0),
-    secondaryUnknownCount: asInteger(source.secondaryUnknownCount, 0, 0),
-    secondaryRemainPercent: toNullableNumber(source.secondaryRemainPercent),
-  };
+export function normalizeUsageAggregateSummary(
+	payload: unknown,
+): UsageAggregateSummary {
+	const source = asObject(payload);
+	return {
+		primaryBucketCount: asInteger(source.primaryBucketCount, 0, 0),
+		primaryKnownCount: asInteger(source.primaryKnownCount, 0, 0),
+		primaryUnknownCount: asInteger(source.primaryUnknownCount, 0, 0),
+		primaryRemainPercent: toNullableNumber(source.primaryRemainPercent),
+		secondaryBucketCount: asInteger(source.secondaryBucketCount, 0, 0),
+		secondaryKnownCount: asInteger(source.secondaryKnownCount, 0, 0),
+		secondaryUnknownCount: asInteger(source.secondaryUnknownCount, 0, 0),
+		secondaryRemainPercent: toNullableNumber(source.secondaryRemainPercent),
+	};
 }
 
 function normalizeStartupAccountSummary(payload: unknown) {
@@ -382,24 +412,26 @@ function normalizeStartupAccountSummary(payload: unknown) {
  * # 返回
  * 返回函数执行结果
  */
-export function normalizeTodaySummary(payload: unknown): RequestLogTodaySummary {
-  const source = asObject(payload);
-  const inputTokens = asInteger(source.inputTokens, 0, 0);
-  const cachedInputTokens = asInteger(source.cachedInputTokens, 0, 0);
-  const outputTokens = asInteger(source.outputTokens, 0, 0);
-  const reasoningOutputTokens = asInteger(source.reasoningOutputTokens, 0, 0);
-  return {
-    inputTokens,
-    cachedInputTokens,
-    outputTokens,
-    reasoningOutputTokens,
-    todayTokens: asInteger(
-      source.todayTokens,
-      Math.max(0, inputTokens - cachedInputTokens) + outputTokens,
-      0
-    ),
-    estimatedCost: Math.max(0, toNullableNumber(source.estimatedCost) ?? 0),
-  };
+export function normalizeTodaySummary(
+	payload: unknown,
+): RequestLogTodaySummary {
+	const source = asObject(payload);
+	const inputTokens = asInteger(source.inputTokens, 0, 0);
+	const cachedInputTokens = asInteger(source.cachedInputTokens, 0, 0);
+	const outputTokens = asInteger(source.outputTokens, 0, 0);
+	const reasoningOutputTokens = asInteger(source.reasoningOutputTokens, 0, 0);
+	return {
+		inputTokens,
+		cachedInputTokens,
+		outputTokens,
+		reasoningOutputTokens,
+		todayTokens: asInteger(
+			source.todayTokens,
+			Math.max(0, inputTokens - cachedInputTokens) + outputTokens,
+			0,
+		),
+		estimatedCost: Math.max(0, toNullableNumber(source.estimatedCost) ?? 0),
+	};
 }
 
 /**
@@ -416,68 +448,81 @@ export function normalizeTodaySummary(payload: unknown): RequestLogTodaySummary 
  * # 返回
  * 返回函数执行结果
  */
-export function normalizeAccount(item: unknown, usage?: AccountUsage | null): Account | null {
-  const source = asObject(item);
-  const id = asString(source.id);
-  if (!id) return null;
+export function normalizeAccount(
+	item: unknown,
+	usage?: AccountUsage | null,
+): Account | null {
+	const source = asObject(item);
+	const id = asString(source.id);
+	if (!id) return null;
 
-  const name = asString(source.label || source.name) || id;
-  const groupName = asString(source.groupName ?? source.group_name);
-  const status = asString(source.status);
-  const statusReason = asString(source.statusReason ?? source.status_reason);
-  const rawHasToken = source.hasToken ?? source.has_token;
-  const hasToken = typeof rawHasToken === "boolean" ? Boolean(rawHasToken) : true;
-  const availability = calcAvailability(usage, { status, statusReason, hasToken });
-  const usageBuckets = getUsageDisplayBuckets(usage);
+	const name = asString(source.label || source.name) || id;
+	const groupName = asString(source.groupName ?? source.group_name);
+	const status = asString(source.status);
+	const statusReason = asString(source.statusReason ?? source.status_reason);
+	const rawHasToken = source.hasToken ?? source.has_token;
+	const hasToken =
+		typeof rawHasToken === "boolean" ? Boolean(rawHasToken) : true;
+	const availability = calcAvailability(usage, {
+		status,
+		statusReason,
+		hasToken,
+	});
+	const usageBuckets = getUsageDisplayBuckets(usage);
 
-  return {
-    id,
-    name,
-    group: groupName,
-    priority: asInteger(source.sort ?? source.priority, 0, 0),
-    preferred: Boolean(source.preferred),
-    label: name,
-    groupName,
-    sort: asInteger(source.sort ?? source.priority, 0, 0),
-    status,
-    statusReason,
-    hasToken,
-    planType:
-      asString(source.planType ?? source.plan_type ?? source.subscriptionPlan ?? source.subscription_plan) ||
-      null,
-    planTypeRaw: asString(source.planTypeRaw ?? source.plan_type_raw) || null,
-    hasSubscription:
-      typeof (source.hasSubscription ?? source.has_subscription) === "boolean"
-        ? Boolean(source.hasSubscription ?? source.has_subscription)
-        : null,
-    subscriptionPlan:
-      asString(source.subscriptionPlan ?? source.subscription_plan) || null,
-    subscriptionExpiresAt: toNullableNumber(
-      source.subscriptionExpiresAt ?? source.subscription_expires_at
-    ),
-    subscriptionRenewsAt: toNullableNumber(
-      source.subscriptionRenewsAt ?? source.subscription_renews_at
-    ),
-    note: asString(source.note) || null,
-    tags: asStringArray(source.tags),
-    modelSlugs: asStringArray(source.modelSlugs ?? source.model_slugs),
-    quotaCapacityPrimaryWindowTokens: toNullableNumber(
-      source.quotaCapacityPrimaryWindowTokens ??
-        source.quota_capacity_primary_window_tokens
-    ),
-    quotaCapacitySecondaryWindowTokens: toNullableNumber(
-      source.quotaCapacitySecondaryWindowTokens ??
-        source.quota_capacity_secondary_window_tokens
-    ),
-    isAvailable: availability.level === "ok",
-    isLowQuota: isLowQuotaUsage(usage),
-    lastRefreshAt: usage?.capturedAt ?? null,
-    availabilityText: availability.text,
-    availabilityLevel: availability.level,
-    primaryRemainPercent: usageBuckets.primaryRemainPercent,
-    secondaryRemainPercent: usageBuckets.secondaryRemainPercent,
-    usage: usage ?? null,
-  };
+	return {
+		id,
+		name,
+		group: groupName,
+		priority: asInteger(source.sort ?? source.priority, 0, 0),
+		preferred: Boolean(source.preferred),
+		label: name,
+		groupName,
+		sort: asInteger(source.sort ?? source.priority, 0, 0),
+		status,
+		statusReason,
+		hasToken,
+		planType:
+			asString(
+				source.planType ??
+					source.plan_type ??
+					source.subscriptionPlan ??
+					source.subscription_plan,
+			) || null,
+		planTypeRaw: asString(source.planTypeRaw ?? source.plan_type_raw) || null,
+		hasSubscription:
+			typeof (source.hasSubscription ?? source.has_subscription) === "boolean"
+				? Boolean(source.hasSubscription ?? source.has_subscription)
+				: null,
+		subscriptionPlan:
+			asString(source.subscriptionPlan ?? source.subscription_plan) || null,
+		subscriptionExpiresAt: toNullableNumber(
+			source.subscriptionExpiresAt ?? source.subscription_expires_at,
+		),
+		subscriptionRenewsAt: toNullableNumber(
+			source.subscriptionRenewsAt ?? source.subscription_renews_at,
+		),
+		note: asString(source.note) || null,
+		tags: asStringArray(source.tags),
+		modelSlugs: asStringArray(source.modelSlugs ?? source.model_slugs),
+		quotaCapacityPrimaryWindowTokens: toNullableNumber(
+			source.quotaCapacityPrimaryWindowTokens ??
+				source.quota_capacity_primary_window_tokens,
+		),
+		quotaCapacitySecondaryWindowTokens: toNullableNumber(
+			source.quotaCapacitySecondaryWindowTokens ??
+				source.quota_capacity_secondary_window_tokens,
+		),
+		isAvailable: availability.level === "ok",
+		isLowQuota: isLowQuotaUsage(usage),
+		lastRefreshAt: usage?.capturedAt ?? null,
+		availabilityText: availability.text,
+		availabilityLevel: availability.level,
+		primaryRemainPercent: usageBuckets.primaryRemainPercent,
+		secondaryRemainPercent: usageBuckets.secondaryRemainPercent,
+		usage: usage ?? null,
+		...normalizeAccountProxySummaryFields(source),
+	};
 }
 
 /**
@@ -495,22 +540,24 @@ export function normalizeAccount(item: unknown, usage?: AccountUsage | null): Ac
  * 返回函数执行结果
  */
 export function normalizeAccountList(
-  payload: unknown,
-  usages: AccountUsage[] = []
+	payload: unknown,
+	usages: AccountUsage[] = [],
 ): AccountListResult {
-  const source = asObject(payload);
-  const items = asArray(source.items ?? payload);
-  const usageMap = buildUsageMap(usages);
-  const normalizedItems = items
-    .map((item) => normalizeAccount(item, usageMap.get(asString(asObject(item).id))))
-    .filter((item): item is Account => Boolean(item));
+	const source = asObject(payload);
+	const items = asArray(source.items ?? payload);
+	const usageMap = buildUsageMap(usages);
+	const normalizedItems = items
+		.map((item) =>
+			normalizeAccount(item, usageMap.get(asString(asObject(item).id))),
+		)
+		.filter((item): item is Account => Boolean(item));
 
-  return {
-    items: normalizedItems,
-    total: asInteger(source.total, normalizedItems.length, 0),
-    page: asInteger(source.page, 1, 1),
-    pageSize: asInteger(source.pageSize, normalizedItems.length || 20, 1),
-  };
+	return {
+		items: normalizedItems,
+		total: asInteger(source.total, normalizedItems.length, 0),
+		page: asInteger(source.page, 1, 1),
+		pageSize: asInteger(source.pageSize, normalizedItems.length || 20, 1),
+	};
 }
 
 /**
@@ -528,11 +575,13 @@ export function normalizeAccountList(
  * 返回函数执行结果
  */
 export function attachUsagesToAccounts(
-  accounts: Account[],
-  usages: AccountUsage[]
+	accounts: Account[],
+	usages: AccountUsage[],
 ): Account[] {
-  const usageMap = buildUsageMap(usages);
-  return accounts.map((account) => normalizeAccount(account, usageMap.get(account.id)) || account);
+	const usageMap = buildUsageMap(usages);
+	return accounts.map(
+		(account) => normalizeAccount(account, usageMap.get(account.id)) || account,
+	);
 }
 
 /**
@@ -548,31 +597,35 @@ export function attachUsagesToAccounts(
  * # 返回
  * 返回函数执行结果
  */
-function normalizeModelReasoningLevels(payload: unknown): ModelReasoningLevel[] {
-  const items = asArray(payload);
-  return items
-    .map((item) => {
-      const current = asObject(item);
-      const effort = asString(current.effort);
-      if (!effort) return null;
-      return {
-        ...current,
-        effort,
-        description: asString(current.description),
-      };
-    })
-    .filter((item): item is ModelReasoningLevel => Boolean(item));
+function normalizeModelReasoningLevels(
+	payload: unknown,
+): ModelReasoningLevel[] {
+	const items = asArray(payload);
+	return items
+		.map((item) => {
+			const current = asObject(item);
+			const effort = asString(current.effort);
+			if (!effort) return null;
+			return {
+				...current,
+				effort,
+				description: asString(current.description),
+			};
+		})
+		.filter((item): item is ModelReasoningLevel => Boolean(item));
 }
 
-function normalizeModelTruncationPolicy(payload: unknown): ModelTruncationPolicy | null {
-  const source = asObject(payload);
-  const mode = asString(source.mode);
-  if (!mode) return null;
-  return {
-    ...source,
-    mode,
-    limit: toNullableNumber(source.limit) ?? 0,
-  };
+function normalizeModelTruncationPolicy(
+	payload: unknown,
+): ModelTruncationPolicy | null {
+	const source = asObject(payload);
+	const mode = asString(source.mode);
+	if (!mode) return null;
+	return {
+		...source,
+		mode,
+		limit: toNullableNumber(source.limit) ?? 0,
+	};
 }
 
 function normalizeModelServiceTiers(payload: unknown): ModelInfo["serviceTiers"] {
@@ -594,102 +647,104 @@ function normalizeModelServiceTiers(payload: unknown): ModelInfo["serviceTiers"]
 }
 
 function normalizeModelVisibility(value: unknown): string | null {
-  const normalized = asString(value).trim().toLowerCase();
-  if (!normalized) return null;
-  if (normalized === "hidden") {
-    return "hide";
-  }
-  return normalized;
+	const normalized = asString(value).trim().toLowerCase();
+	if (!normalized) return null;
+	if (normalized === "hidden") {
+		return "hide";
+	}
+	return normalized;
 }
 
 function normalizeModelInfo(payload: unknown): ModelInfo | null {
-  const source = asObject(payload);
-  const slug = asString(source.slug);
-  if (!slug) return null;
-  const rawInputModalities =
-    source.input_modalities ?? source.inputModalities ?? ["text", "image"];
+	const source = asObject(payload);
+	const slug = asString(source.slug);
+	if (!slug) return null;
+	const rawInputModalities = source.input_modalities ??
+		source.inputModalities ?? ["text", "image"];
 
-  return {
-    ...source,
-    slug,
-    displayName: asString(source.display_name ?? source.displayName) || slug,
-    description: asString(source.description) || null,
-    defaultReasoningLevel:
-      asString(source.default_reasoning_level ?? source.defaultReasoningLevel) || null,
-    supportedReasoningLevels: normalizeModelReasoningLevels(
-      source.supported_reasoning_levels ?? source.supportedReasoningLevels,
-    ),
-    shellType: asString(source.shell_type ?? source.shellType) || null,
-    visibility: normalizeModelVisibility(source.visibility),
-    supportedInApi: asBoolean(source.supported_in_api ?? source.supportedInApi, true),
-    priority: toNullableNumber(source.priority) ?? 0,
-    additionalSpeedTiers: asArray(
-      source.additional_speed_tiers ?? source.additionalSpeedTiers,
-    ).map((item) => asString(item)),
-    serviceTiers: normalizeModelServiceTiers(source.service_tiers ?? source.serviceTiers),
-    defaultServiceTier:
-      asString(source.default_service_tier ?? source.defaultServiceTier) || null,
-    availabilityNux: toNullableObject(source.availability_nux ?? source.availabilityNux),
-    upgrade: toNullableObject(source.upgrade),
-    upgradeInfo: toNullableObject(source.upgrade_info ?? source.upgradeInfo),
-    baseInstructions:
-      asString(source.base_instructions ?? source.baseInstructions) || null,
-    modelMessages: toNullableObject(source.model_messages ?? source.modelMessages),
-    supportsReasoningSummaries: toNullableBoolean(
-      source.supports_reasoning_summaries ?? source.supportsReasoningSummaries,
-    ),
-    defaultReasoningSummary:
-      asString(source.default_reasoning_summary ?? source.defaultReasoningSummary) || null,
-    supportVerbosity: toNullableBoolean(
-      source.support_verbosity ?? source.supportVerbosity,
-    ),
-    defaultVerbosity: source.default_verbosity ?? source.defaultVerbosity ?? null,
-    applyPatchToolType:
-      asString(source.apply_patch_tool_type ?? source.applyPatchToolType) || null,
-    webSearchToolType:
-      asString(source.web_search_tool_type ?? source.webSearchToolType) || null,
-    truncationPolicy: normalizeModelTruncationPolicy(
-      source.truncation_policy ?? source.truncationPolicy,
-    ),
-    supportsParallelToolCalls: toNullableBoolean(
-      source.supports_parallel_tool_calls ?? source.supportsParallelToolCalls,
-    ),
-    supportsImageDetailOriginal: toNullableBoolean(
-      source.supports_image_detail_original ?? source.supportsImageDetailOriginal,
-    ),
-    contextWindow: toNullableNumber(source.context_window ?? source.contextWindow),
-    autoCompactTokenLimit: toNullableNumber(
-      source.auto_compact_token_limit ?? source.autoCompactTokenLimit,
-    ),
-    effectiveContextWindowPercent: toNullableNumber(
-      source.effective_context_window_percent ?? source.effectiveContextWindowPercent,
-    ),
-    experimentalSupportedTools: asArray(
-      source.experimental_supported_tools ?? source.experimentalSupportedTools,
-    ).map((item) => asString(item)),
-    inputModalities: asArray(rawInputModalities).map((item) => asString(item)),
-    minimalClientVersion:
-      source.minimal_client_version ?? source.minimalClientVersion ?? null,
-    supportsSearchTool: toNullableBoolean(
-      source.supports_search_tool ?? source.supportsSearchTool,
-    ),
-    availableInPlans: asArray(source.available_in_plans ?? source.availableInPlans).map((item) =>
-      asString(item),
-    ),
-  };
+	return {
+		...source,
+		slug,
+		displayName: asString(source.display_name ?? source.displayName) || slug,
+		description: asString(source.description) || null,
+		defaultReasoningLevel:
+			asString(source.default_reasoning_level ?? source.defaultReasoningLevel) || null,
+		supportedReasoningLevels: normalizeModelReasoningLevels(
+			source.supported_reasoning_levels ?? source.supportedReasoningLevels,
+		),
+		shellType: asString(source.shell_type ?? source.shellType) || null,
+		visibility: normalizeModelVisibility(source.visibility),
+		supportedInApi: asBoolean(source.supported_in_api ?? source.supportedInApi, true),
+		priority: toNullableNumber(source.priority) ?? 0,
+		additionalSpeedTiers: asArray(
+			source.additional_speed_tiers ?? source.additionalSpeedTiers,
+		).map((item) => asString(item)),
+		serviceTiers: normalizeModelServiceTiers(source.service_tiers ?? source.serviceTiers),
+		defaultServiceTier:
+			asString(source.default_service_tier ?? source.defaultServiceTier) || null,
+		availabilityNux: toNullableObject(source.availability_nux ?? source.availabilityNux),
+		upgrade: toNullableObject(source.upgrade),
+		upgradeInfo: toNullableObject(source.upgrade_info ?? source.upgradeInfo),
+		baseInstructions:
+			asString(source.base_instructions ?? source.baseInstructions) || null,
+		modelMessages: toNullableObject(source.model_messages ?? source.modelMessages),
+		supportsReasoningSummaries: toNullableBoolean(
+			source.supports_reasoning_summaries ?? source.supportsReasoningSummaries,
+		),
+		defaultReasoningSummary:
+			asString(source.default_reasoning_summary ?? source.defaultReasoningSummary) || null,
+		supportVerbosity: toNullableBoolean(
+			source.support_verbosity ?? source.supportVerbosity,
+		),
+		defaultVerbosity: source.default_verbosity ?? source.defaultVerbosity ?? null,
+		applyPatchToolType:
+			asString(source.apply_patch_tool_type ?? source.applyPatchToolType) || null,
+		webSearchToolType:
+			asString(source.web_search_tool_type ?? source.webSearchToolType) || null,
+		truncationPolicy: normalizeModelTruncationPolicy(
+			source.truncation_policy ?? source.truncationPolicy,
+		),
+		supportsParallelToolCalls: toNullableBoolean(
+			source.supports_parallel_tool_calls ?? source.supportsParallelToolCalls,
+		),
+		supportsImageDetailOriginal: toNullableBoolean(
+			source.supports_image_detail_original ?? source.supportsImageDetailOriginal,
+		),
+		contextWindow: toNullableNumber(source.context_window ?? source.contextWindow),
+		autoCompactTokenLimit: toNullableNumber(
+			source.auto_compact_token_limit ?? source.autoCompactTokenLimit,
+		),
+		effectiveContextWindowPercent: toNullableNumber(
+			source.effective_context_window_percent ?? source.effectiveContextWindowPercent,
+		),
+		experimentalSupportedTools: asArray(
+			source.experimental_supported_tools ?? source.experimentalSupportedTools,
+		).map((item) => asString(item)),
+		inputModalities: asArray(rawInputModalities).map((item) => asString(item)),
+		minimalClientVersion:
+			source.minimal_client_version ?? source.minimalClientVersion ?? null,
+		supportsSearchTool: toNullableBoolean(
+			source.supports_search_tool ?? source.supportsSearchTool,
+		),
+		availableInPlans: asArray(source.available_in_plans ?? source.availableInPlans).map((item) =>
+			asString(item),
+		),
+	};
 }
 
-export function normalizeManagedModelInfo(payload: unknown): ManagedModelInfo | null {
-  const model = normalizeModelInfo(payload);
-  if (!model) return null;
-  const source = asObject(payload);
-  return {
-    ...model,
-    sourceKind: asString(source.source_kind ?? source.sourceKind) || "remote",
-    userEdited: asBoolean(source.user_edited ?? source.userEdited, false),
-    sortIndex: asInteger(source.sort_index ?? source.sortIndex, 0, -1),
-    updatedAt: asInteger(source.updated_at ?? source.updatedAt, 0, 0),
-  };
+export function normalizeManagedModelInfo(
+	payload: unknown,
+): ManagedModelInfo | null {
+	const model = normalizeModelInfo(payload);
+	if (!model) return null;
+	const source = asObject(payload);
+	return {
+		...model,
+		sourceKind: asString(source.source_kind ?? source.sourceKind) || "remote",
+		userEdited: asBoolean(source.user_edited ?? source.userEdited, false),
+		sortIndex: asInteger(source.sort_index ?? source.sortIndex, 0, -1),
+		updatedAt: asInteger(source.updated_at ?? source.updatedAt, 0, 0),
+	};
 }
 
 /**
@@ -706,81 +761,94 @@ export function normalizeManagedModelInfo(payload: unknown): ManagedModelInfo | 
  * 返回函数执行结果
  */
 export function normalizeModelCatalog(payload: unknown): ModelCatalog {
-  const source = asObject(payload);
-  const items = asArray(source.models ?? payload);
-  return {
-    ...source,
-    models: items
-      .map((item) => normalizeModelInfo(item))
-      .filter((item): item is ModelInfo => Boolean(item)),
-  };
+	const source = asObject(payload);
+	const items = asArray(source.models ?? payload);
+	return {
+		...source,
+		models: items
+			.map((item) => normalizeModelInfo(item))
+			.filter((item): item is ModelInfo => Boolean(item)),
+	};
 }
 
-export function normalizeManagedModelCatalog(payload: unknown): ManagedModelCatalog {
-  const source = asObject(payload);
-  const items = asArray(source.items ?? payload);
-  return {
-    ...source,
-    items: items
-      .map((item) => normalizeManagedModelInfo(item))
-      .filter((item): item is ManagedModelInfo => Boolean(item)),
-  };
+export function normalizeManagedModelCatalog(
+	payload: unknown,
+): ManagedModelCatalog {
+	const source = asObject(payload);
+	const items = asArray(source.items ?? payload);
+	return {
+		...source,
+		items: items
+			.map((item) => normalizeManagedModelInfo(item))
+			.filter((item): item is ManagedModelInfo => Boolean(item)),
+	};
 }
 
-function normalizeManagedModelSourceModel(payload: unknown): ManagedModelSourceModel | null {
-  const source = asObject(payload);
-  const sourceKind = asString(source.sourceKind ?? source.source_kind);
-  const sourceId = asString(source.sourceId ?? source.source_id);
-  const upstreamModel = asString(source.upstreamModel ?? source.upstream_model);
-  if (!sourceKind || !sourceId || !upstreamModel) return null;
-  return {
-    sourceKind,
-    sourceId,
-    upstreamModel,
-    displayName: asString(source.displayName ?? source.display_name) || null,
-    status: asString(source.status) || "available",
-    discoveryKind: asString(source.discoveryKind ?? source.discovery_kind) || "synced",
-    lastSyncedAt: toNullableNumber(source.lastSyncedAt ?? source.last_synced_at),
-    createdAt: asInteger(source.createdAt ?? source.created_at, 0, 0),
-    updatedAt: asInteger(source.updatedAt ?? source.updated_at, 0, 0),
-  };
+function normalizeManagedModelSourceModel(
+	payload: unknown,
+): ManagedModelSourceModel | null {
+	const source = asObject(payload);
+	const sourceKind = asString(source.sourceKind ?? source.source_kind);
+	const sourceId = asString(source.sourceId ?? source.source_id);
+	const upstreamModel = asString(source.upstreamModel ?? source.upstream_model);
+	if (!sourceKind || !sourceId || !upstreamModel) return null;
+	return {
+		sourceKind,
+		sourceId,
+		upstreamModel,
+		displayName: asString(source.displayName ?? source.display_name) || null,
+		status: asString(source.status) || "available",
+		discoveryKind:
+			asString(source.discoveryKind ?? source.discovery_kind) || "synced",
+		lastSyncedAt: toNullableNumber(
+			source.lastSyncedAt ?? source.last_synced_at,
+		),
+		createdAt: asInteger(source.createdAt ?? source.created_at, 0, 0),
+		updatedAt: asInteger(source.updatedAt ?? source.updated_at, 0, 0),
+	};
 }
 
-function normalizeManagedModelSourceMapping(payload: unknown): ManagedModelSourceMapping | null {
-  const source = asObject(payload);
-  const id = asString(source.id);
-  const platformModelSlug = asString(
-    source.platformModelSlug ?? source.platform_model_slug,
-  );
-  const sourceKind = asString(source.sourceKind ?? source.source_kind);
-  const sourceId = asString(source.sourceId ?? source.source_id);
-  const upstreamModel = asString(source.upstreamModel ?? source.upstream_model);
-  if (!id || !platformModelSlug || !sourceKind || !sourceId || !upstreamModel) return null;
-  return {
-    id,
-    platformModelSlug,
-    sourceKind,
-    sourceId,
-    upstreamModel,
-    enabled: asBoolean(source.enabled, true),
-    priority: asInteger(source.priority, 0, -100000),
-    weight: asInteger(source.weight, 1, 1),
-    billingModelSlug: asString(source.billingModelSlug ?? source.billing_model_slug) || null,
-    createdAt: asInteger(source.createdAt ?? source.created_at, 0, 0),
-    updatedAt: asInteger(source.updatedAt ?? source.updated_at, 0, 0),
-  };
+function normalizeManagedModelSourceMapping(
+	payload: unknown,
+): ManagedModelSourceMapping | null {
+	const source = asObject(payload);
+	const id = asString(source.id);
+	const platformModelSlug = asString(
+		source.platformModelSlug ?? source.platform_model_slug,
+	);
+	const sourceKind = asString(source.sourceKind ?? source.source_kind);
+	const sourceId = asString(source.sourceId ?? source.source_id);
+	const upstreamModel = asString(source.upstreamModel ?? source.upstream_model);
+	if (!id || !platformModelSlug || !sourceKind || !sourceId || !upstreamModel)
+		return null;
+	return {
+		id,
+		platformModelSlug,
+		sourceKind,
+		sourceId,
+		upstreamModel,
+		enabled: asBoolean(source.enabled, true),
+		priority: asInteger(source.priority, 0, -100000),
+		weight: asInteger(source.weight, 1, 1),
+		billingModelSlug:
+			asString(source.billingModelSlug ?? source.billing_model_slug) || null,
+		createdAt: asInteger(source.createdAt ?? source.created_at, 0, 0),
+		updatedAt: asInteger(source.updatedAt ?? source.updated_at, 0, 0),
+	};
 }
 
-export function normalizeManagedModelRouting(payload: unknown): ManagedModelRouting {
-  const source = asObject(payload);
-  return {
-    sourceModels: asArray(source.sourceModels ?? source.source_models)
-      .map((item) => normalizeManagedModelSourceModel(item))
-      .filter((item): item is ManagedModelSourceModel => Boolean(item)),
-    mappings: asArray(source.mappings)
-      .map((item) => normalizeManagedModelSourceMapping(item))
-      .filter((item): item is ManagedModelSourceMapping => Boolean(item)),
-  };
+export function normalizeManagedModelRouting(
+	payload: unknown,
+): ManagedModelRouting {
+	const source = asObject(payload);
+	return {
+		sourceModels: asArray(source.sourceModels ?? source.source_models)
+			.map((item) => normalizeManagedModelSourceModel(item))
+			.filter((item): item is ManagedModelSourceModel => Boolean(item)),
+		mappings: asArray(source.mappings)
+			.map((item) => normalizeManagedModelSourceMapping(item))
+			.filter((item): item is ManagedModelSourceMapping => Boolean(item)),
+	};
 }
 
 /**
@@ -797,31 +865,45 @@ export function normalizeManagedModelRouting(payload: unknown): ManagedModelRout
  * 返回函数执行结果
  */
 export function normalizeApiKey(item: unknown): ApiKey | null {
-  const source = asObject(item);
-  const id = asString(source.id);
-  if (!id) return null;
+	const source = asObject(item);
+	const id = asString(source.id);
+	if (!id) return null;
 
-  return {
-    id,
-    name: asString(source.name),
-    model: asString(source.modelSlug ?? source.model_slug),
-    modelSlug: asString(source.modelSlug ?? source.model_slug),
-    reasoningEffort: asString(source.reasoningEffort ?? source.reasoning_effort),
-    serviceTier: asString(source.serviceTier ?? source.service_tier),
-    rotationStrategy: asString(source.rotationStrategy ?? source.rotation_strategy) || "account_rotation",
-    aggregateApiId: asString(source.aggregateApiId ?? source.aggregate_api_id) || null,
-    accountPlanFilter: asString(source.accountPlanFilter ?? source.account_plan_filter) || null,
-    aggregateApiUrl: asString(source.aggregateApiUrl ?? source.aggregate_api_url) || null,
-    quotaLimitTokens: toNullableNumber(source.quotaLimitTokens ?? source.quota_limit_tokens),
-    protocol: asString(source.protocolType ?? source.protocol_type) || "openai_compat",
-    clientType: asString(source.clientType ?? source.client_type),
-    authScheme: asString(source.authScheme ?? source.auth_scheme),
-    upstreamBaseUrl: asString(source.upstreamBaseUrl ?? source.upstream_base_url),
-    staticHeadersJson: asString(source.staticHeadersJson ?? source.static_headers_json),
-    status: asString(source.status) || "enabled",
-    createdAt: toNullableNumber(source.createdAt ?? source.created_at),
-    lastUsedAt: toNullableNumber(source.lastUsedAt ?? source.last_used_at),
-  };
+	return {
+		id,
+		name: asString(source.name),
+		model: asString(source.modelSlug ?? source.model_slug),
+		modelSlug: asString(source.modelSlug ?? source.model_slug),
+		reasoningEffort: asString(
+			source.reasoningEffort ?? source.reasoning_effort,
+		),
+		serviceTier: asString(source.serviceTier ?? source.service_tier),
+		rotationStrategy:
+			asString(source.rotationStrategy ?? source.rotation_strategy) ||
+			"account_rotation",
+		aggregateApiId:
+			asString(source.aggregateApiId ?? source.aggregate_api_id) || null,
+		accountPlanFilter:
+			asString(source.accountPlanFilter ?? source.account_plan_filter) || null,
+		aggregateApiUrl:
+			asString(source.aggregateApiUrl ?? source.aggregate_api_url) || null,
+		quotaLimitTokens: toNullableNumber(
+			source.quotaLimitTokens ?? source.quota_limit_tokens,
+		),
+		protocol:
+			asString(source.protocolType ?? source.protocol_type) || "openai_compat",
+		clientType: asString(source.clientType ?? source.client_type),
+		authScheme: asString(source.authScheme ?? source.auth_scheme),
+		upstreamBaseUrl: asString(
+			source.upstreamBaseUrl ?? source.upstream_base_url,
+		),
+		staticHeadersJson: asString(
+			source.staticHeadersJson ?? source.static_headers_json,
+		),
+		status: asString(source.status) || "enabled",
+		createdAt: toNullableNumber(source.createdAt ?? source.created_at),
+		lastUsedAt: toNullableNumber(source.lastUsedAt ?? source.last_used_at),
+	};
 }
 
 /**
@@ -838,11 +920,11 @@ export function normalizeApiKey(item: unknown): ApiKey | null {
  * 返回函数执行结果
  */
 export function normalizeApiKeyList(payload: unknown): ApiKey[] {
-  const source = asObject(payload);
-  const items = asArray(source.items ?? payload);
-  return items
-    .map((item) => normalizeApiKey(item))
-    .filter((item): item is ApiKey => Boolean(item));
+	const source = asObject(payload);
+	const items = asArray(source.items ?? payload);
+	return items
+		.map((item) => normalizeApiKey(item))
+		.filter((item): item is ApiKey => Boolean(item));
 }
 
 /**
@@ -858,12 +940,14 @@ export function normalizeApiKeyList(payload: unknown): ApiKey[] {
  * # 返回
  * 返回函数执行结果
  */
-export function normalizeApiKeyCreateResult(payload: unknown): ApiKeyCreateResult {
-  const source = asObject(payload);
-  return {
-    id: asString(source.id),
-    key: asString(source.key),
-  };
+export function normalizeApiKeyCreateResult(
+	payload: unknown,
+): ApiKeyCreateResult {
+	const source = asObject(payload);
+	return {
+		id: asString(source.id),
+		key: asString(source.key),
+	};
 }
 
 /**
@@ -880,58 +964,66 @@ export function normalizeApiKeyCreateResult(payload: unknown): ApiKeyCreateResul
  * 返回函数执行结果
  */
 export function normalizeAggregateApi(item: unknown): AggregateApi | null {
-  const source = asObject(item);
-  const id = asString(source.id);
-  if (!id) return null;
+	const source = asObject(item);
+	const id = asString(source.id);
+	if (!id) return null;
 
-  return {
-    id,
-    providerType: asString(source.providerType ?? source.provider_type) || "codex",
-    supplierName: asString(source.supplierName ?? source.supplier_name) || null,
-    sort: asInteger(source.sort ?? source.priority, 0, 0),
-    url: asString(source.url),
-    authType: asString(source.authType ?? source.auth_type) || "apikey",
-    authParams:
-      source.authParams && typeof source.authParams === "object"
-        ? asObject(source.authParams)
-        : source.auth_params && typeof source.auth_params === "object"
-          ? asObject(source.auth_params)
-          : null,
-    action:
-      typeof source.action === "string"
-        ? source.action
-        : asString(source.action) || null,
-    modelOverride:
-      asString(source.modelOverride ?? source.model_override) || null,
-    status: asString(source.status) || "active",
-    createdAt: toNullableNumber(source.createdAt ?? source.created_at),
-    updatedAt: toNullableNumber(source.updatedAt ?? source.updated_at),
-    lastTestAt: toNullableNumber(source.lastTestAt ?? source.last_test_at),
-    lastTestStatus: asString(source.lastTestStatus ?? source.last_test_status) || null,
-    lastTestError: asString(source.lastTestError ?? source.last_test_error) || null,
-    balanceQueryEnabled: asBoolean(
-      source.balanceQueryEnabled ?? source.balance_query_enabled,
-      false
-    ),
-    balanceQueryTemplate:
-      asString(source.balanceQueryTemplate ?? source.balance_query_template) || null,
-    balanceQueryBaseUrl:
-      asString(source.balanceQueryBaseUrl ?? source.balance_query_base_url) || null,
-    balanceQueryUserId:
-      asString(source.balanceQueryUserId ?? source.balance_query_user_id) || null,
-    balanceQueryConfigJson:
-      asString(
-        source.balanceQueryConfigJson ?? source.balance_query_config_json
-      ) || null,
-    lastBalanceAt: toNullableNumber(source.lastBalanceAt ?? source.last_balance_at),
-    lastBalanceStatus:
-      asString(source.lastBalanceStatus ?? source.last_balance_status) || null,
-    lastBalanceError:
-      asString(source.lastBalanceError ?? source.last_balance_error) || null,
-    lastBalanceJson:
-      asString(source.lastBalanceJson ?? source.last_balance_json) || null,
-    modelSlugs: asStringArray(source.modelSlugs ?? source.model_slugs),
-  };
+	return {
+		id,
+		providerType:
+			asString(source.providerType ?? source.provider_type) || "codex",
+		supplierName: asString(source.supplierName ?? source.supplier_name) || null,
+		sort: asInteger(source.sort ?? source.priority, 0, 0),
+		url: asString(source.url),
+		authType: asString(source.authType ?? source.auth_type) || "apikey",
+		authParams:
+			source.authParams && typeof source.authParams === "object"
+				? asObject(source.authParams)
+				: source.auth_params && typeof source.auth_params === "object"
+					? asObject(source.auth_params)
+					: null,
+		action:
+			typeof source.action === "string"
+				? source.action
+				: asString(source.action) || null,
+		modelOverride:
+			asString(source.modelOverride ?? source.model_override) || null,
+		status: asString(source.status) || "active",
+		createdAt: toNullableNumber(source.createdAt ?? source.created_at),
+		updatedAt: toNullableNumber(source.updatedAt ?? source.updated_at),
+		lastTestAt: toNullableNumber(source.lastTestAt ?? source.last_test_at),
+		lastTestStatus:
+			asString(source.lastTestStatus ?? source.last_test_status) || null,
+		lastTestError:
+			asString(source.lastTestError ?? source.last_test_error) || null,
+		balanceQueryEnabled: asBoolean(
+			source.balanceQueryEnabled ?? source.balance_query_enabled,
+			false,
+		),
+		balanceQueryTemplate:
+			asString(source.balanceQueryTemplate ?? source.balance_query_template) ||
+			null,
+		balanceQueryBaseUrl:
+			asString(source.balanceQueryBaseUrl ?? source.balance_query_base_url) ||
+			null,
+		balanceQueryUserId:
+			asString(source.balanceQueryUserId ?? source.balance_query_user_id) ||
+			null,
+		balanceQueryConfigJson:
+			asString(
+				source.balanceQueryConfigJson ?? source.balance_query_config_json,
+			) || null,
+		lastBalanceAt: toNullableNumber(
+			source.lastBalanceAt ?? source.last_balance_at,
+		),
+		lastBalanceStatus:
+			asString(source.lastBalanceStatus ?? source.last_balance_status) || null,
+		lastBalanceError:
+			asString(source.lastBalanceError ?? source.last_balance_error) || null,
+		lastBalanceJson:
+			asString(source.lastBalanceJson ?? source.last_balance_json) || null,
+		modelSlugs: asStringArray(source.modelSlugs ?? source.model_slugs),
+	};
 }
 
 /**
@@ -948,11 +1040,11 @@ export function normalizeAggregateApi(item: unknown): AggregateApi | null {
  * 返回函数执行结果
  */
 export function normalizeAggregateApiList(payload: unknown): AggregateApi[] {
-  const source = asObject(payload);
-  const items = asArray(source.items ?? payload);
-  return items
-    .map((item) => normalizeAggregateApi(item))
-    .filter((item): item is AggregateApi => Boolean(item));
+	const source = asObject(payload);
+	const items = asArray(source.items ?? payload);
+	return items
+		.map((item) => normalizeAggregateApi(item))
+		.filter((item): item is AggregateApi => Boolean(item));
 }
 
 /**
@@ -968,23 +1060,27 @@ export function normalizeAggregateApiList(payload: unknown): AggregateApi[] {
  * # 返回
  * 返回函数执行结果
  */
-export function normalizeAggregateApiCreateResult(payload: unknown): AggregateApiCreateResult {
-  const source = asObject(payload);
-  return {
-    id: asString(source.id),
-    key: asString(source.key),
-  };
+export function normalizeAggregateApiCreateResult(
+	payload: unknown,
+): AggregateApiCreateResult {
+	const source = asObject(payload);
+	return {
+		id: asString(source.id),
+		key: asString(source.key),
+	};
 }
 
-export function normalizeAggregateApiSecretResult(payload: unknown): AggregateApiSecretResult {
-  const source = asObject(payload);
-  return {
-    id: asString(source.id),
-    key: asString(source.key),
-    authType: asString(source.authType ?? source.auth_type) || "apikey",
-    username: asString(source.username) || null,
-    password: asString(source.password) || null,
-  };
+export function normalizeAggregateApiSecretResult(
+	payload: unknown,
+): AggregateApiSecretResult {
+	const source = asObject(payload);
+	return {
+		id: asString(source.id),
+		key: asString(source.key),
+		authType: asString(source.authType ?? source.auth_type) || "apikey",
+		username: asString(source.username) || null,
+		password: asString(source.password) || null,
+	};
 }
 
 /**
@@ -1000,95 +1096,97 @@ export function normalizeAggregateApiSecretResult(payload: unknown): AggregateAp
  * # 返回
  * 返回函数执行结果
  */
-export function normalizeAggregateApiTestResult(payload: unknown): AggregateApiTestResult {
-  const source = asObject(payload);
-  return {
-    id: asString(source.id),
-    ok: asBoolean(source.ok),
-    statusCode: toNullableNumber(source.statusCode ?? source.status_code),
-    message: asString(source.message) || null,
-    testedAt: asInteger(source.testedAt ?? source.tested_at, 0, 0),
-    latencyMs: asInteger(source.latencyMs ?? source.latency_ms, 0, 0),
-  };
+export function normalizeAggregateApiTestResult(
+	payload: unknown,
+): AggregateApiTestResult {
+	const source = asObject(payload);
+	return {
+		id: asString(source.id),
+		ok: asBoolean(source.ok),
+		statusCode: toNullableNumber(source.statusCode ?? source.status_code),
+		message: asString(source.message) || null,
+		testedAt: asInteger(source.testedAt ?? source.tested_at, 0, 0),
+		latencyMs: asInteger(source.latencyMs ?? source.latency_ms, 0, 0),
+	};
 }
 
 export function normalizeAggregateApiBalanceSnapshot(
-  payload: unknown
+	payload: unknown,
 ): AggregateApiBalanceSnapshot | null {
-  const source = asObject(payload);
-  const hasBalanceFields =
-    "remaining" in source ||
-    "used" in source ||
-    "total" in source ||
-    "isValid" in source ||
-    "is_valid" in source;
-  if (!hasBalanceFields) return null;
-  return {
-    isValid: asBoolean(source.isValid ?? source.is_valid, true),
-    invalidMessage:
-      asString(source.invalidMessage ?? source.invalid_message) || null,
-    remaining: toNullableNumber(source.remaining),
-    unit: asString(source.unit) || null,
-    planName: asString(source.planName ?? source.plan_name) || null,
-    total: toNullableNumber(source.total),
-    used: toNullableNumber(source.used),
-    extra: toNullableObject(source.extra),
-  };
+	const source = asObject(payload);
+	const hasBalanceFields =
+		"remaining" in source ||
+		"used" in source ||
+		"total" in source ||
+		"isValid" in source ||
+		"is_valid" in source;
+	if (!hasBalanceFields) return null;
+	return {
+		isValid: asBoolean(source.isValid ?? source.is_valid, true),
+		invalidMessage:
+			asString(source.invalidMessage ?? source.invalid_message) || null,
+		remaining: toNullableNumber(source.remaining),
+		unit: asString(source.unit) || null,
+		planName: asString(source.planName ?? source.plan_name) || null,
+		total: toNullableNumber(source.total),
+		used: toNullableNumber(source.used),
+		extra: toNullableObject(source.extra),
+	};
 }
 
 export function normalizeAggregateApiBalanceRefreshResult(
-  payload: unknown
+	payload: unknown,
 ): AggregateApiBalanceRefreshResult {
-  const source = asObject(payload);
-  return {
-    id: asString(source.id),
-    ok: asBoolean(source.ok),
-    balance: normalizeAggregateApiBalanceSnapshot(source.balance),
-    message: asString(source.message) || null,
-    queriedAt: asInteger(source.queriedAt ?? source.queried_at, 0, 0),
-    latencyMs: asInteger(source.latencyMs ?? source.latency_ms, 0, 0),
-  };
+	const source = asObject(payload);
+	return {
+		id: asString(source.id),
+		ok: asBoolean(source.ok),
+		balance: normalizeAggregateApiBalanceSnapshot(source.balance),
+		message: asString(source.message) || null,
+		queriedAt: asInteger(source.queriedAt ?? source.queried_at, 0, 0),
+		latencyMs: asInteger(source.latencyMs ?? source.latency_ms, 0, 0),
+	};
 }
 
 export function normalizeAggregateApiSupplierModel(
-  payload: unknown
+	payload: unknown,
 ): AggregateApiSupplierModel | null {
-  const source = asObject(payload);
-  const supplierKey = asString(source.supplierKey ?? source.supplier_key);
-  const providerType = asString(source.providerType ?? source.provider_type);
-  const upstreamModel = asString(source.upstreamModel ?? source.upstream_model);
-  if (!supplierKey || !providerType || !upstreamModel) return null;
-  return {
-    supplierKey,
-    providerType,
-    upstreamModel,
-    displayName: asString(source.displayName ?? source.display_name) || null,
-    status: asString(source.status) || "available",
-    createdAt: asInteger(source.createdAt ?? source.created_at, 0, 0),
-    updatedAt: asInteger(source.updatedAt ?? source.updated_at, 0, 0),
-  };
+	const source = asObject(payload);
+	const supplierKey = asString(source.supplierKey ?? source.supplier_key);
+	const providerType = asString(source.providerType ?? source.provider_type);
+	const upstreamModel = asString(source.upstreamModel ?? source.upstream_model);
+	if (!supplierKey || !providerType || !upstreamModel) return null;
+	return {
+		supplierKey,
+		providerType,
+		upstreamModel,
+		displayName: asString(source.displayName ?? source.display_name) || null,
+		status: asString(source.status) || "available",
+		createdAt: asInteger(source.createdAt ?? source.created_at, 0, 0),
+		updatedAt: asInteger(source.updatedAt ?? source.updated_at, 0, 0),
+	};
 }
 
 export function normalizeAggregateApiSupplierModelList(
-  payload: unknown
+	payload: unknown,
 ): AggregateApiSupplierModel[] {
-  const source = asObject(payload);
-  const items = asArray(source.items ?? payload);
-  return items
-    .map((item) => normalizeAggregateApiSupplierModel(item))
-    .filter((item): item is AggregateApiSupplierModel => Boolean(item));
+	const source = asObject(payload);
+	const items = asArray(source.items ?? payload);
+	return items
+		.map((item) => normalizeAggregateApiSupplierModel(item))
+		.filter((item): item is AggregateApiSupplierModel => Boolean(item));
 }
 
 export function normalizeAggregateApiSupplierModelImportResult(
-  payload: unknown
+	payload: unknown,
 ): AggregateApiSupplierModelImportResult {
-  const source = asObject(payload);
-  return {
-    imported: asInteger(source.imported, 0, 0),
-    items: asArray(source.items)
-      .map((item) => normalizeManagedModelSourceModel(item))
-      .filter((item): item is ManagedModelSourceModel => Boolean(item)),
-  };
+	const source = asObject(payload);
+	return {
+		imported: asInteger(source.imported, 0, 0),
+		items: asArray(source.items)
+			.map((item) => normalizeManagedModelSourceModel(item))
+			.filter((item): item is ManagedModelSourceModel => Boolean(item)),
+	};
 }
 
 /**
@@ -1105,23 +1203,29 @@ export function normalizeAggregateApiSupplierModelImportResult(
  * 返回函数执行结果
  */
 export function normalizeApiKeyUsageStats(payload: unknown): ApiKeyUsageStat[] {
-  const source = asObject(payload);
-  const items = asArray(source.items ?? payload);
-  return items
-    .map((item) => {
-      const current = asObject(item);
-      const keyId = asString(current.keyId ?? current.key_id);
-      if (!keyId) return null;
-      return {
-        keyId,
-        totalTokens: asInteger(current.totalTokens ?? current.total_tokens, 0, 0),
-        estimatedCostUsd: Math.max(
-          0,
-          toNullableNumber(current.estimatedCostUsd ?? current.estimated_cost_usd) ?? 0
-        ),
-      };
-    })
-    .filter((item): item is ApiKeyUsageStat => Boolean(item));
+	const source = asObject(payload);
+	const items = asArray(source.items ?? payload);
+	return items
+		.map((item) => {
+			const current = asObject(item);
+			const keyId = asString(current.keyId ?? current.key_id);
+			if (!keyId) return null;
+			return {
+				keyId,
+				totalTokens: asInteger(
+					current.totalTokens ?? current.total_tokens,
+					0,
+					0,
+				),
+				estimatedCostUsd: Math.max(
+					0,
+					toNullableNumber(
+						current.estimatedCostUsd ?? current.estimated_cost_usd,
+					) ?? 0,
+				),
+			};
+		})
+		.filter((item): item is ApiKeyUsageStat => Boolean(item));
 }
 
 /**
@@ -1137,20 +1241,25 @@ export function normalizeApiKeyUsageStats(payload: unknown): ApiKeyUsageStat[] {
  * # 返回
  * 返回函数执行结果
  */
-export function normalizePluginCatalogTask(payload: unknown): PluginCatalogTask | null {
-  const source = asObject(payload);
-  const id = asString(source.id);
-  if (!id) return null;
+export function normalizePluginCatalogTask(
+	payload: unknown,
+): PluginCatalogTask | null {
+	const source = asObject(payload);
+	const id = asString(source.id);
+	if (!id) return null;
 
-  return {
-    id,
-    name: asString(source.name) || id,
-    description: asString(source.description) || null,
-    entrypoint: asString(source.entrypoint) || "run",
-    scheduleKind: asString(source.scheduleKind ?? source.schedule_kind) || "manual",
-    intervalSeconds: toNullableNumber(source.intervalSeconds ?? source.interval_seconds),
-    enabled: asBoolean(source.enabled, true),
-  };
+	return {
+		id,
+		name: asString(source.name) || id,
+		description: asString(source.description) || null,
+		entrypoint: asString(source.entrypoint) || "run",
+		scheduleKind:
+			asString(source.scheduleKind ?? source.schedule_kind) || "manual",
+		intervalSeconds: toNullableNumber(
+			source.intervalSeconds ?? source.interval_seconds,
+		),
+		enabled: asBoolean(source.enabled, true),
+	};
 }
 
 /**
@@ -1166,29 +1275,36 @@ export function normalizePluginCatalogTask(payload: unknown): PluginCatalogTask 
  * # 返回
  * 返回函数执行结果
  */
-export function normalizePluginCatalogEntry(payload: unknown): PluginCatalogEntry | null {
-  const source = asObject(payload);
-  const id = asString(source.id);
-  if (!id) return null;
-  return {
-    id,
-    name: asString(source.name) || id,
-    version: asString(source.version) || "0.0.0",
-    description: asString(source.description) || null,
-    author: asString(source.author) || null,
-    homepageUrl: asString(source.homepageUrl ?? source.homepage_url) || null,
-    scriptUrl: asString(source.scriptUrl ?? source.script_url) || null,
-    scriptBody: asString(source.scriptBody ?? source.script_body) || null,
-    permissions: asArray(source.permissions).map((item) => asString(item)).filter(Boolean),
-    tasks: asArray(source.tasks)
-      .map((item) => normalizePluginCatalogTask(item))
-      .filter((item): item is PluginCatalogTask => Boolean(item)),
-    manifestVersion: asString(source.manifestVersion ?? source.manifest_version) || "1",
-    category: asString(source.category) || null,
-    runtimeKind: asString(source.runtimeKind ?? source.runtime_kind) || "rhai",
-    tags: asArray(source.tags).map((item) => asString(item)).filter(Boolean),
-    sourceUrl: asString(source.sourceUrl ?? source.source_url) || null,
-  };
+export function normalizePluginCatalogEntry(
+	payload: unknown,
+): PluginCatalogEntry | null {
+	const source = asObject(payload);
+	const id = asString(source.id);
+	if (!id) return null;
+	return {
+		id,
+		name: asString(source.name) || id,
+		version: asString(source.version) || "0.0.0",
+		description: asString(source.description) || null,
+		author: asString(source.author) || null,
+		homepageUrl: asString(source.homepageUrl ?? source.homepage_url) || null,
+		scriptUrl: asString(source.scriptUrl ?? source.script_url) || null,
+		scriptBody: asString(source.scriptBody ?? source.script_body) || null,
+		permissions: asArray(source.permissions)
+			.map((item) => asString(item))
+			.filter(Boolean),
+		tasks: asArray(source.tasks)
+			.map((item) => normalizePluginCatalogTask(item))
+			.filter((item): item is PluginCatalogTask => Boolean(item)),
+		manifestVersion:
+			asString(source.manifestVersion ?? source.manifest_version) || "1",
+		category: asString(source.category) || null,
+		runtimeKind: asString(source.runtimeKind ?? source.runtime_kind) || "rhai",
+		tags: asArray(source.tags)
+			.map((item) => asString(item))
+			.filter(Boolean),
+		sourceUrl: asString(source.sourceUrl ?? source.source_url) || null,
+	};
 }
 
 /**
@@ -1204,15 +1320,17 @@ export function normalizePluginCatalogEntry(payload: unknown): PluginCatalogEntr
  * # 返回
  * 返回函数执行结果
  */
-export function normalizePluginCatalogResult(payload: unknown): PluginCatalogResult {
-  const source = asObject(payload);
-  const items = asArray(source.items ?? payload)
-    .map((item) => normalizePluginCatalogEntry(item))
-    .filter((item): item is PluginCatalogEntry => Boolean(item));
-  return {
-    sourceUrl: asString(source.sourceUrl ?? source.source_url),
-    items,
-  };
+export function normalizePluginCatalogResult(
+	payload: unknown,
+): PluginCatalogResult {
+	const source = asObject(payload);
+	const items = asArray(source.items ?? payload)
+		.map((item) => normalizePluginCatalogEntry(item))
+		.filter((item): item is PluginCatalogEntry => Boolean(item));
+	return {
+		sourceUrl: asString(source.sourceUrl ?? source.source_url),
+		items,
+	};
 }
 
 /**
@@ -1228,33 +1346,44 @@ export function normalizePluginCatalogResult(payload: unknown): PluginCatalogRes
  * # 返回
  * 返回函数执行结果
  */
-export function normalizeInstalledPlugin(payload: unknown): InstalledPluginSummary | null {
-  const source = asObject(payload);
-  const pluginId = asString(source.pluginId ?? source.plugin_id);
-  if (!pluginId) return null;
+export function normalizeInstalledPlugin(
+	payload: unknown,
+): InstalledPluginSummary | null {
+	const source = asObject(payload);
+	const pluginId = asString(source.pluginId ?? source.plugin_id);
+	if (!pluginId) return null;
 
-  return {
-    pluginId,
-    sourceUrl: asString(source.sourceUrl ?? source.source_url) || null,
-    name: asString(source.name) || pluginId,
-    version: asString(source.version) || "0.0.0",
-    description: asString(source.description) || null,
-    author: asString(source.author) || null,
-    homepageUrl: asString(source.homepageUrl ?? source.homepage_url) || null,
-    scriptUrl: asString(source.scriptUrl ?? source.script_url) || null,
-    permissions: asArray(source.permissions).map((item) => asString(item)).filter(Boolean),
-    status: asString(source.status) || "disabled",
-    installedAt: asInteger(source.installedAt ?? source.installed_at, 0, 0),
-    updatedAt: asInteger(source.updatedAt ?? source.updated_at, 0, 0),
-    lastRunAt: toNullableNumber(source.lastRunAt ?? source.last_run_at),
-    lastError: asString(source.lastError ?? source.last_error) || null,
-    taskCount: asInteger(source.taskCount ?? source.task_count, 0, 0),
-    enabledTaskCount: asInteger(source.enabledTaskCount ?? source.enabled_task_count, 0, 0),
-    manifestVersion: asString(source.manifestVersion ?? source.manifest_version) || "1",
-    category: asString(source.category) || null,
-    runtimeKind: asString(source.runtimeKind ?? source.runtime_kind) || "rhai",
-    tags: asArray(source.tags).map((item) => asString(item)).filter(Boolean),
-  };
+	return {
+		pluginId,
+		sourceUrl: asString(source.sourceUrl ?? source.source_url) || null,
+		name: asString(source.name) || pluginId,
+		version: asString(source.version) || "0.0.0",
+		description: asString(source.description) || null,
+		author: asString(source.author) || null,
+		homepageUrl: asString(source.homepageUrl ?? source.homepage_url) || null,
+		scriptUrl: asString(source.scriptUrl ?? source.script_url) || null,
+		permissions: asArray(source.permissions)
+			.map((item) => asString(item))
+			.filter(Boolean),
+		status: asString(source.status) || "disabled",
+		installedAt: asInteger(source.installedAt ?? source.installed_at, 0, 0),
+		updatedAt: asInteger(source.updatedAt ?? source.updated_at, 0, 0),
+		lastRunAt: toNullableNumber(source.lastRunAt ?? source.last_run_at),
+		lastError: asString(source.lastError ?? source.last_error) || null,
+		taskCount: asInteger(source.taskCount ?? source.task_count, 0, 0),
+		enabledTaskCount: asInteger(
+			source.enabledTaskCount ?? source.enabled_task_count,
+			0,
+			0,
+		),
+		manifestVersion:
+			asString(source.manifestVersion ?? source.manifest_version) || "1",
+		category: asString(source.category) || null,
+		runtimeKind: asString(source.runtimeKind ?? source.runtime_kind) || "rhai",
+		tags: asArray(source.tags)
+			.map((item) => asString(item))
+			.filter(Boolean),
+	};
 }
 
 /**
@@ -1270,12 +1399,14 @@ export function normalizeInstalledPlugin(payload: unknown): InstalledPluginSumma
  * # 返回
  * 返回函数执行结果
  */
-export function normalizePluginInstalledList(payload: unknown): InstalledPluginSummary[] {
-  const source = asObject(payload);
-  const items = asArray(source.items ?? payload);
-  return items
-    .map((item) => normalizeInstalledPlugin(item))
-    .filter((item): item is InstalledPluginSummary => Boolean(item));
+export function normalizePluginInstalledList(
+	payload: unknown,
+): InstalledPluginSummary[] {
+	const source = asObject(payload);
+	const items = asArray(source.items ?? payload);
+	return items
+		.map((item) => normalizeInstalledPlugin(item))
+		.filter((item): item is InstalledPluginSummary => Boolean(item));
 }
 
 /**
@@ -1291,26 +1422,31 @@ export function normalizePluginInstalledList(payload: unknown): InstalledPluginS
  * # 返回
  * 返回函数执行结果
  */
-export function normalizePluginTask(payload: unknown): PluginTaskSummary | null {
-  const source = asObject(payload);
-  const id = asString(source.id);
-  const pluginId = asString(source.pluginId ?? source.plugin_id);
-  if (!id || !pluginId) return null;
-  return {
-    id,
-    pluginId,
-    pluginName: asString(source.pluginName ?? source.plugin_name) || pluginId,
-    name: asString(source.name) || id,
-    description: asString(source.description) || null,
-    entrypoint: asString(source.entrypoint) || "run",
-    scheduleKind: asString(source.scheduleKind ?? source.schedule_kind) || "manual",
-    intervalSeconds: toNullableNumber(source.intervalSeconds ?? source.interval_seconds),
-    enabled: asBoolean(source.enabled, true),
-    nextRunAt: toNullableNumber(source.nextRunAt ?? source.next_run_at),
-    lastRunAt: toNullableNumber(source.lastRunAt ?? source.last_run_at),
-    lastStatus: asString(source.lastStatus ?? source.last_status) || null,
-    lastError: asString(source.lastError ?? source.last_error) || null,
-  };
+export function normalizePluginTask(
+	payload: unknown,
+): PluginTaskSummary | null {
+	const source = asObject(payload);
+	const id = asString(source.id);
+	const pluginId = asString(source.pluginId ?? source.plugin_id);
+	if (!id || !pluginId) return null;
+	return {
+		id,
+		pluginId,
+		pluginName: asString(source.pluginName ?? source.plugin_name) || pluginId,
+		name: asString(source.name) || id,
+		description: asString(source.description) || null,
+		entrypoint: asString(source.entrypoint) || "run",
+		scheduleKind:
+			asString(source.scheduleKind ?? source.schedule_kind) || "manual",
+		intervalSeconds: toNullableNumber(
+			source.intervalSeconds ?? source.interval_seconds,
+		),
+		enabled: asBoolean(source.enabled, true),
+		nextRunAt: toNullableNumber(source.nextRunAt ?? source.next_run_at),
+		lastRunAt: toNullableNumber(source.lastRunAt ?? source.last_run_at),
+		lastStatus: asString(source.lastStatus ?? source.last_status) || null,
+		lastError: asString(source.lastError ?? source.last_error) || null,
+	};
 }
 
 /**
@@ -1327,11 +1463,11 @@ export function normalizePluginTask(payload: unknown): PluginTaskSummary | null 
  * 返回函数执行结果
  */
 export function normalizePluginTaskList(payload: unknown): PluginTaskSummary[] {
-  const source = asObject(payload);
-  const items = asArray(source.items ?? payload);
-  return items
-    .map((item) => normalizePluginTask(item))
-    .filter((item): item is PluginTaskSummary => Boolean(item));
+	const source = asObject(payload);
+	const items = asArray(source.items ?? payload);
+	return items
+		.map((item) => normalizePluginTask(item))
+		.filter((item): item is PluginTaskSummary => Boolean(item));
 }
 
 /**
@@ -1347,24 +1483,26 @@ export function normalizePluginTaskList(payload: unknown): PluginTaskSummary[] {
  * # 返回
  * 返回函数执行结果
  */
-export function normalizePluginRunLog(payload: unknown): PluginRunLogSummary | null {
-  const source = asObject(payload);
-  const id = asInteger(source.id, 0, 0);
-  if (!id) return null;
-  return {
-    id,
-    pluginId: asString(source.pluginId ?? source.plugin_id),
-    pluginName: asString(source.pluginName ?? source.plugin_name) || null,
-    taskId: asString(source.taskId ?? source.task_id) || null,
-    taskName: asString(source.taskName ?? source.task_name) || null,
-    runType: asString(source.runType ?? source.run_type) || "manual",
-    status: asString(source.status) || "ok",
-    startedAt: asInteger(source.startedAt ?? source.started_at, 0, 0),
-    finishedAt: toNullableNumber(source.finishedAt ?? source.finished_at),
-    durationMs: toNullableNumber(source.durationMs ?? source.duration_ms),
-    output: source.output ?? null,
-    error: asString(source.error) || null,
-  };
+export function normalizePluginRunLog(
+	payload: unknown,
+): PluginRunLogSummary | null {
+	const source = asObject(payload);
+	const id = asInteger(source.id, 0, 0);
+	if (!id) return null;
+	return {
+		id,
+		pluginId: asString(source.pluginId ?? source.plugin_id),
+		pluginName: asString(source.pluginName ?? source.plugin_name) || null,
+		taskId: asString(source.taskId ?? source.task_id) || null,
+		taskName: asString(source.taskName ?? source.task_name) || null,
+		runType: asString(source.runType ?? source.run_type) || "manual",
+		status: asString(source.status) || "ok",
+		startedAt: asInteger(source.startedAt ?? source.started_at, 0, 0),
+		finishedAt: toNullableNumber(source.finishedAt ?? source.finished_at),
+		durationMs: toNullableNumber(source.durationMs ?? source.duration_ms),
+		output: source.output ?? null,
+		error: asString(source.error) || null,
+	};
 }
 
 /**
@@ -1380,12 +1518,14 @@ export function normalizePluginRunLog(payload: unknown): PluginRunLogSummary | n
  * # 返回
  * 返回函数执行结果
  */
-export function normalizePluginRunLogList(payload: unknown): PluginRunLogSummary[] {
-  const source = asObject(payload);
-  const items = asArray(source.items ?? payload);
-  return items
-    .map((item) => normalizePluginRunLog(item))
-    .filter((item): item is PluginRunLogSummary => Boolean(item));
+export function normalizePluginRunLogList(
+	payload: unknown,
+): PluginRunLogSummary[] {
+	const source = asObject(payload);
+	const items = asArray(source.items ?? payload);
+	return items
+		.map((item) => normalizePluginRunLog(item))
+		.filter((item): item is PluginRunLogSummary => Boolean(item));
 }
 
 /**
@@ -1401,17 +1541,21 @@ export function normalizePluginRunLogList(payload: unknown): PluginRunLogSummary
  * # 返回
  * 返回函数执行结果
  */
-export function normalizeDeviceAuthInfo(payload: unknown): DeviceAuthInfo | null {
-  const source = asObject(payload);
-  const verificationUrl = asString(source.verificationUrl ?? source.verification_url);
-  if (!verificationUrl) return null;
+export function normalizeDeviceAuthInfo(
+	payload: unknown,
+): DeviceAuthInfo | null {
+	const source = asObject(payload);
+	const verificationUrl = asString(
+		source.verificationUrl ?? source.verification_url,
+	);
+	if (!verificationUrl) return null;
 
-  return {
-    userCodeUrl: asString(source.userCodeUrl ?? source.user_code_url),
-    tokenUrl: asString(source.tokenUrl ?? source.token_url),
-    verificationUrl,
-    redirectUri: asString(source.redirectUri ?? source.redirect_uri),
-  };
+	return {
+		userCodeUrl: asString(source.userCodeUrl ?? source.user_code_url),
+		tokenUrl: asString(source.tokenUrl ?? source.token_url),
+		verificationUrl,
+		redirectUri: asString(source.redirectUri ?? source.redirect_uri),
+	};
 }
 
 /**
@@ -1428,15 +1572,17 @@ export function normalizeDeviceAuthInfo(payload: unknown): DeviceAuthInfo | null
  * 返回函数执行结果
  */
 export function normalizeLoginStartResult(payload: unknown): LoginStartResult {
-  const source = asObject(payload);
-  const verificationUrl = asString(source.verificationUrl ?? source.verification_url);
-  return {
-    type: asString(source.type ?? source.loginType ?? source.login_type),
-    authUrl: asString(source.authUrl ?? source.auth_url ?? verificationUrl),
-    loginId: asString(source.loginId ?? source.login_id),
-    verificationUrl: verificationUrl || null,
-    userCode: asString(source.userCode ?? source.user_code) || null,
-  };
+	const source = asObject(payload);
+	const verificationUrl = asString(
+		source.verificationUrl ?? source.verification_url,
+	);
+	return {
+		type: asString(source.type ?? source.loginType ?? source.login_type),
+		authUrl: asString(source.authUrl ?? source.auth_url ?? verificationUrl),
+		loginId: asString(source.loginId ?? source.login_id),
+		verificationUrl: verificationUrl || null,
+		userCode: asString(source.userCode ?? source.user_code) || null,
+	};
 }
 
 /**
@@ -1453,110 +1599,112 @@ export function normalizeLoginStartResult(payload: unknown): LoginStartResult {
  * 返回函数执行结果
  */
 export function normalizeRequestLog(item: unknown): RequestLog | null {
-  const source = asObject(item);
-  const createdAt = toNullableNumber(source.createdAt ?? source.created_at);
-  const traceId = asString(source.traceId ?? source.trace_id);
-  const keyId = asString(source.keyId ?? source.key_id);
-  const accountId = asString(source.accountId ?? source.account_id);
-  const requestPath = asString(source.requestPath ?? source.request_path);
-  const method = asString(source.method);
-  const id = traceId || [createdAt ?? "", method, requestPath, accountId, keyId].join("|");
-  if (!id) return null;
-  const durationMs = toNullableNumber(
-    source.durationMs ??
-      source.duration_ms ??
-      source.latencyMs ??
-      source.latency_ms ??
-      source.elapsedMs ??
-      source.elapsed_ms ??
-      source.responseTimeMs ??
-      source.response_time_ms
-  );
-  const firstResponseMs = toNullableNumber(
-    source.firstResponseMs ??
-      source.first_response_ms ??
-      source.firstTokenMs ??
-      source.first_token_ms ??
-      source.ttftMs ??
-      source.ttft_ms
-  );
+	const source = asObject(item);
+	const createdAt = toNullableNumber(source.createdAt ?? source.created_at);
+	const traceId = asString(source.traceId ?? source.trace_id);
+	const keyId = asString(source.keyId ?? source.key_id);
+	const accountId = asString(source.accountId ?? source.account_id);
+	const requestPath = asString(source.requestPath ?? source.request_path);
+	const method = asString(source.method);
+	const id =
+		traceId ||
+		[createdAt ?? "", method, requestPath, accountId, keyId].join("|");
+	if (!id) return null;
+	const durationMs = toNullableNumber(
+		source.durationMs ??
+			source.duration_ms ??
+			source.latencyMs ??
+			source.latency_ms ??
+			source.elapsedMs ??
+			source.elapsed_ms ??
+			source.responseTimeMs ??
+			source.response_time_ms,
+	);
+	const firstResponseMs = toNullableNumber(
+		source.firstResponseMs ??
+			source.first_response_ms ??
+			source.firstTokenMs ??
+			source.first_token_ms ??
+			source.ttftMs ??
+			source.ttft_ms,
+	);
 
-  return {
-    id,
-    traceId,
-    keyId,
-    accountId,
-    initialAccountId: asString(source.initialAccountId ?? source.initial_account_id),
-    attemptedAccountIds: asArray(source.attemptedAccountIds ?? source.attempted_account_ids)
-      .map((value) => asString(value))
-      .filter((value) => value.length > 0),
-    initialAggregateApiId: asString(
-      source.initialAggregateApiId ?? source.initial_aggregate_api_id
-    ),
-    attemptedAggregateApiIds: asArray(
-      source.attemptedAggregateApiIds ?? source.attempted_aggregate_api_ids
-    )
-      .map((value) => asString(value))
-      .filter((value) => value.length > 0),
-    requestPath,
-    originalPath: asString(source.originalPath ?? source.original_path),
-    adaptedPath: asString(source.adaptedPath ?? source.adapted_path),
-    method,
-    requestType: asString(source.requestType ?? source.request_type) || "http",
-    gatewayMode: asString(source.gatewayMode ?? source.gateway_mode),
-    routeStrategy: asString(source.routeStrategy ?? source.route_strategy),
-    routeSource: asString(source.routeSource ?? source.route_source),
-    path: requestPath,
-    clientModel: asString(source.clientModel ?? source.client_model),
-    model: asString(source.model),
-    modelSource: asString(source.modelSource ?? source.model_source),
-    upstreamModel: asString(source.upstreamModel ?? source.upstream_model),
-    actualSourceKind: asString(
-      source.actualSourceKind ?? source.actual_source_kind
-    ),
-    actualSourceId: asString(source.actualSourceId ?? source.actual_source_id),
-    clientReasoningEffort: asString(
-      source.clientReasoningEffort ?? source.client_reasoning_effort
-    ),
-    reasoningEffort: asString(source.reasoningEffort ?? source.reasoning_effort),
-    reasoningSource: asString(source.reasoningSource ?? source.reasoning_source),
-    serviceTier: asString(source.serviceTier ?? source.service_tier),
-    effectiveServiceTier: asString(
-      source.effectiveServiceTier ?? source.effective_service_tier
-    ),
-    serviceTierSource: asString(
-      source.serviceTierSource ?? source.service_tier_source
-    ),
-    responseAdapter: asString(source.responseAdapter ?? source.response_adapter),
-    canonicalSource:
-      asString(source.canonicalSource ?? source.canonical_source) || "native_codex",
-    sizeRejectStage:
-      asString(source.sizeRejectStage ?? source.size_reject_stage) || "-",
-    upstreamUrl: asString(source.upstreamUrl ?? source.upstream_url),
-    aggregateApiSupplierName:
-      asString(
-        source.aggregateApiSupplierName ?? source.aggregate_api_supplier_name
-      ) || null,
-    aggregateApiUrl:
-      asString(source.aggregateApiUrl ?? source.aggregate_api_url) || null,
-    statusCode: toNullableNumber(source.statusCode ?? source.status_code),
-    inputTokens: toNullableNumber(source.inputTokens ?? source.input_tokens),
-    cachedInputTokens: toNullableNumber(
-      source.cachedInputTokens ?? source.cached_input_tokens
-    ),
-    outputTokens: toNullableNumber(source.outputTokens ?? source.output_tokens),
-    totalTokens: toNullableNumber(source.totalTokens ?? source.total_tokens),
-    reasoningOutputTokens: toNullableNumber(
-      source.reasoningOutputTokens ?? source.reasoning_output_tokens
-    ),
-    estimatedCostUsd: toNullableNumber(
-      source.estimatedCostUsd ?? source.estimated_cost_usd
-    ),
-    durationMs,
-    firstResponseMs,
-    error: asString(source.error),
-    createdAt,
-  };
+	return {
+		id,
+		traceId,
+		keyId,
+		accountId,
+		initialAccountId: asString(source.initialAccountId ?? source.initial_account_id),
+		attemptedAccountIds: asArray(source.attemptedAccountIds ?? source.attempted_account_ids)
+			.map((value) => asString(value))
+			.filter((value) => value.length > 0),
+		initialAggregateApiId: asString(
+			source.initialAggregateApiId ?? source.initial_aggregate_api_id,
+		),
+		attemptedAggregateApiIds: asArray(
+			source.attemptedAggregateApiIds ?? source.attempted_aggregate_api_ids,
+		)
+			.map((value) => asString(value))
+			.filter((value) => value.length > 0),
+		requestPath,
+		originalPath: asString(source.originalPath ?? source.original_path),
+		adaptedPath: asString(source.adaptedPath ?? source.adapted_path),
+		method,
+		requestType: asString(source.requestType ?? source.request_type) || "http",
+		gatewayMode: asString(source.gatewayMode ?? source.gateway_mode),
+		routeStrategy: asString(source.routeStrategy ?? source.route_strategy),
+		routeSource: asString(source.routeSource ?? source.route_source),
+		path: requestPath,
+		clientModel: asString(source.clientModel ?? source.client_model),
+		model: asString(source.model),
+		modelSource: asString(source.modelSource ?? source.model_source),
+		upstreamModel: asString(source.upstreamModel ?? source.upstream_model),
+		actualSourceKind: asString(
+			source.actualSourceKind ?? source.actual_source_kind,
+		),
+		actualSourceId: asString(source.actualSourceId ?? source.actual_source_id),
+		clientReasoningEffort: asString(
+			source.clientReasoningEffort ?? source.client_reasoning_effort,
+		),
+		reasoningEffort: asString(source.reasoningEffort ?? source.reasoning_effort),
+		reasoningSource: asString(source.reasoningSource ?? source.reasoning_source),
+		serviceTier: asString(source.serviceTier ?? source.service_tier),
+		effectiveServiceTier: asString(
+			source.effectiveServiceTier ?? source.effective_service_tier,
+		),
+		serviceTierSource: asString(
+			source.serviceTierSource ?? source.service_tier_source,
+		),
+		responseAdapter: asString(source.responseAdapter ?? source.response_adapter),
+		canonicalSource:
+			asString(source.canonicalSource ?? source.canonical_source) || "native_codex",
+		sizeRejectStage:
+			asString(source.sizeRejectStage ?? source.size_reject_stage) || "-",
+		upstreamUrl: asString(source.upstreamUrl ?? source.upstream_url),
+		aggregateApiSupplierName:
+			asString(
+				source.aggregateApiSupplierName ?? source.aggregate_api_supplier_name,
+			) || null,
+		aggregateApiUrl:
+			asString(source.aggregateApiUrl ?? source.aggregate_api_url) || null,
+		statusCode: toNullableNumber(source.statusCode ?? source.status_code),
+		inputTokens: toNullableNumber(source.inputTokens ?? source.input_tokens),
+		cachedInputTokens: toNullableNumber(
+			source.cachedInputTokens ?? source.cached_input_tokens,
+		),
+		outputTokens: toNullableNumber(source.outputTokens ?? source.output_tokens),
+		totalTokens: toNullableNumber(source.totalTokens ?? source.total_tokens),
+		reasoningOutputTokens: toNullableNumber(
+			source.reasoningOutputTokens ?? source.reasoning_output_tokens,
+		),
+		estimatedCostUsd: toNullableNumber(
+			source.estimatedCostUsd ?? source.estimated_cost_usd,
+		),
+		durationMs,
+		firstResponseMs,
+		error: asString(source.error),
+		createdAt,
+	};
 }
 
 /**
@@ -1573,11 +1721,11 @@ export function normalizeRequestLog(item: unknown): RequestLog | null {
  * 返回函数执行结果
  */
 export function normalizeRequestLogs(payload: unknown): RequestLog[] {
-  const source = asObject(payload);
-  const items = asArray(source.items ?? payload);
-  return items
-    .map((item) => normalizeRequestLog(item))
-    .filter((item): item is RequestLog => Boolean(item));
+	const source = asObject(payload);
+	const items = asArray(source.items ?? payload);
+	return items
+		.map((item) => normalizeRequestLog(item))
+		.filter((item): item is RequestLog => Boolean(item));
 }
 
 /**
@@ -1593,15 +1741,17 @@ export function normalizeRequestLogs(payload: unknown): RequestLog[] {
  * # 返回
  * 返回函数执行结果
  */
-export function normalizeRequestLogListResult(payload: unknown): RequestLogListResult {
-  const source = asObject(payload);
-  const items = normalizeRequestLogs(source.items ?? payload);
-  return {
-    items,
-    total: asInteger(source.total, items.length, 0),
-    page: asInteger(source.page, 1, 1),
-    pageSize: asInteger(source.pageSize, items.length || 20, 1),
-  };
+export function normalizeRequestLogListResult(
+	payload: unknown,
+): RequestLogListResult {
+	const source = asObject(payload);
+	const items = normalizeRequestLogs(source.items ?? payload);
+	return {
+		items,
+		total: asInteger(source.total, items.length, 0),
+		page: asInteger(source.page, 1, 1),
+		pageSize: asInteger(source.pageSize, items.length || 20, 1),
+	};
 }
 
 export function normalizeRequestLogListWithSummaryResult(
@@ -1628,18 +1778,296 @@ export function normalizeRequestLogListWithSummaryResult(
  * 返回函数执行结果
  */
 export function normalizeRequestLogFilterSummary(
-  payload: unknown
+	payload: unknown,
 ): RequestLogFilterSummary {
-  const source = asObject(payload);
-  return {
-    totalCount: asInteger(source.totalCount, 0, 0),
-    filteredCount: asInteger(source.filteredCount, 0, 0),
-    successCount: asInteger(source.successCount, 0, 0),
-    errorCount: asInteger(source.errorCount, 0, 0),
-    totalTokens: asInteger(source.totalTokens, 0, 0),
-    totalCostUsd: Math.max(0, toNullableNumber(source.totalCostUsd) ?? 0),
-  };
+	const source = asObject(payload);
+	return {
+		totalCount: asInteger(source.totalCount, 0, 0),
+		filteredCount: asInteger(source.filteredCount, 0, 0),
+		successCount: asInteger(source.successCount, 0, 0),
+		errorCount: asInteger(source.errorCount, 0, 0),
+		totalTokens: asInteger(source.totalTokens, 0, 0),
+		totalCostUsd: Math.max(0, toNullableNumber(source.totalCostUsd) ?? 0),
+	};
 }
+
+export function normalizeProxyProfile(payload: unknown): ProxyProfile {
+	const source = asObject(payload);
+	return {
+		id: asString(source.id),
+		name: asString(source.name),
+		proxyUrlRedacted:
+			asString(source.proxyUrlRedacted ?? source.proxy_url_redacted) || "<invalid>",
+		scheme: asString(source.scheme) || null,
+		host: asString(source.host) || null,
+		port: toNullableNumber(source.port),
+		enabled: asBoolean(source.enabled, true),
+		status: asString(source.status) || "unchecked",
+		lastError: asString(source.lastError ?? source.last_error) || null,
+		lastUrlLatencyMs: toNullableNumber(
+			source.lastUrlLatencyMs ?? source.last_url_latency_ms,
+		),
+		lastDownloadMbps: toNullableNumber(
+			source.lastDownloadMbps ?? source.last_download_mbps,
+		),
+		lastUploadMbps: toNullableNumber(
+			source.lastUploadMbps ?? source.last_upload_mbps,
+		),
+		lastTestedAt: toNullableNumber(source.lastTestedAt ?? source.last_tested_at),
+		ip: asString(source.ip) || null,
+		countryCode: asString(source.countryCode ?? source.country_code) || null,
+		countryName: asString(source.countryName ?? source.country_name) || null,
+		regionName: asString(source.regionName ?? source.region_name) || null,
+		cityName: asString(source.cityName ?? source.city_name) || null,
+		geoCheckedAt: toNullableNumber(source.lastTestedAt ?? source.last_tested_at),
+		geoError: asString(source.lastError ?? source.last_error) || null,
+		asn: toNullableNumber(source.asn),
+		asOrg: asString(source.asOrg ?? source.as_org) || null,
+		isp: asString(source.isp) || null,
+		asDomain: asString(source.asDomain ?? source.as_domain) || null,
+		tagsJson: asString(source.tagsJson ?? source.tags_json) || null,
+		notes: asString(source.notes) || null,
+		flagImgUrl: asString(source.flagImgUrl ?? source.flag_img_url) || null,
+		flagEmoji: asString(source.flagEmoji ?? source.flag_emoji) || null,
+		timezoneId: asString(source.timezoneId ?? source.timezone_id) || null,
+		timezoneOffset: toNullableNumber(source.timezoneOffset ?? source.timezone_offset),
+		timezoneUtc: asString(source.timezoneUtc ?? source.timezone_utc) || null,
+		accountsCount: toNullableNumber(source.accountsCount ?? source.accounts_count) ?? null,
+		createdAt: asInteger(source.createdAt ?? source.created_at, 0, 0),
+		updatedAt: asInteger(source.updatedAt ?? source.updated_at, 0, 0),
+	};
+}
+
+export function normalizeProxyProfileListResult(
+	payload: unknown,
+): ProxyProfileListResult {
+	const source = asObject(payload);
+	const items = asArray(source.items ?? payload).map((item) =>
+		normalizeProxyProfile(item),
+	);
+	return { items };
+}
+
+export function normalizeProxyTestPresetsResult(
+	payload: unknown,
+): ProxyTestPresetsResult {
+	const source = asObject(payload);
+	const defaults = asObject(source.defaults);
+	const uploadEp = asObject(source.uploadEndpoint ?? source.upload_endpoint);
+	return {
+		speedProviders: asArray(source.speedProviders ?? source.speed_providers).map(
+			(item) => {
+				const provider = asObject(item);
+				return {
+					id: asString(provider.id),
+					label: asString(provider.label),
+					providerFamily: asString(provider.providerFamily ?? provider.provider_family),
+					files: asArray(provider.files).map((fileItem) => {
+						const f = asObject(fileItem);
+						return {
+							fileSizeId: asString(f.fileSizeId ?? f.file_size_id),
+							downloadUrl: asString(f.downloadUrl ?? f.download_url),
+							readLimitBytes: toNullableNumber(f.readLimitBytes ?? f.read_limit_bytes),
+						};
+					}),
+				};
+			},
+		),
+		fileSizes: asArray(source.fileSizes ?? source.file_sizes).map(
+			(item) => {
+				const fs = asObject(item);
+				return {
+					id: asString(fs.id),
+					label: asString(fs.label),
+					bytes: asInteger(fs.bytes, 0, 0),
+					warning: asBoolean(fs.warning, false),
+				};
+			},
+		),
+		defaults: {
+			speedProviderId: asString(
+				defaults.speedProviderId ?? defaults.speed_provider_id,
+			),
+			fileSizeId: asString(defaults.fileSizeId ?? defaults.file_size_id),
+			latencyPresetId: asString(
+				defaults.latencyPresetId ?? defaults.latency_preset_id,
+			),
+		},
+		uploadEndpoint: {
+			status: asString(uploadEp.status),
+			configured: asBoolean(uploadEp.configured, false),
+			source: asString(uploadEp.source),
+			url: asString(uploadEp.url) || null,
+		},
+	};
+}
+
+
+export function normalizeProxyProfileUrlTestResult(
+	payload: unknown,
+): ProxyProfileUrlTestResult {
+	const source = asObject(payload);
+	return {
+		id: asInteger(source.id, 0, 0),
+		proxyProfileId:
+			asString(source.proxyProfileId ?? source.proxy_profile_id) || "",
+		status: asString(source.status) || "failed",
+		urlLatencyMs: toNullableNumber(
+			source.urlLatencyMs ?? source.url_latency_ms,
+		),
+		statusCode: toNullableNumber(source.statusCode ?? source.status_code),
+		testUrl: asString(source.testUrl ?? source.test_url),
+		finalUrl: asString(source.finalUrl ?? source.final_url) || null,
+		redirected: asBoolean(source.redirected, false),
+		testedAt: asInteger(source.testedAt ?? source.tested_at, 0, 0),
+		errorCode: asString(source.errorCode ?? source.error_code) || null,
+		error: asString(source.error) || null,
+	};
+}
+
+export function normalizeProxyProfileUrlTestListResult(payload: unknown): ProxyProfileUrlTestListResult {
+	const source = asObject(payload);
+	const items = asArray(source.items ?? payload).map(normalizeProxyProfileUrlTestResult);
+	return { items };
+}
+
+function normalizeCfStyleThroughput(raw: any): CfStyleThroughputResult | null {
+	if (!raw) return null;
+	const obj = asObject(raw) as any;
+
+	return {
+		direction: asString(obj.direction) as ThroughputDirection,
+		finalMbps: toNullableNumber(obj.finalMbps ?? obj.final_mbps) ?? 0,
+		rawFinalMbps: toNullableNumber(obj.rawFinalMbps ?? obj.raw_final_mbps) ?? 0,
+		adjustedFinalMbps: toNullableNumber(obj.adjustedFinalMbps ?? obj.adjusted_final_mbps) ?? 0,
+		avgMbps: toNullableNumber(obj.avgMbps ?? obj.avg_mbps) ?? 0,
+		medianMbps: toNullableNumber(obj.medianMbps ?? obj.median_mbps) ?? 0,
+		p90Mbps: toNullableNumber(obj.p90Mbps ?? obj.p90_mbps) ?? 0,
+		maxMbps: toNullableNumber(obj.maxMbps ?? obj.max_mbps) ?? 0,
+		totalBytes: asInteger(obj.totalBytes ?? obj.total_bytes, 0, 0),
+		totalDurationMs: asInteger(obj.totalDurationMs ?? obj.total_duration_ms, 0, 0),
+		runs: asArray(obj.runs).map((r: any) => ({
+			payloadBytes: asInteger(r.payloadBytes ?? r.payload_bytes, 0, 0),
+			transferredBytes: asInteger(r.transferredBytes ?? r.transferred_bytes, 0, 0),
+			totalDurationMs: asInteger(r.totalDurationMs ?? r.total_duration_ms, 0, 0),
+			ttfbMs: toNullableNumber(r.ttfbMs ?? r.ttfb_ms),
+			transferDurationMs: asInteger(r.transferDurationMs ?? r.transfer_duration_ms, 0, 0),
+			rawMbps: toNullableNumber(r.rawMbps ?? r.raw_mbps) ?? 0,
+			adjustedMbps: toNullableNumber(r.adjustedMbps ?? r.adjusted_mbps) ?? 0,
+			status: asString(r.status) as CfStyleRunStatus,
+			error: asString(r.error) || null,
+		})),
+	};
+}
+
+function normalizeCfStyleResult(raw: any): CfStyleResult | null {
+	if (!raw) return null;
+	const obj = asObject(raw) as any;
+
+	return {
+		status: asString(obj.status) as CfStyleStatus,
+		startedAt: asString(obj.startedAt ?? obj.started_at),
+		finishedAt: asString(obj.finishedAt ?? obj.finished_at),
+		durationMs: asInteger(obj.durationMs ?? obj.duration_ms, 0, 0),
+		errors: asArray(obj.errors).map((e: any) => ({
+			phase: asString(e.phase),
+			message: asString(e.message),
+		})),
+		endpointInfo: {
+			observedIp: asString(obj.endpointInfo?.observedIp ?? obj.endpoint_info?.observed_ip) || null,
+			observedCountry: asString(obj.endpointInfo?.observedCountry ?? obj.endpoint_info?.observed_country) || null,
+			observedColo: asString(obj.endpointInfo?.observedColo ?? obj.endpoint_info?.observed_colo) || null,
+		},
+		usedProxy: (obj.usedProxy ?? obj.used_proxy) ? {
+			proxyUrlRedacted: asString((obj.usedProxy ?? obj.used_proxy).proxyUrlRedacted ?? (obj.usedProxy ?? obj.used_proxy).proxy_url_redacted),
+			proxyScheme: asString((obj.usedProxy ?? obj.used_proxy).proxyScheme ?? (obj.usedProxy ?? obj.used_proxy).proxy_scheme),
+			dnsNote: asString((obj.usedProxy ?? obj.used_proxy).dnsNote ?? (obj.usedProxy ?? obj.used_proxy).dns_note),
+		} : null,
+		latency: obj.latency ? {
+			rawSamplesMs: asArray(obj.latency.rawSamplesMs ?? obj.latency.raw_samples_ms).map(v => toNullableNumber(v) ?? 0),
+			minMs: toNullableNumber(obj.latency.minMs ?? obj.latency.min_ms) ?? 0,
+			avgMs: toNullableNumber(obj.latency.avgMs ?? obj.latency.avg_ms) ?? 0,
+			medianMs: toNullableNumber(obj.latency.medianMs ?? obj.latency.median_ms) ?? 0,
+			p90Ms: toNullableNumber(obj.latency.p90Ms ?? obj.latency.p90_ms) ?? 0,
+			p95Ms: toNullableNumber(obj.latency.p95Ms ?? obj.latency.p95_ms) ?? 0,
+			jitterMs: toNullableNumber(obj.latency.jitterMs ?? obj.latency.jitter_ms) ?? 0,
+		} : null,
+		download: normalizeCfStyleThroughput(obj.download),
+		upload: normalizeCfStyleThroughput(obj.upload),
+	};
+}
+
+export function normalizeProxyTestJobState(payload: unknown): ProxyTestJobState {
+	const source = asObject(payload);
+	const downloadSummaryRaw = source.downloadSummary ?? source.download_summary;
+	const uploadSummaryRaw = source.uploadSummary ?? source.upload_summary;
+	return {
+		jobId: asString(source.jobId ?? source.job_id),
+		scope:
+			(asString(source.scope) as ProxyTestJobState["scope"]) || "system_proxy",
+		proxyProfileId:
+			asString(source.proxyProfileId ?? source.proxy_profile_id) || null,
+		accountId: asString(source.accountId ?? source.account_id) || null,
+		kind: (asString(source.kind) as ProxyTestJobState["kind"]) || "latency",
+		status:
+			(asString(source.status) as ProxyTestJobState["status"]) || "queued",
+		phase: (asString(source.phase) as ProxyTestJobState["phase"]) || "queued",
+		downloadedBytes: asInteger(
+			source.downloadedBytes ?? source.downloaded_bytes,
+			0,
+			0,
+		),
+		uploadedBytes: asInteger(
+			source.uploadedBytes ?? source.uploaded_bytes,
+			0,
+			0,
+		),
+		downloadMbps: toNullableNumber(
+			source.downloadMbps ?? source.download_mbps,
+		),
+		uploadMbps: toNullableNumber(source.uploadMbps ?? source.upload_mbps),
+		latencyMs: toNullableNumber(source.latencyMs ?? source.latency_ms),
+		startedAt: asInteger(source.startedAt ?? source.started_at, 0, 0),
+		updatedAt: asInteger(source.updatedAt ?? source.updated_at, 0, 0),
+		error: asString(source.error) || null,
+		observedIp: asString(source.observedIp ?? source.observed_ip) || null,
+		observedCountry: asString(source.observedCountry ?? source.observed_country) || null,
+		observedColo: asString(source.observedColo ?? source.observed_colo) || null,
+		downloadSamples: asArray(source.downloadSamples ?? source.download_samples).map((s: any) => ({
+			payloadBytes: asInteger(s.payloadBytes ?? s.payload_bytes, 0, 0),
+			durationMs: asInteger(s.durationMs ?? s.duration_ms, 0, 0),
+			mbps: toNullableNumber(s.mbps) ?? 0,
+		})),
+		uploadSamples: asArray(source.uploadSamples ?? source.upload_samples).map((s: any) => ({
+			payloadBytes: asInteger(s.payloadBytes ?? s.payload_bytes, 0, 0),
+			durationMs: asInteger(s.durationMs ?? s.duration_ms, 0, 0),
+			mbps: toNullableNumber(s.mbps) ?? 0,
+		})),
+		downloadSummary: downloadSummaryRaw ? {
+			median: toNullableNumber((downloadSummaryRaw as any).median) ?? 0,
+			average: toNullableNumber((downloadSummaryRaw as any).average) ?? 0,
+			p90: toNullableNumber((downloadSummaryRaw as any).p90) ?? 0,
+			best: toNullableNumber((downloadSummaryRaw as any).best) ?? 0,
+		} : null,
+		uploadSummary: uploadSummaryRaw ? {
+			median: toNullableNumber((uploadSummaryRaw as any).median) ?? 0,
+			average: toNullableNumber((uploadSummaryRaw as any).average) ?? 0,
+			p90: toNullableNumber((uploadSummaryRaw as any).p90) ?? 0,
+			best: toNullableNumber((uploadSummaryRaw as any).best) ?? 0,
+		} : null,
+		downloadDiagnostics: asArray(source.downloadDiagnostics ?? source.download_diagnostics).map((s: any) => ({
+			providerId: asString(s.providerId ?? s.provider_id),
+			fileSizeId: asString(s.fileSizeId ?? s.file_size_id),
+			status: asString(s.status),
+			error: asString(s.error) || null,
+			downloadedBytes: asInteger(s.downloadedBytes ?? s.downloaded_bytes, 0, 0),
+			durationMs: asInteger(s.durationMs ?? s.duration_ms, 0, 0),
+			mbps: toNullableNumber(s.mbps) ?? 0,
+		})),
+		cfStyleResult: normalizeCfStyleResult(source.cfStyleResult ?? source.cf_style_result),
+	};
+}
+
 
 /**
  * 函数 `normalizeBackgroundTasks`
@@ -1654,70 +2082,72 @@ export function normalizeRequestLogFilterSummary(
  * # 返回
  * 返回函数执行结果
  */
-export function normalizeBackgroundTasks(payload: unknown): BackgroundTaskSettings {
-  const source = asObject(payload);
-  return {
-    usagePollingEnabled: asBoolean(
-      source.usagePollingEnabled,
-      DEFAULT_BACKGROUND_TASKS.usagePollingEnabled
-    ),
-    usagePollIntervalSecs: asInteger(
-      source.usagePollIntervalSecs,
-      DEFAULT_BACKGROUND_TASKS.usagePollIntervalSecs,
-      1
-    ),
-    gatewayKeepaliveEnabled: asBoolean(
-      source.gatewayKeepaliveEnabled,
-      DEFAULT_BACKGROUND_TASKS.gatewayKeepaliveEnabled
-    ),
-    gatewayKeepaliveIntervalSecs: asInteger(
-      source.gatewayKeepaliveIntervalSecs,
-      DEFAULT_BACKGROUND_TASKS.gatewayKeepaliveIntervalSecs,
-      1
-    ),
-    tokenRefreshPollingEnabled: asBoolean(
-      source.tokenRefreshPollingEnabled,
-      DEFAULT_BACKGROUND_TASKS.tokenRefreshPollingEnabled
-    ),
-    tokenRefreshPollIntervalSecs: asInteger(
-      source.tokenRefreshPollIntervalSecs,
-      DEFAULT_BACKGROUND_TASKS.tokenRefreshPollIntervalSecs,
-      1
-    ),
-    warmupCronEnabled: asBoolean(
-      source.warmupCronEnabled,
-      DEFAULT_BACKGROUND_TASKS.warmupCronEnabled
-    ),
-    warmupCronExpression: asString(
-      source.warmupCronExpression,
-      DEFAULT_BACKGROUND_TASKS.warmupCronExpression
-    ),
-    usageRefreshWorkers: asInteger(
-      source.usageRefreshWorkers,
-      DEFAULT_BACKGROUND_TASKS.usageRefreshWorkers,
-      1
-    ),
-    httpWorkerFactor: asInteger(
-      source.httpWorkerFactor,
-      DEFAULT_BACKGROUND_TASKS.httpWorkerFactor,
-      1
-    ),
-    httpWorkerMin: asInteger(
-      source.httpWorkerMin,
-      DEFAULT_BACKGROUND_TASKS.httpWorkerMin,
-      1
-    ),
-    httpStreamWorkerFactor: asInteger(
-      source.httpStreamWorkerFactor,
-      DEFAULT_BACKGROUND_TASKS.httpStreamWorkerFactor,
-      1
-    ),
-    httpStreamWorkerMin: asInteger(
-      source.httpStreamWorkerMin,
-      DEFAULT_BACKGROUND_TASKS.httpStreamWorkerMin,
-      1
-    ),
-  };
+export function normalizeBackgroundTasks(
+	payload: unknown,
+): BackgroundTaskSettings {
+	const source = asObject(payload);
+	return {
+		usagePollingEnabled: asBoolean(
+			source.usagePollingEnabled,
+			DEFAULT_BACKGROUND_TASKS.usagePollingEnabled,
+		),
+		usagePollIntervalSecs: asInteger(
+			source.usagePollIntervalSecs,
+			DEFAULT_BACKGROUND_TASKS.usagePollIntervalSecs,
+			1,
+		),
+		gatewayKeepaliveEnabled: asBoolean(
+			source.gatewayKeepaliveEnabled,
+			DEFAULT_BACKGROUND_TASKS.gatewayKeepaliveEnabled,
+		),
+		gatewayKeepaliveIntervalSecs: asInteger(
+			source.gatewayKeepaliveIntervalSecs,
+			DEFAULT_BACKGROUND_TASKS.gatewayKeepaliveIntervalSecs,
+			1,
+		),
+		tokenRefreshPollingEnabled: asBoolean(
+			source.tokenRefreshPollingEnabled,
+			DEFAULT_BACKGROUND_TASKS.tokenRefreshPollingEnabled,
+		),
+		tokenRefreshPollIntervalSecs: asInteger(
+			source.tokenRefreshPollIntervalSecs,
+			DEFAULT_BACKGROUND_TASKS.tokenRefreshPollIntervalSecs,
+			1,
+		),
+		warmupCronEnabled: asBoolean(
+			source.warmupCronEnabled,
+			DEFAULT_BACKGROUND_TASKS.warmupCronEnabled,
+		),
+		warmupCronExpression: asString(
+			source.warmupCronExpression,
+			DEFAULT_BACKGROUND_TASKS.warmupCronExpression,
+		),
+		usageRefreshWorkers: asInteger(
+			source.usageRefreshWorkers,
+			DEFAULT_BACKGROUND_TASKS.usageRefreshWorkers,
+			1,
+		),
+		httpWorkerFactor: asInteger(
+			source.httpWorkerFactor,
+			DEFAULT_BACKGROUND_TASKS.httpWorkerFactor,
+			1,
+		),
+		httpWorkerMin: asInteger(
+			source.httpWorkerMin,
+			DEFAULT_BACKGROUND_TASKS.httpWorkerMin,
+			1,
+		),
+		httpStreamWorkerFactor: asInteger(
+			source.httpStreamWorkerFactor,
+			DEFAULT_BACKGROUND_TASKS.httpStreamWorkerFactor,
+			1,
+		),
+		httpStreamWorkerMin: asInteger(
+			source.httpStreamWorkerMin,
+			DEFAULT_BACKGROUND_TASKS.httpStreamWorkerMin,
+			1,
+		),
+	};
 }
 
 /**
@@ -1733,64 +2163,69 @@ export function normalizeBackgroundTasks(payload: unknown): BackgroundTaskSettin
  * # 返回
  * 返回函数执行结果
  */
-function clampPercent(value: number | null | undefined, fallback: number): number {
-  const parsed = toNullableNumber(value);
-  if (parsed == null) return fallback;
-  return Math.max(0, Math.min(100, parsed));
+function clampPercent(
+	value: number | null | undefined,
+	fallback: number,
+): number {
+	const parsed = toNullableNumber(value);
+	if (parsed == null) return fallback;
+	return Math.max(0, Math.min(100, parsed));
 }
 
 export function normalizeQuotaGuard(payload: unknown): QuotaGuardSettings {
-  const source = asObject(payload);
-  return {
-    enabled: asBoolean(source.enabled, DEFAULT_QUOTA_GUARD.enabled),
-    primaryMinRemainingPercent: clampPercent(
-      toNullableNumber(
-        source.primaryMinRemainingPercent ??
-          source.primary_min_remaining_percent
-      ),
-      DEFAULT_QUOTA_GUARD.primaryMinRemainingPercent
-    ),
-    secondaryMinRemainingPercent: clampPercent(
-      toNullableNumber(
-        source.secondaryMinRemainingPercent ??
-          source.secondary_min_remaining_percent
-      ),
-      DEFAULT_QUOTA_GUARD.secondaryMinRemainingPercent
-    ),
-    allowAllLowQuotaFallback: asBoolean(
-      source.allowAllLowQuotaFallback ?? source.allow_all_low_quota_fallback,
-      DEFAULT_QUOTA_GUARD.allowAllLowQuotaFallback
-    ),
-  };
+	const source = asObject(payload);
+	return {
+		enabled: asBoolean(source.enabled, DEFAULT_QUOTA_GUARD.enabled),
+		primaryMinRemainingPercent: clampPercent(
+			toNullableNumber(
+				source.primaryMinRemainingPercent ??
+					source.primary_min_remaining_percent,
+			),
+			DEFAULT_QUOTA_GUARD.primaryMinRemainingPercent,
+		),
+		secondaryMinRemainingPercent: clampPercent(
+			toNullableNumber(
+				source.secondaryMinRemainingPercent ??
+					source.secondary_min_remaining_percent,
+			),
+			DEFAULT_QUOTA_GUARD.secondaryMinRemainingPercent,
+		),
+		allowAllLowQuotaFallback: asBoolean(
+			source.allowAllLowQuotaFallback ?? source.allow_all_low_quota_fallback,
+			DEFAULT_QUOTA_GUARD.allowAllLowQuotaFallback,
+		),
+	};
 }
 
 export function normalizeRuntimeTimeZone(payload: unknown): RuntimeTimeZone {
-  const source = asObject(payload);
-  return {
-    name: asString(source.name) || DEFAULT_RUNTIME_TIME_ZONE.name,
-    offset: asString(source.offset),
-    source: asString(source.source) || DEFAULT_RUNTIME_TIME_ZONE.source,
-  };
+	const source = asObject(payload);
+	return {
+		name: asString(source.name) || DEFAULT_RUNTIME_TIME_ZONE.name,
+		offset: asString(source.offset),
+		source: asString(source.source) || DEFAULT_RUNTIME_TIME_ZONE.source,
+	};
 }
 
-export function normalizeEnvOverrideCatalog(payload: unknown): EnvOverrideCatalogItem[] {
-  return asArray(payload).reduce<EnvOverrideCatalogItem[]>((result, item) => {
-    const source = asObject(item);
-    const key = asString(source.key);
-    if (!key) return result;
-    result.push({
-      key,
-      label: asString(source.label) || key,
-      defaultValue: asString(source.defaultValue ?? source.default_value),
-      scope: asString(source.scope),
-      applyMode: asString(source.applyMode ?? source.apply_mode),
-      riskLevel: asString(source.riskLevel ?? source.risk_level) || "medium",
-      effectScope:
-        asString(source.effectScope ?? source.effect_scope) || "runtime-global",
-      safetyNote: asString(source.safetyNote ?? source.safety_note),
-    });
-    return result;
-  }, []);
+export function normalizeEnvOverrideCatalog(
+	payload: unknown,
+): EnvOverrideCatalogItem[] {
+	return asArray(payload).reduce<EnvOverrideCatalogItem[]>((result, item) => {
+		const source = asObject(item);
+		const key = asString(source.key);
+		if (!key) return result;
+		result.push({
+			key,
+			label: asString(source.label) || key,
+			defaultValue: asString(source.defaultValue ?? source.default_value),
+			scope: asString(source.scope),
+			applyMode: asString(source.applyMode ?? source.apply_mode),
+			riskLevel: asString(source.riskLevel ?? source.risk_level) || "medium",
+			effectScope:
+				asString(source.effectScope ?? source.effect_scope) || "runtime-global",
+			safetyNote: asString(source.safetyNote ?? source.safety_note),
+		});
+		return result;
+	}, []);
 }
 
 /**
@@ -1807,90 +2242,103 @@ export function normalizeEnvOverrideCatalog(payload: unknown): EnvOverrideCatalo
  * 返回函数执行结果
  */
 export function normalizeAppSettings(payload: unknown): AppSettings {
-  const source = asObject(payload);
-  return {
-    updateAutoCheck: asBoolean(source.updateAutoCheck, true),
-    closeToTrayOnClose: asBoolean(source.closeToTrayOnClose, false),
-    closeToTraySupported: asBoolean(source.closeToTraySupported, false),
-    lowTransparency: asBoolean(source.lowTransparency, false),
-    lightweightModeOnCloseToTray: asBoolean(
-      source.lightweightModeOnCloseToTray,
-      false
-    ),
-    codexCliGuideDismissed: asBoolean(source.codexCliGuideDismissed, false),
-    webAccessPasswordConfigured: asBoolean(
-      source.webAccessPasswordConfigured,
-      false
-    ),
-    webAuthMode: asString(source.webAuthMode) || "none",
-    webAuthModeOptions: asArray(source.webAuthModeOptions)
-      .map((item) => asString(item))
-      .filter(Boolean),
-    distributionEnabled: asBoolean(source.distributionEnabled, false),
-    billingModeLock: readBillingModeLock(source.billingModeLock),
-    appUsersConfigured: asBoolean(source.appUsersConfigured, false),
-    appUserCount: asInteger(source.appUserCount, 0, 0),
-    locale: asString(source.locale) || "zh-CN",
-    localeOptions: asArray(source.localeOptions).map((item) => asString(item)).filter(Boolean),
-    serviceAddr: asString(source.serviceAddr) || "localhost:48760",
-    serviceListenMode: asString(source.serviceListenMode) || "loopback",
-    serviceListenModeOptions: asArray(source.serviceListenModeOptions).map((item) =>
-      asString(item)
-    ),
-    routeStrategy: asString(source.routeStrategy) || "ordered",
-    routeStrategyOptions: asArray(source.routeStrategyOptions).map((item) =>
-      asString(item)
-    ),
-    freeAccountMaxModel: asString(source.freeAccountMaxModel) || "auto",
-    freeAccountMaxModelOptions: asArray(source.freeAccountMaxModelOptions).map((item) =>
-      asString(item)
-    ),
-    modelForwardRules: asString(source.modelForwardRules ?? source.model_forward_rules),
-    compactModelForwardRules: asString(
-      source.compactModelForwardRules ?? source.compact_model_forward_rules
-    ),
-    accountMaxInflight: asInteger(source.accountMaxInflight, 1, 0),
-    quotaGuard: normalizeQuotaGuard(source.quotaGuard ?? source.quota_guard),
-    gatewayOriginator:
-      asString(source.gatewayOriginator) || DEFAULT_CODEX_ORIGINATOR,
-    gatewayOriginatorDefault:
-      asString(source.gatewayOriginatorDefault) || DEFAULT_CODEX_ORIGINATOR,
-    gatewayUserAgentVersion:
-      asString(source.gatewayUserAgentVersion) || DEFAULT_CODEX_USER_AGENT_VERSION,
-    gatewayUserAgentVersionDefault:
-      asString(source.gatewayUserAgentVersionDefault) ||
-      DEFAULT_CODEX_USER_AGENT_VERSION,
-    gatewayResidencyRequirement: asString(source.gatewayResidencyRequirement),
-    gatewayResidencyRequirementOptions: asArray(
-      source.gatewayResidencyRequirementOptions
-    ).map((item) => asString(item)),
-    pluginMarketMode: asString(source.pluginMarketMode ?? source.plugin_market_mode) || "builtin",
-    pluginMarketSourceUrl: asString(source.pluginMarketSourceUrl ?? source.plugin_market_source_url),
-    authorSponsors: normalizeSponsorLinkItems(
-      source.authorSponsors,
-      DEFAULT_AUTHOR_SPONSORS
-    ),
-    authorServerRecommendations: normalizeSponsorLinkItems(
-      source.authorServerRecommendations,
-      DEFAULT_AUTHOR_SERVER_RECOMMENDATIONS
-    ),
-    upstreamProxyUrl: asString(source.upstreamProxyUrl),
-    upstreamStreamTimeoutMs: asInteger(source.upstreamStreamTimeoutMs, 300_000, 0),
-    upstreamTotalTimeoutMs: asInteger(source.upstreamTotalTimeoutMs, 0, 0),
-    sseKeepaliveIntervalMs: asInteger(source.sseKeepaliveIntervalMs, 15_000, 1),
-    backgroundTasks: normalizeBackgroundTasks(source.backgroundTasks),
-    runtimeTimeZone: normalizeRuntimeTimeZone(source.runtimeTimeZone),
-    envOverrides: normalizeStringRecord(source.envOverrides),
-    envOverrideCatalog: normalizeEnvOverrideCatalog(source.envOverrideCatalog),
-    envOverrideReservedKeys: asArray(source.envOverrideReservedKeys).map((item) =>
-      asString(item)
-    ),
-    envOverrideUnsupportedKeys: asArray(source.envOverrideUnsupportedKeys).map((item) =>
-      asString(item)
-    ),
-    theme: asString(source.theme) || "tech",
-    appearancePreset: asString(source.appearancePreset) || "classic",
-  };
+	const source = asObject(payload);
+	return {
+		updateAutoCheck: asBoolean(source.updateAutoCheck, true),
+		closeToTrayOnClose: asBoolean(source.closeToTrayOnClose, false),
+		closeToTraySupported: asBoolean(source.closeToTraySupported, false),
+		lowTransparency: asBoolean(source.lowTransparency, false),
+		lightweightModeOnCloseToTray: asBoolean(
+			source.lightweightModeOnCloseToTray,
+			false,
+		),
+		codexCliGuideDismissed: asBoolean(source.codexCliGuideDismissed, false),
+		webAccessPasswordConfigured: asBoolean(
+			source.webAccessPasswordConfigured,
+			false,
+		),
+		webAuthMode: asString(source.webAuthMode) || "none",
+		webAuthModeOptions: asArray(source.webAuthModeOptions)
+			.map((item) => asString(item))
+			.filter(Boolean),
+		distributionEnabled: asBoolean(source.distributionEnabled, false),
+		billingModeLock: readBillingModeLock(source.billingModeLock),
+		appUsersConfigured: asBoolean(source.appUsersConfigured, false),
+		appUserCount: asInteger(source.appUserCount, 0, 0),
+		locale: asString(source.locale) || "zh-CN",
+		localeOptions: asArray(source.localeOptions)
+			.map((item) => asString(item))
+			.filter(Boolean),
+		serviceAddr: asString(source.serviceAddr) || "localhost:48760",
+		serviceListenMode: asString(source.serviceListenMode) || "loopback",
+		serviceListenModeOptions: asArray(source.serviceListenModeOptions).map(
+			(item) => asString(item),
+		),
+		routeStrategy: asString(source.routeStrategy) || "ordered",
+		routeStrategyOptions: asArray(source.routeStrategyOptions).map((item) =>
+			asString(item),
+		),
+		freeAccountMaxModel: asString(source.freeAccountMaxModel) || "auto",
+		freeAccountMaxModelOptions: asArray(source.freeAccountMaxModelOptions).map(
+			(item) => asString(item),
+		),
+		modelForwardRules: asString(
+			source.modelForwardRules ?? source.model_forward_rules,
+		),
+		compactModelForwardRules: asString(
+			source.compactModelForwardRules ?? source.compact_model_forward_rules,
+		),
+		accountMaxInflight: asInteger(source.accountMaxInflight, 1, 0),
+		quotaGuard: normalizeQuotaGuard(source.quotaGuard ?? source.quota_guard),
+		gatewayOriginator:
+			asString(source.gatewayOriginator) || DEFAULT_CODEX_ORIGINATOR,
+		gatewayOriginatorDefault:
+			asString(source.gatewayOriginatorDefault) || DEFAULT_CODEX_ORIGINATOR,
+		gatewayUserAgentVersion:
+			asString(source.gatewayUserAgentVersion) ||
+			DEFAULT_CODEX_USER_AGENT_VERSION,
+		gatewayUserAgentVersionDefault:
+			asString(source.gatewayUserAgentVersionDefault) ||
+			DEFAULT_CODEX_USER_AGENT_VERSION,
+		gatewayResidencyRequirement: asString(source.gatewayResidencyRequirement),
+		gatewayResidencyRequirementOptions: asArray(
+			source.gatewayResidencyRequirementOptions,
+		).map((item) => asString(item)),
+		pluginMarketMode:
+			asString(source.pluginMarketMode ?? source.plugin_market_mode) ||
+			"builtin",
+		pluginMarketSourceUrl: asString(
+			source.pluginMarketSourceUrl ?? source.plugin_market_source_url,
+		),
+		authorSponsors: normalizeSponsorLinkItems(
+			source.authorSponsors,
+			DEFAULT_AUTHOR_SPONSORS,
+		),
+		authorServerRecommendations: normalizeSponsorLinkItems(
+			source.authorServerRecommendations,
+			DEFAULT_AUTHOR_SERVER_RECOMMENDATIONS,
+		),
+		upstreamProxyUrl: asString(source.upstreamProxyUrl),
+		upstreamStreamTimeoutMs: asInteger(
+			source.upstreamStreamTimeoutMs,
+			300_000,
+			0,
+		),
+		upstreamTotalTimeoutMs: asInteger(source.upstreamTotalTimeoutMs, 0, 0),
+		sseKeepaliveIntervalMs: asInteger(source.sseKeepaliveIntervalMs, 15_000, 1),
+		backgroundTasks: normalizeBackgroundTasks(source.backgroundTasks),
+		runtimeTimeZone: normalizeRuntimeTimeZone(source.runtimeTimeZone),
+		envOverrides: normalizeStringRecord(source.envOverrides),
+		envOverrideCatalog: normalizeEnvOverrideCatalog(source.envOverrideCatalog),
+		envOverrideReservedKeys: asArray(source.envOverrideReservedKeys).map(
+			(item) => asString(item),
+		),
+		envOverrideUnsupportedKeys: asArray(source.envOverrideUnsupportedKeys).map(
+			(item) => asString(item),
+		),
+		theme: asString(source.theme) || "tech",
+		appearancePreset: asString(source.appearancePreset) || "classic",
+	};
 }
 
 /**
@@ -1907,22 +2355,108 @@ export function normalizeAppSettings(payload: unknown): AppSettings {
  * 返回函数执行结果
  */
 export function normalizeStartupSnapshot(payload: unknown): StartupSnapshot {
-  const source = asObject(payload);
-  const usageSnapshots = normalizeUsageList(source.usageSnapshots);
-  const usageMap = buildUsageMap(usageSnapshots);
-  const accounts = asArray(source.accounts)
-    .map((item) => normalizeAccount(item, usageMap.get(asString(asObject(item).id))))
-    .filter((item): item is Account => Boolean(item));
+	const source = asObject(payload);
+	const usageSnapshots = normalizeUsageList(source.usageSnapshots);
+	const usageMap = buildUsageMap(usageSnapshots);
+	const accounts = asArray(source.accounts)
+		.map((item) =>
+			normalizeAccount(item, usageMap.get(asString(asObject(item).id))),
+		)
+		.filter((item): item is Account => Boolean(item));
 
-  return {
-    accounts,
-    accountSummary: normalizeStartupAccountSummary(source.accountSummary ?? source.account_summary),
-    usageSnapshots,
-    usageAggregateSummary: normalizeUsageAggregateSummary(source.usageAggregateSummary),
-    apiKeys: normalizeApiKeyList(source.apiKeys),
-    apiModels: normalizeModelCatalog(source.apiModels ?? { models: source.apiModelOptions }),
-    manualPreferredAccountId: asString(source.manualPreferredAccountId),
-    requestLogTodaySummary: normalizeTodaySummary(source.requestLogTodaySummary),
-    requestLogs: normalizeRequestLogs(source.requestLogs),
-  };
+	return {
+		accounts,
+		accountSummary: normalizeStartupAccountSummary(
+			source.accountSummary ?? source.account_summary,
+		),
+		usageSnapshots,
+		usageAggregateSummary: normalizeUsageAggregateSummary(
+			source.usageAggregateSummary,
+		),
+		apiKeys: normalizeApiKeyList(source.apiKeys),
+		apiModels: normalizeModelCatalog(
+			source.apiModels ?? { models: source.apiModelOptions },
+		),
+		manualPreferredAccountId: asString(source.manualPreferredAccountId),
+		requestLogTodaySummary: normalizeTodaySummary(
+			source.requestLogTodaySummary,
+		),
+		requestLogs: normalizeRequestLogs(source.requestLogs),
+	};
+}
+
+export function normalizeProxySpeedTestEntry(payload: unknown): ProxySpeedTestEntry {
+	const source = asObject(payload);
+	return {
+		id: asInteger(source.id, 0, 0),
+		scope: asString(source.scope) || "",
+		proxyProfileId: asString(source.proxyProfileId ?? source.proxy_profile_id) || null,
+		accountId: asString(source.accountId ?? source.account_id) || null,
+		status: asString(source.status) || "failed",
+		provider: asString(source.provider) || "",
+		observedIp: asString(source.observedIp ?? source.observed_ip) || null,
+		observedCountry: asString(source.observedCountry ?? source.observed_country) || null,
+		observedColo: asString(source.observedColo ?? source.observed_colo) || null,
+		maxPayloadBytes: toNullableNumber(source.maxPayloadBytes ?? source.max_payload_bytes),
+		samplesJson: asString(source.samplesJson ?? source.samples_json) || null,
+		downloadSummaryJson: asString(source.downloadSummaryJson ?? source.download_summary_json) || null,
+		uploadSummaryJson: asString(source.uploadSummaryJson ?? source.upload_summary_json) || null,
+		startedAt: asInteger(source.startedAt ?? source.started_at, 0, 0),
+		finishedAt: asInteger(source.finishedAt ?? source.finished_at, 0, 0),
+		errorCode: asString(source.errorCode ?? source.error_code) || null,
+		error: asString(source.error) || null,
+	};
+}
+
+export function normalizeProxySpeedTestListResult(payload: unknown): ProxySpeedTestListResult {
+	const source = asObject(payload);
+	const items = asArray(source.items ?? payload).map(normalizeProxySpeedTestEntry);
+	return { items };
+}
+
+export function normalizeProxyDiagnosticTestEntry(payload: unknown): ProxyDiagnosticTestEntry {
+	const source = asObject(payload);
+	return {
+		id: asInteger(source.id, 0, 0),
+		scope: asString(source.scope) || "",
+		proxyProfileId: asString(source.proxyProfileId ?? source.proxy_profile_id) || null,
+		accountId: asString(source.accountId ?? source.account_id) || null,
+		status: asString(source.status) || "failed",
+		provider: asString(source.provider) || "",
+		fileSizeId: asString(source.fileSizeId ?? source.file_size_id) || "",
+		downloadedBytes: toNullableNumber(source.downloadedBytes ?? source.downloaded_bytes),
+		durationMs: toNullableNumber(source.durationMs ?? source.duration_ms),
+		mbps: toNullableNumber(source.mbps),
+		testedAt: asInteger(source.testedAt ?? source.tested_at, 0, 0),
+		error: asString(source.error) || null,
+	};
+}
+
+export function normalizeProxyDiagnosticTestListResult(payload: unknown): ProxyDiagnosticTestListResult {
+	const source = asObject(payload);
+	const items = asArray(source.items ?? payload).map(normalizeProxyDiagnosticTestEntry);
+	return { items };
+}
+
+export function normalizeAccountProxyUrlTestEntry(payload: unknown): AccountProxyUrlTestEntry {
+	const source = asObject(payload);
+	return {
+		id: asInteger(source.id, 0, 0),
+		accountId: asString(source.accountId ?? source.account_id) || "",
+		status: asString(source.status) || "failed",
+		urlLatencyMs: toNullableNumber(source.urlLatencyMs ?? source.url_latency_ms),
+		statusCode: toNullableNumber(source.statusCode ?? source.status_code),
+		testUrl: asString(source.testUrl ?? source.test_url) || "",
+		finalUrl: asString(source.finalUrl ?? source.final_url) || null,
+		redirected: asBoolean(source.redirected, false),
+		testedAt: asInteger(source.testedAt ?? source.tested_at, 0, 0),
+		errorCode: asString(source.errorCode ?? source.error_code) || null,
+		error: asString(source.error) || null,
+	};
+}
+
+export function normalizeAccountProxyUrlTestListResult(payload: unknown): AccountProxyUrlTestListResult {
+	const source = asObject(payload);
+	const items = asArray(source.items ?? payload).map(normalizeAccountProxyUrlTestEntry);
+	return { items };
 }

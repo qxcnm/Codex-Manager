@@ -1,5 +1,6 @@
 import { ShieldCheck } from "lucide-react";
 import { AppSettings } from "@/types";
+import { toast } from "sonner";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -360,12 +361,21 @@ export function GatewayTabContent({
             onChange={(event) => setUpstreamProxyDraft(event.target.value)}
             onBlur={() => {
               if (upstreamProxyDraft == null) return;
-              if (upstreamProxyInput === (snapshot.upstreamProxyUrl || "")) {
+              let finalUrl = upstreamProxyInput.trim();
+              if (finalUrl) {
+                const lowerUrl = finalUrl.toLowerCase();
+                if (lowerUrl.startsWith("socks5://")) {
+                  finalUrl = "socks5h://" + finalUrl.slice(9);
+                } else if (lowerUrl.startsWith("socks4://")) {
+                  toast.warning(t("SOCKS4 是已过时的协议，建议使用 SOCKS5"));
+                }
+              }
+              if (finalUrl === (snapshot.upstreamProxyUrl || "")) {
                 setUpstreamProxyDraft(null);
                 return;
               }
               void updateSettings
-                .mutateAsync({ upstreamProxyUrl: upstreamProxyInput })
+                .mutateAsync({ upstreamProxyUrl: finalUrl })
                 .then(() => setUpstreamProxyDraft(null))
                 .catch(() => undefined);
             }}

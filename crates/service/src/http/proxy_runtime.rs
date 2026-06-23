@@ -233,6 +233,29 @@ async fn responses_handler(
     proxy_handler(State(state), request).await
 }
 
+/// Reference upload endpoint for proxy testing.
+/// Reads and discards client payload stream, limiting the body size to prevent memory exhaustion.
+///
+/// NOTE: This localhost route is for development/mocking purposes only. In a self-hosted or production
+/// deployment, the actual upload endpoint must be reachable through the proxy egress. Localhost
+/// targets cannot measure real proxy upload throughput.
+async fn proxy_test_upload(req: axum::extract::Request) -> Result<StatusCode, (StatusCode, String)> {
+    use futures_util::StreamExt;
+
+    const MAX_UPLOAD_BYTES: u64 = 110_000_000;
+    let mut total = 0u64;
+    let mut stream = req.into_body().into_data_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        total += chunk.len() as u64;
+        if total > MAX_UPLOAD_BYTES {
+            return Err((StatusCode::PAYLOAD_TOO_LARGE, "body too large".into()));
+        }
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// 函数 `build_front_proxy_app`
 ///
 /// 作者: gaohongshun
@@ -252,6 +275,7 @@ fn build_front_proxy_app(state: ProxyState) -> Router {
             get(crate::http::usage_events::handle_usage_refresh_events_http),
         )
         .route("/v1/responses", any(responses_handler))
+        .route("/proxy-test-upload", post(proxy_test_upload))
         .fallback(any(proxy_handler))
         .with_state(state)
 }

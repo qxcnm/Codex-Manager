@@ -5,6 +5,7 @@ import { createCodexProfileWebCommands } from "./transport-web-commands/codex-pr
 import { createGatewayWebCommands } from "./transport-web-commands/gateway";
 import { createLoginWebCommands } from "./transport-web-commands/login";
 import { createMiscWebCommands } from "./transport-web-commands/misc";
+import { createProxyProfilesWebCommands } from "./transport-web-commands/proxy-profiles";
 import { createQuotaWebCommands } from "./transport-web-commands/quota";
 import type { WebCommandDescriptor, WebRpcCaller } from "./transport-web-commands/shared";
 
@@ -15,6 +16,7 @@ export function createWebCommandMap(postWebRpc: WebRpcCaller): Record<string, We
     ...createMiscWebCommands(),
     ...createCodexProfileWebCommands(),
     ...createAccountWebCommands(postWebRpc),
+    ...createProxyProfilesWebCommands(),
     ...createQuotaWebCommands(),
     ...createAggregateApiWebCommands(),
     ...createLoginWebCommands(),

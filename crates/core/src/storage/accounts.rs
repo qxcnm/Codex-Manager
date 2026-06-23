@@ -1061,6 +1061,22 @@ impl Storage {
             delete_model_source_mapping_preferences_for_source_sql(),
             (ACCOUNT_MODEL_SOURCE_KIND, account_id),
         )?;
+        tx.execute(
+            "DELETE FROM account_proxy_settings WHERE account_id = ?1",
+            [account_id],
+        )?;
+        tx.execute(
+            "DELETE FROM account_proxy_url_tests WHERE account_id = ?1",
+            [account_id],
+        )?;
+        tx.execute(
+            "DELETE FROM proxy_speed_tests WHERE account_id = ?1",
+            [account_id],
+        )?;
+        tx.execute(
+            "DELETE FROM proxy_diagnostics_history WHERE account_id = ?1",
+            [account_id],
+        )?;
         tx.execute(delete_account_by_id_sql(), [account_id])?;
         tx.commit()?;
         Ok(())

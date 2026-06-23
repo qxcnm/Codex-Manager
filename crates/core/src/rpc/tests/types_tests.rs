@@ -1,8 +1,10 @@
 use super::{
     AccountListResult, AccountSummary, ApiKeyUsageStatSummary, DashboardAdminUsageSummaryResult,
     DashboardDailyUsagePoint, DashboardSourceUsageSummary, DashboardTokenUsageResult,
-    DashboardUserUsageSummary, RequestLogFilterSummaryResult, RequestLogListParams,
-    RequestLogListResult, RequestLogSummary,
+    DashboardUserUsageSummary, ProxyProfileEntry, ProxyProfileListResult, ProxyProfileUrlTestEntry,
+    ProxyTestDefaults, ProxyTestFileSizePreset, ProxyTestPresetsResult,
+    ProxyTestProviderFilePreset, ProxyTestSpeedProviderPreset, ProxyTestUploadEndpointStatus,
+    RequestLogFilterSummaryResult, RequestLogListParams, RequestLogListResult, RequestLogSummary,
 };
 
 /// 函数 `account_summary_serialization_matches_compact_contract`
@@ -38,6 +40,26 @@ fn account_summary_serialization_matches_compact_contract() {
         model_slugs: vec!["gpt-5.4".to_string()],
         quota_capacity_primary_window_tokens: Some(100_000),
         quota_capacity_secondary_window_tokens: Some(1_000_000),
+        proxy_enabled: None,
+        proxy_source: None,
+        proxy_profile_id: None,
+        proxy_profile_name: None,
+        proxy_status: None,
+        proxy_url: None,
+        proxy_ip: None,
+        proxy_country_code: None,
+        proxy_country_name: None,
+        proxy_region_name: None,
+        proxy_city_name: None,
+        proxy_geo_checked_at: None,
+        proxy_asn: None,
+        proxy_as_org: None,
+        proxy_isp: None,
+        proxy_as_domain: None,
+        proxy_timezone_id: None,
+        proxy_timezone_utc: None,
+        proxy_flag_img_url: None,
+        proxy_flag_emoji: None,
     };
 
     let value = serde_json::to_value(summary).expect("serialize account summary");
@@ -97,6 +119,26 @@ fn account_list_result_serialization_includes_pagination_fields() {
             model_slugs: vec!["gpt-5.4".to_string()],
             quota_capacity_primary_window_tokens: Some(100_000),
             quota_capacity_secondary_window_tokens: Some(1_000_000),
+            proxy_enabled: None,
+            proxy_source: None,
+            proxy_profile_id: None,
+            proxy_profile_name: None,
+            proxy_status: None,
+            proxy_url: None,
+            proxy_ip: None,
+            proxy_country_code: None,
+            proxy_country_name: None,
+            proxy_region_name: None,
+            proxy_city_name: None,
+            proxy_geo_checked_at: None,
+            proxy_asn: None,
+            proxy_as_org: None,
+            proxy_isp: None,
+            proxy_as_domain: None,
+            proxy_timezone_id: None,
+            proxy_timezone_utc: None,
+            proxy_flag_img_url: None,
+            proxy_flag_emoji: None,
         }],
         total: 9,
         page: 2,
@@ -417,4 +459,149 @@ fn dashboard_admin_usage_summary_serialization_uses_camel_case() {
     assert!(obj["todayUsage"].get("inputTokens").is_some());
     assert!(obj["users"][0].get("walletAvailableCreditMicros").is_some());
     assert!(obj["openaiAccounts"][0].get("sourceKind").is_some());
+}
+
+#[test]
+fn proxy_profile_list_result_serialization_uses_camel_case() {
+    let result = ProxyProfileListResult {
+        items: vec![ProxyProfileEntry {
+            id: "pp_1".to_string(),
+            name: "Proxy One".to_string(),
+            proxy_url_redacted: "http://example.com:8080".to_string(),
+            scheme: Some("http".to_string()),
+            host: Some("example.com".to_string()),
+            port: Some(8080),
+            enabled: true,
+            status: "unchecked".to_string(),
+            last_error: None,
+            last_url_latency_ms: Some(42),
+            last_download_mbps: Some(10.5),
+            last_upload_mbps: Some(5.25),
+            last_tested_at: Some(1_700_000_000),
+            ip: Some("203.0.113.10".to_string()),
+            country_code: Some("US".to_string()),
+            country_name: Some("United States".to_string()),
+            region_name: Some("California".to_string()),
+            city_name: Some("San Francisco".to_string()),
+            asn: Some(64512),
+            as_org: Some("Example ASN".to_string()),
+            isp: Some("Example ISP".to_string()),
+            as_domain: Some("example.com".to_string()),
+            flag_img_url: None,
+            flag_emoji: None,
+            timezone_id: None,
+            timezone_offset: None,
+            timezone_utc: None,
+            tags_json: Some(r#"["work"]"#.to_string()),
+            notes: Some("Primary proxy".to_string()),
+            accounts_count: Some(2),
+            created_at: 1,
+            updated_at: 2,
+        }],
+    };
+
+    let value = serde_json::to_value(result).expect("serialize proxy profile list result");
+    let obj = value.as_object().expect("proxy profile list result object");
+    assert!(obj.contains_key("items"));
+    let first = obj["items"][0]
+        .as_object()
+        .expect("proxy profile entry object");
+    for key in [
+        "proxyUrlRedacted",
+        "lastError",
+        "lastUrlLatencyMs",
+        "lastDownloadMbps",
+        "lastUploadMbps",
+        "lastTestedAt",
+        "countryCode",
+        "countryName",
+        "regionName",
+        "cityName",
+        "asOrg",
+        "tagsJson",
+        "createdAt",
+        "updatedAt",
+    ] {
+        assert!(first.contains_key(key), "missing key: {key}");
+    }
+}
+
+#[test]
+fn proxy_test_presets_result_serialization_uses_camel_case() {
+    let result = ProxyTestPresetsResult {
+        speed_providers: vec![ProxyTestSpeedProviderPreset {
+            id: "cachefly".to_string(),
+            label: "CacheFly".to_string(),
+            provider_family: "cachefly".to_string(),
+            files: vec![ProxyTestProviderFilePreset {
+                file_size_id: "size_10mb".to_string(),
+                download_url: "http://cachefly.cachefly.net/10mb.test".to_string(),
+                read_limit_bytes: None,
+            }],
+        }],
+        file_sizes: vec![ProxyTestFileSizePreset {
+            id: "size_10mb".to_string(),
+            label: "10MB".to_string(),
+            bytes: 10_000_000,
+            warning: false,
+        }],
+        defaults: ProxyTestDefaults {
+            speed_provider_id: "cachefly".to_string(),
+            file_size_id: "size_10mb".to_string(),
+            latency_preset_id: "google_gstatic_204".to_string(),
+        },
+        upload_endpoint: ProxyTestUploadEndpointStatus {
+            status: "configured".to_string(),
+            configured: true,
+            source: "env".to_string(),
+            url: Some("https://upload.example.com/proxy-test".to_string()),
+        },
+    };
+
+    let value = serde_json::to_value(result).expect("serialize proxy test presets result");
+    let obj = value.as_object().expect("proxy test presets result object");
+    for key in [
+        "speedProviders",
+        "fileSizes",
+        "defaults",
+        "uploadEndpoint",
+    ] {
+        assert!(obj.contains_key(key), "missing key: {key}");
+    }
+    assert!(obj["uploadEndpoint"].get("configured").is_some());
+    assert!(obj["speedProviders"][0]["files"][0]
+        .get("fileSizeId")
+        .is_some());
+}
+
+#[test]
+fn proxy_profile_url_test_result_serialization_uses_camel_case() {
+    let result = ProxyProfileUrlTestEntry {
+        id: 7,
+        proxy_profile_id: "pp_1".to_string(),
+        status: "failed".to_string(),
+        url_latency_ms: Some(123),
+        status_code: Some(302),
+        test_url: "http://example.test/generate_204".to_string(),
+        final_url: Some("http://example.test/login".to_string()),
+        redirected: true,
+        tested_at: 1_700_000_123,
+        error_code: Some("redirect_detected".to_string()),
+        error: Some("Received redirect".to_string()),
+    };
+
+    let value = serde_json::to_value(result).expect("serialize proxy url test result");
+    let obj = value.as_object().expect("proxy url test result object");
+    for key in [
+        "proxyProfileId",
+        "urlLatencyMs",
+        "statusCode",
+        "testUrl",
+        "finalUrl",
+        "redirected",
+        "testedAt",
+        "errorCode",
+    ] {
+        assert!(obj.contains_key(key), "missing key: {key}");
+    }
 }

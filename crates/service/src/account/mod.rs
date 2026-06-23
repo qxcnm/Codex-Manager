@@ -14,6 +14,12 @@ pub(crate) mod import;
 pub(crate) mod list;
 #[path = "account_plan.rs"]
 pub(crate) mod plan;
+#[path = "account_proxy.rs"]
+pub(crate) mod proxy;
+#[path = "account_proxy_health.rs"]
+pub(crate) mod proxy_health;
+#[path = "proxy_testing/mod.rs"]
+pub(crate) mod proxy_testing;
 #[path = "account_status.rs"]
 pub(crate) mod status;
 #[path = "account_update.rs"]

@@ -124,6 +124,12 @@ export const TOP_LEVEL_ROUTE_CONFIG = [
     roles: ["system_admin", "admin", "member"],
   },
   {
+    path: "/proxy-settings",
+    label: "代理设置",
+    section: "system",
+    roles: ["system_admin", "admin"],
+  },
+  {
     path: "/plugins",
     label: "插件中心",
     section: "system",

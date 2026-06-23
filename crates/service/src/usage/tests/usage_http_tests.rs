@@ -2,9 +2,11 @@ use super::{
     build_usage_request_headers, summarize_usage_error_response, usage_http_client,
     CHATGPT_ACCOUNT_ID_HEADER_NAME,
 };
+use codexmanager_core::storage::{now_ts, Account, Storage};
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::Client;
 use reqwest::StatusCode;
+use std::path::PathBuf;
 use std::sync::MutexGuard;
 use std::thread;
 use std::time::Duration;
@@ -19,6 +21,227 @@ struct RecordedSubscriptionRequest {
     origin: Option<String>,
     referer: Option<String>,
     accept: Option<String>,
+}
+
+struct EnvVarRestore {
+    key: &'static str,
+    value: Option<String>,
+}
+
+impl EnvVarRestore {
+    fn set(key: &'static str, value: &str) -> Self {
+        let restore = Self {
+            key,
+            value: std::env::var(key).ok(),
+        };
+        std::env::set_var(key, value);
+        restore
+    }
+
+    fn remove(key: &'static str) -> Self {
+        let restore = Self {
+            key,
+            value: std::env::var(key).ok(),
+        };
+        std::env::remove_var(key);
+        restore
+    }
+}
+
+impl Drop for EnvVarRestore {
+    fn drop(&mut self) {
+        match self.value.as_deref() {
+            Some(value) => std::env::set_var(self.key, value),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
+struct TestDbGuard {
+    previous_db_path: Option<String>,
+    db_path: PathBuf,
+}
+
+impl TestDbGuard {
+    fn new(label: &str) -> Self {
+        let db_path = std::env::temp_dir().join(format!(
+            "codexmanager-usage-http-{label}-{}-{}.sqlite",
+            std::process::id(),
+            codexmanager_core::storage::now_ts()
+        ));
+        let previous_db_path = std::env::var("CODEXMANAGER_DB_PATH").ok();
+        std::env::set_var("CODEXMANAGER_DB_PATH", &db_path);
+        let storage = Storage::open(&db_path).expect("open test storage");
+        storage.init().expect("init test storage");
+        Self {
+            previous_db_path,
+            db_path,
+        }
+    }
+}
+
+impl Drop for TestDbGuard {
+    fn drop(&mut self) {
+        match self.previous_db_path.as_deref() {
+            Some(value) => std::env::set_var("CODEXMANAGER_DB_PATH", value),
+            None => std::env::remove_var("CODEXMANAGER_DB_PATH"),
+        }
+        let _ = std::fs::remove_file(&self.db_path);
+    }
+}
+
+fn seed_account_proxy(db_path: &PathBuf, account_id: &str, enabled: bool, proxy_url: Option<&str>) {
+    let storage = Storage::open(db_path).expect("reopen test storage");
+    let now = now_ts();
+    storage
+        .insert_account(&Account {
+            id: account_id.to_string(),
+            label: account_id.to_string(),
+            issuer: "issuer".to_string(),
+            chatgpt_account_id: None,
+            workspace_id: None,
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("seed account");
+    storage
+        .upsert_account_proxy_settings(
+            account_id,
+            enabled,
+            Some("custom"),
+            None,
+            proxy_url,
+            "unchecked",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("seed account proxy");
+    crate::gateway::invalidate_account_proxy_cache(account_id);
+}
+
+fn spawn_recording_http_proxy(
+    response_body: &'static str,
+    content_type: &'static str,
+) -> (
+    String,
+    std::sync::mpsc::Receiver<String>,
+    thread::JoinHandle<()>,
+) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock HTTP proxy");
+    let proxy_addr = listener.local_addr().expect("mock HTTP proxy addr");
+    let (request_tx, request_rx) = std::sync::mpsc::channel();
+    let handle = thread::spawn(move || {
+        let (mut client, _) = listener.accept().expect("accept proxy client");
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("set proxy read timeout");
+        let mut request = Vec::new();
+        let mut buf = [0_u8; 1024];
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+            let read = client.read(&mut buf).expect("read proxy request");
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buf[..read]);
+        }
+        let request_text = String::from_utf8_lossy(request.as_slice()).to_string();
+        request_tx.send(request_text).expect("send proxy request");
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+            response_body.len()
+        );
+        client
+            .write_all(response.as_bytes())
+            .expect("write proxy response");
+        client.flush().expect("flush proxy response");
+    });
+    (format!("http://{proxy_addr}"), request_rx, handle)
+}
+
+fn spawn_timeout_recording_http_proxy(
+    response_body: &'static str,
+    content_type: &'static str,
+    accept_timeout: Duration,
+) -> (
+    String,
+    std::sync::mpsc::Receiver<String>,
+    thread::JoinHandle<()>,
+) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Instant;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind timeout HTTP proxy");
+    listener
+        .set_nonblocking(true)
+        .expect("set timeout proxy nonblocking");
+    let proxy_addr = listener.local_addr().expect("timeout HTTP proxy addr");
+    let (request_tx, request_rx) = std::sync::mpsc::channel();
+    let handle = thread::spawn(move || {
+        let started_at = Instant::now();
+        loop {
+            match listener.accept() {
+                Ok((mut client, _)) => {
+                    client
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .expect("set timeout proxy read timeout");
+                    let mut request = Vec::new();
+                    let mut buf = [0_u8; 1024];
+                    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        let read = client.read(&mut buf).expect("read timeout proxy request");
+                        if read == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&buf[..read]);
+                    }
+                    let request_text = String::from_utf8_lossy(request.as_slice()).to_string();
+                    request_tx
+                        .send(request_text)
+                        .expect("send timeout proxy request");
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+                        response_body.len()
+                    );
+                    client
+                        .write_all(response.as_bytes())
+                        .expect("write timeout proxy response");
+                    client.flush().expect("flush timeout proxy response");
+                    return;
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if started_at.elapsed() >= accept_timeout {
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(err) => panic!("accept timeout proxy client failed: {err}"),
+            }
+        }
+    });
+    (format!("http://{proxy_addr}"), request_rx, handle)
 }
 
 /// 函数 `usage_header_runtime_scope`
@@ -731,6 +954,216 @@ fn refresh_access_token_mock_region_blocked_response_surfaces_marker() {
     assert!(err.contains("refresh token failed with status 403 Forbidden"));
     assert!(err.contains("auth_error=unsupported_country_region_territory"));
     assert!(super::is_refresh_token_region_blocked_error_message(&err));
+}
+
+#[test]
+fn fetch_usage_snapshot_with_explicit_proxy_uses_explicit_proxy_before_global_proxy() {
+    let _guard = crate::test_env_guard();
+    let _global_proxy = EnvVarRestore::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "http://127.0.0.1:1");
+    super::reload_usage_http_client_from_env();
+    let (proxy_url, request_rx, proxy_handle) = spawn_recording_http_proxy(
+        r#"{"gpt4":{"usedPercent":12.5,"windowMinutes":180}}"#,
+        "application/json",
+    );
+
+    let snapshot = super::fetch_usage_snapshot_with_explicit_proxy(
+        "http://chatgpt.test",
+        "token_123",
+        Some("workspace_123"),
+        proxy_url.as_str(),
+    )
+    .expect("fetch usage snapshot");
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("capture usage proxy request");
+    proxy_handle.join().expect("join usage proxy");
+    let request = request.to_ascii_lowercase();
+
+    assert!(request.starts_with("get http://chatgpt.test/"));
+    assert!(request.contains("authorization: bearer token_123"));
+    assert!(request.contains("chatgpt-account-id: workspace_123"));
+    assert_eq!(snapshot["gpt4"]["usedPercent"], 12.5);
+}
+
+#[test]
+fn fetch_account_subscription_with_explicit_proxy_uses_explicit_proxy_before_global_proxy() {
+    let _guard = crate::test_env_guard();
+    let _global_proxy = EnvVarRestore::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "http://127.0.0.1:1");
+    super::reload_usage_http_client_from_env();
+    let (proxy_url, request_rx, proxy_handle) = spawn_recording_http_proxy(
+        r#"{"accounts":{"acct-chatgpt":{"account":{"plan_type":"pro","is_default":true},"entitlement":{"subscription_plan":"plus","has_active_subscription":true}}}}"#,
+        "application/json",
+    );
+
+    let snapshot = super::fetch_account_subscription_with_explicit_proxy(
+        "http://chatgpt.test",
+        "token_123",
+        "acct-chatgpt",
+        Some("workspace_123"),
+        proxy_url.as_str(),
+    )
+    .expect("fetch subscription");
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("capture subscription proxy request");
+    proxy_handle.join().expect("join subscription proxy");
+    let request = request.to_ascii_lowercase();
+
+    assert!(request.starts_with("get http://chatgpt.test/"));
+    assert!(request.contains("authorization: bearer token_123"));
+    assert!(request.contains("origin: https://chatgpt.com"));
+    assert!(!request.contains("user-agent:"));
+    assert!(snapshot.has_subscription);
+    assert_eq!(snapshot.account_plan_type.as_deref(), Some("pro"));
+}
+
+#[test]
+fn refresh_access_token_with_explicit_proxy_fails_for_invalid_proxy_url() {
+    let _guard = crate::test_env_guard();
+    let _override_restore = EnvVarRestore::remove("CODEX_REFRESH_TOKEN_URL_OVERRIDE");
+
+    let err = match super::refresh_access_token_with_explicit_proxy(
+        "https://auth.openai.com",
+        "client-id",
+        "refresh-token",
+        "http://",
+    ) {
+        Ok(_) => panic!("invalid explicit proxy should fail closed"),
+        Err(err) => err,
+    };
+
+    assert!(err.contains("explicit account proxy URL is invalid and fail-closed"));
+}
+
+#[test]
+fn refresh_access_token_with_explicit_proxy_fails_closed_for_empty_proxy_url() {
+    let _guard = crate::test_env_guard();
+
+    let err = match super::refresh_access_token_with_explicit_proxy(
+        "https://auth.openai.com",
+        "client-id",
+        "refresh-token",
+        "   ",
+    ) {
+        Ok(_) => panic!("empty explicit proxy should fail closed"),
+        Err(err) => err,
+    };
+
+    assert!(err.contains("explicit account proxy URL is required and fail-closed"));
+}
+
+#[test]
+fn legacy_subscription_request_ignores_proxy_pool_when_account_proxy_is_disabled() {
+    let _guard = crate::test_env_guard();
+    let db = TestDbGuard::new("subscription-disabled-proxy-pool");
+    seed_account_proxy(
+        &db.db_path,
+        "acc-disabled-subscription",
+        false,
+        Some("http://127.0.0.1:7891"),
+    );
+    let server = Server::http("127.0.0.1:0").expect("start legacy subscription server");
+    let addr = format!("http://{}", server.server_addr());
+    let (proxy_url, proxy_rx, proxy_handle) = spawn_timeout_recording_http_proxy(
+        r#"{"accounts":{"acct-chatgpt":{"account":{"plan_type":"pro","is_default":true},"entitlement":{"subscription_plan":"plus","has_active_subscription":true}}}}"#,
+        "application/json",
+        Duration::from_millis(400),
+    );
+    let _global_proxy = EnvVarRestore::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "");
+    let _pool_proxy = EnvVarRestore::set("CODEXMANAGER_PROXY_LIST", proxy_url.as_str());
+    super::reload_usage_http_client_from_env();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = thread::spawn(move || {
+        let request = server
+            .recv_timeout(Duration::from_secs(5))
+            .expect("subscription server timeout")
+            .expect("receive legacy subscription request");
+        tx.send(request.url().to_string())
+            .expect("send legacy subscription path");
+        let response = Response::from_string(
+            r#"{"accounts":{"acct-chatgpt":{"account":{"plan_type":"pro","is_default":true},"entitlement":{"subscription_plan":"plus","has_active_subscription":true}}}}"#,
+        )
+        .with_status_code(TinyStatusCode(200))
+        .with_header(
+            Header::from_bytes("Content-Type", "application/json")
+                .expect("content-type header"),
+        );
+        request
+            .respond(response)
+            .expect("respond legacy subscription");
+    });
+
+    let snapshot = super::fetch_account_subscription(
+        &addr,
+        "token_123",
+        "acct-chatgpt",
+        Some("workspace_123"),
+    )
+    .expect("fetch legacy subscription");
+
+    assert!(snapshot.has_subscription);
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(5))
+            .expect("receive legacy subscription path"),
+        "/accounts/check/v4-2023-04-27"
+    );
+    assert!(proxy_rx.recv_timeout(Duration::from_millis(300)).is_err());
+    handle.join().expect("join legacy subscription server");
+    proxy_handle.join().expect("join unused proxy");
+}
+
+#[test]
+fn legacy_usage_request_ignores_proxy_pool_when_account_proxy_is_disabled() {
+    let _guard = crate::test_env_guard();
+    let db = TestDbGuard::new("usage-disabled-proxy-pool");
+    seed_account_proxy(
+        &db.db_path,
+        "acc-disabled-usage",
+        false,
+        Some("http://127.0.0.1:7891"),
+    );
+    let server = Server::http("127.0.0.1:0").expect("start legacy usage server");
+    let addr = format!("http://{}", server.server_addr());
+    let (proxy_url, proxy_rx, proxy_handle) = spawn_timeout_recording_http_proxy(
+        r#"{"gpt4":{"usedPercent":99.0,"windowMinutes":180}}"#,
+        "application/json",
+        Duration::from_millis(400),
+    );
+    let _global_proxy = EnvVarRestore::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "");
+    let _pool_proxy = EnvVarRestore::set("CODEXMANAGER_PROXY_LIST", proxy_url.as_str());
+    super::reload_usage_http_client_from_env();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = thread::spawn(move || {
+        let request = server
+            .recv_timeout(Duration::from_secs(5))
+            .expect("usage server timeout")
+            .expect("receive legacy usage request");
+        tx.send(request.url().to_string())
+            .expect("send legacy usage path");
+        let response =
+            Response::from_string(r#"{"gpt4":{"usedPercent":99.0,"windowMinutes":180}}"#)
+                .with_status_code(TinyStatusCode(200))
+                .with_header(
+                    Header::from_bytes("Content-Type", "application/json")
+                        .expect("content-type header"),
+                );
+        request.respond(response).expect("respond legacy usage");
+    });
+
+    let snapshot = super::fetch_usage_snapshot(&addr, "token_123", Some("workspace_123"))
+        .expect("fetch legacy usage");
+
+    assert_eq!(snapshot["gpt4"]["usedPercent"], 99.0);
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(5))
+            .expect("receive legacy usage path"),
+        "/api/codex/usage"
+    );
+    assert!(proxy_rx.recv_timeout(Duration::from_millis(300)).is_err());
+    handle.join().expect("join legacy usage server");
+    proxy_handle.join().expect("join unused proxy");
 }
 
 /// 函数 `summarize_usage_error_response_stabilizes_html_and_debug_headers`

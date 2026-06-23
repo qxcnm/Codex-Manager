@@ -1,9 +1,10 @@
 use codexmanager_core::{
     rpc::types::{AccountListResult, AccountSummary},
     storage::{
-        Account, AccountListSummaryRow, AccountMetadata, AccountQuotaCapacityOverride,
-        AccountSubscription, AccountSummaryStorageSnapshot, AccountSummaryStorageSnapshotOptions,
-        AccountTokenPlan, UsageSnapshotRecord,
+        derive_proxy_profile_url_metadata, Account, AccountListSummaryRow, AccountMetadata,
+        AccountProxySettings, AccountQuotaCapacityOverride, AccountSubscription,
+        AccountSummaryStorageSnapshot, AccountSummaryStorageSnapshotOptions, AccountTokenPlan,
+        ProxyProfile, UsageSnapshotRecord,
     },
 };
 use std::collections::HashMap;
@@ -62,6 +63,8 @@ struct AccountSummarySetup {
     subscriptions: HashMap<String, AccountSubscription>,
     model_slugs_by_account: HashMap<String, Vec<String>>,
     quota_overrides: HashMap<String, AccountQuotaCapacityOverride>,
+    proxy_settings: HashMap<String, AccountProxySettings>,
+    proxy_profiles: HashMap<String, ProxyProfile>,
 }
 
 impl From<&Account> for AccountSummaryParts {
@@ -170,6 +173,26 @@ fn to_account_summary_with_reason(
         model_slugs,
         quota_capacity_primary_window_tokens,
         quota_capacity_secondary_window_tokens,
+        proxy_enabled: None,
+        proxy_source: None,
+        proxy_profile_id: None,
+        proxy_profile_name: None,
+        proxy_status: None,
+        proxy_url: None,
+        proxy_ip: None,
+        proxy_country_code: None,
+        proxy_country_name: None,
+        proxy_region_name: None,
+        proxy_city_name: None,
+        proxy_geo_checked_at: None,
+        proxy_asn: None,
+        proxy_as_org: None,
+        proxy_isp: None,
+        proxy_as_domain: None,
+        proxy_timezone_id: None,
+        proxy_timezone_utc: None,
+        proxy_flag_img_url: None,
+        proxy_flag_emoji: None,
     }
 }
 
@@ -254,7 +277,31 @@ fn load_account_summary_setup(
     let snapshot = storage
         .load_account_summary_storage_snapshot_with_options(account_ids, options)
         .map_err(|err| format!("load account summary snapshot failed: {err}"))?;
-    Ok(account_summary_setup_from_snapshot(snapshot))
+    let mut setup = account_summary_setup_from_snapshot(snapshot);
+    let proxy_settings = storage
+        .list_account_proxy_settings()
+        .map_err(|err| format!("load account proxy settings failed: {err}"))?;
+    let proxy_profile_ids = proxy_settings
+        .iter()
+        .filter_map(|item| item.proxy_profile_id.clone())
+        .collect::<Vec<_>>();
+    let proxy_profiles = if proxy_profile_ids.is_empty() {
+        HashMap::new()
+    } else {
+        storage
+            .list_proxy_profiles()
+            .map_err(|err| format!("load proxy profiles failed: {err}"))?
+            .into_iter()
+            .filter(|profile| proxy_profile_ids.iter().any(|id| id == &profile.id))
+            .map(|profile| (profile.id.clone(), profile))
+            .collect::<HashMap<String, ProxyProfile>>()
+    };
+    setup.proxy_settings = proxy_settings
+        .into_iter()
+        .map(|item| (item.account_id.clone(), item))
+        .collect();
+    setup.proxy_profiles = proxy_profiles;
+    Ok(setup)
 }
 
 fn account_summary_setup_from_snapshot(
@@ -296,6 +343,8 @@ fn account_summary_setup_from_snapshot(
         subscriptions,
         model_slugs_by_account,
         quota_overrides,
+        proxy_settings: HashMap::new(),
+        proxy_profiles: HashMap::new(),
     }
 }
 
@@ -325,6 +374,8 @@ where
                 &setup.subscriptions,
                 &setup.model_slugs_by_account,
                 &setup.quota_overrides,
+                &setup.proxy_settings,
+                &setup.proxy_profiles,
             )
         })
         .collect()
@@ -355,6 +406,8 @@ fn map_account_summary<A>(
     subscriptions: &HashMap<String, AccountSubscription>,
     model_slugs_by_account: &HashMap<String, Vec<String>>,
     quota_overrides: &HashMap<String, AccountQuotaCapacityOverride>,
+    proxy_settings: &HashMap<String, AccountProxySettings>,
+    proxy_profiles: &HashMap<String, ProxyProfile>,
 ) -> AccountSummary
 where
     A: Into<AccountSummaryParts>,
@@ -382,13 +435,14 @@ where
         .cloned()
         .unwrap_or_default();
     let quota_override = quota_overrides.get(&account_id);
+    let proxy_setting = proxy_settings.get(&account_id);
     let (fallback_plan_type, plan_type_raw) = match plan {
         Some(value) => (Some(value.normalized), value.raw),
         None => (None, None),
     };
     let subscription_plan = subscription.and_then(|value| value.plan_type.clone());
     let plan_type = fallback_plan_type;
-    to_account_summary_with_reason(
+    let mut summary = to_account_summary_with_reason(
         AccountSummaryParts {
             id: account_id,
             label,
@@ -410,5 +464,73 @@ where
         model_slugs,
         quota_override.and_then(|value| value.primary_window_tokens),
         quota_override.and_then(|value| value.secondary_window_tokens),
-    )
+    );
+
+    if let Some(proxy) = proxy_setting {
+        let proxy_source = proxy.proxy_source.clone().unwrap_or_else(|| {
+            if proxy
+                .proxy_profile_id
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                "profile".to_string()
+            } else {
+                "custom".to_string()
+            }
+        });
+        let proxy_profile = proxy
+            .proxy_profile_id
+            .as_ref()
+            .and_then(|id| proxy_profiles.get(id));
+        summary.proxy_enabled = Some(proxy.enabled);
+        summary.proxy_source = Some(proxy_source.clone());
+        summary.proxy_profile_id = proxy.proxy_profile_id.clone();
+        summary.proxy_profile_name = proxy_profile.map(|profile| profile.name.clone());
+        summary.proxy_url = Some(match proxy_source.as_str() {
+            "profile" => proxy_profile
+                .map(|profile| profile.proxy_url_redacted.clone())
+                .unwrap_or_else(|| "<missing>".to_string()),
+            _ => proxy
+                .proxy_url
+                .as_deref()
+                .map(|value| derive_proxy_profile_url_metadata(value).proxy_url_redacted)
+                .unwrap_or_default(),
+        });
+        if proxy_source == "profile" && proxy_profile.is_some() {
+            let p = proxy_profile.unwrap();
+            summary.proxy_status = Some(p.status.clone());
+            summary.proxy_ip = p.ip.clone();
+            summary.proxy_country_code = p.country_code.clone();
+            summary.proxy_country_name = p.country_name.clone();
+            summary.proxy_region_name = p.region_name.clone();
+            summary.proxy_city_name = p.city_name.clone();
+            summary.proxy_geo_checked_at = p.last_tested_at;
+            summary.proxy_asn = p.asn;
+            summary.proxy_as_org = p.as_org.clone();
+            summary.proxy_isp = None;
+            summary.proxy_as_domain = None;
+            summary.proxy_timezone_id = p.timezone_id.clone();
+            summary.proxy_timezone_utc = p.timezone_utc.clone();
+            summary.proxy_flag_img_url = p.flag_img_url.clone();
+            summary.proxy_flag_emoji = p.flag_emoji.clone();
+        } else {
+            summary.proxy_status = Some(proxy.status.clone());
+            summary.proxy_ip = proxy.ip.clone();
+            summary.proxy_country_code = proxy.country_code.clone();
+            summary.proxy_country_name = proxy.country_name.clone();
+            summary.proxy_region_name = proxy.region_name.clone();
+            summary.proxy_city_name = proxy.city_name.clone();
+            summary.proxy_geo_checked_at = proxy.geo_checked_at;
+            summary.proxy_asn = proxy.asn;
+            summary.proxy_as_org = proxy.as_org.clone();
+            summary.proxy_isp = proxy.isp.clone();
+            summary.proxy_as_domain = proxy.as_domain.clone();
+            summary.proxy_timezone_id = proxy.timezone_id.clone();
+            summary.proxy_timezone_utc = proxy.timezone_utc.clone();
+            summary.proxy_flag_img_url = proxy.flag_img_url.clone();
+            summary.proxy_flag_emoji = proxy.flag_emoji.clone();
+        }
+    }
+
+    summary
 }

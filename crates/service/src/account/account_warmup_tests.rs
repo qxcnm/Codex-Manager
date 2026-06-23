@@ -1,7 +1,6 @@
 use super::{
-    build_warmup_headers, consume_warmup_stream, reset_warmup_client_cache_for_test,
-    resolve_target_accounts, resolve_warmup_model_slug, should_retry_warmup_with_refresh,
-    warmup_client, warmup_client_build_count_for_test, DEFAULT_WARMUP_MODEL,
+    build_warmup_headers, consume_warmup_stream, resolve_target_accounts,
+    resolve_warmup_model_slug, should_retry_warmup_with_refresh, DEFAULT_WARMUP_MODEL,
 };
 use crate::apikey_models::save_managed_model_catalog_with_storage;
 use codexmanager_core::rpc::types::{
@@ -52,16 +51,6 @@ fn resolve_warmup_model_slug_falls_back_when_catalog_missing() {
     let storage = Storage::open_in_memory().expect("open in-memory storage");
     storage.init().expect("init in-memory storage");
     assert_eq!(resolve_warmup_model_slug(&storage), DEFAULT_WARMUP_MODEL);
-}
-
-#[test]
-fn warmup_client_reuses_cached_client_for_stable_config() {
-    reset_warmup_client_cache_for_test();
-
-    let _first = warmup_client().expect("first warmup client");
-    let _second = warmup_client().expect("second warmup client");
-
-    assert_eq!(warmup_client_build_count_for_test(), 1);
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use chrono::DateTime;
 use codexmanager_core::usage::{accounts_check_endpoint, usage_endpoint};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
-use reqwest::Client;
+use reqwest::{Client, Proxy};
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{OnceLock, RwLock};
@@ -1003,7 +1003,27 @@ pub(crate) fn fetch_usage_snapshot(
     bearer: &str,
     workspace_id: Option<&str>,
 ) -> Result<serde_json::Value, String> {
-    run_usage_future(fetch_usage_snapshot_async(base_url, bearer, workspace_id))
+    run_usage_future(fetch_usage_snapshot_async(
+        base_url,
+        bearer,
+        workspace_id,
+        None,
+    ))
+}
+
+pub(crate) fn fetch_usage_snapshot_with_explicit_proxy(
+    base_url: &str,
+    bearer: &str,
+    workspace_id: Option<&str>,
+    proxy_url: &str,
+) -> Result<serde_json::Value, String> {
+    let proxy_url = normalize_explicit_proxy_url(proxy_url)?;
+    run_usage_future(fetch_usage_snapshot_async(
+        base_url,
+        bearer,
+        workspace_id,
+        Some(proxy_url.as_str()),
+    ))
 }
 
 /// 函数 `fetch_account_subscription`
@@ -1031,6 +1051,24 @@ pub(crate) fn fetch_account_subscription(
         bearer,
         account_id,
         workspace_id,
+        None,
+    ))
+}
+
+pub(crate) fn fetch_account_subscription_with_explicit_proxy(
+    base_url: &str,
+    bearer: &str,
+    account_id: &str,
+    workspace_id: Option<&str>,
+    proxy_url: &str,
+) -> Result<AccountSubscriptionSnapshot, String> {
+    let proxy_url = normalize_explicit_proxy_url(proxy_url)?;
+    run_usage_future(fetch_account_subscription_async(
+        base_url,
+        bearer,
+        account_id,
+        workspace_id,
+        Some(proxy_url.as_str()),
     ))
 }
 
@@ -1051,26 +1089,28 @@ async fn fetch_usage_snapshot_async(
     base_url: &str,
     bearer: &str,
     workspace_id: Option<&str>,
+    explicit_proxy_url: Option<&str>,
 ) -> Result<serde_json::Value, String> {
     // 调用上游用量接口
     let url = usage_endpoint(base_url);
-    let build_request = || {
-        let client = usage_http_client();
+    let request_headers = build_usage_request_headers(workspace_id);
+    let build_request = |client: Client| {
         let mut req = client
             .get(&url)
             .header("Authorization", format!("Bearer {bearer}"));
-        let request_headers = build_usage_request_headers(workspace_id);
         if !request_headers.is_empty() {
-            req = req.headers(request_headers);
+            req = req.headers(request_headers.clone());
         }
         req
     };
-    let resp = match build_request().send().await {
+    let client = usage_http_client_for_proxy(explicit_proxy_url)?;
+    let resp = match build_request(client).send().await {
         Ok(resp) => resp,
         Err(first_err) => {
             // 中文注释：代理在程序启动后才开启时，旧 client 可能沿用旧网络状态；这里自动重建并重试一次。
-            rebuild_usage_http_client();
-            let retried = build_request().send().await;
+            let retried = build_request(refresh_usage_http_client_for_proxy(explicit_proxy_url)?)
+                .send()
+                .await;
             match retried {
                 Ok(resp) => resp,
                 Err(second_err) => {
@@ -1111,10 +1151,10 @@ async fn fetch_usage_snapshot_async(
 async fn fetch_accounts_check_response_async(
     base_url: &str,
     bearer: &str,
+    explicit_proxy_url: Option<&str>,
 ) -> Result<AccountsCheckResponse, String> {
     let url = accounts_check_endpoint(base_url);
-    let build_request = || {
-        let client = subscription_http_client();
+    let build_request = |client: Client| {
         client
             .get(&url)
             .header("Authorization", format!("Bearer {bearer}"))
@@ -1122,11 +1162,15 @@ async fn fetch_accounts_check_response_async(
             .header("Referer", "https://chatgpt.com/")
             .header("Accept", "application/json")
     };
-    let resp = match build_request().send().await {
+    let client = subscription_http_client_for_proxy(explicit_proxy_url)?;
+    let resp = match build_request(client).send().await {
         Ok(resp) => resp,
         Err(first_err) => {
-            rebuild_subscription_http_client();
-            let retried = build_request().send().await;
+            let retried = build_request(refresh_subscription_http_client_for_proxy(
+                explicit_proxy_url,
+            )?)
+            .send()
+            .await;
             match retried {
                 Ok(resp) => resp,
                 Err(second_err) => {
@@ -1189,12 +1233,14 @@ async fn fetch_account_subscription_async(
     bearer: &str,
     account_id: &str,
     _workspace_id: Option<&str>,
+    explicit_proxy_url: Option<&str>,
 ) -> Result<AccountSubscriptionSnapshot, String> {
     let normalized_account_id = account_id.trim();
     if normalized_account_id.is_empty() {
         return Ok(AccountSubscriptionSnapshot::default());
     }
-    let response = fetch_accounts_check_response_async(base_url, bearer).await?;
+    let response =
+        fetch_accounts_check_response_async(base_url, bearer, explicit_proxy_url).await?;
 
     if let Some(entry) = response.accounts.get(normalized_account_id) {
         return Ok(build_accounts_check_snapshot(entry));
@@ -1249,7 +1295,27 @@ pub(crate) fn refresh_access_token(
     client_id: &str,
     refresh_token: &str,
 ) -> Result<RefreshTokenResponse, String> {
-    run_usage_future(refresh_access_token_async(issuer, client_id, refresh_token))
+    run_usage_future(refresh_access_token_async(
+        issuer,
+        client_id,
+        refresh_token,
+        None,
+    ))
+}
+
+pub(crate) fn refresh_access_token_with_explicit_proxy(
+    issuer: &str,
+    client_id: &str,
+    refresh_token: &str,
+    proxy_url: &str,
+) -> Result<RefreshTokenResponse, String> {
+    let proxy_url = normalize_explicit_proxy_url(proxy_url)?;
+    run_usage_future(refresh_access_token_async(
+        issuer,
+        client_id,
+        refresh_token,
+        Some(proxy_url.as_str()),
+    ))
 }
 
 /// 函数 `refresh_access_token_async`
@@ -1269,21 +1335,25 @@ async fn refresh_access_token_async(
     issuer: &str,
     client_id: &str,
     refresh_token: &str,
+    explicit_proxy_url: Option<&str>,
 ) -> Result<RefreshTokenResponse, String> {
     let refresh_token_url = resolve_refresh_token_url(issuer);
     let body = build_refresh_token_body(client_id, refresh_token);
-    let build_request = || {
-        let client = usage_http_client();
+    let build_request = |client: Client| {
         client
             .post(refresh_token_url.clone())
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(body.clone())
     };
-    let resp = match build_request().send().await {
+    let client = token_refresh_http_client_for_proxy(explicit_proxy_url)?;
+    let resp = match build_request(client).send().await {
         Ok(resp) => resp,
         Err(first_err) => {
-            rebuild_usage_http_client();
-            let retried = build_request().send().await;
+            let retried = build_request(refresh_token_refresh_http_client_for_proxy(
+                explicit_proxy_url,
+            )?)
+            .send()
+            .await;
             match retried {
                 Ok(resp) => resp,
                 Err(second_err) => {
@@ -1308,6 +1378,193 @@ async fn refresh_access_token_async(
     read_response_json(resp, USAGE_HTTP_TOTAL_TIMEOUT)
         .await
         .map_err(|e| format!("read refresh token response json failed: {e}"))
+}
+
+fn usage_http_client_for_proxy(explicit_proxy_url: Option<&str>) -> Result<Client, String> {
+    match explicit_proxy_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(proxy_url) => build_usage_http_client_with_explicit_proxy(proxy_url),
+        None => Ok(usage_http_client()),
+    }
+}
+
+fn refresh_usage_http_client_for_proxy(explicit_proxy_url: Option<&str>) -> Result<Client, String> {
+    match explicit_proxy_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(proxy_url) => build_usage_http_client_with_explicit_proxy(proxy_url),
+        None => {
+            rebuild_usage_http_client();
+            Ok(usage_http_client())
+        }
+    }
+}
+
+fn subscription_http_client_for_proxy(explicit_proxy_url: Option<&str>) -> Result<Client, String> {
+    match explicit_proxy_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(proxy_url) => build_subscription_http_client_with_explicit_proxy(proxy_url),
+        None => Ok(subscription_http_client()),
+    }
+}
+
+fn refresh_subscription_http_client_for_proxy(
+    explicit_proxy_url: Option<&str>,
+) -> Result<Client, String> {
+    match explicit_proxy_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(proxy_url) => build_subscription_http_client_with_explicit_proxy(proxy_url),
+        None => {
+            rebuild_subscription_http_client();
+            Ok(subscription_http_client())
+        }
+    }
+}
+
+fn token_refresh_http_client_for_proxy(explicit_proxy_url: Option<&str>) -> Result<Client, String> {
+    match explicit_proxy_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(proxy_url) => build_token_refresh_http_client_with_explicit_proxy(proxy_url),
+        None => Ok(usage_http_client()),
+    }
+}
+
+fn refresh_token_refresh_http_client_for_proxy(
+    explicit_proxy_url: Option<&str>,
+) -> Result<Client, String> {
+    match explicit_proxy_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(proxy_url) => build_token_refresh_http_client_with_explicit_proxy(proxy_url),
+        None => {
+            rebuild_usage_http_client();
+            Ok(usage_http_client())
+        }
+    }
+}
+
+fn normalize_explicit_proxy_url(proxy_url: &str) -> Result<String, String> {
+    let trimmed = proxy_url.trim();
+    if trimmed.is_empty() {
+        return Err("explicit account proxy URL is required and fail-closed".to_string());
+    }
+    crate::account_proxy::normalize_supported_proxy_url(trimmed)
+        .map_err(|err| format!("explicit account proxy URL is invalid and fail-closed: {err}"))
+}
+
+fn build_usage_http_client_with_explicit_proxy(proxy_url: &str) -> Result<Client, String> {
+    let builder = Client::builder()
+        .connect_timeout(USAGE_HTTP_CONNECT_TIMEOUT)
+        .timeout(USAGE_HTTP_TOTAL_TIMEOUT)
+        .pool_max_idle_per_host(8)
+        .pool_idle_timeout(Some(Duration::from_secs(60)))
+        .user_agent(crate::gateway::current_codex_user_agent())
+        .default_headers(build_usage_http_default_headers());
+    let builder = builder.proxy(
+        Proxy::all(proxy_url).map_err(|err| format!("build explicit usage proxy failed: {err}"))?,
+    );
+    builder
+        .build()
+        .map_err(|err| format!("build explicit usage client failed: {err}"))
+}
+
+fn build_subscription_http_client_with_explicit_proxy(proxy_url: &str) -> Result<Client, String> {
+    let builder = Client::builder()
+        .connect_timeout(USAGE_HTTP_CONNECT_TIMEOUT)
+        .timeout(USAGE_HTTP_TOTAL_TIMEOUT)
+        .pool_max_idle_per_host(4)
+        .pool_idle_timeout(Some(Duration::from_secs(60)));
+    let builder = builder.proxy(
+        Proxy::all(proxy_url)
+            .map_err(|err| format!("build explicit subscription proxy failed: {err}"))?,
+    );
+    builder
+        .build()
+        .map_err(|err| format!("build explicit subscription client failed: {err}"))
+}
+
+fn build_token_refresh_http_client_with_explicit_proxy(proxy_url: &str) -> Result<Client, String> {
+    let builder = Client::builder()
+        .connect_timeout(USAGE_HTTP_CONNECT_TIMEOUT)
+        .timeout(USAGE_HTTP_TOTAL_TIMEOUT)
+        .pool_max_idle_per_host(8)
+        .pool_idle_timeout(Some(Duration::from_secs(60)))
+        .user_agent(crate::gateway::current_codex_user_agent())
+        .default_headers(build_usage_http_default_headers());
+    let builder = builder.proxy(
+        Proxy::all(proxy_url)
+            .map_err(|err| format!("build explicit token refresh proxy failed: {err}"))?,
+    );
+    builder
+        .build()
+        .map_err(|err| format!("build explicit token refresh client failed: {err}"))
+}
+
+pub(crate) fn log_account_data_route(
+    kind: &str,
+    account_id: &str,
+    mode: &crate::account_proxy::AccountProxyMode,
+    endpoint: &str,
+    uses_codex_user_agent: bool,
+) {
+    if !crate::account_proxy::account_proxy_debug_enabled() {
+        return;
+    }
+
+    let (client_path, proxy_source, proxy_url_redacted, uses_account_scoped_client) = match mode {
+        crate::account_proxy::AccountProxyMode::Disabled => {
+            if let Some(proxy_url) = current_upstream_proxy_url() {
+                (
+                    "legacy",
+                    "legacy_upstream_proxy_url",
+                    crate::account_proxy::redact_proxy_url_for_log(proxy_url.as_str()),
+                    false,
+                )
+            } else {
+                ("legacy", "system_proxy_possible", "-".to_string(), false)
+            }
+        }
+        crate::account_proxy::AccountProxyMode::Explicit { proxy_url, source } => (
+            "explicit_account_proxy",
+            source.as_str(),
+            crate::account_proxy::redact_proxy_url_for_log(proxy_url),
+            true,
+        ),
+        crate::account_proxy::AccountProxyMode::Invalid {
+            proxy_url, source, ..
+        } => (
+            "invalid",
+            source.as_str(),
+            proxy_url
+                .as_deref()
+                .map(crate::account_proxy::redact_proxy_url_for_log)
+                .unwrap_or_else(|| "-".to_string()),
+            false,
+        ),
+    };
+
+    log::info!(
+        "event=account_data_route kind={} account_id={} account_proxy_mode={} client_path={} proxy_source={} proxy_url_redacted={} uses_account_scoped_client={} uses_codex_user_agent={} endpoint={}",
+        kind,
+        account_id,
+        mode.as_str(),
+        client_path,
+        proxy_source,
+        proxy_url_redacted,
+        uses_account_scoped_client,
+        uses_codex_user_agent,
+        endpoint
+    );
 }
 
 /// 函数 `read_response_text`

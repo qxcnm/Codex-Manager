@@ -15,6 +15,7 @@ mod lifecycle;
 mod logging;
 mod model_groups;
 mod plugin;
+mod proxy_registry;
 mod quota;
 mod requestlog;
 mod rpc_actor;
@@ -33,6 +34,8 @@ pub(crate) use account::export as account_export;
 pub(crate) use account::import as account_import;
 pub(crate) use account::list as account_list;
 pub(crate) use account::plan as account_plan;
+pub(crate) use account::proxy as account_proxy;
+pub(crate) use account::proxy_testing::presets::proxy_test_presets;
 pub(crate) use account::status as account_status;
 pub(crate) use account::update as account_update;
 pub(crate) use account::warmup as account_warmup;
@@ -64,6 +67,16 @@ pub(crate) use model_groups::{
     resolve_api_key_model_group_access, set_model_group_models, set_model_group_users,
     upsert_model_group,
 };
+pub(crate) use proxy_registry::{
+    create_proxy_profile, delete_proxy_profile, list_proxy_profiles, test_proxy_profile,
+    test_proxy_profile_latency, test_proxy_profile_speed,
+    test_proxy_profile_cloudflare_style_speed,
+    update_proxy_profile,
+    get_proxy_test_job, cancel_proxy_test_job,
+    get_proxy_profile_speed_test_history, get_proxy_profile_latency_test_history,
+    get_proxy_profile_diagnostics_history,
+};
+
 pub(crate) use requestlog::clear as requestlog_clear;
 pub(crate) use requestlog::list as requestlog_list;
 pub(crate) use requestlog::summary as requestlog_summary;

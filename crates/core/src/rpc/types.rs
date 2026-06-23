@@ -196,6 +196,26 @@ pub struct AccountSummary {
     pub model_slugs: Vec<String>,
     pub quota_capacity_primary_window_tokens: Option<i64>,
     pub quota_capacity_secondary_window_tokens: Option<i64>,
+    pub proxy_enabled: Option<bool>,
+    pub proxy_source: Option<String>,
+    pub proxy_profile_id: Option<String>,
+    pub proxy_profile_name: Option<String>,
+    pub proxy_status: Option<String>,
+    pub proxy_url: Option<String>,
+    pub proxy_ip: Option<String>,
+    pub proxy_country_code: Option<String>,
+    pub proxy_country_name: Option<String>,
+    pub proxy_region_name: Option<String>,
+    pub proxy_city_name: Option<String>,
+    pub proxy_geo_checked_at: Option<i64>,
+    pub proxy_asn: Option<i64>,
+    pub proxy_as_org: Option<String>,
+    pub proxy_isp: Option<String>,
+    pub proxy_as_domain: Option<String>,
+    pub proxy_timezone_id: Option<String>,
+    pub proxy_timezone_utc: Option<String>,
+    pub proxy_flag_img_url: Option<String>,
+    pub proxy_flag_emoji: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -615,6 +635,204 @@ pub struct ApiKeyCreateResult {
 pub struct ApiKeySecretResult {
     pub id: String,
     pub key: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyProfileEntry {
+    pub id: String,
+    pub name: String,
+    pub proxy_url_redacted: String,
+    pub scheme: Option<String>,
+    pub host: Option<String>,
+    pub port: Option<i64>,
+    pub enabled: bool,
+    pub status: String,
+    pub last_error: Option<String>,
+    pub last_url_latency_ms: Option<i64>,
+    pub last_download_mbps: Option<f64>,
+    pub last_upload_mbps: Option<f64>,
+    pub last_tested_at: Option<i64>,
+    pub ip: Option<String>,
+    pub country_code: Option<String>,
+    pub country_name: Option<String>,
+    pub region_name: Option<String>,
+    pub city_name: Option<String>,
+    pub asn: Option<i64>,
+    pub as_org: Option<String>,
+    pub isp: Option<String>,
+    pub as_domain: Option<String>,
+    pub flag_img_url: Option<String>,
+    pub flag_emoji: Option<String>,
+    pub timezone_id: Option<String>,
+    pub timezone_offset: Option<i64>,
+    pub timezone_utc: Option<String>,
+    pub tags_json: Option<String>,
+    pub notes: Option<String>,
+    pub accounts_count: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyProfileListResult {
+    #[serde(default)]
+    pub items: Vec<ProxyProfileEntry>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyTestFileSizePreset {
+    pub id: String,
+    pub label: String,
+    pub bytes: i64,
+    pub warning: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyTestProviderFilePreset {
+    pub file_size_id: String,
+    pub download_url: String,
+    pub read_limit_bytes: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyTestSpeedProviderPreset {
+    pub id: String,
+    pub label: String,
+    pub provider_family: String,
+    #[serde(default)]
+    pub files: Vec<ProxyTestProviderFilePreset>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyTestDefaults {
+    pub speed_provider_id: String,
+    pub file_size_id: String,
+    pub latency_preset_id: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyTestUploadEndpointStatus {
+    pub status: String,
+    pub configured: bool,
+    pub source: String,
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyTestPresetsResult {
+    #[serde(default)]
+    pub speed_providers: Vec<ProxyTestSpeedProviderPreset>,
+    #[serde(default)]
+    pub file_sizes: Vec<ProxyTestFileSizePreset>,
+    pub defaults: ProxyTestDefaults,
+    pub upload_endpoint: ProxyTestUploadEndpointStatus,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyProfileUrlTestEntry {
+    pub id: i64,
+    pub proxy_profile_id: String,
+    pub status: String,
+    pub url_latency_ms: Option<i64>,
+    pub status_code: Option<i64>,
+    pub test_url: String,
+    pub final_url: Option<String>,
+    pub redirected: bool,
+    pub tested_at: i64,
+    pub error_code: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyProfileUrlTestListResult {
+    #[serde(default)]
+    pub items: Vec<ProxyProfileUrlTestEntry>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxySpeedTestEntry {
+    pub id: i64,
+    pub scope: String,
+    pub proxy_profile_id: Option<String>,
+    pub account_id: Option<String>,
+    pub status: String,
+    pub provider: String,
+    pub observed_ip: Option<String>,
+    pub observed_country: Option<String>,
+    pub observed_colo: Option<String>,
+    pub max_payload_bytes: Option<i64>,
+    pub samples_json: Option<String>,
+    pub download_summary_json: Option<String>,
+    pub upload_summary_json: Option<String>,
+    pub started_at: i64,
+    pub finished_at: i64,
+    pub error_code: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxySpeedTestListResult {
+    #[serde(default)]
+    pub items: Vec<ProxySpeedTestEntry>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyDiagnosticTestEntry {
+    pub id: i64,
+    pub scope: String,
+    pub proxy_profile_id: Option<String>,
+    pub account_id: Option<String>,
+    pub status: String,
+    pub provider: String,
+    pub file_size_id: String,
+    pub downloaded_bytes: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub mbps: Option<f64>,
+    pub tested_at: i64,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyDiagnosticTestListResult {
+    #[serde(default)]
+    pub items: Vec<ProxyDiagnosticTestEntry>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountProxyUrlTestEntry {
+    pub id: i64,
+    pub account_id: String,
+    pub status: String,
+    pub url_latency_ms: Option<i64>,
+    pub status_code: Option<i64>,
+    pub test_url: String,
+    pub final_url: Option<String>,
+    pub redirected: bool,
+    pub tested_at: i64,
+    pub error_code: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountProxyUrlTestListResult {
+    #[serde(default)]
+    pub items: Vec<AccountProxyUrlTestEntry>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

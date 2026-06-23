@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod support;
-use support::test_env_guard;
+use support::{test_env_guard, EnvGuard};
 
 const CODEX_IMAGE_AUTO_INJECT_TOOL_ENV: &str =
     "CODEXMANAGER_CODEX_IMAGE_GENERATION_AUTO_INJECT_TOOL";
@@ -130,8 +130,7 @@ fn reset_runtime_defaults() {
 fn with_temp_db(test: impl FnOnce(&PathBuf)) {
     let _guard = test_env_guard();
     let db_path = unique_temp_db_path();
-    let previous_db_path = std::env::var("CODEXMANAGER_DB_PATH").ok();
-    std::env::set_var("CODEXMANAGER_DB_PATH", &db_path);
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
     codexmanager_service::initialize_storage_if_needed().expect("init storage");
     reset_runtime_defaults();
     let isolated_env_vars = ISOLATED_RUNTIME_ENV_KEYS
@@ -143,11 +142,6 @@ fn with_temp_db(test: impl FnOnce(&PathBuf)) {
     test(&db_path);
 
     reset_runtime_defaults();
-    if let Some(value) = previous_db_path {
-        std::env::set_var("CODEXMANAGER_DB_PATH", value);
-    } else {
-        std::env::remove_var("CODEXMANAGER_DB_PATH");
-    }
     let _ = std::fs::remove_file(&db_path);
 }
 

@@ -1,8 +1,12 @@
 use codexmanager_core::storage::{
-    now_ts, Account, AggregateApi, ApiKey, ApiKeyOwner, AppUser, AppWalletLedgerEntry, Event,
-    ModelCatalogModelRecord, ModelGroup, ModelSourceMapping, ModelSourceModel, RequestLog,
-    RequestTokenStat, Storage, Token, UsageSnapshotRecord, UserModelGroup,
+    derive_proxy_profile_url_metadata, now_ts, AccountProxyUrlTestInsertInput, Account,
+    AggregateApi, ApiKey, ApiKeyOwner, AppUser, AppWalletLedgerEntry, Event,
+    ModelCatalogModelRecord, ModelGroup, ModelSourceMapping, ModelSourceModel,
+    ProxyDiagnosticTestInsertInput, ProxyProfileCreateInput, ProxyProfileUpdateInput,
+    ProxyProfileUrlTestInsertInput, ProxySpeedTestInsertInput, RequestLog, RequestTokenStat,
+    Storage, Token, UsageSnapshotRecord, UserModelGroup,
 };
+use std::time::Duration;
 
 /// 函数 `storage_can_insert_account_and_token`
 ///
@@ -112,6 +116,604 @@ fn storage_can_find_token_and_account_by_account_id() {
         .find_token_by_account_id("missing-account")
         .expect("find missing token")
         .is_none());
+}
+
+#[test]
+fn storage_can_persist_account_proxy_settings() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init schema");
+    let now = now_ts();
+
+    storage
+        .insert_account(&Account {
+            id: "acc-proxy-1".to_string(),
+            label: "proxy".to_string(),
+            issuer: "https://auth.openai.com".to_string(),
+            chatgpt_account_id: None,
+            workspace_id: None,
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("insert account");
+
+    storage
+        .upsert_account_proxy_settings(
+            "acc-proxy-1",
+            true,
+            Some("custom"),
+            None,
+            Some("http://127.0.0.1:7891"),
+            "unchecked",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("upsert proxy settings");
+
+    let stored = storage
+        .find_account_proxy_settings("acc-proxy-1")
+        .expect("find proxy settings")
+        .expect("proxy settings exist");
+    assert!(stored.enabled);
+    assert_eq!(stored.proxy_source.as_deref(), Some("custom"));
+    assert_eq!(stored.proxy_profile_id, None);
+    assert_eq!(stored.proxy_url.as_deref(), Some("http://127.0.0.1:7891"));
+    assert_eq!(stored.status, "unchecked");
+    assert_eq!(stored.latency_ms, None);
+    assert_eq!(stored.last_check_at, None);
+    assert_eq!(stored.last_error, None);
+
+    let listed = storage
+        .list_account_proxy_settings()
+        .expect("list proxy settings");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].account_id, "acc-proxy-1");
+}
+
+#[test]
+fn storage_can_update_and_clear_account_proxy_settings() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init schema");
+    let now = now_ts();
+
+    storage
+        .insert_account(&Account {
+            id: "acc-proxy-2".to_string(),
+            label: "proxy".to_string(),
+            issuer: "https://auth.openai.com".to_string(),
+            chatgpt_account_id: None,
+            workspace_id: None,
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("insert account");
+
+    storage
+        .upsert_account_proxy_settings(
+            "acc-proxy-2",
+            true,
+            Some("custom"),
+            None,
+            Some("socks5h://127.0.0.1:7892"),
+            "checking",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("seed proxy settings");
+    storage
+        .update_account_proxy_check_status(
+            "acc-proxy-2",
+            "ok",
+            Some(184),
+            Some(1_760_000_000),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("update proxy check status");
+
+    let stored = storage
+        .find_account_proxy_settings("acc-proxy-2")
+        .expect("find proxy settings")
+        .expect("proxy settings exist");
+    assert_eq!(stored.proxy_source.as_deref(), Some("custom"));
+    assert_eq!(stored.status, "ok");
+    assert_eq!(stored.latency_ms, Some(184));
+    assert_eq!(stored.last_download_mbps, None);
+    assert_eq!(stored.last_upload_mbps, None);
+    assert_eq!(stored.last_check_at, Some(1_760_000_000));
+    assert_eq!(stored.last_error, None);
+
+    storage
+        .clear_account_proxy_settings("acc-proxy-2")
+        .expect("clear proxy settings");
+    assert!(storage
+        .find_account_proxy_settings("acc-proxy-2")
+        .expect("find cleared proxy settings")
+        .is_none());
+}
+
+#[test]
+fn storage_can_store_latest_account_proxy_speed_metrics() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init schema");
+    let now = now_ts();
+
+    storage
+        .insert_account(&Account {
+            id: "acc-proxy-speed".to_string(),
+            label: "proxy".to_string(),
+            issuer: "https://auth.openai.com".to_string(),
+            chatgpt_account_id: None,
+            workspace_id: None,
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("insert account");
+
+    storage
+        .upsert_account_proxy_settings(
+            "acc-proxy-speed",
+            true,
+            Some("custom"),
+            None,
+            Some("http://127.0.0.1:7891"),
+            "unchecked",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("seed proxy settings");
+
+    storage
+        .update_account_proxy_test_result(
+            "acc-proxy-speed",
+            "ok",
+            Some(91),
+            Some(18.5),
+            Some(7.25),
+            Some(1_760_000_123),
+            None,
+        )
+        .expect("update latest account proxy test result");
+
+    let stored = storage
+        .find_account_proxy_settings("acc-proxy-speed")
+        .expect("find proxy settings")
+        .expect("proxy settings exist");
+    assert_eq!(stored.status, "ok");
+    assert_eq!(stored.latency_ms, Some(91));
+    assert_eq!(stored.last_download_mbps, Some(18.5));
+    assert_eq!(stored.last_upload_mbps, Some(7.25));
+    assert_eq!(stored.last_check_at, Some(1_760_000_123));
+}
+
+#[test]
+fn deleting_account_cleans_up_account_proxy_settings() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init schema");
+    let now = now_ts();
+
+    storage
+        .insert_account(&Account {
+            id: "acc-proxy-delete".to_string(),
+            label: "proxy".to_string(),
+            issuer: "https://auth.openai.com".to_string(),
+            chatgpt_account_id: None,
+            workspace_id: None,
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("insert account");
+    storage
+        .upsert_account_proxy_settings(
+            "acc-proxy-delete",
+            false,
+            Some("custom"),
+            None,
+            None,
+            "not_configured",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("upsert proxy settings");
+
+    let mut storage = storage;
+    storage
+        .delete_account("acc-proxy-delete")
+        .expect("delete account");
+
+    assert!(storage
+        .find_account_proxy_settings("acc-proxy-delete")
+        .expect("find deleted proxy settings")
+        .is_none());
+}
+
+#[test]
+fn storage_can_create_and_list_proxy_profiles() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init schema");
+
+    storage
+        .create_proxy_profile(&ProxyProfileCreateInput {
+            id: "proxy-old".to_string(),
+            name: "Beta".to_string(),
+            proxy_url: " http://user:pass@example.com:8080/path?token=secret ".to_string(),
+            enabled: true,
+            tags_json: None,
+            notes: None,
+        })
+        .expect("create older proxy profile");
+    std::thread::sleep(Duration::from_secs(1));
+    storage
+        .create_proxy_profile(&ProxyProfileCreateInput {
+            id: "proxy-new".to_string(),
+            name: "Alpha".to_string(),
+            proxy_url: "socks5h://proxy.local:1080".to_string(),
+            enabled: false,
+            tags_json: Some(r#"["work"]"#.to_string()),
+            notes: Some("Local socks".to_string()),
+        })
+        .expect("create newer proxy profile");
+
+    let stored = storage
+        .find_proxy_profile("proxy-old")
+        .expect("find proxy profile")
+        .expect("proxy profile exists");
+    assert_eq!(stored.status, "unchecked");
+    assert!(stored.enabled);
+    assert_eq!(
+        stored.proxy_url,
+        "http://user:pass@example.com:8080/path?token=secret"
+    );
+    assert_eq!(stored.proxy_url_redacted, "http://example.com:8080");
+    assert_eq!(stored.scheme.as_deref(), Some("http"));
+    assert_eq!(stored.host.as_deref(), Some("example.com"));
+    assert_eq!(stored.port, Some(8080));
+    assert_eq!(stored.last_error, None);
+    assert_eq!(stored.last_url_latency_ms, None);
+
+    let listed = storage.list_proxy_profiles().expect("list proxy profiles");
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].id, "proxy-new");
+    assert_eq!(listed[1].id, "proxy-old");
+    assert!(!listed[0].enabled);
+}
+
+#[test]
+fn storage_updates_proxy_profile_and_recomputes_redacted_url() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init schema");
+
+    let created = storage
+        .create_proxy_profile(&ProxyProfileCreateInput {
+            id: "proxy-update".to_string(),
+            name: "Initial".to_string(),
+            proxy_url: "http://first.example:8000".to_string(),
+            enabled: true,
+            tags_json: None,
+            notes: None,
+        })
+        .expect("create proxy profile");
+    std::thread::sleep(Duration::from_secs(1));
+
+    let updated = storage
+        .update_proxy_profile(&ProxyProfileUpdateInput {
+            id: "proxy-update".to_string(),
+            name: Some("Updated".to_string()),
+            proxy_url: Some("socks5h://user:pass@second.example:1080/private".to_string()),
+            enabled: Some(false),
+            status: Some("ok".to_string()),
+            last_error: None,
+            last_url_latency_ms: Some(42),
+            last_download_mbps: Some(18.5),
+            last_upload_mbps: Some(7.25),
+            last_tested_at: Some(1_800_000_000),
+            ip: Some("203.0.113.10".to_string()),
+            country_code: Some("us".to_string()),
+            country_name: Some("United States".to_string()),
+            region_name: Some("California".to_string()),
+            city_name: Some("San Francisco".to_string()),
+            asn: Some(64512),
+            as_org: Some("Example ASN".to_string()),
+            isp: Some("Example ISP".to_string()),
+            as_domain: Some("example.com".to_string()),
+            flag_img_url: None,
+            flag_emoji: None,
+            timezone_id: None,
+            timezone_offset: None,
+            timezone_utc: None,
+            tags_json: Some(r#"["fast","shared"]"#.to_string()),
+            notes: Some("Updated notes".to_string()),
+        })
+        .expect("update proxy profile")
+        .expect("proxy profile exists");
+
+    assert_eq!(updated.created_at, created.created_at);
+    assert!(
+        updated.updated_at > created.updated_at,
+        "updated_at should change after update"
+    );
+    assert_eq!(updated.name, "Updated");
+    assert!(!updated.enabled);
+    assert_eq!(updated.status, "ok");
+    assert_eq!(updated.proxy_url_redacted, "socks5h://second.example:1080");
+    assert_eq!(updated.scheme.as_deref(), Some("socks5h"));
+    assert_eq!(updated.host.as_deref(), Some("second.example"));
+    assert_eq!(updated.port, Some(1080));
+    assert_eq!(updated.last_url_latency_ms, Some(42));
+    assert_eq!(updated.last_download_mbps, Some(18.5));
+    assert_eq!(updated.last_upload_mbps, Some(7.25));
+    assert_eq!(updated.country_code.as_deref(), Some("US"));
+    assert_eq!(updated.tags_json.as_deref(), Some(r#"["fast","shared"]"#));
+    assert_eq!(updated.notes.as_deref(), Some("Updated notes"));
+    assert_eq!(updated.isp.as_deref(), Some("Example ISP"));
+    assert_eq!(updated.as_domain.as_deref(), Some("example.com"));
+
+    let preserved = storage
+        .update_proxy_profile(&ProxyProfileUpdateInput {
+            id: "proxy-update".to_string(),
+            name: Some("Renamed Only".to_string()),
+            proxy_url: None,
+            enabled: None,
+            status: None,
+            last_error: None,
+            last_url_latency_ms: None,
+            last_download_mbps: None,
+            last_upload_mbps: None,
+            last_tested_at: None,
+            ip: None,
+            country_code: None,
+            country_name: None,
+            region_name: None,
+            city_name: None,
+            asn: None,
+            as_org: None,
+            isp: None,
+            as_domain: None,
+            flag_img_url: None,
+            flag_emoji: None,
+            timezone_id: None,
+            timezone_offset: None,
+            timezone_utc: None,
+            tags_json: None,
+            notes: None,
+        })
+        .expect("rename proxy profile")
+        .expect("proxy profile exists");
+    assert_eq!(preserved.name, "Renamed Only");
+    assert_eq!(
+        preserved.proxy_url_redacted,
+        "socks5h://second.example:1080"
+    );
+}
+
+#[test]
+fn storage_can_insert_and_list_proxy_profile_url_tests() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init schema");
+
+    storage
+        .create_proxy_profile(&ProxyProfileCreateInput {
+            id: "proxy-url-tests".to_string(),
+            name: "Proxy URL Tests".to_string(),
+            proxy_url: "http://127.0.0.1:8080".to_string(),
+            enabled: true,
+            tags_json: None,
+            notes: None,
+        })
+        .expect("create proxy profile");
+
+    let first = storage
+        .insert_proxy_profile_url_test(&ProxyProfileUrlTestInsertInput {
+            proxy_profile_id: "proxy-url-tests".to_string(),
+            status: "ok".to_string(),
+            url_latency_ms: Some(84),
+            status_code: Some(204),
+            test_url: "http://example.test/generate_204".to_string(),
+            final_url: None,
+            redirected: false,
+            tested_at: 1_800_000_000,
+            error_code: None,
+            error: None,
+        })
+        .expect("insert first url test");
+    let second = storage
+        .insert_proxy_profile_url_test(&ProxyProfileUrlTestInsertInput {
+            proxy_profile_id: "proxy-url-tests".to_string(),
+            status: "failed".to_string(),
+            url_latency_ms: Some(91),
+            status_code: Some(302),
+            test_url: "http://example.test/generate_204".to_string(),
+            final_url: Some("http://example.test/login".to_string()),
+            redirected: true,
+            tested_at: 1_800_000_010,
+            error_code: Some("redirect_detected".to_string()),
+            error: Some("redirect detected".to_string()),
+        })
+        .expect("insert second url test");
+
+    assert!(first.id > 0);
+    assert!(second.id > first.id);
+
+    let listed = storage
+        .list_proxy_profile_url_tests("proxy-url-tests", 10)
+        .expect("list proxy profile url tests");
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].id, second.id);
+    assert_eq!(
+        listed[0].final_url.as_deref(),
+        Some("http://example.test/login")
+    );
+    assert!(listed[0].redirected);
+    assert_eq!(listed[0].error_code.as_deref(), Some("redirect_detected"));
+    assert_eq!(listed[1].status_code, Some(204));
+    assert_eq!(listed[1].url_latency_ms, Some(84));
+}
+
+#[test]
+fn storage_deletes_proxy_profile() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init schema");
+
+    storage
+        .create_proxy_profile(&ProxyProfileCreateInput {
+            id: "proxy-delete".to_string(),
+            name: "Delete".to_string(),
+            proxy_url: "http://example.com:8080".to_string(),
+            enabled: true,
+            tags_json: None,
+            notes: None,
+        })
+        .expect("create proxy profile");
+
+    assert!(storage
+        .delete_proxy_profile("proxy-delete")
+        .expect("delete existing proxy profile"));
+    assert!(!storage
+        .delete_proxy_profile("proxy-delete")
+        .expect("delete missing proxy profile"));
+    assert!(storage
+        .find_proxy_profile("proxy-delete")
+        .expect("find deleted proxy profile")
+        .is_none());
+}
+
+#[test]
+fn proxy_profile_redaction_never_exposes_credentials() {
+    for (raw, redacted, scheme, host, port) in [
+        (
+            "http://user:pass@example.com:8080/path?token=secret#fragment",
+            "http://example.com:8080",
+            Some("http"),
+            Some("example.com"),
+            Some(8080),
+        ),
+        (
+            "socks5h://user:pass@example.com:1080",
+            "socks5h://example.com:1080",
+            Some("socks5h"),
+            Some("example.com"),
+            Some(1080),
+        ),
+        (
+            "http://user:pass@[2001:db8::1]:8080/private",
+            "http://[2001:db8::1]:8080",
+            Some("http"),
+            Some("2001:db8::1"),
+            Some(8080),
+        ),
+        (
+            "https://example.com/path?token=secret",
+            "https://example.com:443",
+            Some("https"),
+            Some("example.com"),
+            Some(443),
+        ),
+        ("not a url", "<invalid>", None, None, None),
+    ] {
+        let metadata = derive_proxy_profile_url_metadata(raw);
+        assert_eq!(metadata.proxy_url_redacted, redacted);
+        assert_eq!(metadata.scheme.as_deref(), scheme);
+        assert_eq!(metadata.host.as_deref(), host);
+        assert_eq!(metadata.port, port);
+        assert!(!metadata.proxy_url_redacted.contains("user"));
+        assert!(!metadata.proxy_url_redacted.contains("pass"));
+        assert!(!metadata.proxy_url_redacted.contains("token"));
+        assert!(!metadata.proxy_url_redacted.contains('?'));
+    }
 }
 
 #[test]
@@ -2634,5 +3236,202 @@ fn storage_can_roundtrip_api_key_quota_limit_and_usage() {
             .find_api_key_quota_limit("key-quota-1")
             .expect("read cleared quota"),
         None
+    );
+}
+
+#[test]
+fn storage_can_insert_and_list_proxy_speed_and_diagnostic_history() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init schema");
+
+    storage
+        .create_proxy_profile(&ProxyProfileCreateInput {
+            id: "prof-1".to_string(),
+            name: "Test Profile".to_string(),
+            proxy_url: "http://127.0.0.1:8080".to_string(),
+            enabled: true,
+            tags_json: None,
+            notes: None,
+        })
+        .expect("create proxy profile");
+
+    storage
+        .insert_account(&Account {
+            id: "acc-1".to_string(),
+            label: "label".to_string(),
+            issuer: "issuer".to_string(),
+            chatgpt_account_id: None,
+            workspace_id: None,
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: 0,
+            updated_at: 0,
+        })
+        .expect("insert account");
+
+    // 1. Proxy speed test
+    let input_speed = ProxySpeedTestInsertInput {
+        scope: "system_proxy".to_string(),
+        proxy_profile_id: Some("prof-1".to_string()),
+        account_id: None,
+        status: "ok".to_string(),
+        provider: "cloudflare".to_string(),
+        observed_ip: Some("127.0.0.1".to_string()),
+        observed_country: Some("US".to_string()),
+        observed_colo: Some("SFO".to_string()),
+        max_payload_bytes: Some(25 * 1024 * 1024),
+        samples_json: Some("[]".to_string()),
+        download_summary_json: Some("{}".to_string()),
+        upload_summary_json: Some("{}".to_string()),
+        started_at: 1000,
+        finished_at: 2000,
+        error_code: None,
+        error: None,
+    };
+    let speed_res = storage.insert_proxy_speed_test(&input_speed).expect("insert speed");
+    assert_eq!(speed_res.status, "ok");
+    assert_eq!(speed_res.provider, "cloudflare");
+
+    let list_speed_prof = storage.list_proxy_speed_tests_by_profile("prof-1", 10).expect("list speed by prof");
+    assert_eq!(list_speed_prof.len(), 1);
+    assert_eq!(list_speed_prof[0].id, speed_res.id);
+
+    // 2. Diagnostic test
+    let input_diag = ProxyDiagnosticTestInsertInput {
+        scope: "system_proxy".to_string(),
+        proxy_profile_id: Some("prof-1".to_string()),
+        account_id: None,
+        status: "ok".to_string(),
+        provider: "cachefly".to_string(),
+        file_size_id: "size_10mb".to_string(),
+        downloaded_bytes: Some(10 * 1024 * 1024),
+        duration_ms: Some(1500),
+        mbps: Some(53.3),
+        tested_at: 1500,
+        error: None,
+    };
+    let diag_res = storage.insert_proxy_diagnostic_test(&input_diag).expect("insert diag");
+    assert_eq!(diag_res.provider, "cachefly");
+
+    let list_diag_prof = storage.list_proxy_diagnostic_tests_by_profile("prof-1", 10).expect("list diag by prof");
+    assert_eq!(list_diag_prof.len(), 1);
+    assert_eq!(list_diag_prof[0].id, diag_res.id);
+
+    // 3. Account proxy url test
+    let input_url = AccountProxyUrlTestInsertInput {
+        account_id: "acc-1".to_string(),
+        status: "ok".to_string(),
+        url_latency_ms: Some(120),
+        status_code: Some(204),
+        test_url: "https://www.gstatic.com/generate_204".to_string(),
+        final_url: None,
+        redirected: false,
+        tested_at: 1200,
+        error_code: None,
+        error: None,
+    };
+    let url_res = storage.insert_account_proxy_url_test(&input_url).expect("insert url");
+    assert_eq!(url_res.url_latency_ms, Some(120));
+
+    let list_url = storage.list_account_proxy_url_tests("acc-1", 10).expect("list url");
+    assert_eq!(list_url.len(), 1);
+    assert_eq!(list_url[0].id, url_res.id);
+}
+
+#[test]
+fn storage_deletes_proxy_profile_cascades_test_history() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init schema");
+
+    storage
+        .create_proxy_profile(&ProxyProfileCreateInput {
+            id: "proxy-cascade".to_string(),
+            name: "Cascade Test Profile".to_string(),
+            proxy_url: "http://127.0.0.1:8080".to_string(),
+            enabled: true,
+            tags_json: None,
+            notes: None,
+        })
+        .expect("create proxy profile");
+
+    storage
+        .insert_proxy_profile_url_test(&ProxyProfileUrlTestInsertInput {
+            proxy_profile_id: "proxy-cascade".to_string(),
+            status: "ok".to_string(),
+            url_latency_ms: Some(100),
+            status_code: Some(200),
+            test_url: "http://example.com".to_string(),
+            final_url: None,
+            redirected: false,
+            tested_at: 1000,
+            error_code: None,
+            error: None,
+        })
+        .expect("insert url test");
+
+    storage
+        .insert_proxy_speed_test(&ProxySpeedTestInsertInput {
+            scope: "system_proxy".to_string(),
+            proxy_profile_id: Some("proxy-cascade".to_string()),
+            account_id: None,
+            status: "ok".to_string(),
+            provider: "cloudflare".to_string(),
+            observed_ip: Some("127.0.0.1".to_string()),
+            observed_country: Some("US".to_string()),
+            observed_colo: Some("SFO".to_string()),
+            max_payload_bytes: Some(1000),
+            samples_json: Some("[]".to_string()),
+            download_summary_json: Some("{}".to_string()),
+            upload_summary_json: Some("{}".to_string()),
+            started_at: 1000,
+            finished_at: 1100,
+            error_code: None,
+            error: None,
+        })
+        .expect("insert speed test");
+
+    storage
+        .insert_proxy_diagnostic_test(&ProxyDiagnosticTestInsertInput {
+            scope: "system_proxy".to_string(),
+            proxy_profile_id: Some("proxy-cascade".to_string()),
+            account_id: None,
+            status: "ok".to_string(),
+            provider: "cachefly".to_string(),
+            file_size_id: "size_10mb".to_string(),
+            downloaded_bytes: Some(1000),
+            duration_ms: Some(100),
+            mbps: Some(10.0),
+            tested_at: 1000,
+            error: None,
+        })
+        .expect("insert diagnostic test");
+
+    assert_eq!(
+        storage.list_proxy_profile_url_tests("proxy-cascade", 10).unwrap().len(),
+        1
+    );
+    assert_eq!(
+        storage.list_proxy_speed_tests_by_profile("proxy-cascade", 10).unwrap().len(),
+        1
+    );
+    assert_eq!(
+        storage.list_proxy_diagnostic_tests_by_profile("proxy-cascade", 10).unwrap().len(),
+        1
+    );
+
+    assert!(storage.delete_proxy_profile("proxy-cascade").unwrap());
+
+    assert_eq!(
+        storage.list_proxy_profile_url_tests("proxy-cascade", 10).unwrap().len(),
+        0
+    );
+    assert_eq!(
+        storage.list_proxy_speed_tests_by_profile("proxy-cascade", 10).unwrap().len(),
+        0
+    );
+    assert_eq!(
+        storage.list_proxy_diagnostic_tests_by_profile("proxy-cascade", 10).unwrap().len(),
+        0
     );
 }

@@ -122,6 +122,9 @@ pub(super) fn warmup_cron_loop() {
     let mut last_invalid_expression = String::new();
     let mut signal_version = warmup_cron_signal_version();
     loop {
+        if crate::shutdown_requested() {
+            break;
+        }
         if !WARMUP_CRON_ENABLED.load(Ordering::Relaxed) {
             signal_version = wait_for_warmup_cron_change(signal_version, None).0;
             continue;
@@ -152,6 +155,9 @@ pub(super) fn warmup_cron_loop() {
             wait_for_warmup_cron_change(signal_version, Some(delay));
         signal_version = next_signal_version;
         if !timed_out {
+            continue;
+        }
+        if Local::now() < next_run_at {
             continue;
         }
         if !WARMUP_CRON_ENABLED.load(Ordering::Relaxed)
@@ -207,6 +213,10 @@ fn delay_until(next: chrono::DateTime<Local>) -> Duration {
 }
 
 fn wait_for_warmup_cron_change(last_seen: u64, timeout: Option<Duration>) -> (u64, bool) {
+    let effective_timeout = match timeout {
+        Some(d) => d.min(Duration::from_millis(500)),
+        None => Duration::from_millis(500),
+    };
     let (lock, cvar) =
         WARMUP_CRON_SIGNAL.get_or_init(|| (std::sync::Mutex::new(0), std::sync::Condvar::new()));
     let guard = crate::lock_utils::lock_recover(lock, "warmup_cron_signal");
@@ -214,18 +224,12 @@ fn wait_for_warmup_cron_change(last_seen: u64, timeout: Option<Duration>) -> (u6
         return (*guard, false);
     }
 
-    let (guard, timed_out) = match timeout {
-        Some(duration) => match cvar.wait_timeout(guard, duration) {
-            Ok((guard, result)) => (guard, result.timed_out()),
-            Err(poisoned) => {
-                let (guard, result) = poisoned.into_inner();
-                (guard, result.timed_out())
-            }
-        },
-        None => match cvar.wait(guard) {
-            Ok(guard) => (guard, false),
-            Err(poisoned) => (poisoned.into_inner(), false),
-        },
+    let (guard, timed_out) = match cvar.wait_timeout(guard, effective_timeout) {
+        Ok((guard, result)) => (guard, result.timed_out()),
+        Err(poisoned) => {
+            let (guard, result) = poisoned.into_inner();
+            (guard, result.timed_out())
+        }
     };
     (*guard, timed_out)
 }
@@ -322,9 +326,18 @@ fn run_dynamic_poll_loop<F, L, E, I, J, B>(
     let mut rng = rand::thread_rng();
     let mut consecutive_failures = 0u32;
     loop {
+        if crate::shutdown_requested() {
+            break;
+        }
         if !enabled() {
             consecutive_failures = 0;
-            thread::sleep(Duration::from_secs(1));
+            let start = std::time::Instant::now();
+            while start.elapsed() < Duration::from_secs(1) {
+                if crate::shutdown_requested() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
             continue;
         }
 
@@ -360,7 +373,13 @@ fn run_dynamic_poll_loop<F, L, E, I, J, B>(
             consecutive_failures,
             sampled_jitter,
         );
-        thread::sleep(delay);
+        let start = std::time::Instant::now();
+        while start.elapsed() < delay {
+            if crate::shutdown_requested() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
     }
 }
 

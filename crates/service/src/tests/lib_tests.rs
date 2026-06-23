@@ -7,6 +7,7 @@ use codexmanager_core::storage::{
     Account, Event, ModelCatalogModelRecord, ModelGroupModel, PluginInstall, PluginRunLog,
     PluginTask, RequestLog, RequestTokenStat, Token, UsageSnapshotRecord,
 };
+use rusqlite::Connection;
 
 /// 函数 `response_result`
 ///
@@ -120,6 +121,7 @@ fn member_actor_cannot_call_admin_only_rpc() {
         "accountManager/users/list",
         "codexProfile/repairHistory",
         "codexProfile/pruneHistoryBackups",
+        "system/proxy/list",
     ] {
         let req = JsonRpcRequest {
             id: 21.into(),
@@ -139,6 +141,246 @@ fn member_actor_cannot_call_admin_only_rpc() {
             .unwrap_or("");
         assert!(err.contains("permission_denied"), "{method}: {err}");
     }
+}
+
+#[test]
+fn system_proxy_rpc_crud_roundtrip() {
+    let _guard = test_env_guard();
+    let db_path = setup_dashboard_test_db("codexmanager-system-proxy-crud");
+
+    let created = response_result(handle_request_with_actor(
+        rpc_request(
+            "system/proxy/create",
+            serde_json::json!({
+                "name": "DE-Frankfurt-1",
+                "proxyUrl": "http://user:pass@example.com:8080/path",
+                "enabled": true,
+                "tagsJson": "[\"de\",\"work\"]",
+                "notes": "Primary proxy"
+            }),
+        ),
+        RpcActor::system_admin(),
+    ));
+    assert!(
+        created.result.get("error").is_none(),
+        "{:?}",
+        created.result
+    );
+    let proxy_id = created.result["id"].as_str().expect("proxy id").to_string();
+    assert_eq!(created.result["status"], "unchecked");
+    assert_eq!(
+        created.result["proxyUrlRedacted"],
+        "http://example.com:8080"
+    );
+    assert_eq!(created.result["scheme"], "http");
+    assert_eq!(created.result["host"], "example.com");
+    assert!(created.result.get("proxyUrl").is_none());
+
+    let listed = response_result(handle_request_with_actor(
+        rpc_request("system/proxy/list", serde_json::json!({})),
+        RpcActor::system_admin(),
+    ));
+    assert!(listed.result.get("error").is_none(), "{:?}", listed.result);
+    let items = listed.result["items"].as_array().expect("items array");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["id"], proxy_id);
+    assert_eq!(items[0]["notes"], "Primary proxy");
+
+    let updated = response_result(handle_request_with_actor(
+        rpc_request(
+            "system/proxy/update",
+            serde_json::json!({
+                "id": proxy_id,
+                "name": "DE-Frankfurt-2",
+                "proxyUrl": "socks5h://user:pass@proxy.example:1080/private",
+                "enabled": false,
+                "tagsJson": "[\"updated\"]",
+                "notes": "Updated proxy"
+            }),
+        ),
+        RpcActor::system_admin(),
+    ));
+    assert!(
+        updated.result.get("error").is_none(),
+        "{:?}",
+        updated.result
+    );
+    assert_eq!(updated.result["name"], "DE-Frankfurt-2");
+    assert_eq!(
+        updated.result["proxyUrlRedacted"],
+        "socks5h://proxy.example:1080"
+    );
+    assert_eq!(updated.result["scheme"], "socks5h");
+    assert_eq!(updated.result["status"], "unchecked");
+    assert_eq!(updated.result["enabled"], false);
+
+    let deleted = response_result(handle_request_with_actor(
+        rpc_request(
+            "system/proxy/delete",
+            serde_json::json!({
+                "id": updated.result["id"].as_str().expect("updated proxy id")
+            }),
+        ),
+        RpcActor::system_admin(),
+    ));
+    assert!(
+        deleted.result.get("error").is_none(),
+        "{:?}",
+        deleted.result
+    );
+    assert_eq!(deleted.result["ok"], true);
+
+    let empty = response_result(handle_request_with_actor(
+        rpc_request("system/proxy/list", serde_json::json!({})),
+        RpcActor::system_admin(),
+    ));
+    assert_eq!(
+        empty.result["items"].as_array().expect("items array").len(),
+        0
+    );
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn system_proxy_rpc_rejects_invalid_schemes() {
+    let _guard = test_env_guard();
+    let db_path = setup_dashboard_test_db("codexmanager-system-proxy-schemes");
+
+    for proxy_url in [
+        "vless://example.com:443",
+        "ss://example.com:8388",
+        "hysteria2://example.com:443",
+        "ftp://example.com:21",
+    ] {
+        let resp = response_result(handle_request_with_actor(
+            rpc_request(
+                "system/proxy/create",
+                serde_json::json!({
+                    "name": "Invalid",
+                    "proxyUrl": proxy_url
+                }),
+            ),
+            RpcActor::system_admin(),
+        ));
+        let err = rpc_error(&resp);
+        assert!(
+            err.contains("For sing-box, paste the local mixed inbound address"),
+            "{proxy_url}: {err}"
+        );
+    }
+
+    let update = response_result(handle_request_with_actor(
+        rpc_request(
+            "system/proxy/update",
+            serde_json::json!({
+                "id": "pp_test",
+                "proxyUrl": "trojan://example.com:443"
+            }),
+        ),
+        RpcActor::system_admin(),
+    ));
+    assert!(
+        rpc_error(&update).contains("For sing-box, paste the local mixed inbound address"),
+        "{:?}",
+        update.result
+    );
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn system_proxy_delete_rejects_bound_accounts() {
+    let _guard = test_env_guard();
+    let db_path = setup_dashboard_test_db("codexmanager-system-proxy-bound-delete");
+
+    let created = response_result(handle_request_with_actor(
+        rpc_request(
+            "system/proxy/create",
+            serde_json::json!({
+                "name": "Bound Proxy",
+                "proxyUrl": "http://127.0.0.1:7891"
+            }),
+        ),
+        RpcActor::system_admin(),
+    ));
+    assert!(
+        created.result.get("error").is_none(),
+        "{:?}",
+        created.result
+    );
+    let proxy_id = created.result["id"].as_str().expect("proxy id").to_string();
+
+    {
+        let storage = storage_helpers::open_storage().expect("open storage");
+        let now = codexmanager_core::storage::now_ts();
+        storage
+            .insert_account(&Account {
+                id: "acc-bound".to_string(),
+                label: "Bound account".to_string(),
+                issuer: "https://auth.openai.com".to_string(),
+                chatgpt_account_id: None,
+                workspace_id: None,
+                group_name: None,
+                sort: 0,
+                status: "active".to_string(),
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("insert account");
+        storage
+            .upsert_account_proxy_settings(
+                "acc-bound",
+                true,
+                Some("custom"),
+                None,
+                Some("http://127.0.0.1:7891"),
+                "unchecked",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("seed account proxy settings");
+    }
+
+    let conn = Connection::open(&db_path).expect("open raw sqlite connection");
+    conn.execute(
+        "UPDATE account_proxy_settings
+         SET proxy_source = 'profile', proxy_profile_id = ?1
+         WHERE account_id = 'acc-bound'",
+        [&proxy_id],
+    )
+    .expect("bind account to proxy profile");
+    drop(conn);
+
+    let deleted = response_result(handle_request_with_actor(
+        rpc_request("system/proxy/delete", serde_json::json!({ "id": proxy_id })),
+        RpcActor::system_admin(),
+    ));
+    let err = rpc_error(&deleted);
+    assert!(
+        err.contains("proxy profile is still bound to accounts"),
+        "{err}"
+    );
+    assert!(err.contains("acc-bound"), "{err}");
+
+    let _ = std::fs::remove_file(db_path);
 }
 
 #[test]

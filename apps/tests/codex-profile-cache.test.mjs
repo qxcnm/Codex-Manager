@@ -12,9 +12,9 @@ async function readSource(relativePath) {
 function readConstFunctionBody(source, functionName) {
   const start = source.indexOf(`const ${functionName} = async () => {`);
   assert.notEqual(start, -1, `${functionName} not found`);
-  const end = source.indexOf("\n  };\n", start);
+  const end = source.slice(start).search(/\r?\n[\t ]*\};\r?\n/);
   assert.notEqual(end, -1, `${functionName} body end not found`);
-  return source.slice(start, end);
+  return source.slice(start, start + end);
 }
 
 test("账号登录和导入会刷新 Codex profile 候选账号", async () => {
@@ -22,7 +22,7 @@ test("账号登录和导入会刷新 Codex profile 候选账号", async () => {
   assert.match(source, /CODEX_PROFILE_CANDIDATES_QUERY_KEY/);
   assert.match(
     source,
-    /queryClient\.invalidateQueries\(\{\s*queryKey:\s*CODEX_PROFILE_CANDIDATES_QUERY_KEY\s*\}\)/s,
+    /queryClient\.invalidateQueries\(\{\s*queryKey:\s*CODEX_PROFILE_CANDIDATES_QUERY_KEY,?\s*\}\)/s,
   );
 });
 
@@ -32,7 +32,7 @@ test("账号池页面变更会刷新 Codex profile 候选账号", async () => {
   assert.match(source, /CODEX_PROFILE_CANDIDATES_QUERY_KEY/);
   assert.match(
     invalidateUsageBody,
-    /queryClient\.invalidateQueries\(\{\s*queryKey:\s*CODEX_PROFILE_CANDIDATES_QUERY_KEY\s*\}\)/,
+    /queryClient\.invalidateQueries\(\{\s*queryKey:\s*CODEX_PROFILE_CANDIDATES_QUERY_KEY,?\s*\}\)/,
   );
 });
 
@@ -67,7 +67,7 @@ test("平台密钥变更会刷新 Codex profile 候选密钥", async () => {
   assert.match(source, /CODEX_PROFILE_CANDIDATES_QUERY_KEY/);
   assert.match(
     source,
-    /queryClient\.invalidateQueries\(\{\s*queryKey:\s*CODEX_PROFILE_CANDIDATES_QUERY_KEY\s*\}\)/s,
+    /queryClient\.invalidateQueries\(\{\s*queryKey:\s*CODEX_PROFILE_CANDIDATES_QUERY_KEY,?\s*\}\)/s,
   );
 });
 
@@ -76,6 +76,6 @@ test("平台密钥弹窗创建和编辑会刷新 Codex profile 候选密钥", as
   assert.match(source, /CODEX_PROFILE_CANDIDATES_QUERY_KEY/);
   assert.match(
     source,
-    /queryClient\.invalidateQueries\(\{\s*queryKey:\s*CODEX_PROFILE_CANDIDATES_QUERY_KEY\s*\}\)/s,
+    /queryClient\.invalidateQueries\(\{\s*queryKey:\s*CODEX_PROFILE_CANDIDATES_QUERY_KEY,?\s*\}\)/s,
   );
 });

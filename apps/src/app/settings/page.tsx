@@ -1401,7 +1401,7 @@ function AdminSettingsPage() {
         </TabsList>
 
         <TabsContent value="general" className="space-y-6">
-                    <GeneralBasicsCard
+          <GeneralBasicsCard
             t={t}
             updateActionLabel={updateActionLabel}
             updateActionDescription={updateActionDescription}
@@ -1436,7 +1436,6 @@ function AdminSettingsPage() {
             webAuthModeLabel={webAuthModeLabel}
             onOpen={() => setWebPasswordModalOpen(true)}
           />
-
         </TabsContent>
 
         <TabsContent value="appearance" className="space-y-6">

@@ -37,7 +37,15 @@ pub(super) fn execute<F>(
 where
     F: FnMut(Option<&str>, u16, Option<&str>),
 {
-    let client = super::super::super::upstream_client_for_account(account.id.as_str());
+    let client = match super::super::super::upstream_client_for_account(account.id.as_str()) {
+        Ok(client) => client,
+        Err(err) => {
+            return CandidateUpstreamDecision::Terminal {
+                status_code: 502,
+                message: err,
+            };
+        }
+    };
 
     if deadline::is_expired(request_deadline) {
         return CandidateUpstreamDecision::Terminal {

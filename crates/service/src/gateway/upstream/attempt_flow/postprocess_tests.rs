@@ -82,6 +82,11 @@ fn anthropic_challenge_uses_extended_cooldown_reason() {
 /// 无
 #[test]
 fn retries_server_error_once_before_final_decision() {
+    let _guard = crate::test_env_guard();
+    std::env::remove_var("CODEXMANAGER_UPSTREAM_PROXY_URL");
+    std::env::remove_var("CODEXMANAGER_PROXY_LIST");
+    crate::gateway::reload_runtime_config_from_env();
+
     let storage = Storage::open_in_memory().expect("open storage");
     storage.init().expect("init storage");
     let now = now_ts();
@@ -171,6 +176,11 @@ fn retries_server_error_once_before_final_decision() {
 
 #[test]
 fn chatgpt_challenge_on_last_candidate_retries_without_same_account_failover() {
+    let _guard = crate::test_env_guard();
+    std::env::remove_var("CODEXMANAGER_UPSTREAM_PROXY_URL");
+    std::env::remove_var("CODEXMANAGER_PROXY_LIST");
+    crate::gateway::reload_runtime_config_from_env();
+
     let storage = Storage::open_in_memory().expect("open storage");
     storage.init().expect("init storage");
     let now = now_ts();
@@ -268,6 +278,11 @@ fn chatgpt_challenge_on_last_candidate_retries_without_same_account_failover() {
 
 #[test]
 fn chatgpt_cloudflare_challenge_directly_failovers_without_same_account_retry() {
+    let _guard = crate::test_env_guard();
+    std::env::remove_var("CODEXMANAGER_UPSTREAM_PROXY_URL");
+    std::env::remove_var("CODEXMANAGER_PROXY_LIST");
+    crate::gateway::reload_runtime_config_from_env();
+
     let storage = Storage::open_in_memory().expect("open storage");
     storage.init().expect("init storage");
     let now = now_ts();
@@ -357,6 +372,11 @@ fn chatgpt_cloudflare_challenge_directly_failovers_without_same_account_retry() 
 
 #[test]
 fn cloudflare_cf_ray_directly_failovers_without_same_account_retry() {
+    let _guard = crate::test_env_guard();
+    std::env::remove_var("CODEXMANAGER_UPSTREAM_PROXY_URL");
+    std::env::remove_var("CODEXMANAGER_PROXY_LIST");
+    crate::gateway::reload_runtime_config_from_env();
+
     let storage = Storage::open_in_memory().expect("open storage");
     storage.init().expect("init storage");
     let now = now_ts();

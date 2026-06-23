@@ -17,6 +17,7 @@ const modulePaths = [
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "gateway.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "login.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "misc.ts"),
+  path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "proxy-profiles.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "quota.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "shared.ts"),
 ];
@@ -31,6 +32,7 @@ function rewriteImports(outputText) {
     .replaceAll('./transport-web-commands/gateway', './transport-web-commands/gateway.js')
     .replaceAll('./transport-web-commands/login', './transport-web-commands/login.js')
     .replaceAll('./transport-web-commands/misc', './transport-web-commands/misc.js')
+    .replaceAll('./transport-web-commands/proxy-profiles', './transport-web-commands/proxy-profiles.js')
     .replaceAll('./transport-web-commands/quota', './transport-web-commands/quota.js')
     .replaceAll('./transport-web-commands/shared', './transport-web-commands/shared.js')
     .replaceAll('./shared', './shared.js')
@@ -63,6 +65,11 @@ async function ensureRequestUtils(tempDir) {
 
 async function loadTransportWebCommandsModule() {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codexmanager-transport-web-commands-"));
+  await fs.writeFile(
+    path.join(tempDir, "package.json"),
+    '{"type":"module"}\n',
+    "utf8",
+  );
   const tempFile = path.join(tempDir, "transport-web-commands.mjs");
   await writeCompiledModule(sourcePath, tempFile);
   for (const modulePath of modulePaths) {
@@ -141,6 +148,45 @@ test("createWebCommandMap 为按状态清理账号提供 Web RPC 映射", () => 
   const cleanup = commandMap.service_account_delete_by_statuses;
   assert.deepEqual(cleanup, {
     rpcMethod: "account/deleteByStatuses",
+  });
+});
+
+test("createWebCommandMap 为 system proxy profiles 提供 Web RPC 映射", () => {
+  assert.deepEqual(commandMap.service_system_proxy_list, {
+    rpcMethod: "system/proxy/list",
+  });
+  assert.deepEqual(commandMap.service_system_proxy_create, {
+    rpcMethod: "system/proxy/create",
+  });
+  assert.deepEqual(commandMap.service_system_proxy_update, {
+    rpcMethod: "system/proxy/update",
+  });
+  assert.deepEqual(commandMap.service_system_proxy_delete, {
+    rpcMethod: "system/proxy/delete",
+  });
+  assert.deepEqual(commandMap.service_system_proxy_test_presets, {
+    rpcMethod: "system/proxy/test-presets",
+  });
+  assert.deepEqual(commandMap.service_system_proxy_test_latency, {
+    rpcMethod: "system/proxy/test-latency",
+  });
+  assert.deepEqual(commandMap.service_system_proxy_speed_test, {
+    rpcMethod: "system/proxy/speed-test",
+  });
+  assert.deepEqual(commandMap.service_system_proxy_test_job, {
+    rpcMethod: "system/proxy/test-job",
+  });
+  assert.deepEqual(commandMap.service_system_proxy_cancel_test, {
+    rpcMethod: "system/proxy/cancel-test",
+  });
+  assert.deepEqual(commandMap.service_system_proxy_cloudflare_speed_test, {
+    rpcMethod: "system/proxy/cloudflare-speed-test",
+  });
+});
+
+test("createWebCommandMap 为 account proxy cloudflare speed test 提供 Web RPC 映射", () => {
+  assert.deepEqual(commandMap.service_account_proxy_cloudflare_speed_test, {
+    rpcMethod: "account/proxy/cloudflare-speed-test",
   });
 });
 

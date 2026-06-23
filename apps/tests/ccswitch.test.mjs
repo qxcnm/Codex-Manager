@@ -35,6 +35,11 @@ async function writeCompiledModule(inputPath, outputPath) {
 
 async function loadCcSwitchModule() {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codexmanager-ccswitch-"));
+  await fs.writeFile(
+    path.join(tempDir, "package.json"),
+    '{"type":"module"}\n',
+    "utf8",
+  );
   const tempFile = path.join(tempDir, "lib", "utils", "ccswitch.mjs");
   const endpointTempFile = path.join(tempDir, "lib", "gateway", "endpoints.js");
   await writeCompiledModule(sourcePath, tempFile);
