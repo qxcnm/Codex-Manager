@@ -18,11 +18,12 @@ use super::{
     current_gateway_upstream_total_timeout_ms, current_gateway_user_agent_version,
     current_saved_service_addr, current_service_bind_mode, default_gateway_originator,
     default_gateway_user_agent_version, env_override_catalog_value, env_override_reserved_keys,
-    env_override_unsupported_keys, normalize_ui_appearance_preset, normalize_ui_locale,
-    normalize_ui_theme, parse_bool_with_default, residency_requirement_options,
-    save_env_overrides_value, save_persisted_app_setting, save_persisted_bool_setting,
-    sync_runtime_settings_from_storage, APP_SETTING_AUTHOR_SERVER_RECOMMENDATIONS_KEY,
-    APP_SETTING_AUTHOR_SPONSORS_KEY, APP_SETTING_CLOSE_TO_TRAY_ON_CLOSE_KEY,
+    env_override_unsupported_keys, normalize_optional_text, normalize_ui_appearance_preset,
+    normalize_ui_locale, normalize_ui_theme, parse_bool_with_default,
+    residency_requirement_options, save_env_overrides_value, save_persisted_app_setting,
+    save_persisted_bool_setting, sync_runtime_settings_from_storage,
+    APP_SETTING_AUTHOR_SERVER_RECOMMENDATIONS_KEY, APP_SETTING_AUTHOR_SPONSORS_KEY,
+    APP_SETTING_CLOSE_TO_TRAY_ON_CLOSE_KEY, APP_SETTING_ENV_OVERRIDES_KEY,
     APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY, APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY,
     APP_SETTING_GATEWAY_COMPACT_MODEL_FORWARD_RULES_KEY,
     APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY, APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY,
@@ -122,6 +123,32 @@ pub(super) fn current_app_settings_value(
     close_to_tray_supported: Option<bool>,
     service_listen_mode_override: Option<&str>,
 ) -> Result<Value, String> {
+    current_app_settings_value_inner(
+        close_to_tray_on_close,
+        close_to_tray_supported,
+        service_listen_mode_override,
+        false,
+    )
+}
+
+pub(super) fn current_app_settings_value_persisted(
+    close_to_tray_on_close: Option<bool>,
+    close_to_tray_supported: Option<bool>,
+    service_listen_mode_override: Option<&str>,
+) -> Result<Value, String> {
+    current_app_settings_value_inner(
+        close_to_tray_on_close,
+        close_to_tray_supported,
+        service_listen_mode_override,
+        true,
+    )
+}
+fn current_app_settings_value_inner(
+    close_to_tray_on_close: Option<bool>,
+    close_to_tray_supported: Option<bool>,
+    service_listen_mode_override: Option<&str>,
+    persist_snapshot: bool,
+) -> Result<Value, String> {
     initialize_storage_if_needed()?;
     sync_runtime_settings_from_storage();
     let settings = list_app_settings_map();
@@ -215,37 +242,56 @@ pub(super) fn current_app_settings_value(
         })
     });
 
-    persist_current_snapshot(
-        update_auto_check,
-        persisted_close_to_tray,
-        lightweight_mode_on_close_to_tray,
-        codex_cli_guide_dismissed,
-        low_transparency,
-        &theme,
-        &appearance_preset,
-        &locale,
-        &service_addr,
-        &service_listen_mode,
-        &route_strategy,
-        &free_account_max_model,
-        &model_forward_rules,
-        &compact_model_forward_rules,
-        account_max_inflight,
-        &gateway_originator,
-        &gateway_user_agent_version,
-        &gateway_residency_requirement,
-        &quota_guard_raw,
-        &plugin_market_mode,
-        &plugin_market_source_url,
-        &author_sponsors_raw,
-        &author_server_recommendations_raw,
-        upstream_proxy_url.as_deref(),
-        upstream_stream_timeout_ms,
-        upstream_total_timeout_ms,
-        sse_keepalive_interval_ms,
-        &background_tasks_raw,
-        &env_overrides,
-    );
+    if persist_snapshot {
+        persist_current_snapshot(
+            update_auto_check,
+            persisted_close_to_tray,
+            lightweight_mode_on_close_to_tray,
+            codex_cli_guide_dismissed,
+            low_transparency,
+            &theme,
+            &appearance_preset,
+            &locale,
+            &service_addr,
+            &service_listen_mode,
+            &route_strategy,
+            &free_account_max_model,
+            &model_forward_rules,
+            &compact_model_forward_rules,
+            account_max_inflight,
+            &gateway_originator,
+            &gateway_user_agent_version,
+            &gateway_residency_requirement,
+            &quota_guard_raw,
+            &plugin_market_mode,
+            &plugin_market_source_url,
+            &author_sponsors_raw,
+            &author_server_recommendations_raw,
+            upstream_proxy_url.as_deref(),
+            upstream_stream_timeout_ms,
+            upstream_total_timeout_ms,
+            sse_keepalive_interval_ms,
+            &background_tasks_raw,
+            &env_overrides,
+        );
+    } else {
+        persist_get_snapshot_if_changed(
+            &settings,
+            &service_addr,
+            &service_listen_mode,
+            &route_strategy,
+            &free_account_max_model,
+            &model_forward_rules,
+            &gateway_originator,
+            &gateway_user_agent_version,
+            &gateway_residency_requirement,
+            upstream_proxy_url.as_deref(),
+            upstream_stream_timeout_ms,
+            sse_keepalive_interval_ms,
+            &background_tasks_raw,
+            &env_overrides,
+        );
+    }
 
     if service_listen_mode_override.is_none() {
         if let Some(mode) = settings.get(SERVICE_BIND_MODE_SETTING_KEY) {
@@ -615,6 +661,117 @@ fn persist_current_snapshot(
     let _ = save_env_overrides_value(env_overrides);
 }
 
+fn persisted_text_value(value: Option<&str>) -> String {
+    normalize_optional_text(value).unwrap_or_default()
+}
+
+fn save_app_setting_if_changed(settings: &HashMap<String, String>, key: &str, value: Option<&str>) {
+    let text = persisted_text_value(value);
+    if settings.get(key).map(String::as_str) == Some(text.as_str()) {
+        return;
+    }
+    let _ = save_persisted_app_setting(key, if text.is_empty() { None } else { Some(&text) });
+}
+
+fn save_env_overrides_if_changed(
+    settings: &HashMap<String, String>,
+    env_overrides: &BTreeMap<String, String>,
+) {
+    let Ok(raw) = serde_json::to_string(env_overrides) else {
+        return;
+    };
+    if settings
+        .get(APP_SETTING_ENV_OVERRIDES_KEY)
+        .map(String::as_str)
+        == Some(raw.as_str())
+    {
+        return;
+    }
+    let _ = save_env_overrides_value(env_overrides);
+}
+
+fn persist_get_snapshot_if_changed(
+    settings: &HashMap<String, String>,
+    service_addr: &str,
+    service_listen_mode: &str,
+    route_strategy: &str,
+    free_account_max_model: &str,
+    model_forward_rules: &str,
+    gateway_originator: &str,
+    gateway_user_agent_version: &str,
+    gateway_residency_requirement: &str,
+    upstream_proxy_url: Option<&str>,
+    upstream_stream_timeout_ms: u64,
+    sse_keepalive_interval_ms: u64,
+    background_tasks_raw: &str,
+    env_overrides: &BTreeMap<String, String>,
+) {
+    save_app_setting_if_changed(settings, APP_SETTING_SERVICE_ADDR_KEY, Some(service_addr));
+    save_app_setting_if_changed(
+        settings,
+        SERVICE_BIND_MODE_SETTING_KEY,
+        Some(service_listen_mode),
+    );
+    save_app_setting_if_changed(
+        settings,
+        APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY,
+        Some(route_strategy),
+    );
+    save_app_setting_if_changed(
+        settings,
+        APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY,
+        Some(free_account_max_model),
+    );
+    save_app_setting_if_changed(
+        settings,
+        APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY,
+        if model_forward_rules.trim().is_empty() {
+            None
+        } else {
+            Some(model_forward_rules)
+        },
+    );
+    save_app_setting_if_changed(
+        settings,
+        APP_SETTING_GATEWAY_ORIGINATOR_KEY,
+        Some(gateway_originator),
+    );
+    save_app_setting_if_changed(
+        settings,
+        APP_SETTING_GATEWAY_USER_AGENT_VERSION_KEY,
+        Some(gateway_user_agent_version),
+    );
+    save_app_setting_if_changed(
+        settings,
+        APP_SETTING_GATEWAY_RESIDENCY_REQUIREMENT_KEY,
+        if gateway_residency_requirement.trim().is_empty() {
+            None
+        } else {
+            Some(gateway_residency_requirement)
+        },
+    );
+    save_app_setting_if_changed(
+        settings,
+        APP_SETTING_GATEWAY_UPSTREAM_PROXY_URL_KEY,
+        upstream_proxy_url,
+    );
+    save_app_setting_if_changed(
+        settings,
+        APP_SETTING_GATEWAY_UPSTREAM_STREAM_TIMEOUT_MS_KEY,
+        Some(&upstream_stream_timeout_ms.to_string()),
+    );
+    save_app_setting_if_changed(
+        settings,
+        APP_SETTING_GATEWAY_SSE_KEEPALIVE_INTERVAL_MS_KEY,
+        Some(&sse_keepalive_interval_ms.to_string()),
+    );
+    save_app_setting_if_changed(
+        settings,
+        APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY,
+        Some(background_tasks_raw),
+    );
+    save_env_overrides_if_changed(settings, env_overrides);
+}
 /// 函数 `normalize_market_mode`
 ///
 /// 作者: gaohongshun

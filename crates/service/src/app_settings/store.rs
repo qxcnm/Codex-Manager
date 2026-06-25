@@ -1,4 +1,4 @@
-use codexmanager_core::storage::{now_ts, Storage};
+use codexmanager_core::storage::now_ts;
 use std::collections::HashMap;
 
 use super::normalize_optional_text;
@@ -14,12 +14,10 @@ use super::normalize_optional_text;
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(crate) fn open_app_settings_storage() -> Option<Storage> {
+pub(crate) fn open_app_settings_storage() -> Option<crate::storage_helpers::StorageHandle> {
     crate::process_env::ensure_default_db_path();
-    let path = std::env::var("CODEXMANAGER_DB_PATH").ok()?;
-    let storage = Storage::open(&path).ok()?;
-    let _ = storage.init();
-    Some(storage)
+    let _ = crate::storage_helpers::initialize_storage();
+    crate::storage_helpers::open_storage()
 }
 
 /// 函数 `list_app_settings_map`

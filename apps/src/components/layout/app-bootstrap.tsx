@@ -27,6 +27,7 @@ import { withTimeout } from "@/lib/utils/timeout";
 
 const DEFAULT_SERVICE_ADDR = "localhost:48760";
 const STARTUP_STEP_TIMEOUT_MS = 15_000;
+const WEB_GATEWAY_SETTINGS_TIMEOUT_MS = 60_000;
 const CODEX_CLI_GUIDE_SESSION_DISMISSED_KEY =
   "codexmanager.codexCliGuide.sessionDismissed";
 const UNSUPPORTED_RUNTIME_AUTO_RETRY_LIMIT = 8;
@@ -88,6 +89,12 @@ function isValidServicePort(value: string): boolean {
   }
   const port = Number.parseInt(trimmed, 10);
   return Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
+export function startupAppSettingsTimeoutMs(runtimeMode?: string | null): number {
+  return runtimeMode === "web-gateway"
+    ? WEB_GATEWAY_SETTINGS_TIMEOUT_MS
+    : STARTUP_STEP_TIMEOUT_MS;
 }
 
 /**
@@ -265,10 +272,13 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
       }
       unsupportedRuntimeRetryCountRef.current = 0;
 
+      const appSettingsTimeoutMs = startupAppSettingsTimeoutMs(
+        detectedRuntimeCapabilities.mode,
+      );
       const settings = await withTimeout(
         appClient.getSettings(),
-        STARTUP_STEP_TIMEOUT_MS,
-        `Loading app settings timed out after ${STARTUP_STEP_TIMEOUT_MS / 1000}s`,
+        appSettingsTimeoutMs,
+        `Loading app settings timed out after ${appSettingsTimeoutMs / 1000}s`,
       );
       const addr = normalizeServiceAddr(settings.serviceAddr || DEFAULT_SERVICE_ADDR);
       setRecoveryPort(readPortFromServiceAddr(addr));

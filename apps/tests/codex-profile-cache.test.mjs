@@ -22,7 +22,7 @@ test("账号登录和导入会刷新 Codex profile 候选账号", async () => {
   assert.match(source, /CODEX_PROFILE_CANDIDATES_QUERY_KEY/);
   assert.match(
     source,
-    /queryClient\.invalidateQueries\(\{\s*queryKey:\s*CODEX_PROFILE_CANDIDATES_QUERY_KEY\s*\}\)/s,
+    /queryClient\.invalidateQueries\(\{\s*queryKey:\s*CODEX_PROFILE_CANDIDATES_QUERY_KEY\s*,?\s*\}\)/s,
   );
 });
 
@@ -32,7 +32,7 @@ test("账号池页面变更会刷新 Codex profile 候选账号", async () => {
   assert.match(source, /CODEX_PROFILE_CANDIDATES_QUERY_KEY/);
   assert.match(
     invalidateUsageBody,
-    /queryClient\.invalidateQueries\(\{\s*queryKey:\s*CODEX_PROFILE_CANDIDATES_QUERY_KEY\s*\}\)/,
+    /queryClient\.invalidateQueries\(\{\s*queryKey:\s*CODEX_PROFILE_CANDIDATES_QUERY_KEY\s*,?\s*\}\)/,
   );
 });
 
@@ -67,7 +67,7 @@ test("平台密钥变更会刷新 Codex profile 候选密钥", async () => {
   assert.match(source, /CODEX_PROFILE_CANDIDATES_QUERY_KEY/);
   assert.match(
     source,
-    /queryClient\.invalidateQueries\(\{\s*queryKey:\s*CODEX_PROFILE_CANDIDATES_QUERY_KEY\s*\}\)/s,
+    /queryClient\.invalidateQueries\(\{\s*queryKey:\s*CODEX_PROFILE_CANDIDATES_QUERY_KEY\s*,?\s*\}\)/s,
   );
 });
 
@@ -76,6 +76,6 @@ test("平台密钥弹窗创建和编辑会刷新 Codex profile 候选密钥", as
   assert.match(source, /CODEX_PROFILE_CANDIDATES_QUERY_KEY/);
   assert.match(
     source,
-    /queryClient\.invalidateQueries\(\{\s*queryKey:\s*CODEX_PROFILE_CANDIDATES_QUERY_KEY\s*\}\)/s,
+    /queryClient\.invalidateQueries\(\{\s*queryKey:\s*CODEX_PROFILE_CANDIDATES_QUERY_KEY\s*,?\s*\}\)/s,
   );
 });

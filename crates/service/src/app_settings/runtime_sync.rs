@@ -65,8 +65,8 @@ pub fn sync_runtime_settings_from_storage() {
     let env_overrides = persisted_env_overrides_missing_process_env();
     if !env_overrides.is_empty() {
         apply_env_overrides_to_process(&env_overrides, &env_overrides);
+        reload_runtime_after_env_override_apply();
     }
-    reload_runtime_after_env_override_apply();
 
     if !process_env_has_value("CODEXMANAGER_SERVICE_ADDR") {
         if let Some(mode) = settings.get(SERVICE_BIND_MODE_SETTING_KEY) {

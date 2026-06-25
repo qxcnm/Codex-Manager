@@ -25,7 +25,6 @@ pub(super) use super::gateway::{
     set_gateway_upstream_stream_timeout_ms, set_gateway_upstream_total_timeout_ms,
     set_gateway_user_agent_version, BackgroundTasksInput, QuotaGuardInput,
 };
-pub(super) use super::parse_bool_with_default;
 pub(super) use super::runtime_sync::sync_runtime_settings_from_storage;
 pub(super) use super::service::{
     current_saved_service_addr, current_service_bind_mode, set_saved_service_addr,
@@ -39,10 +38,12 @@ pub(super) use super::ui::{
     set_lightweight_mode_on_close_to_tray_setting, set_ui_appearance_preset, set_ui_locale,
     set_ui_low_transparency_enabled, set_ui_theme, set_update_auto_check_enabled,
 };
+pub(super) use super::{normalize_optional_text, parse_bool_with_default};
 pub(super) use super::{
     APP_SETTING_AUTHOR_SERVER_RECOMMENDATIONS_KEY, APP_SETTING_AUTHOR_SPONSORS_KEY,
-    APP_SETTING_CLOSE_TO_TRAY_ON_CLOSE_KEY, APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY,
-    APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY, APP_SETTING_GATEWAY_COMPACT_MODEL_FORWARD_RULES_KEY,
+    APP_SETTING_CLOSE_TO_TRAY_ON_CLOSE_KEY, APP_SETTING_ENV_OVERRIDES_KEY,
+    APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY, APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY,
+    APP_SETTING_GATEWAY_COMPACT_MODEL_FORWARD_RULES_KEY,
     APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY, APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY,
     APP_SETTING_GATEWAY_ORIGINATOR_KEY, APP_SETTING_GATEWAY_QUOTA_GUARD_KEY,
     APP_SETTING_GATEWAY_RESIDENCY_REQUIREMENT_KEY, APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY,
@@ -110,5 +111,5 @@ pub fn app_settings_set(params: Option<&Value>) -> Result<Value, String> {
     let patch = patch::parse_app_settings_patch(params)?;
     let service_listen_mode = patch.service_listen_mode.clone();
     patch::apply_app_settings_patch(patch)?;
-    current::current_app_settings_value(None, None, service_listen_mode.as_deref())
+    current::current_app_settings_value_persisted(None, None, service_listen_mode.as_deref())
 }

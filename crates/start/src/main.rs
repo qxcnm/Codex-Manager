@@ -411,18 +411,49 @@ fn tcp_probe(addr: &str) -> bool {
     false
 }
 
-/// 函数 `simple_get_best_effort`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - addr: 参数 addr
-/// - path: 参数 path
-///
-/// # 返回
-/// 无
+fn http_get_status_ok(addr: &str, path: &str, timeout: Duration) -> bool {
+    let addr_trimmed = addr.trim();
+    if addr_trimmed.is_empty() {
+        return false;
+    }
+    let addr_trimmed = addr_trimmed.strip_prefix("http://").unwrap_or(addr_trimmed);
+    let addr_trimmed = addr_trimmed
+        .strip_prefix("https://")
+        .unwrap_or(addr_trimmed);
+    let addr_trimmed = addr_trimmed.split('/').next().unwrap_or(addr_trimmed);
+    let Some(sock) = resolve_socket_addrs_best_effort(addr_trimmed)
+        .into_iter()
+        .next()
+    else {
+        return false;
+    };
+    let Ok(mut stream) = TcpStream::connect_timeout(&sock, timeout) else {
+        return false;
+    };
+    let _ = stream.set_write_timeout(Some(timeout));
+    let _ = stream.set_read_timeout(Some(timeout));
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {addr_trimmed}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(req.as_bytes()).is_err() {
+        return false;
+    }
+
+    let mut response = [0_u8; 16];
+    let Ok(read) = std::io::Read::read(&mut stream, &mut response) else {
+        return false;
+    };
+    read >= 12 && response.starts_with(b"HTTP/1.") && response[9] == b'2'
+}
+
+fn wait_for_service_ready(addr: &str, attempts: usize) -> bool {
+    for _ in 0..attempts {
+        if http_get_status_ok(addr, "/health", Duration::from_millis(750)) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    false
+}
+
 fn simple_get_best_effort(addr: &str, path: &str) {
     let addr_trimmed = addr.trim();
     if addr_trimmed.is_empty() {
@@ -631,6 +662,13 @@ fn main() {
         if let Err(err) = job.assign(&service_child) {
             eprintln!("service 未能加入 Windows 回收句柄，关闭窗口时可能残留：{err}");
         }
+    }
+
+    println!("等待 service 就绪...");
+    if !wait_for_service_ready(&service_addr, 120) {
+        eprintln!("service 启动后仍未通过健康检查：{service_addr}");
+        let _ = service_child.kill();
+        std::process::exit(1);
     }
 
     if tcp_probe(&web_open_addr) || tcp_probe(&web_addr) {
