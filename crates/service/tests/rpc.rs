@@ -332,6 +332,14 @@ struct RecordedHeaderRequest {
     chatgpt_account_id: Option<String>,
 }
 
+#[derive(Debug)]
+struct RecordedHeaderBodyRequest {
+    path: String,
+    authorization: Option<String>,
+    chatgpt_account_id: Option<String>,
+    body: String,
+}
+
 fn start_mock_subscription_server(
     status: u16,
     response_body: String,
@@ -428,6 +436,156 @@ fn start_mock_usage_refresh_server(
             request
                 .respond(response)
                 .expect("respond usage refresh request");
+        }
+    });
+    (addr, rx, handle)
+}
+
+fn start_mock_reset_credits_read_server(
+    response_body: String,
+) -> (
+    String,
+    std::sync::mpsc::Receiver<RecordedHeaderRequest>,
+    thread::JoinHandle<()>,
+) {
+    let server = Server::http("127.0.0.1:0").expect("start mock reset credits server");
+    let addr = format!("http://{}", server.server_addr());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = thread::spawn(move || {
+        let request = server
+            .recv_timeout(Duration::from_secs(5))
+            .expect("reset credits server timeout")
+            .expect("receive reset credits request");
+        let path = request.url().to_string();
+        let authorization = request
+            .headers()
+            .iter()
+            .find(|header| header.field.equiv("Authorization"))
+            .map(|header| header.value.as_str().to_string());
+        let chatgpt_account_id = request
+            .headers()
+            .iter()
+            .find(|header| header.field.equiv("ChatGPT-Account-ID"))
+            .map(|header| header.value.as_str().to_string());
+        tx.send(RecordedHeaderRequest {
+            path: path.clone(),
+            authorization,
+            chatgpt_account_id,
+        })
+        .expect("send reset credits request");
+
+        let response_body = match path.as_str() {
+            "/backend-api/wham/rate-limit-reset-credits" => response_body,
+            other => panic!("unexpected reset credits path: {other}"),
+        };
+        let response = Response::from_string(response_body)
+            .with_status_code(StatusCode(200))
+            .with_header(
+                Header::from_bytes("Content-Type", "application/json")
+                    .expect("content-type header"),
+            );
+        request
+            .respond(response)
+            .expect("respond reset credits request");
+    });
+    (addr, rx, handle)
+}
+
+fn start_mock_reset_credits_consume_server() -> (
+    String,
+    std::sync::mpsc::Receiver<RecordedHeaderBodyRequest>,
+    thread::JoinHandle<()>,
+) {
+    let server = Server::http("127.0.0.1:0").expect("start mock reset consume server");
+    let addr = format!("http://{}", server.server_addr());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = thread::spawn(move || {
+        for _ in 0..4 {
+            let mut request = server
+                .recv_timeout(Duration::from_secs(5))
+                .expect("reset consume server timeout")
+                .expect("receive reset consume request");
+            let path = request.url().to_string();
+            let authorization = request
+                .headers()
+                .iter()
+                .find(|header| header.field.equiv("Authorization"))
+                .map(|header| header.value.as_str().to_string());
+            let chatgpt_account_id = request
+                .headers()
+                .iter()
+                .find(|header| header.field.equiv("ChatGPT-Account-ID"))
+                .map(|header| header.value.as_str().to_string());
+            let mut body = String::new();
+            request
+                .as_reader()
+                .read_to_string(&mut body)
+                .expect("read reset consume request body");
+            tx.send(RecordedHeaderBodyRequest {
+                path: path.clone(),
+                authorization,
+                chatgpt_account_id,
+                body,
+            })
+            .expect("send reset consume request");
+
+            let response_body = match path.as_str() {
+                "/backend-api/wham/rate-limit-reset-credits" => serde_json::json!({
+                    "available_count": 1,
+                    "total_earned_count": 1,
+                    "credits": [
+                        {
+                            "id": "credit-consume-1",
+                            "status": "available",
+                            "title": "Free reset"
+                        }
+                    ]
+                })
+                .to_string(),
+                "/backend-api/wham/rate-limit-reset-credits/consume" => {
+                    serde_json::json!({ "ok": true }).to_string()
+                }
+                "/backend-api/accounts/check/v4-2023-04-27" => serde_json::json!({
+                    "accounts": {
+                        "org-reset-consume": {
+                            "account": {
+                                "plan_type": "plus",
+                                "is_default": true
+                            },
+                            "entitlement": {
+                                "subscription_plan": "plus",
+                                "has_active_subscription": true
+                            }
+                        }
+                    }
+                })
+                .to_string(),
+                "/backend-api/wham/usage" => serde_json::json!({
+                    "rate_limit": {
+                        "primary_window": {
+                            "used_percent": 0.0,
+                            "limit_window_seconds": 18000,
+                            "reset_at": 1776655889
+                        },
+                        "secondary_window": {
+                            "used_percent": 0.0,
+                            "limit_window_seconds": 604800,
+                            "reset_at": 1778038289
+                        }
+                    }
+                })
+                .to_string(),
+                other => panic!("unexpected reset consume path: {other}"),
+            };
+            let response = Response::from_string(response_body)
+                .with_status_code(StatusCode(200))
+                .with_header(
+                    Header::from_bytes("Content-Type", "application/json")
+                        .expect("content-type header"),
+                );
+            request
+                .respond(response)
+                .expect("respond reset consume request");
         }
     });
     (addr, rx, handle)
@@ -2245,6 +2403,200 @@ fn rpc_usage_refresh_persists_subscription_fields() {
     assert_eq!(extras[0]["source_key"], "codex_other");
     assert_eq!(extras[0]["limit_name"], "Spark");
     assert_eq!(extras[0]["primary_window"]["used_percent"], 40.0);
+}
+
+#[test]
+fn rpc_account_usage_reset_credits_read_returns_available_count() {
+    let ctx = RpcTestContext::new("rpc-reset-credits-read");
+    let storage = Storage::open(ctx.db_path()).expect("open db");
+    storage.init().expect("init schema");
+    let now = now_ts();
+    storage
+        .insert_account(&Account {
+            id: "acc-reset-read".to_string(),
+            label: "Reset Read".to_string(),
+            issuer: "https://auth.openai.com".to_string(),
+            chatgpt_account_id: Some("org-reset-read".to_string()),
+            workspace_id: Some("org-reset-read".to_string()),
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("insert account");
+    storage
+        .insert_token(&Token {
+            account_id: "acc-reset-read".to_string(),
+            id_token: "id-token".to_string(),
+            access_token: "access-reset-read".to_string(),
+            refresh_token: "refresh-reset-read".to_string(),
+            api_key_access_token: None,
+            last_refresh: now,
+        })
+        .expect("insert token");
+
+    let response_body = serde_json::json!({
+        "available_count": 2,
+        "total_earned_count": 3,
+        "credits": [
+            {
+                "id": "credit-1",
+                "status": "available",
+                "title": "Free reset"
+            }
+        ]
+    });
+    let (reset_base_url, request_rx, request_join) = start_mock_reset_credits_read_server(
+        serde_json::to_string(&response_body).expect("serialize reset credits response"),
+    );
+    let _usage_base_url_guard =
+        EnvGuard::set("CODEXMANAGER_USAGE_BASE_URL", &format!("{reset_base_url}/backend-api"));
+
+    let read_req = JsonRpcRequest {
+        id: 83.into(),
+        method: "account/usage/resetCredits/read".to_string(),
+        params: Some(serde_json::json!({
+            "accountId": "acc-reset-read"
+        })),
+        trace: None,
+    };
+    let read_json = serde_json::to_string(&read_req).expect("serialize reset credits read");
+    let read_server = codexmanager_service::start_one_shot_server().expect("start server");
+    let read_resp = post_rpc(&read_server.addr, &read_json);
+    let result = read_resp.get("result").expect("reset credits result");
+    assert_eq!(
+        result.get("availableCount").and_then(|value| value.as_i64()),
+        Some(2)
+    );
+    assert_eq!(
+        result
+            .get("totalEarnedCount")
+            .and_then(|value| value.as_i64()),
+        Some(3)
+    );
+    assert_eq!(
+        result
+            .get("credits")
+            .and_then(|value| value.as_array())
+            .map(Vec::len),
+        Some(1)
+    );
+
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("receive reset credits request");
+    request_join.join().expect("join reset credits server");
+    assert_eq!(request.path, "/backend-api/wham/rate-limit-reset-credits");
+    assert_eq!(
+        request.authorization.as_deref(),
+        Some("Bearer access-reset-read")
+    );
+    assert_eq!(request.chatgpt_account_id.as_deref(), Some("org-reset-read"));
+}
+
+#[test]
+fn rpc_account_usage_reset_credits_consume_posts_credit_and_refreshes_usage() {
+    let ctx = RpcTestContext::new("rpc-reset-credits-consume");
+    let storage = Storage::open(ctx.db_path()).expect("open db");
+    storage.init().expect("init schema");
+    let now = now_ts();
+    storage
+        .insert_account(&Account {
+            id: "acc-reset-consume".to_string(),
+            label: "Reset Consume".to_string(),
+            issuer: "https://auth.openai.com".to_string(),
+            chatgpt_account_id: Some("org-reset-consume".to_string()),
+            workspace_id: Some("org-reset-consume".to_string()),
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("insert account");
+    storage
+        .insert_token(&Token {
+            account_id: "acc-reset-consume".to_string(),
+            id_token: "id-token".to_string(),
+            access_token: "access-reset-consume".to_string(),
+            refresh_token: "refresh-reset-consume".to_string(),
+            api_key_access_token: None,
+            last_refresh: now,
+        })
+        .expect("insert token");
+
+    let (reset_base_url, request_rx, request_join) = start_mock_reset_credits_consume_server();
+    let _usage_base_url_guard =
+        EnvGuard::set("CODEXMANAGER_USAGE_BASE_URL", &format!("{reset_base_url}/backend-api"));
+
+    let consume_req = JsonRpcRequest {
+        id: 84.into(),
+        method: "account/usage/resetCredits/consume".to_string(),
+        params: Some(serde_json::json!({
+            "accountId": "acc-reset-consume"
+        })),
+        trace: None,
+    };
+    let consume_json = serde_json::to_string(&consume_req).expect("serialize reset consume");
+    let consume_server = codexmanager_service::start_one_shot_server().expect("start server");
+    let consume_resp = post_rpc(&consume_server.addr, &consume_json);
+    let result = consume_resp.get("result").expect("consume result");
+    assert_eq!(
+        result
+            .get("consumed")
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        result.get("creditId").and_then(|value| value.as_str()),
+        Some("credit-consume-1")
+    );
+
+    let read_request = request_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("receive reset credits read request");
+    let consume_request = request_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("receive reset credits consume request");
+    let subscription_request = request_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("receive subscription refresh request");
+    let usage_request = request_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("receive usage refresh request");
+    request_join.join().expect("join reset consume server");
+
+    assert_eq!(read_request.path, "/backend-api/wham/rate-limit-reset-credits");
+    assert_eq!(
+        consume_request.path,
+        "/backend-api/wham/rate-limit-reset-credits/consume"
+    );
+    assert_eq!(
+        consume_request.authorization.as_deref(),
+        Some("Bearer access-reset-consume")
+    );
+    assert_eq!(
+        consume_request.chatgpt_account_id.as_deref(),
+        Some("org-reset-consume")
+    );
+    let consume_body: serde_json::Value =
+        serde_json::from_str(&consume_request.body).expect("parse consume body");
+    assert_eq!(consume_body["credit_id"], "credit-consume-1");
+    assert!(consume_body["redeem_request_id"]
+        .as_str()
+        .is_some_and(|value| !value.trim().is_empty()));
+    assert_eq!(
+        subscription_request.path,
+        "/backend-api/accounts/check/v4-2023-04-27"
+    );
+    assert_eq!(usage_request.path, "/backend-api/wham/usage");
+
+    let refreshed = storage
+        .latest_usage_snapshot_for_account("acc-reset-consume")
+        .expect("read refreshed usage")
+        .expect("refreshed usage snapshot");
+    assert_eq!(refreshed.used_percent, Some(0.0));
 }
 
 /// 函数 `rpc_usage_read_empty`
