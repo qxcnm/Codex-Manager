@@ -37,6 +37,11 @@ struct UsageRefreshCompletedPayload {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(tauri_plugin_window_state::StateFlags::all())
+                .build(),
+        )
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             log::info!(
                 "secondary instance intercepted; focusing main window (args: {:?}, cwd: {})",

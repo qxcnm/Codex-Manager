@@ -22,6 +22,7 @@ log = "0.4"
 tauri = { version = "2.10.3", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2.4.0"
+tauri-plugin-window-state = "2.4.1"
 codexmanager-core = { path = "../../crates/core" }
 codexmanager-service = { path = "../../crates/service" }
 webbrowser = "0.8"

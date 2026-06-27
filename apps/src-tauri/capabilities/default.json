@@ -7,6 +7,7 @@
     "tray-preview"
   ],
   "permissions": [
-    "core:default"
+    "core:default",
+    "window-state:default"
   ]
 }

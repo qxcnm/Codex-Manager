@@ -1,6 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use tauri::Manager;
+use tauri_plugin_window_state::AppHandleExt;
 
 use crate::service_runtime::stop_service;
 
@@ -152,6 +153,10 @@ pub(crate) fn handle_main_window_event(window: &tauri::Window, event: &tauri::Wi
                 );
             }
             return;
+        }
+
+        if let Err(err) = window.app_handle().save_window_state(tauri_plugin_window_state::StateFlags::all()) {
+            log::warn!("save window state before close failed: {}", err);
         }
 
         match close_mode {
