@@ -1046,6 +1046,7 @@ export const EN_MESSAGES: MessageCatalog = {
   "免费重置已触发，账号用量已刷新":
     "Free reset triggered and account usage refreshed.",
   免费重置失败: "Free reset failed",
+  查询免费重置次数失败: "Failed to query free reset count",
   免费重置: "Free reset",
   "正在等待服务连接。": "Waiting for service connection.",
   "正在刷新...": "Refreshing...",

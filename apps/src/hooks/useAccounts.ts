@@ -598,40 +598,35 @@ export function useAccounts() {
     },
   });
 
-  const resetCreditsMutation = useMutation({
-    mutationFn: async (accountId: string): Promise<{
-      canceled?: boolean;
-      skipped?: boolean;
-      availableCount?: number;
-      result?: ResetCreditsResult;
-    }> => {
+  const [pendingReset, setPendingReset] = useState<{
+    accountId: string;
+    availableCount: number;
+  } | null>(null);
+
+  const readResetCreditsMutation = useMutation({
+    mutationFn: async (accountId: string) => {
       const credits = await accountClient.readRateLimitResetCredits(accountId);
-      const availableCount = Number(credits?.availableCount || 0);
-      if (availableCount <= 0) {
-        return { skipped: true, availableCount };
-      }
-      const confirmed =
-        typeof window === "undefined" ||
-        window.confirm(
-          t("当前账号有 {count} 次免费重置可用，确定消耗 1 次并刷新用量吗？", {
-            count: availableCount,
-          }),
-        );
-      if (!confirmed) {
-        return { canceled: true, availableCount };
-      }
-      const result = await accountClient.consumeRateLimitResetCredits(accountId);
-      return { result, availableCount };
+      return { accountId, availableCount: Number(credits?.availableCount || 0) };
     },
-    onSuccess: async (payload) => {
-      if (payload?.canceled) {
-        toast.info(t("已取消免费重置"));
-        return;
-      }
-      if (payload?.skipped) {
+    onSuccess: ({ accountId, availableCount }) => {
+      if (availableCount <= 0) {
         toast.info(t("当前账号没有可用免费重置"));
         return;
       }
+      setPendingReset({ accountId, availableCount });
+    },
+    onError: (error: unknown) => {
+      toast.error(
+        `${t("查询免费重置次数失败")}: ${getAppErrorMessage(error)}`,
+      );
+    },
+  });
+
+  const consumeResetCreditsMutation = useMutation({
+    mutationFn: (accountId: string) =>
+      accountClient.consumeRateLimitResetCredits(accountId),
+    onSuccess: async () => {
+      setPendingReset(null);
       await invalidateUsageData();
       toast.success(t("免费重置已触发，账号用量已刷新"));
     },
@@ -639,6 +634,27 @@ export function useAccounts() {
       toast.error(`${t("免费重置失败")}: ${getAppErrorMessage(error)}`);
     },
   });
+
+  const requestResetCredits = (accountId: string) => {
+    if (!ensureServiceReady("免费重置")) return;
+    const targetAccountId = accountId.trim();
+    if (!targetAccountId) {
+      toast.error(t("未找到当前账号，请刷新后重试"));
+      return;
+    }
+    readResetCreditsMutation.mutate(targetAccountId);
+  };
+
+  const cancelPendingReset = () => {
+    if (!pendingReset) return;
+    setPendingReset(null);
+    toast.info(t("已取消免费重置"));
+  };
+
+  const confirmPendingReset = () => {
+    if (!pendingReset) return;
+    consumeResetCreditsMutation.mutate(pendingReset.accountId);
+  };
 
   const refreshAccountRtMutation = useMutation({
     mutationFn: (accountId: string) =>
@@ -998,14 +1014,12 @@ export function useAccounts() {
       refreshAccountRtMutation.mutate(targetAccountId);
     },
     resetAccountUsage: (accountId: string) => {
-      if (!ensureServiceReady("免费重置")) return;
-      const targetAccountId = accountId.trim();
-      if (!targetAccountId) {
-        toast.error(t("未找到当前账号，请刷新后重试"));
-        return;
-      }
-      resetCreditsMutation.mutate(targetAccountId);
+      requestResetCredits(accountId);
     },
+    pendingReset,
+    confirmPendingReset,
+    cancelPendingReset,
+    isReadingResetCredits: readResetCreditsMutation.isPending,
     refreshAllAccountRt: () => {
       if (!ensureServiceReady("刷新 AT/RT")) return;
       if (!accounts.length) {
@@ -1099,10 +1113,20 @@ export function useAccounts() {
       refreshAccountMutation.isPending && typeof refreshAccountMutation.variables === "string"
         ? refreshAccountMutation.variables
         : "",
-    isResettingAccountId:
-      resetCreditsMutation.isPending && typeof resetCreditsMutation.variables === "string"
-        ? resetCreditsMutation.variables
-        : "",
+    isResettingAccountId: (() => {
+      const readVar =
+        readResetCreditsMutation.isPending &&
+        typeof readResetCreditsMutation.variables === "string"
+          ? readResetCreditsMutation.variables
+          : "";
+      const consumeVar =
+        consumeResetCreditsMutation.isPending &&
+        typeof consumeResetCreditsMutation.variables === "string"
+          ? consumeResetCreditsMutation.variables
+          : "";
+      const pending = pendingReset?.accountId || "";
+      return readVar || consumeVar || pending;
+    })(),
     isRefreshingRtAccountId:
       refreshAccountRtMutation.isPending &&
       typeof refreshAccountRtMutation.variables === "string"

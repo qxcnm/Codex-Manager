@@ -86,4 +86,15 @@ export const EN_ACCOUNTS_MESSAGES: MessageCatalog = {
     "Quota capacity must be a number greater than 0. Leave blank for no override.",
   "额度已耗尽": "Quota exhausted",
   "预计删除": "Estimated delete",
+  免费重置: "Free reset",
+  "查询免费重置次数失败": "Failed to query free reset count",
+  "免费重置失败": "Free reset failed",
+  "免费重置已触发，账号用量已刷新":
+    "Free reset triggered and account usage refreshed.",
+  "当前账号没有可用免费重置":
+    "This account has no available free reset.",
+  "已取消免费重置": "Free reset canceled",
+  "当前账号有 {count} 次免费重置可用，确定消耗 1 次并刷新用量吗？":
+    "This account has {count} free reset(s). Consume 1 reset and refresh usage?",
+  "触发免费重置": "Trigger free reset",
 };

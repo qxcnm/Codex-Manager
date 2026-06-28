@@ -211,6 +211,10 @@ export interface AccountsPageViewProps {
   importByDirectory: () => void;
   refreshAccount: (accountId: string) => void;
   resetAccountUsage: (accountId: string) => void;
+  pendingReset: { accountId: string; availableCount: number } | null;
+  confirmPendingReset: () => void;
+  cancelPendingReset: () => void;
+  isReadingResetCredits: boolean;
   clearPreferredAccount: (accountId: string) => void;
   setPreferredAccount: (accountId: string) => void;
   toggleAccountStatus: (
@@ -319,6 +323,10 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     importByDirectory,
     refreshAccount,
     resetAccountUsage,
+    pendingReset,
+    confirmPendingReset,
+    cancelPendingReset,
+    isReadingResetCredits,
     clearPreferredAccount,
     setPreferredAccount,
     toggleAccountStatus,
@@ -849,7 +857,8 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                   const isRefreshingCurrentAccount =
                     isRefreshingAccountId === account.id;
                   const isResettingCurrentAccount =
-                    isResettingAccountId === account.id;
+                    isResettingAccountId === account.id ||
+                    (isReadingResetCredits && pendingReset?.accountId === account.id);
                   const isRefreshingCurrentRt =
                     isRefreshingRtAccountId === account.id;
                   const filteredIndex =
@@ -1203,6 +1212,22 @@ export function AccountsPageView(props: AccountsPageViewProps) {
         confirmText={t("删除")}
         confirmVariant="destructive"
         onConfirm={handleConfirmDelete}
+      />
+      <ConfirmDialog
+        open={isPageActive && Boolean(pendingReset)}
+        onOpenChange={(open) => {
+          if (!open) {
+            cancelPendingReset();
+          }
+        }}
+        title={t("触发免费重置")}
+        description={t(
+          "当前账号有 {count} 次免费重置可用，确定消耗 1 次并刷新用量吗？",
+          { count: pendingReset?.availableCount ?? 0 },
+        )}
+        confirmText={t("确定")}
+        cancelText={t("取消")}
+        onConfirm={confirmPendingReset}
       />
       <Dialog
         open={isPageActive && Boolean(accountEditorState)}
