@@ -16,6 +16,7 @@ import {
   Pin,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Trash2,
   Zap,
@@ -148,6 +149,7 @@ export interface AccountsPageViewProps {
   quotaSecondaryDraft: string;
   isRefreshingAllAccounts: boolean;
   isRefreshingAccountId: string | null;
+  isResettingAccountId: string | null;
   isRefreshingRtAccountId: string | null;
   isRefreshingAllRtAccounts: boolean;
   isExporting: boolean;
@@ -208,6 +210,11 @@ export interface AccountsPageViewProps {
   importByFile: () => void;
   importByDirectory: () => void;
   refreshAccount: (accountId: string) => void;
+  resetAccountUsage: (accountId: string) => void;
+  pendingReset: { accountId: string; availableCount: number } | null;
+  confirmPendingReset: () => void;
+  cancelPendingReset: () => void;
+  isReadingResetCredits: boolean;
   clearPreferredAccount: (accountId: string) => void;
   setPreferredAccount: (accountId: string) => void;
   toggleAccountStatus: (
@@ -257,6 +264,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     quotaSecondaryDraft,
     isRefreshingAllAccounts,
     isRefreshingAccountId,
+    isResettingAccountId,
     isRefreshingRtAccountId,
     isRefreshingAllRtAccounts,
     isExporting,
@@ -314,6 +322,11 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     importByFile,
     importByDirectory,
     refreshAccount,
+    resetAccountUsage,
+    pendingReset,
+    confirmPendingReset,
+    cancelPendingReset,
+    isReadingResetCredits,
     clearPreferredAccount,
     setPreferredAccount,
     toggleAccountStatus,
@@ -843,6 +856,9 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                   }`;
                   const isRefreshingCurrentAccount =
                     isRefreshingAccountId === account.id;
+                  const isResettingCurrentAccount =
+                    isResettingAccountId === account.id ||
+                    (isReadingResetCredits && pendingReset?.accountId === account.id);
                   const isRefreshingCurrentRt =
                     isRefreshingRtAccountId === account.id;
                   const filteredIndex =
@@ -1015,6 +1031,24 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 className="gap-2"
+                                disabled={
+                                  !isServiceReady ||
+                                  isRefreshingAllAccounts ||
+                                  isRefreshingCurrentAccount ||
+                                  isResettingCurrentAccount
+                                }
+                                onClick={() => resetAccountUsage(account.id)}
+                              >
+                                <RotateCcw
+                                  className={cn(
+                                    "h-4 w-4",
+                                    isResettingCurrentAccount && "animate-spin",
+                                  )}
+                                />
+                                {t("触发免费重置")}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                className="gap-2"
                                 disabled={!isServiceReady || isRefreshingCurrentRt}
                                 onClick={() => refreshAccountRt(account.id)}
                               >
@@ -1178,6 +1212,22 @@ export function AccountsPageView(props: AccountsPageViewProps) {
         confirmText={t("删除")}
         confirmVariant="destructive"
         onConfirm={handleConfirmDelete}
+      />
+      <ConfirmDialog
+        open={isPageActive && Boolean(pendingReset)}
+        onOpenChange={(open) => {
+          if (!open) {
+            cancelPendingReset();
+          }
+        }}
+        title={t("触发免费重置")}
+        description={t(
+          "当前账号有 {count} 次免费重置可用，确定消耗 1 次并刷新用量吗？",
+          { count: pendingReset?.availableCount ?? 0 },
+        )}
+        confirmText={t("确定")}
+        cancelText={t("取消")}
+        onConfirm={confirmPendingReset}
       />
       <Dialog
         open={isPageActive && Boolean(accountEditorState)}

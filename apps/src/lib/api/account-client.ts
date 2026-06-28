@@ -80,6 +80,20 @@ export interface AccountWarmupPayload {
   message?: string;
 }
 
+export interface RateLimitResetCreditsResult {
+  availableCount: number;
+  totalEarnedCount: number;
+  credits: unknown[];
+  raw?: unknown;
+}
+
+export interface RateLimitResetConsumeResult {
+  consumed: boolean;
+  creditId: string;
+  redeemRequestId: string;
+  response?: unknown;
+}
+
 export interface AccountDeleteByStatusesPayload {
   statuses: string[];
 }
@@ -543,6 +557,28 @@ export const accountClient = {
           ? { accountId: targetAccountId, account_id: targetAccountId }
           : {}
       )
+    );
+  },
+  async readRateLimitResetCredits(
+    accountId: string
+  ): Promise<RateLimitResetCreditsResult> {
+    const result = await invoke<RateLimitResetCreditsResult>(
+      "service_usage_reset_credits_read",
+      withAddr({ accountId: accountId.trim() })
+    );
+    return {
+      availableCount: Number(result?.availableCount || 0),
+      totalEarnedCount: Number(result?.totalEarnedCount || 0),
+      credits: Array.isArray(result?.credits) ? result.credits : [],
+      raw: result?.raw,
+    };
+  },
+  async consumeRateLimitResetCredits(
+    accountId: string
+  ): Promise<RateLimitResetConsumeResult> {
+    return await invoke<RateLimitResetConsumeResult>(
+      "service_usage_reset_credits_consume",
+      withAddr({ accountId: accountId.trim() })
     );
   },
   async aggregateUsage(): Promise<UsageAggregateSummary> {

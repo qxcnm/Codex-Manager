@@ -1,4 +1,7 @@
-use codexmanager_core::usage::{accounts_check_endpoint, parse_usage_snapshot, usage_endpoint};
+use codexmanager_core::usage::{
+    accounts_check_endpoint, rate_limit_reset_credits_consume_endpoint,
+    rate_limit_reset_credits_endpoint, parse_usage_snapshot, usage_endpoint,
+};
 use serde_json::json;
 
 /// 函数 `usage_snapshot_parsed`
@@ -84,5 +87,17 @@ fn usage_snapshot_parsed() {
     assert_eq!(
         accounts_check_url,
         "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27"
+    );
+
+    let reset_credits_url = rate_limit_reset_credits_endpoint("https://chatgpt.com");
+    assert_eq!(
+        reset_credits_url,
+        "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
+    );
+
+    let reset_consume_url = rate_limit_reset_credits_consume_endpoint("https://chatgpt.com");
+    assert_eq!(
+        reset_consume_url,
+        "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
     );
 }
