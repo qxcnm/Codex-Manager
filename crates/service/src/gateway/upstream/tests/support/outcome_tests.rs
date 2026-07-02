@@ -30,7 +30,7 @@ fn low_quota_usage_snapshot(account_id: &str) -> UsageSnapshotRecord {
     }
 }
 
-/// 函数 `official_status_404_with_more_candidates_keeps_upstream_response`
+/// 函数 `official_status_404_with_more_candidates_triggers_failover`
 ///
 /// 作者: gaohongshun
 ///
@@ -42,7 +42,7 @@ fn low_quota_usage_snapshot(account_id: &str) -> UsageSnapshotRecord {
 /// # 返回
 /// 无
 #[test]
-fn official_status_404_with_more_candidates_keeps_upstream_response() {
+fn official_status_404_with_more_candidates_triggers_failover() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
     let decision = decide_upstream_outcome(
@@ -52,6 +52,33 @@ fn official_status_404_with_more_candidates_keeps_upstream_response() {
         None,
         "https://chatgpt.com/backend-api/codex/chat/completions",
         true,
+        |_, _, _| {},
+    );
+    assert!(matches!(decision, UpstreamOutcomeDecision::Failover));
+}
+
+/// 函数 `official_status_404_on_last_candidate_keeps_upstream_response`
+///
+/// 作者: gaohongshun
+///
+/// 时间: 2026-07-01
+///
+/// # 参数
+/// 无
+///
+/// # 返回
+/// 无
+#[test]
+fn official_status_404_on_last_candidate_keeps_upstream_response() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let decision = decide_upstream_outcome(
+        &storage,
+        "acc-404-last",
+        reqwest::StatusCode::NOT_FOUND,
+        None,
+        "https://chatgpt.com/backend-api/codex/responses",
+        false,
         |_, _, _| {},
     );
     assert!(matches!(decision, UpstreamOutcomeDecision::RespondUpstream));

@@ -91,6 +91,23 @@ where
         return from_follow_up_action(follow_up_action(true, has_more_candidates));
     }
 
+    // OpenAI / chatgpt.com 间歇性返回 404（非 endpoint 缺失，而是流量被集中降级）。
+    // 把该账号置为短暂 cooldown，让剩余候选账号优先尝试；最后一个候选时仍回传上游响应。
+    if is_official_target && status.as_u16() == 404 {
+        super::super::super::mark_account_cooldown_for_status(account_id, status.as_u16());
+        log::warn!(
+            "event=upstream_not_found account_id={} upstream_url={} status=404 detail=\"likely OpenAI intermittent block\"",
+            account_id,
+            url
+        );
+        log_gateway_result(
+            Some(url),
+            status.as_u16(),
+            Some("upstream not-found (likely OpenAI block)"),
+        );
+        return from_follow_up_action(follow_up_action(true, has_more_candidates));
+    }
+
     if is_official_target
         && is_compact_target(url)
         && matches!(status.as_u16(), 500..=599)
