@@ -214,6 +214,7 @@ export interface AccountsPageViewProps {
   pendingReset: { accountId: string; availableCount: number } | null;
   confirmPendingReset: () => void;
   cancelPendingReset: () => void;
+  dismissPendingReset: () => void;
   isReadingResetCredits: boolean;
   clearPreferredAccount: (accountId: string) => void;
   setPreferredAccount: (accountId: string) => void;
@@ -326,6 +327,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     pendingReset,
     confirmPendingReset,
     cancelPendingReset,
+    dismissPendingReset,
     isReadingResetCredits,
     clearPreferredAccount,
     setPreferredAccount,
@@ -1217,7 +1219,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
         open={isPageActive && Boolean(pendingReset)}
         onOpenChange={(open) => {
           if (!open) {
-            cancelPendingReset();
+            dismissPendingReset();
           }
         }}
         title={t("触发免费重置")}
@@ -1227,6 +1229,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
         )}
         confirmText={t("确定")}
         cancelText={t("取消")}
+        onCancel={cancelPendingReset}
         onConfirm={confirmPendingReset}
       />
       <Dialog

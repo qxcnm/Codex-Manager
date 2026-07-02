@@ -21,6 +21,7 @@ interface ConfirmDialogProps {
   cancelText?: string;
   confirmVariant?: "default" | "destructive";
   onConfirm: () => void;
+  onCancel?: () => void;
 }
 
 /**
@@ -45,6 +46,7 @@ export function ConfirmDialog({
   cancelText,
   confirmVariant = "default",
   onConfirm,
+  onCancel,
 }: ConfirmDialogProps) {
   const { t } = useI18n();
   return (
@@ -62,6 +64,7 @@ export function ConfirmDialog({
           <DialogClose
             className={buttonVariants({ variant: "outline" })}
             type="button"
+            onClick={() => onCancel?.()}
           >
             {cancelText || t("取消")}
           </DialogClose>

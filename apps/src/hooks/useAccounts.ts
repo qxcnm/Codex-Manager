@@ -645,9 +645,13 @@ export function useAccounts() {
     readResetCreditsMutation.mutate(targetAccountId);
   };
 
+  const dismissPendingReset = () => {
+    setPendingReset(null);
+  };
+
   const cancelPendingReset = () => {
     if (!pendingReset) return;
-    setPendingReset(null);
+    dismissPendingReset();
     toast.info(t("已取消免费重置"));
   };
 
@@ -1019,6 +1023,7 @@ export function useAccounts() {
     pendingReset,
     confirmPendingReset,
     cancelPendingReset,
+    dismissPendingReset,
     isReadingResetCredits: readResetCreditsMutation.isPending,
     refreshAllAccountRt: () => {
       if (!ensureServiceReady("刷新 AT/RT")) return;

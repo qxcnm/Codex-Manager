@@ -58,6 +58,7 @@ export default function AccountsPage() {
     pendingReset,
     confirmPendingReset,
     cancelPendingReset,
+    dismissPendingReset,
     isReadingResetCredits,
     refreshAccountRt,
     refreshAllAccountRt,
@@ -721,6 +722,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
       pendingReset={pendingReset}
       confirmPendingReset={confirmPendingReset}
       cancelPendingReset={cancelPendingReset}
+      dismissPendingReset={dismissPendingReset}
       isReadingResetCredits={isReadingResetCredits}
       clearPreferredAccount={clearPreferredAccount}
       setPreferredAccount={setPreferredAccount}
