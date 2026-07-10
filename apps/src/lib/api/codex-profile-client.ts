@@ -8,6 +8,7 @@ import type {
   CodexProfileMode,
   CodexProfilePruneHistoryBackupsResult,
   CodexProfileStatus,
+  CodexRuntimeReloadResult,
 } from "@/types";
 
 function asObject(value: unknown): Record<string, unknown> {
@@ -110,6 +111,27 @@ export function normalizeCodexProfileStatus(payload: unknown): CodexProfileStatu
     historyRepair: normalizeCodexProfileHistoryRepair(
       source.historyRepair ?? source.history_repair,
     ),
+    runtimeReload: normalizeCodexRuntimeReload(
+      source.runtimeReload ?? source.runtime_reload,
+    ),
+  };
+}
+
+export function normalizeCodexRuntimeReload(
+  payload: unknown,
+): CodexRuntimeReloadResult | null {
+  if (!payload) return null;
+  const source = asObject(payload);
+  return {
+    requested: asBoolean(source.requested),
+    matchedProcessCount: asNumber(
+      source.matchedProcessCount ?? source.matched_process_count,
+    ),
+    signaledProcessCount: asNumber(
+      source.signaledProcessCount ?? source.signaled_process_count,
+    ),
+    warnings: asStringArray(source.warnings),
+    message: asString(source.message),
   };
 }
 
@@ -255,12 +277,14 @@ export const codexProfileClient = {
   async applyDirectAccount(params: {
     accountId: string;
     codexHome?: string | null;
+    reloadAfterSwitch: boolean;
   }): Promise<CodexProfileStatus> {
     const result = await invoke<unknown>(
       "service_codex_profile_apply_direct_account",
       withAddr({
         accountId: params.accountId,
         codexHome: params.codexHome || null,
+        reloadAfterSwitch: params.reloadAfterSwitch,
       }),
     );
     return normalizeCodexProfileStatus(result);
@@ -269,6 +293,7 @@ export const codexProfileClient = {
     apiKeyId: string;
     codexHome?: string | null;
     baseUrl?: string | null;
+    reloadAfterSwitch: boolean;
   }): Promise<CodexProfileStatus> {
     const result = await invoke<unknown>(
       "service_codex_profile_apply_gateway",
@@ -276,6 +301,7 @@ export const codexProfileClient = {
         apiKeyId: params.apiKeyId,
         codexHome: params.codexHome || null,
         baseUrl: params.baseUrl || null,
+        reloadAfterSwitch: params.reloadAfterSwitch,
       }),
     );
     return normalizeCodexProfileStatus(result);

@@ -20,6 +20,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import { buildStaticRouteUrl } from "@/lib/utils/static-routes";
 import { cn } from "@/lib/utils";
 import { CODEX_PROFILE_MODE_LABELS } from "@/hooks/useCodexProfileModeStatus";
@@ -109,6 +110,40 @@ function MetadataItem({
       <span className={cn("min-w-0 break-all text-xs text-foreground", valueClassName)}>
         {value}
       </span>
+    </div>
+  );
+}
+
+export function ReloadAfterSwitchOption({
+  t,
+  enabled,
+  disabled,
+  onEnabledChange,
+}: {
+  t: (value: string, params?: Record<string, string | number>) => string;
+  enabled: boolean;
+  disabled: boolean;
+  onEnabledChange: (enabled: boolean) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-border/70 bg-background/45 p-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="grid gap-1">
+        <Label htmlFor="reload-codex-after-switch">
+          {t("切换后重载 Codex 后台")}
+        </Label>
+        <p className="max-w-4xl text-xs text-muted-foreground">
+          {t(
+            "开启后只向使用当前 Codex profile 的 app-server 发送重载信号，不会终止前台 Codex CLI；关闭后，现有进程会在下次启动时读取新配置。",
+          )}
+        </p>
+      </div>
+      <Switch
+        id="reload-codex-after-switch"
+        checked={enabled}
+        onCheckedChange={onEnabledChange}
+        disabled={disabled}
+        aria-label={t("切换后重载 Codex 后台")}
+      />
     </div>
   );
 }

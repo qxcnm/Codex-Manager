@@ -26,6 +26,15 @@ export interface CodexProfileStatus {
   error: string | null;
   warnings: string[];
   historyRepair: CodexProfileHistoryRepairSummary | null;
+  runtimeReload: CodexRuntimeReloadResult | null;
+}
+
+export interface CodexRuntimeReloadResult {
+  requested: boolean;
+  matchedProcessCount: number;
+  signaledProcessCount: number;
+  warnings: string[];
+  message: string;
 }
 
 export interface CodexProfileHistoryRetention {

@@ -125,7 +125,9 @@ name = "Other"
 base_url = "https://example.test/v1"
 "#;
 
-    let output = patch_config_for_direct(Some(input.to_string())).expect("patch direct");
+    let managed_catalog = PathBuf::from("/tmp/codexmanager/gateway-models.json");
+    let output = patch_config_for_direct(Some(input.to_string()), &managed_catalog, None)
+        .expect("patch direct");
 
     assert!(!output.contains("model_provider = \"cm\""));
     assert!(!output.contains("[model_providers.cm]"));
@@ -142,19 +144,59 @@ model = "gpt-5.4"
 name = "Other"
 "#;
 
-    let output = patch_config_for_gateway(Some(input.to_string()), "http://127.0.0.1:48770/v1")
-        .expect("patch gateway");
+    let managed_catalog = PathBuf::from("/tmp/codexmanager/gateway-models.json");
+    let output = patch_config_for_gateway(
+        Some(input.to_string()),
+        "http://127.0.0.1:48770/v1",
+        &managed_catalog,
+    )
+    .expect("patch gateway");
 
     assert!(output.contains("model_provider = \"cm\""));
     assert!(output.contains("[model_providers.cm]"));
     assert!(output.contains("base_url = \"http://127.0.0.1:48770/v1\""));
     assert!(output.contains("wire_api = \"responses\""));
+    assert!(output.contains("model_catalog_json = \"/tmp/codexmanager/gateway-models.json\""));
     assert!(output.contains("[model_providers.other]"));
 }
 
 #[test]
+fn direct_config_only_removes_manager_owned_catalog() {
+    let managed_catalog = PathBuf::from("/tmp/codexmanager/gateway-models.json");
+    let managed = format!(
+        "model_catalog_json = {:?}\n",
+        managed_catalog.to_string_lossy()
+    );
+
+    let removed = patch_config_for_direct(Some(managed), &managed_catalog, None)
+        .expect("remove managed catalog");
+    assert!(!removed.contains("model_catalog_json"));
+
+    let restored = patch_config_for_direct(
+        Some(format!(
+            "model_catalog_json = {:?}\n",
+            managed_catalog.to_string_lossy()
+        )),
+        &managed_catalog,
+        Some("/home/test/custom-models.json"),
+    )
+    .expect("restore prior catalog");
+    assert!(restored.contains("model_catalog_json = \"/home/test/custom-models.json\""));
+
+    let custom = "model_catalog_json = \"/home/test/owned-by-user.json\"\n";
+    let preserved = patch_config_for_direct(Some(custom.to_string()), &managed_catalog, None)
+        .expect("preserve user catalog");
+    assert!(preserved.contains("/home/test/owned-by-user.json"));
+}
+
+#[test]
 fn invalid_toml_is_rejected() {
-    assert!(patch_config_for_gateway(Some("bad = [".to_string()), "http://x/v1").is_err());
+    assert!(patch_config_for_gateway(
+        Some("bad = [".to_string()),
+        "http://x/v1",
+        Path::new("/tmp/gateway-models.json"),
+    )
+    .is_err());
 }
 
 #[test]
@@ -306,6 +348,7 @@ fn write_profile_files_uses_internal_marker() {
         api_key_id: Some("key-1".to_string()),
         gateway_base_url: Some("http://localhost:48760/v1".to_string()),
         provider_id: PROVIDER_ID.to_string(),
+        previous_model_catalog_json: None,
         updated_at: now_ts(),
     };
 

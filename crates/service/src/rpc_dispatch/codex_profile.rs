@@ -26,12 +26,14 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
             super::value_or_error(crate::codex_profile::apply_direct_account(
                 super::str_param(req, "accountId"),
                 super::str_param(req, "codexHome"),
+                super::bool_param(req, "reloadAfterSwitch").unwrap_or(false),
             ))
         }
         "codexProfile/applyGateway" => super::value_or_error(crate::codex_profile::apply_gateway(
             super::str_param(req, "apiKeyId"),
             super::str_param(req, "codexHome"),
             super::str_param(req, "baseUrl"),
+            super::bool_param(req, "reloadAfterSwitch").unwrap_or(false),
         )),
         "codexProfile/restore" => super::value_or_error(crate::codex_profile::restore(
             super::str_param(req, "codexHome"),

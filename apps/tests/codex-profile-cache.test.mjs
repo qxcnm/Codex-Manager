@@ -62,6 +62,29 @@ test("平台模式页面采用当前模式优先的切换结构", async () => {
   assert.match(source, /href=\{buildStaticRouteUrl\(href\)\}/);
 });
 
+test("模型目录不再自动覆盖 Codex models_cache", async () => {
+  const hook = await readSource("src/hooks/useManagedModels.ts");
+  const page = await readSource("src/app/models/page.tsx");
+  const syncCalls = hook.match(/syncCatalogToCodexCache\(/g) || [];
+
+  assert.equal(syncCalls.length, 1, "cache sync should only remain in explicit export");
+  assert.doesNotMatch(hook, /sync codex models cache failed/);
+  assert.match(page, /不会自动覆盖 `~\/\.codex\/models_cache\.json`/);
+});
+
+test("平台模式切换透传并持久化 Codex 后台重载开关", async () => {
+  const state = await readSource("src/app/platform-mode/use-platform-mode-state.ts");
+  const sections = await readSource("src/app/platform-mode/page-sections.tsx");
+  const client = await readSource("src/lib/api/codex-profile-client.ts");
+  const tauri = await readSource("src-tauri/src/commands/codex_profile.rs");
+
+  assert.match(state, /codexmanager\.platform-mode\.reload-after-switch/);
+  assert.match(state, /reloadAfterSwitch,/);
+  assert.match(sections, /切换后重载 Codex 后台/);
+  assert.match(client, /reloadAfterSwitch: params\.reloadAfterSwitch/);
+  assert.match(tauri, /"reloadAfterSwitch": reload_after_switch\.unwrap_or\(false\)/);
+});
+
 test("平台密钥变更会刷新 Codex profile 候选密钥", async () => {
   const source = await readSource("src/hooks/useApiKeys.ts");
   assert.match(source, /CODEX_PROFILE_CANDIDATES_QUERY_KEY/);

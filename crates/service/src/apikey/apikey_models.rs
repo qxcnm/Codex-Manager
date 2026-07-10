@@ -191,7 +191,16 @@ pub(crate) fn save_managed_model_catalog_with_storage(
 ) -> Result<(), String> {
     let normalized = normalize_managed_model_catalog(catalog.clone());
     let updated_at = now_ts();
-    save_managed_model_catalog_rows(storage, &normalized, updated_at)
+    save_managed_model_catalog_rows(storage, &normalized, updated_at)?;
+    sync_active_gateway_catalog_best_effort(storage);
+    Ok(())
+}
+
+fn sync_active_gateway_catalog_best_effort(storage: &Storage) {
+    if let Err(err) = crate::codex_profile::sync_active_gateway_model_catalog_from_storage(storage)
+    {
+        log::warn!("event=sync_active_gateway_model_catalog_failed error={err}");
+    }
 }
 
 pub(crate) fn save_managed_model_catalog_model(
@@ -268,6 +277,7 @@ pub(crate) fn save_managed_model_catalog_model(
     ensure_platform_model_enableable(&storage, &next_entry.model)?;
 
     replace_model_catalog_entry(&storage, previous_slug.as_deref(), &next_entry)?;
+    sync_active_gateway_catalog_best_effort(&storage);
     Ok(next_entry)
 }
 
@@ -278,7 +288,9 @@ pub(crate) fn delete_managed_model_catalog_model(slug: &str) -> Result<(), Strin
     }
     let storage =
         storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    delete_model_catalog_entry(&storage, normalized_slug, true)
+    delete_model_catalog_entry(&storage, normalized_slug, true)?;
+    sync_active_gateway_catalog_best_effort(&storage);
+    Ok(())
 }
 
 pub(crate) fn prune_stale_remote_managed_model_catalog() -> Result<ManagedModelCatalogResult, String>
@@ -297,7 +309,9 @@ pub(crate) fn prune_stale_remote_managed_model_catalog() -> Result<ManagedModelC
         save_managed_model_catalog_with_storage(&storage, &merged_catalog)?;
     }
     prune_unedited_remote_model_catalog_entries_missing_from_remote(&storage, &remote_models)?;
-    read_managed_model_catalog_from_storage(&storage)
+    let catalog = read_managed_model_catalog_from_storage(&storage)?;
+    sync_active_gateway_catalog_best_effort(&storage);
+    Ok(catalog)
 }
 
 pub(crate) fn read_managed_model_routing() -> Result<ManagedModelRoutingResult, String> {

@@ -12,6 +12,7 @@ import {
   CurrentModeCard,
   DirectAccountCard,
   GatewayModeCard,
+  ReloadAfterSwitchOption,
 } from "./page-sections";
 import {
   modeImpact,
@@ -103,6 +104,13 @@ export default function PlatformModePage() {
           <AlertDescription>{state.status.warnings[0]}</AlertDescription>
         </Alert>
       ) : null}
+
+      <ReloadAfterSwitchOption
+        t={t}
+        enabled={state.reloadAfterSwitch}
+        disabled={!state.isServiceReady || state.isMutating}
+        onEnabledChange={state.setReloadAfterSwitch}
+      />
 
       <div className="grid gap-5 lg:grid-cols-2 xl:grid-cols-[minmax(320px,0.9fr)_minmax(0,1.05fr)_minmax(0,1.05fr)]">
         <CurrentModeCard

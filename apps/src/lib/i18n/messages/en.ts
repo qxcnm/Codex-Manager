@@ -445,6 +445,8 @@ export const EN_MESSAGES: MessageCatalog = {
     "After saving, the cache is automatically synced to `~/.codex/models_cache.json`. To make `/model` pick up the latest models and descriptions immediately, you still need to restart the running Codex session. On desktop, use the export button above to replace the local cache directly; in browser mode, a `models_cache.json` file will be downloaded and you can place it into `~/.codex/` manually.",
   "保存后会自动同步到 `~/.codex/models_cache.json`；如需让 `/model` 立即看到最新模型与说明，仍需重启正在运行中的 Codex 会话。Web 端可通过上方导出按钮下载同名 `models_cache.json`，再手动放入本地 `~/.codex/`；桌面端继续由本地自动同步。":
     "After saving, the cache is automatically synced to `~/.codex/models_cache.json`. To make `/model` pick up the latest models and descriptions immediately, you still need to restart the running Codex session. On the web, use the export button above to download a `models_cache.json` file and place it into the local `~/.codex/` folder manually; desktop continues to sync locally automatically.",
+  "模型变更会更新网关模式使用的独立目录，不会自动覆盖 `~/.codex/models_cache.json`；运行中的 Codex 仍需重载后生效。直连模式的模型列表与缓存由 Codex 官方管理；Web 端仍可用上方导出按钮下载兼容缓存。":
+    "Model changes update the separate catalog used by gateway mode and no longer overwrite `~/.codex/models_cache.json`; running Codex clients still need a reload before changes take effect. In direct mode, the model list and cache are managed by official Codex; the Web UI can still download a compatibility cache with the export button above.",
   当前环境不支持浏览器导出:
     "The current runtime does not support browser export",
   "当前环境不支持导出 Codex 缓存":
@@ -1672,4 +1674,15 @@ export const EN_MESSAGES: MessageCatalog = {
   未分配: "Unassigned",
   按我的平台密钥累计: "Accumulated by my platform keys",
   归属成员: "Owner member",
+  "切换后重载 Codex 后台": "Reload Codex background services after switching",
+  "开启后只向使用当前 Codex profile 的 app-server 发送重载信号，不会终止前台 Codex CLI；关闭后，现有进程会在下次启动时读取新配置。":
+    "When enabled, only app-server processes using the current Codex profile receive a reload signal; foreground Codex CLI sessions are not terminated. When disabled, running processes read the new configuration on their next start.",
+  "配置已切换；现有 Codex 进程将在下次启动时生效":
+    "Configuration switched; running Codex processes will pick it up on their next start",
+  "配置已切换，但 Codex 后台重载有警告":
+    "Configuration switched, but the Codex background reload reported a warning",
+  "已请求重载 {count} 个 Codex 后台进程":
+    "Requested reload for {count} Codex background process(es)",
+  "未发现需要重载的 Codex 后台进程":
+    "No Codex background process needed reloading",
 };

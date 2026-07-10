@@ -749,7 +749,7 @@ export default function ModelsPage() {
               </div>
               <div className="text-xs text-muted-foreground">
                 {isAdminMode
-                  ? t("保存后会自动同步到 `~/.codex/models_cache.json`；如需让 `/model` 立即看到最新模型与说明，仍需重启正在运行中的 Codex 会话。Web 端可通过上方导出按钮下载同名 `models_cache.json`，再手动放入本地 `~/.codex/`；桌面端继续由本地自动同步。")
+                  ? t("模型变更会更新网关模式使用的独立目录，不会自动覆盖 `~/.codex/models_cache.json`；运行中的 Codex 仍需重载后生效。直连模式的模型列表与缓存由 Codex 官方管理；Web 端仍可用上方导出按钮下载兼容缓存。")
                   : t("下游请求请使用平台模型 slug；实际来源和真实 upstream model 不在成员界面展示。")}
               </div>
             </div>

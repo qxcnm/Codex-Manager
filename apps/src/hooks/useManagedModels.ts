@@ -45,7 +45,6 @@ export function useManagedModels() {
   const isPageActive = useDesktopPageActive("/models/");
   const isQueryEnabled = useDeferredDesktopActivation(isServiceReady && isPageActive);
   const codexUserAgentRef = useRef("");
-  const syncedCatalogFingerprintRef = useRef("");
 
   const ensureServiceReady = (actionLabel: string): boolean => {
     if (isServiceReady) {
@@ -92,7 +91,6 @@ export function useManagedModels() {
 
   const syncCatalogToCodexCache = async (
     catalog: ManagedModelCatalog | null | undefined,
-    options?: { force?: boolean },
   ): Promise<string | null> => {
     if (!catalog) {
       return null;
@@ -108,18 +106,12 @@ export function useManagedModels() {
 
     const models = serializeManagedModelCatalogForCodexCache(catalog.items || []);
 
-    const fingerprint = JSON.stringify(models);
-    if (!options?.force && syncedCatalogFingerprintRef.current === fingerprint) {
-      return null;
-    }
-
     try {
       const userAgent = await resolveCodexUserAgent();
       await serviceClient.syncCodexModelsCache({
         userAgent,
         models,
       });
-      syncedCatalogFingerprintRef.current = fingerprint;
       return null;
     } catch (error) {
       return getAppErrorMessage(error);
@@ -165,13 +157,8 @@ export function useManagedModels() {
     mutationFn: (refreshRemote: boolean) => accountClient.listManagedModels(refreshRemote),
     onSuccess: async (catalog) => {
       queryClient.setQueryData(MANAGED_MODEL_QUERY_KEY, catalog);
-      const cacheSyncError = await syncCatalogToCodexCache(catalog);
       await invalidateAll();
-      if (cacheSyncError) {
-        toast.error(`${t("模型目录已刷新，但同步 Codex 模型缓存失败")}: ${cacheSyncError}`);
-      } else {
-        toast.success(t("模型目录已刷新"));
-      }
+      toast.success(t("模型目录已刷新"));
     },
     onError: (error: unknown) => {
       toast.error(`${t("刷新模型失败")}: ${getAppErrorMessage(error)}`);
@@ -182,13 +169,8 @@ export function useManagedModels() {
     mutationFn: () => accountClient.pruneStaleRemoteManagedModels(),
     onSuccess: async (catalog) => {
       queryClient.setQueryData(MANAGED_MODEL_QUERY_KEY, catalog);
-      const cacheSyncError = await syncCatalogToCodexCache(catalog);
       await invalidateAll();
-      if (cacheSyncError) {
-        toast.error(`${t("远端旧模型已清理，但同步 Codex 模型缓存失败")}: ${cacheSyncError}`);
-      } else {
-        toast.success(t("远端旧模型已清理"));
-      }
+      toast.success(t("远端旧模型已清理"));
     },
     onError: (error: unknown) => {
       toast.error(`${t("清理远端旧模型失败")}: ${getAppErrorMessage(error)}`);
@@ -198,14 +180,9 @@ export function useManagedModels() {
   const saveMutation = useMutation({
     mutationFn: (params: ManagedModelPayload) => accountClient.saveManagedModel(params),
     onSuccess: async () => {
-      const catalog = await reloadManagedCatalog();
-      const cacheSyncError = await syncCatalogToCodexCache(catalog);
+      await reloadManagedCatalog();
       await invalidateAll();
-      if (cacheSyncError) {
-        toast.error(`${t("模型已保存，但同步 Codex 模型缓存失败")}: ${cacheSyncError}`);
-      } else {
-        toast.success(t("模型已保存"));
-      }
+      toast.success(t("模型已保存"));
     },
     onError: (error: unknown) => {
       toast.error(`${t("保存模型失败")}: ${getAppErrorMessage(error)}`);
@@ -215,14 +192,9 @@ export function useManagedModels() {
   const deleteMutation = useMutation({
     mutationFn: (slug: string) => accountClient.deleteManagedModel(slug),
     onSuccess: async () => {
-      const catalog = await reloadManagedCatalog();
-      const cacheSyncError = await syncCatalogToCodexCache(catalog);
+      await reloadManagedCatalog();
       await invalidateAll();
-      if (cacheSyncError) {
-        toast.error(`${t("模型已删除，但同步 Codex 模型缓存失败")}: ${cacheSyncError}`);
-      } else {
-        toast.success(t("模型已删除"));
-      }
+      toast.success(t("模型已删除"));
     },
     onError: (error: unknown) => {
       toast.error(`${t("删除模型失败")}: ${getAppErrorMessage(error)}`);
@@ -259,13 +231,10 @@ export function useManagedModels() {
       };
     },
     onSuccess: async (result) => {
-      const catalog = await reloadManagedCatalog();
-      const cacheSyncError = await syncCatalogToCodexCache(catalog);
+      await reloadManagedCatalog();
       await invalidateAll();
 
-      if (cacheSyncError) {
-        toast.error(`${t("模型已删除，但同步 Codex 模型缓存失败")}: ${cacheSyncError}`);
-      } else if (result.deleted.length > 0 && result.failed.length === 0) {
+      if (result.deleted.length > 0 && result.failed.length === 0) {
         toast.success(t("已删除 {count} 个模型", { count: result.deleted.length }));
       } else if (result.deleted.length > 0) {
         toast.warning(
@@ -299,7 +268,7 @@ export function useManagedModels() {
       }
 
       if (isDesktopRuntime) {
-        const cacheSyncError = await syncCatalogToCodexCache(catalog, { force: true });
+        const cacheSyncError = await syncCatalogToCodexCache(catalog);
         if (cacheSyncError) {
           throw new Error(cacheSyncError);
         }
@@ -385,25 +354,7 @@ export function useManagedModels() {
 
   useEffect(() => {
     codexUserAgentRef.current = "";
-    syncedCatalogFingerprintRef.current = "";
   }, [serviceStatus.addr]);
-
-  useEffect(() => {
-    if (!isDesktopRuntime || !isServiceReady || !query.data || query.dataUpdatedAt === 0) {
-      return;
-    }
-
-    void syncCatalogToCodexCache(query.data).then((errorMessage) => {
-      if (errorMessage) {
-        console.warn("sync codex models cache failed", errorMessage);
-      }
-    });
-  }, [
-    isDesktopRuntime,
-    isServiceReady,
-    query.data,
-    query.dataUpdatedAt,
-  ]);
 
   return {
     models: query.data?.items || [],

@@ -78,10 +78,12 @@ pub async fn service_codex_profile_apply_direct_account(
     addr: Option<String>,
     account_id: String,
     codex_home: Option<String>,
+    reload_after_switch: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     let params = serde_json::json!({
         "accountId": account_id,
         "codexHome": codex_home,
+        "reloadAfterSwitch": reload_after_switch.unwrap_or(false),
     });
     rpc_call_in_background("codexProfile/applyDirectAccount", addr, Some(params)).await
 }
@@ -106,11 +108,13 @@ pub async fn service_codex_profile_apply_gateway(
     api_key_id: String,
     codex_home: Option<String>,
     base_url: Option<String>,
+    reload_after_switch: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     let params = serde_json::json!({
         "apiKeyId": api_key_id,
         "codexHome": codex_home,
         "baseUrl": base_url,
+        "reloadAfterSwitch": reload_after_switch.unwrap_or(false),
     });
     rpc_call_in_background("codexProfile/applyGateway", addr, Some(params)).await
 }
