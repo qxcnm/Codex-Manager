@@ -217,6 +217,12 @@ struct MarkerFile {
     updated_at: i64,
 }
 
+#[derive(Debug, Clone)]
+struct DetectedGatewayConfig {
+    provider_id: String,
+    base_url: String,
+}
+
 pub(crate) fn get_status(codex_home: Option<&str>) -> Result<CodexProfileStatus, String> {
     let profile_dir = resolve_profile_dir(codex_home)?;
     status_for_profile(&profile_dir)
@@ -669,6 +675,10 @@ fn status_for_profile(profile_dir: &Path) -> Result<CodexProfileStatus, String> 
     let marker = read_marker(&paths.marker_path).ok();
     let persisted = settings.state.filter(|state| state.profile_dir == key);
     let detected_mode = detect_mode(&auth_path, &config_path, marker.as_ref());
+    let detected_gateway = read_optional(&config_path)
+        .ok()
+        .flatten()
+        .and_then(|content| detect_gateway_config(&content).ok().flatten());
     let state = marker
         .map(|marker| ManagedState {
             profile_dir: key.clone(),
@@ -680,6 +690,18 @@ fn status_for_profile(profile_dir: &Path) -> Result<CodexProfileStatus, String> 
             updated_at: marker.updated_at,
         })
         .or(persisted);
+    let stale_non_gateway_state = detected_gateway.is_some()
+        && state
+            .as_ref()
+            .is_some_and(|state| !matches!(&state.mode, CodexProfileMode::Gateway));
+    let mode = if detected_gateway.is_some() {
+        CodexProfileMode::Gateway
+    } else {
+        state
+            .as_ref()
+            .map(|state| state.mode.clone())
+            .unwrap_or(detected_mode)
+    };
 
     Ok(CodexProfileStatus {
         codex_home: profile_dir.to_string_lossy().to_string(),
@@ -691,18 +713,35 @@ fn status_for_profile(profile_dir: &Path) -> Result<CodexProfileStatus, String> 
         history_backup_count: stats.0,
         history_backup_bytes: stats.1,
         history_retention: default_history_retention(),
-        mode: state
+        mode,
+        selected_account_id: if stale_non_gateway_state {
+            None
+        } else {
+            state.as_ref().and_then(|state| state.account_id.clone())
+        },
+        selected_api_key_id: if stale_non_gateway_state {
+            None
+        } else {
+            state.as_ref().and_then(|state| state.api_key_id.clone())
+        },
+        gateway_base_url: detected_gateway
             .as_ref()
-            .map(|state| state.mode.clone())
-            .unwrap_or(detected_mode),
-        selected_account_id: state.as_ref().and_then(|state| state.account_id.clone()),
-        selected_api_key_id: state.as_ref().and_then(|state| state.api_key_id.clone()),
-        gateway_base_url: state
+            .map(|gateway| gateway.base_url.clone())
+            .or_else(|| {
+                state
+                    .as_ref()
+                    .and_then(|state| state.gateway_base_url.clone())
+            }),
+        provider_id: detected_gateway
             .as_ref()
-            .and_then(|state| state.gateway_base_url.clone()),
-        provider_id: PROVIDER_ID.to_string(),
+            .map(|gateway| gateway.provider_id.clone())
+            .unwrap_or_else(|| PROVIDER_ID.to_string()),
         has_backup: settings.backups.contains_key(&key),
-        last_applied_at: state.as_ref().map(|state| state.updated_at),
+        last_applied_at: if stale_non_gateway_state {
+            None
+        } else {
+            state.as_ref().map(|state| state.updated_at)
+        },
         profile_writable: profile_writable(profile_dir),
         error: None,
         warnings,
@@ -723,7 +762,7 @@ fn status_for_profile_with_history_repair(
 fn target_history_provider_for_profile(profile_dir: &Path) -> Result<String, String> {
     let status = status_for_profile(profile_dir)?;
     match status.mode {
-        CodexProfileMode::Gateway => Ok(PROVIDER_ID.to_string()),
+        CodexProfileMode::Gateway => Ok(status.provider_id),
         CodexProfileMode::DirectAccount => Ok(DEFAULT_HISTORY_PROVIDER_ID.to_string()),
         CodexProfileMode::Missing
         | CodexProfileMode::Unmanaged
@@ -1586,20 +1625,20 @@ fn detect_mode(
     config_path: &Path,
     marker: Option<&MarkerFile>,
 ) -> CodexProfileMode {
-    if let Some(marker) = marker {
-        return marker.mode.clone();
-    }
     let auth = read_optional(auth_path).ok().flatten();
     let config = read_optional(config_path).ok().flatten();
-    if auth.is_none() && config.is_none() {
-        return CodexProfileMode::Missing;
-    }
     if auth.as_deref().is_some_and(auth_json_is_gateway)
         || config
             .as_deref()
-            .is_some_and(|content| config_uses_managed_provider(content).unwrap_or(false))
+            .is_some_and(|content| detect_gateway_config(content).ok().flatten().is_some())
     {
         return CodexProfileMode::Gateway;
+    }
+    if let Some(marker) = marker {
+        return marker.mode.clone();
+    }
+    if auth.is_none() && config.is_none() {
+        return CodexProfileMode::Missing;
     }
     if auth.as_deref().is_some_and(auth_json_has_tokens) {
         return CodexProfileMode::DirectAccount;
@@ -1644,12 +1683,85 @@ fn auth_json_has_tokens(content: &str) -> bool {
         })
 }
 
-fn config_uses_managed_provider(content: &str) -> Result<bool, String> {
+fn detect_gateway_config(content: &str) -> Result<Option<DetectedGatewayConfig>, String> {
     let doc = parse_config(content)?;
-    Ok(doc
+    let provider_id = doc
         .get("model_provider")
         .and_then(Item::as_str)
-        .is_some_and(|provider| provider == PROVIDER_ID))
+        .map(str::trim)
+        .filter(|provider| !provider.is_empty())
+        .unwrap_or(DEFAULT_HISTORY_PROVIDER_ID);
+    let root_base_url = doc
+        .get("base_url")
+        .and_then(Item::as_str)
+        .map(str::trim)
+        .filter(|base_url| !base_url.is_empty());
+    let provider_base_url = doc
+        .get("model_providers")
+        .and_then(Item::as_table)
+        .and_then(|providers| providers.get(provider_id))
+        .and_then(Item::as_table)
+        .and_then(|provider| provider.get("base_url"))
+        .and_then(Item::as_str)
+        .map(str::trim)
+        .filter(|base_url| !base_url.is_empty());
+    let effective_base_url = root_base_url.or(provider_base_url);
+
+    if provider_id == PROVIDER_ID {
+        return Ok(Some(DetectedGatewayConfig {
+            provider_id: provider_id.to_string(),
+            base_url: normalize_gateway_base_url(effective_base_url),
+        }));
+    }
+
+    let Some(base_url) = effective_base_url else {
+        return Ok(None);
+    };
+    let service_base_url = format!(
+        "http://{}",
+        crate::app_settings::current_saved_service_addr()
+    );
+    let service_base_url = normalize_gateway_base_url(Some(&service_base_url));
+    if !gateway_base_urls_match(base_url, &service_base_url) {
+        return Ok(None);
+    }
+
+    Ok(Some(DetectedGatewayConfig {
+        provider_id: provider_id.to_string(),
+        base_url: normalize_gateway_base_url(Some(base_url)),
+    }))
+}
+
+fn gateway_base_urls_match(candidate: &str, expected: &str) -> bool {
+    let Ok(candidate) = url::Url::parse(candidate.trim()) else {
+        return false;
+    };
+    let Ok(expected) = url::Url::parse(expected.trim()) else {
+        return false;
+    };
+    let Some(candidate_host) = candidate.host_str() else {
+        return false;
+    };
+    let Some(expected_host) = expected.host_str() else {
+        return false;
+    };
+
+    candidate.scheme().eq_ignore_ascii_case(expected.scheme())
+        && gateway_hosts_match(candidate_host, expected_host)
+        && candidate.port_or_known_default() == expected.port_or_known_default()
+        && candidate.path().trim_end_matches('/') == expected.path().trim_end_matches('/')
+}
+
+fn gateway_hosts_match(candidate: &str, expected: &str) -> bool {
+    candidate.eq_ignore_ascii_case(expected)
+        || (is_local_gateway_host(candidate) && is_local_gateway_host(expected))
+}
+
+fn is_local_gateway_host(host: &str) -> bool {
+    matches!(
+        host.to_ascii_lowercase().as_str(),
+        "localhost" | "127.0.0.1" | "::1" | "0.0.0.0" | "::"
+    )
 }
 
 fn ensure_profile_dir_valid(profile_dir: &Path) -> Result<(), String> {

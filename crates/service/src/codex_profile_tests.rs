@@ -297,6 +297,95 @@ fn auth_json_shapes_match_codex_modes() {
 }
 
 #[test]
+fn experimental_gateway_config_overrides_login_tokens_and_stale_direct_marker() {
+    let dir = temp_profile("experimental-gateway-detection");
+    fs::create_dir_all(&dir).expect("mkdir profile");
+    fs::write(
+        dir.join(AUTH_FILE),
+        r#"{"OPENAI_API_KEY":null,"tokens":{"access_token":"access-token"}}"#,
+    )
+    .expect("write auth");
+    fs::write(
+        dir.join(CONFIG_FILE),
+        r#"
+model_provider = "default"
+wire_api = "responses"
+base_url = "http://localhost:48760/v1"
+experimental_bearer_token = "cm-key"
+
+[model_providers.default]
+name = "OpenAI"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "http://localhost:48760/v1"
+experimental_bearer_token = "cm-key"
+"#,
+    )
+    .expect("write config");
+    let marker = MarkerFile {
+        writer: "codexmanager".to_string(),
+        mode: CodexProfileMode::DirectAccount,
+        account_id: Some("acc-1".to_string()),
+        api_key_id: None,
+        gateway_base_url: None,
+        provider_id: PROVIDER_ID.to_string(),
+        updated_at: now_ts(),
+    };
+
+    let mode = detect_mode(&dir.join(AUTH_FILE), &dir.join(CONFIG_FILE), Some(&marker));
+
+    assert!(matches!(mode, CodexProfileMode::Gateway));
+    fs::write(
+        dir.join(MARKER_FILE),
+        serde_json::to_string_pretty(&marker).expect("marker json"),
+    )
+    .expect("write stale marker");
+    let status = status_for_profile(&dir).expect("profile status");
+    assert!(matches!(status.mode, CodexProfileMode::Gateway));
+    assert_eq!(status.provider_id, "default");
+    assert_eq!(
+        status.gateway_base_url.as_deref(),
+        Some("http://localhost:48760/v1")
+    );
+    assert_eq!(status.selected_account_id, None);
+    assert_eq!(status.last_applied_at, None);
+    assert_eq!(
+        target_history_provider_for_profile(&dir).expect("history provider"),
+        "default"
+    );
+    cleanup_profile(&dir);
+}
+
+#[test]
+fn experimental_non_gateway_base_url_keeps_login_mode_direct() {
+    let dir = temp_profile("experimental-non-gateway-detection");
+    fs::create_dir_all(&dir).expect("mkdir profile");
+    fs::write(
+        dir.join(AUTH_FILE),
+        r#"{"OPENAI_API_KEY":null,"tokens":{"access_token":"access-token"}}"#,
+    )
+    .expect("write auth");
+    fs::write(
+        dir.join(CONFIG_FILE),
+        r#"
+model_provider = "default"
+base_url = "http://localhost:12345/v1"
+experimental_bearer_token = "other-key"
+
+[model_providers.default]
+base_url = "http://localhost:12345/v1"
+experimental_bearer_token = "other-key"
+"#,
+    )
+    .expect("write config");
+
+    let mode = detect_mode(&dir.join(AUTH_FILE), &dir.join(CONFIG_FILE), None);
+
+    assert!(matches!(mode, CodexProfileMode::DirectAccount));
+    cleanup_profile(&dir);
+}
+
+#[test]
 fn write_profile_files_uses_internal_marker() {
     let dir = temp_profile("internal-marker");
     let state = ManagedState {
