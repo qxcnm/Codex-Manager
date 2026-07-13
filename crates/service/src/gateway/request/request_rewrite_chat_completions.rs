@@ -268,6 +268,31 @@ fn normalize_responses_tools_to_chat(obj: &mut serde_json::Map<String, Value>) -
     changed
 }
 
+pub(super) fn retain_chat_bridge_function_tools(obj: &mut serde_json::Map<String, Value>) -> bool {
+    let Some(tools_value) = obj.get_mut("tools") else {
+        return false;
+    };
+    let Some(tools) = tools_value.as_array_mut() else {
+        obj.remove("tools");
+        return true;
+    };
+    let before = tools.len();
+    tools.retain(|tool| {
+        tool.as_object()
+            .and_then(|tool| tool.get("type"))
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind == "function")
+    });
+    let changed = tools.len() != before;
+    if tools.is_empty() {
+        obj.remove("tools");
+        obj.remove("tool_choice");
+        obj.remove("parallel_tool_calls");
+        return true;
+    }
+    changed
+}
+
 /// 函数 `normalize_responses_tool_choice_to_chat`
 ///
 /// 作者: gaohongshun

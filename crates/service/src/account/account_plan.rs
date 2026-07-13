@@ -56,6 +56,21 @@ pub(crate) fn is_free_plan_type(plan_type: Option<&str>) -> bool {
     normalized.contains("free")
 }
 
+pub(crate) fn is_workspace_plan_type(plan_type: Option<&str>) -> bool {
+    let Some(plan_type) = plan_type else {
+        return false;
+    };
+    let normalized = plan_type.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return false;
+    }
+    normalized.contains("business")
+        || normalized.contains("team")
+        || normalized.contains("enterprise")
+        || normalized == "edu"
+        || normalized.contains("education")
+}
+
 /// 函数 `is_free_plan_from_credits_json`
 ///
 /// 作者: gaohongshun
@@ -141,6 +156,12 @@ pub(crate) fn resolve_effective_account_plan(
 ) -> Option<ResolvedAccountPlan> {
     if let Some(plan) = subscription
         .and_then(|value| value.account_plan_type.as_deref())
+        .and_then(normalize_plan_type)
+    {
+        return Some(plan);
+    }
+    if let Some(plan) = subscription
+        .and_then(|value| value.plan_type.as_deref())
         .and_then(normalize_plan_type)
     {
         return Some(plan);
@@ -255,7 +276,8 @@ pub(crate) fn account_matches_plan_filter(
         .latest_usage_snapshot_for_account(account_id)
         .ok()
         .flatten();
-    match resolve_account_plan(Some(token), snapshot.as_ref()) {
+    let subscription = storage.find_account_subscription(account_id).ok().flatten();
+    match resolve_effective_account_plan(Some(token), snapshot.as_ref(), subscription.as_ref()) {
         Some(plan) => plan.normalized == normalized_filter,
         None => normalized_filter == "unknown",
     }
@@ -379,7 +401,7 @@ mod tests {
         account_matches_plan_filter, extract_plan_type_from_credits_json,
         extract_plan_type_from_id_token, is_free_or_single_window_account,
         is_free_plan_from_credits_json, is_free_plan_type, is_single_window_long_usage_snapshot,
-        normalize_plan_type, resolve_account_plan,
+        is_workspace_plan_type, normalize_plan_type, resolve_account_plan,
     };
     use codexmanager_core::storage::{now_ts, Account, Storage, Token, UsageSnapshotRecord};
 
@@ -462,6 +484,16 @@ mod tests {
         assert!(!is_free_plan_type(Some("plus")));
         assert!(!is_free_plan_type(Some("pro")));
         assert!(!is_free_plan_type(Some("team")));
+    }
+
+    #[test]
+    fn workspace_plan_detection_accepts_business_variants() {
+        assert!(is_workspace_plan_type(Some("business")));
+        assert!(is_workspace_plan_type(Some("chatgpt_business")));
+        assert!(is_workspace_plan_type(Some("enterprise")));
+        assert!(is_workspace_plan_type(Some("edu")));
+        assert!(!is_workspace_plan_type(Some("plus")));
+        assert!(!is_workspace_plan_type(Some("pro")));
     }
 
     /// 函数 `free_plan_detection_accepts_credits_json_marker`
@@ -746,6 +778,59 @@ mod tests {
         assert!(!account_matches_plan_filter(
             &storage,
             "acc-unknown",
+            &token,
+            Some("plus"),
+        ));
+    }
+
+    #[test]
+    fn account_plan_filter_uses_subscription_plan_type() {
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        let now = now_ts();
+        storage
+            .insert_account(&Account {
+                id: "acc-business".to_string(),
+                label: "acc-business".to_string(),
+                issuer: "issuer".to_string(),
+                chatgpt_account_id: None,
+                workspace_id: None,
+                group_name: None,
+                sort: 0,
+                status: "active".to_string(),
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("insert account");
+        let token = Token {
+            account_id: "acc-business".to_string(),
+            id_token: "header.payload.sig".to_string(),
+            access_token: "header.payload.sig".to_string(),
+            refresh_token: "refresh".to_string(),
+            api_key_access_token: None,
+            last_refresh: now,
+        };
+        storage.insert_token(&token).expect("insert token");
+        storage
+            .upsert_account_subscription(
+                "acc-business",
+                true,
+                None,
+                Some("business"),
+                None,
+                None,
+            )
+            .expect("insert subscription");
+
+        assert!(account_matches_plan_filter(
+            &storage,
+            "acc-business",
+            &token,
+            Some("business"),
+        ));
+        assert!(!account_matches_plan_filter(
+            &storage,
+            "acc-business",
             &token,
             Some("plus"),
         ));

@@ -73,3 +73,32 @@ pub async fn service_usage_refresh(
     let params = account_id.map(|id| serde_json::json!({ "accountId": id }));
     rpc_call_in_background("account/usage/refresh", addr, params).await
 }
+
+/// 函数 `service_usage_quota_reset`
+///
+/// 作者: gaohongshun
+///
+/// 时间: 2026-07-13
+///
+/// # 参数
+/// - addr: 参数 addr
+/// - account_id: 参数 account_id
+///
+/// # 返回
+/// 返回函数执行结果
+#[tauri::command]
+pub async fn service_usage_quota_reset(
+    addr: Option<String>,
+    account_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let account_id = account_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "accountId is required".to_string())?;
+    rpc_call_in_background(
+        "account/usage/resetQuota",
+        addr,
+        Some(serde_json::json!({ "accountId": account_id })),
+    )
+    .await
+}

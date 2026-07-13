@@ -67,9 +67,14 @@ fn normalize_header_key(name: &str) -> String {
     name.trim().to_ascii_lowercase()
 }
 
+fn is_raw_action_marker(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    matches!(normalized.as_str(), "raw" | "@raw" | "__raw__")
+}
+
 fn normalize_action_path(action: &str) -> String {
     let action_trimmed = action.trim();
-    if action_trimmed.is_empty() {
+    if action_trimmed.is_empty() || is_raw_action_marker(action_trimmed) {
         return String::new();
     }
     if action_trimmed.starts_with('/') {
@@ -81,9 +86,150 @@ fn normalize_action_path(action: &str) -> String {
 
 fn effective_action_path(candidate: &AggregateApi, path: &str) -> String {
     match candidate.action.as_deref().map(str::trim) {
-        Some("") => String::new(),
         Some(value) => normalize_action_path(value),
         None => path.to_string(),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AggregateRequestBridge {
+    Passthrough,
+    ResponsesFromChatCompletions,
+}
+
+struct AggregateRequestPlan {
+    effective_path: String,
+    bridge: AggregateRequestBridge,
+}
+
+impl AggregateRequestPlan {
+    fn response_adapter(
+        &self,
+        fallback: super::super::super::ResponseAdapter,
+    ) -> super::super::super::ResponseAdapter {
+        match self.bridge {
+            AggregateRequestBridge::Passthrough => fallback,
+            AggregateRequestBridge::ResponsesFromChatCompletions => {
+                super::super::super::ResponseAdapter::ResponsesFromChatCompletions
+            }
+        }
+    }
+
+    fn upstream_is_stream(&self, client_is_stream: bool) -> bool {
+        match self.bridge {
+            AggregateRequestBridge::Passthrough => client_is_stream,
+            AggregateRequestBridge::ResponsesFromChatCompletions => false,
+        }
+    }
+}
+
+fn path_without_query(path: &str) -> String {
+    path.split_once('?')
+        .map_or(path, |(path, _)| path)
+        .trim()
+        .trim_end_matches('/')
+        .to_ascii_lowercase()
+}
+
+fn is_responses_request_path(path: &str) -> bool {
+    let normalized = path_without_query(path);
+    normalized == "/v1/responses" || normalized.starts_with("/v1/responses/")
+}
+
+fn is_chat_completions_endpoint_path(path: &str) -> bool {
+    path_without_query(path).ends_with("/chat/completions")
+}
+
+fn is_responses_endpoint_path(path: &str) -> bool {
+    let normalized = path_without_query(path);
+    normalized == "/responses"
+        || normalized.ends_with("/responses")
+        || normalized.contains("/responses/")
+}
+
+fn aggregate_url_path(url: &str) -> Option<String> {
+    reqwest::Url::parse(url)
+        .ok()
+        .map(|url| url.path().to_string())
+}
+
+fn aggregate_url_looks_like_openai_chat_base(url: &str) -> bool {
+    let Some(path) = aggregate_url_path(url) else {
+        return false;
+    };
+    let normalized = path.trim().trim_end_matches('/').to_ascii_lowercase();
+    normalized.is_empty() || normalized == "/" || normalized.ends_with("/v1")
+}
+
+fn resolve_aggregate_request_plan(candidate: &AggregateApi, path: &str) -> AggregateRequestPlan {
+    let has_configured_action = candidate.action.is_some();
+    let mut effective_path = effective_action_path(candidate, path);
+    let is_codex_provider = normalize_provider_type_value(candidate.provider_type.as_str())
+        == AGGREGATE_API_PROVIDER_CODEX;
+    if !is_codex_provider || !is_responses_request_path(path) {
+        return AggregateRequestPlan {
+            effective_path,
+            bridge: AggregateRequestBridge::Passthrough,
+        };
+    }
+
+    if is_chat_completions_endpoint_path(effective_path.as_str()) {
+        return AggregateRequestPlan {
+            effective_path,
+            bridge: AggregateRequestBridge::ResponsesFromChatCompletions,
+        };
+    }
+    if !has_configured_action {
+        effective_path = String::new();
+    }
+    if !effective_path.trim().is_empty() {
+        return AggregateRequestPlan {
+            effective_path,
+            bridge: AggregateRequestBridge::Passthrough,
+        };
+    }
+
+    if let Some(url_path) = aggregate_url_path(candidate.url.as_str()) {
+        if is_chat_completions_endpoint_path(url_path.as_str()) {
+            return AggregateRequestPlan {
+                effective_path,
+                bridge: AggregateRequestBridge::ResponsesFromChatCompletions,
+            };
+        }
+        if is_responses_endpoint_path(url_path.as_str()) {
+            return AggregateRequestPlan {
+                effective_path,
+                bridge: AggregateRequestBridge::Passthrough,
+            };
+        }
+    }
+
+    if aggregate_url_looks_like_openai_chat_base(candidate.url.as_str()) {
+        effective_path = "/chat/completions".to_string();
+        return AggregateRequestPlan {
+            effective_path,
+            bridge: AggregateRequestBridge::ResponsesFromChatCompletions,
+        };
+    }
+
+    AggregateRequestPlan {
+        effective_path,
+        bridge: AggregateRequestBridge::Passthrough,
+    }
+}
+
+fn aggregate_request_body_for_plan(
+    body: &Bytes,
+    model_override: Option<&str>,
+    plan: &AggregateRequestPlan,
+) -> Result<Bytes, String> {
+    let body = rewrite_body_model_override(body, model_override);
+    match plan.bridge {
+        AggregateRequestBridge::Passthrough => Ok(body),
+        AggregateRequestBridge::ResponsesFromChatCompletions => {
+            super::super::super::convert_responses_body_to_chat_completions_body(body.as_ref())
+                .map(Bytes::from)
+        }
     }
 }
 
@@ -809,7 +955,7 @@ pub(in super::super) fn proxy_aggregate_request(
             continue;
         };
 
-        let effective_path = effective_action_path(&candidate, path);
+        let request_plan = resolve_aggregate_request_plan(&candidate, path);
         let (auth_config, injected_headers) = match parse_auth_config(&candidate) {
             Ok(value) => value,
             Err(err) => {
@@ -874,8 +1020,10 @@ pub(in super::super) fn proxy_aggregate_request(
                 return Ok(());
             }
 
-            let mut url = match build_upstream_url(candidate_url.as_str(), effective_path.as_str())
-            {
+            let mut url = match build_upstream_url(
+                candidate_url.as_str(),
+                request_plan.effective_path.as_str(),
+            ) {
                 Ok(url) => url,
                 Err(_) => {
                     last_attempt_url = Some(candidate_url.clone());
@@ -904,17 +1052,34 @@ pub(in super::super) fn proxy_aggregate_request(
                 _ => {}
             }
 
+            let upstream_body = match aggregate_request_body_for_plan(
+                body,
+                candidate.model_override.as_deref(),
+                &request_plan,
+            ) {
+                Ok(body) => body,
+                Err(err) => {
+                    last_attempt_url = Some(url.as_str().to_string());
+                    last_attempt_supplier_name = candidate_supplier_name.clone();
+                    last_attempt_error = Some(err);
+                    last_failure_status = 400;
+                    break;
+                }
+            };
+            let upstream_is_stream = request_plan.upstream_is_stream(is_stream);
+            let upstream_response_adapter = request_plan.response_adapter(response_adapter);
+
             let builder = build_aggregate_api_request(
                 &client,
                 request.as_ref().expect("request should still be available"),
                 method,
                 url.clone(),
-                &rewrite_body_model_override(body, candidate.model_override.as_deref()),
+                &upstream_body,
                 secret.as_str(),
                 &auth_config,
                 &injected_headers,
                 request_deadline,
-                is_stream,
+                upstream_is_stream,
             )?;
 
             let attempt_started_at = Instant::now();
@@ -980,14 +1145,15 @@ pub(in super::super) fn proxy_aggregate_request(
             }
 
             let inflight_guard = super::super::super::acquire_account_inflight(key_id);
-            let passthrough_sse_protocol = resolve_passthrough_sse_protocol(path, response_adapter);
+            let passthrough_sse_protocol =
+                resolve_passthrough_sse_protocol(path, upstream_response_adapter);
             let bridge = super::super::super::respond_with_upstream(
                 request
                     .take()
                     .expect("request should be available before bridge"),
                 GatewayUpstreamResponse::Blocking(upstream),
                 inflight_guard,
-                response_adapter,
+                upstream_response_adapter,
                 passthrough_sse_protocol,
                 None,
                 path,
@@ -1008,7 +1174,7 @@ pub(in super::super) fn proxy_aggregate_request(
             super::super::super::trace_log::log_bridge_result(
                 super::super::super::trace_log::BridgeResultLog {
                     trace_id,
-                    adapter: format!("{response_adapter:?}").as_str(),
+                    adapter: format!("{upstream_response_adapter:?}").as_str(),
                     path,
                     is_stream,
                     stream_terminal_seen: bridge.stream_terminal_seen,
@@ -1066,7 +1232,7 @@ pub(in super::super) fn proxy_aggregate_request(
                     original_path: Some(original_path),
                     adapted_path: Some(path),
                     gateway_mode: gateway_mode_for_log,
-                    response_adapter: Some(response_adapter),
+                    response_adapter: Some(upstream_response_adapter),
                     effective_service_tier: effective_service_tier_for_log,
                     aggregate_api_supplier_name: candidate_supplier_name.as_deref(),
                     aggregate_api_url: Some(candidate_url.as_str()),
@@ -1342,8 +1508,9 @@ mod tests {
     use codexmanager_core::storage::{now_ts, AggregateApi, Storage};
 
     use super::{
-        build_upstream_url, effective_action_path, resolve_aggregate_api_rotation_candidates,
-        resolve_passthrough_sse_protocol, rewrite_body_model_override,
+        aggregate_request_body_for_plan, build_upstream_url, effective_action_path,
+        resolve_aggregate_api_rotation_candidates, resolve_aggregate_request_plan,
+        resolve_passthrough_sse_protocol, rewrite_body_model_override, AggregateRequestBridge,
     };
     use crate::aggregate_api::{
         AGGREGATE_API_AUTH_APIKEY, AGGREGATE_API_PROVIDER_CLAUDE, AGGREGATE_API_PROVIDER_CODEX,
@@ -1389,6 +1556,20 @@ mod tests {
     }
 
     #[test]
+    fn default_action_preserves_original_path_for_passthrough() {
+        let api = aggregate_api_with_action(None);
+        let path = effective_action_path(&api, "/v1/responses");
+        assert_eq!(path, "/v1/responses");
+    }
+
+    #[test]
+    fn raw_custom_action_uses_base_url_without_original_path() {
+        let api = aggregate_api_with_action(Some("@raw"));
+        let path = effective_action_path(&api, "/v1/responses");
+        assert_eq!(path, "");
+    }
+
+    #[test]
     fn messages_passthrough_uses_anthropic_native_terminal_rules_without_provider_gate() {
         let protocol = resolve_passthrough_sse_protocol(
             "/v1/messages?beta=true",
@@ -1427,6 +1608,83 @@ mod tests {
             url.as_str(),
             "https://api.example.com/v1/messages?beta=true"
         );
+    }
+
+    #[test]
+    fn codex_root_base_url_bridges_responses_to_chat_completions() {
+        let mut api = aggregate_api_with_action(None);
+        api.provider_type = AGGREGATE_API_PROVIDER_CODEX.to_string();
+        api.url = "https://api.deepseek.com".to_string();
+
+        let plan = resolve_aggregate_request_plan(&api, "/v1/responses");
+        let url = build_upstream_url(api.url.as_str(), plan.effective_path.as_str())
+            .expect("build upstream url");
+
+        assert_eq!(
+            plan.bridge,
+            AggregateRequestBridge::ResponsesFromChatCompletions
+        );
+        assert_eq!(url.as_str(), "https://api.deepseek.com/chat/completions");
+    }
+
+    #[test]
+    fn codex_v1_base_url_bridges_responses_to_chat_completions() {
+        let mut api = aggregate_api_with_action(None);
+        api.provider_type = AGGREGATE_API_PROVIDER_CODEX.to_string();
+        api.url = "https://sub2.huiyou688.eu.cc/v1".to_string();
+
+        let plan = resolve_aggregate_request_plan(&api, "/v1/responses");
+        let url = build_upstream_url(api.url.as_str(), plan.effective_path.as_str())
+            .expect("build upstream url");
+
+        assert_eq!(
+            plan.bridge,
+            AggregateRequestBridge::ResponsesFromChatCompletions
+        );
+        assert_eq!(
+            url.as_str(),
+            "https://sub2.huiyou688.eu.cc/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn codex_final_responses_url_keeps_passthrough_behavior() {
+        let mut api = aggregate_api_with_action(None);
+        api.provider_type = AGGREGATE_API_PROVIDER_CODEX.to_string();
+        api.url = "https://api.example.com/v1/responses".to_string();
+
+        let plan = resolve_aggregate_request_plan(&api, "/v1/responses");
+        let url = build_upstream_url(api.url.as_str(), plan.effective_path.as_str())
+            .expect("build upstream url");
+
+        assert_eq!(plan.bridge, AggregateRequestBridge::Passthrough);
+        assert_eq!(url.as_str(), "https://api.example.com/v1/responses");
+    }
+
+    #[test]
+    fn aggregate_chat_bridge_rewrites_responses_body_to_chat_shape() {
+        let mut api = aggregate_api_with_action(Some("/v1/chat/completions"));
+        api.provider_type = AGGREGATE_API_PROVIDER_CODEX.to_string();
+        let plan = resolve_aggregate_request_plan(&api, "/v1/responses");
+        let body = Bytes::from_static(
+            br#"{"model":"gpt-5.5","input":"hello","stream":true,"include":["reasoning.encrypted_content"]}"#,
+        );
+
+        let rewritten = aggregate_request_body_for_plan(&body, Some("deepseek-v4-pro"), &plan)
+            .expect("rewrite aggregate body");
+        let value: serde_json::Value =
+            serde_json::from_slice(rewritten.as_ref()).expect("parse rewritten body");
+
+        assert_eq!(
+            plan.bridge,
+            AggregateRequestBridge::ResponsesFromChatCompletions
+        );
+        assert_eq!(value["model"], "deepseek-v4-pro");
+        assert_eq!(value["messages"][0]["role"], "user");
+        assert_eq!(value["messages"][0]["content"], "hello");
+        assert_eq!(value["stream"], false);
+        assert!(value.get("input").is_none());
+        assert!(value.get("include").is_none());
     }
 
     #[test]

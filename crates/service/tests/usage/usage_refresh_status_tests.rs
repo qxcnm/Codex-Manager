@@ -83,6 +83,57 @@ fn apply_status_missing_snapshot_keeps_account_status() {
     assert_eq!(loaded.status, "active");
 }
 
+#[test]
+fn apply_status_keeps_business_account_available_without_usage_quota() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let now = now_ts();
+    storage
+        .insert_account(&Account {
+            id: "acc-business".to_string(),
+            label: "business".to_string(),
+            issuer: "issuer".to_string(),
+            chatgpt_account_id: None,
+            workspace_id: None,
+            group_name: None,
+            sort: 0,
+            status: "limited".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("insert");
+    storage
+        .upsert_account_subscription(
+            "acc-business",
+            true,
+            Some("business"),
+            Some("business"),
+            None,
+            None,
+        )
+        .expect("insert subscription");
+
+    let record = UsageSnapshotRecord {
+        account_id: "acc-business".to_string(),
+        used_percent: None,
+        window_minutes: None,
+        resets_at: None,
+        secondary_used_percent: None,
+        secondary_window_minutes: None,
+        secondary_resets_at: None,
+        credits_json: None,
+        captured_at: now_ts(),
+    };
+
+    let availability = apply_status_from_snapshot(&storage, &record);
+    assert!(matches!(availability, Availability::Available));
+    let loaded = storage
+        .find_account_by_id("acc-business")
+        .expect("find")
+        .expect("exists");
+    assert_eq!(loaded.status, "active");
+}
+
 /// 函数 `apply_status_skips_db_and_event_when_status_unchanged`
 ///
 /// 作者: gaohongshun

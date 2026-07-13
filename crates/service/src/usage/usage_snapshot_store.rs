@@ -52,7 +52,16 @@ pub(crate) fn apply_status_from_snapshot(
     storage: &Storage,
     record: &UsageSnapshotRecord,
 ) -> Availability {
-    let availability = evaluate_snapshot(record);
+    let availability = match evaluate_snapshot(record) {
+        Availability::Unavailable(reason) => {
+            if reason == "usage_missing_primary" && account_has_workspace_plan(storage, record) {
+                Availability::Available
+            } else {
+                Availability::Unavailable(reason)
+            }
+        }
+        Availability::Available => Availability::Available,
+    };
     let current_status = storage
         .find_account_by_id(&record.account_id)
         .ok()
@@ -79,6 +88,23 @@ pub(crate) fn apply_status_from_snapshot(
         Availability::Unavailable(_) => {}
     }
     availability
+}
+
+fn account_has_workspace_plan(storage: &Storage, record: &UsageSnapshotRecord) -> bool {
+    let credits_plan_type =
+        crate::account_plan::extract_plan_type_from_credits_json(record.credits_json.as_deref());
+    if crate::account_plan::is_workspace_plan_type(credits_plan_type.as_deref()) {
+        return true;
+    }
+
+    storage
+        .find_account_subscription(&record.account_id)
+        .ok()
+        .flatten()
+        .is_some_and(|subscription| {
+            crate::account_plan::is_workspace_plan_type(subscription.account_plan_type.as_deref())
+                || crate::account_plan::is_workspace_plan_type(subscription.plan_type.as_deref())
+        })
 }
 
 /// 函数 `store_usage_snapshot`

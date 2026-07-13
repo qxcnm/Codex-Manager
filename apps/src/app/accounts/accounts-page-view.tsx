@@ -15,6 +15,7 @@ import {
   PencilLine,
   Pin,
   Plus,
+  RefreshCcw,
   RefreshCw,
   Search,
   Trash2,
@@ -148,6 +149,7 @@ export interface AccountsPageViewProps {
   isRefreshingAllAccounts: boolean;
   isRefreshingAccountId: string | null;
   isRefreshingRtAccountId: string | null;
+  isResettingQuotaAccountId: string | null;
   isRefreshingAllRtAccounts: boolean;
   isExporting: boolean;
   isWarmingUpAccounts: boolean;
@@ -204,6 +206,7 @@ export interface AccountsPageViewProps {
   refreshAllAccountRt: () => void;
   refreshAccountList: () => void;
   refreshAccountRt: (accountId: string) => void;
+  resetAccountQuota: (accountId: string) => void;
   importByFile: () => void;
   importByDirectory: () => void;
   refreshAccount: (accountId: string) => void;
@@ -257,6 +260,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     isRefreshingAllAccounts,
     isRefreshingAccountId,
     isRefreshingRtAccountId,
+    isResettingQuotaAccountId,
     isRefreshingAllRtAccounts,
     isExporting,
     isWarmingUpAccounts,
@@ -310,6 +314,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     refreshAllAccountRt,
     refreshAccountList,
     refreshAccountRt,
+    resetAccountQuota,
     importByFile,
     importByDirectory,
     refreshAccount,
@@ -834,6 +839,16 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     isRefreshingAccountId === account.id;
                   const isRefreshingCurrentRt =
                     isRefreshingRtAccountId === account.id;
+                  const isResettingCurrentQuota =
+                    isResettingQuotaAccountId === account.id;
+                  const quotaResetAvailableCount =
+                    account.quotaResetAvailableCount;
+                  const quotaResetCountText =
+                    quotaResetAvailableCount == null
+                      ? "--"
+                      : String(quotaResetAvailableCount);
+                  const canResetQuota =
+                    (quotaResetAvailableCount ?? 0) > 0;
                   const filteredIndex =
                     filteredAccountIndexMap.get(account.id) ?? -1;
                   const canMoveUp = filteredIndex > 0;
@@ -1014,6 +1029,26 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                                 />
                                 {t("刷新 AT/RT")}
                                 <DropdownMenuShortcut>RT</DropdownMenuShortcut>
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                className="gap-2"
+                                disabled={
+                                  !isServiceReady ||
+                                  isResettingCurrentQuota ||
+                                  !canResetQuota
+                                }
+                                onClick={() => resetAccountQuota(account.id)}
+                              >
+                                <RefreshCcw
+                                  className={cn(
+                                    "h-4 w-4",
+                                    isResettingCurrentQuota && "animate-spin",
+                                  )}
+                                />
+                                {t("额度重置")}
+                                <DropdownMenuShortcut className="text-muted-foreground tabular-nums">
+                                  {quotaResetCountText}
+                                </DropdownMenuShortcut>
                               </DropdownMenuItem>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem

@@ -15,11 +15,16 @@ const SERVICE_READY_RETRY_DELAY: std::time::Duration = std::time::Duration::from
 const BIND_PROBE_RETRIES: usize = 10;
 const BIND_PROBE_DELAY: Duration = Duration::from_millis(120);
 const MODEL_CACHE_FILE: &str = "models_cache.json";
+const CODEX_CONFIG_FILE: &str = "config.toml";
 const ENV_CODEX_HOME: &str = "CODEX_HOME";
 const ENV_HOME: &str = "HOME";
 const ENV_USERPROFILE: &str = "USERPROFILE";
 const ENV_HOMEDRIVE: &str = "HOMEDRIVE";
 const ENV_HOMEPATH: &str = "HOMEPATH";
+const MANAGED_CONFIG_BEGIN: &str = "# BEGIN CODEXMANAGER CLI CONFIG";
+const MANAGED_CONFIG_END: &str = "# END CODEXMANAGER CLI CONFIG";
+const MANAGED_PROVIDER_BEGIN_PREFIX: &str = "# BEGIN CODEXMANAGER MODEL PROVIDER ";
+const MANAGED_PROVIDER_END: &str = "# END CODEXMANAGER MODEL PROVIDER";
 
 fn is_addr_in_use(err: &io::Error) -> bool {
     err.kind() == io::ErrorKind::AddrInUse
@@ -38,20 +43,22 @@ fn probe_bind_target_available(bind_addr: &str, connect_addr: &str) -> Result<()
         }
         v4.map_err(|err| format!("检查服务端口失败 ({connect_addr}): {err}"))?;
         if let Err(err) = v6 {
-            log::debug!("IPv6 loopback bind probe skipped for {}: {}", connect_addr, err);
+            log::debug!(
+                "IPv6 loopback bind probe skipped for {}: {}",
+                connect_addr,
+                err
+            );
         }
         return Ok(());
     }
 
-    TcpListener::bind(trimmed)
-        .map(|_| ())
-        .map_err(|err| {
-            if is_addr_in_use(&err) {
-                format!("端口已被占用: {connect_addr}")
-            } else {
-                format!("检查服务端口失败 ({connect_addr}): {err}")
-            }
-        })
+    TcpListener::bind(trimmed).map(|_| ()).map_err(|err| {
+        if is_addr_in_use(&err) {
+            format!("端口已被占用: {connect_addr}")
+        } else {
+            format!("检查服务端口失败 ({connect_addr}): {err}")
+        }
+    })
 }
 
 pub(crate) fn ensure_bind_target_available(
@@ -176,6 +183,202 @@ fn write_models_cache_file(
         .map_err(|err| format!("序列化 Codex 模型缓存失败: {err}"))?;
     fs::write(cache_path, bytes)
         .map_err(|err| format!("写入 Codex 模型缓存失败 ({}): {err}", cache_path.display()))
+}
+
+fn normalize_required_config_text(field: &str, value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{field} is required"));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn normalize_provider_id(value: Option<&str>) -> Result<String, String> {
+    let provider_id = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("codexmanager");
+    if !provider_id
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+    {
+        return Err("providerId may only contain letters, numbers, '_' and '-'".to_string());
+    }
+    Ok(provider_id.to_string())
+}
+
+fn normalize_env_key(value: Option<&str>) -> Result<String, String> {
+    let env_key = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("CODEXMANAGER_API_KEY");
+    if !env_key
+        .chars()
+        .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+    {
+        return Err("envKey may only contain uppercase letters, numbers, and '_'".to_string());
+    }
+    Ok(env_key.to_string())
+}
+
+fn normalize_cli_base_url(value: &str) -> Result<String, String> {
+    let normalized = normalize_required_config_text("baseUrl", value)?
+        .trim_end_matches('/')
+        .to_string();
+    let parsed =
+        reqwest::Url::parse(normalized.as_str()).map_err(|_| "baseUrl is invalid".to_string())?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err("baseUrl must use http or https".to_string());
+    }
+    Ok(normalized)
+}
+
+fn toml_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if ch.is_control() => out.push(' '),
+            ch => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn table_header_name(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('[') || trimmed.starts_with("[[") {
+        return None;
+    }
+    let end = trimmed.find(']')?;
+    let name = trimmed[1..end].trim();
+    if name.is_empty() {
+        return None;
+    }
+    Some(name.to_string())
+}
+
+fn is_provider_table_for_id(table: &str, provider_id: &str) -> bool {
+    table == format!("model_providers.{provider_id}")
+        || table == format!("model_providers.\"{provider_id}\"")
+        || table.starts_with(format!("model_providers.{provider_id}.").as_str())
+        || table.starts_with(format!("model_providers.\"{provider_id}\".").as_str())
+}
+
+fn strip_legacy_codexmanager_managed_blocks(content: &str) -> String {
+    let mut out = Vec::new();
+    let mut skipping = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == MANAGED_CONFIG_BEGIN || trimmed.starts_with(MANAGED_PROVIDER_BEGIN_PREFIX) {
+            skipping = true;
+            continue;
+        }
+        if skipping {
+            if trimmed == MANAGED_CONFIG_END || trimmed == MANAGED_PROVIDER_END {
+                skipping = false;
+            }
+            continue;
+        }
+        out.push(line);
+    }
+    out.join("\n")
+}
+
+fn build_codex_provider_block(
+    provider_id: &str,
+    provider_name: &str,
+    base_url: &str,
+    env_key: &str,
+) -> String {
+    [
+        format!("[model_providers.{provider_id}]"),
+        format!("name = {}", toml_string(provider_name)),
+        format!("base_url = {}", toml_string(base_url)),
+        "wire_api = \"responses\"".to_string(),
+        format!("env_key = {}", toml_string(env_key)),
+    ]
+    .join("\n")
+}
+
+fn build_codex_provider_config(
+    existing: &str,
+    provider_id: &str,
+    provider_name: &str,
+    base_url: &str,
+    env_key: &str,
+) -> String {
+    let cleaned = strip_legacy_codexmanager_managed_blocks(existing);
+    let provider_block = build_codex_provider_block(provider_id, provider_name, base_url, env_key);
+    let mut out = Vec::new();
+    let mut skipping_provider_table = false;
+    let mut inserted = false;
+
+    for line in cleaned.lines() {
+        if let Some(table) = table_header_name(line) {
+            if is_provider_table_for_id(table.as_str(), provider_id) {
+                if !inserted {
+                    out.push(provider_block.as_str());
+                    inserted = true;
+                }
+                skipping_provider_table = true;
+                continue;
+            }
+            skipping_provider_table = false;
+        }
+
+        if skipping_provider_table {
+            continue;
+        }
+        out.push(line);
+    }
+
+    if !inserted {
+        if !out.iter().all(|line| line.trim().is_empty()) {
+            out.push("");
+        }
+        out.push(provider_block.as_str());
+    }
+
+    format!("{}\n", out.join("\n").trim())
+}
+
+fn write_codex_provider_config_file(
+    config_path: &Path,
+    provider_id: &str,
+    provider_name: &str,
+    base_url: &str,
+    env_key: &str,
+) -> Result<(), String> {
+    let parent = config_path
+        .parent()
+        .ok_or_else(|| format!("无法定位 Codex 配置目录: {}", config_path.display()))?;
+    fs::create_dir_all(parent)
+        .map_err(|err| format!("创建 Codex 配置目录失败 ({}): {err}", parent.display()))?;
+    let existing = match fs::read_to_string(config_path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(err) => {
+            return Err(format!(
+                "读取 Codex 配置失败 ({}): {err}",
+                config_path.display()
+            ))
+        }
+    };
+    let next =
+        build_codex_provider_config(&existing, provider_id, provider_name, base_url, env_key);
+    fs::write(config_path, next).map_err(|err| {
+        format!(
+            "写入 Codex provider 配置失败 ({}): {err}",
+            config_path.display()
+        )
+    })
 }
 
 /// 函数 `service_initialize`
@@ -327,10 +530,54 @@ pub async fn service_sync_codex_models_cache(
     .map_err(|err| format!("service_sync_codex_models_cache task failed: {err}"))?
 }
 
+#[tauri::command]
+pub async fn service_sync_codex_provider_config(
+    base_url: String,
+    provider_id: Option<String>,
+    provider_name: Option<String>,
+    env_key: Option<String>,
+    codex_home: Option<String>,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let provider_id = normalize_provider_id(provider_id.as_deref())?;
+        let provider_name = provider_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("CodexManager Local")
+            .to_string();
+        let base_url = normalize_cli_base_url(base_url.as_str())?;
+        let env_key = normalize_env_key(env_key.as_deref())?;
+        let codex_home_dir = resolve_codex_home_dir(codex_home.as_deref())?;
+        let config_path = codex_home_dir.join(CODEX_CONFIG_FILE);
+
+        write_codex_provider_config_file(
+            &config_path,
+            provider_id.as_str(),
+            provider_name.as_str(),
+            base_url.as_str(),
+            env_key.as_str(),
+        )?;
+
+        Ok(serde_json::json!({
+            "configPath": config_path.to_string_lossy().to_string(),
+            "providerId": provider_id,
+            "providerName": provider_name,
+            "baseUrl": base_url,
+            "envKey": env_key,
+        }))
+    })
+    .await
+    .map_err(|err| format!("service_sync_codex_provider_config task failed: {err}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     struct EnvGuard {
         key: &'static str,
@@ -373,6 +620,7 @@ mod tests {
 
     #[test]
     fn resolve_codex_home_dir_prefers_env_over_hint() {
+        let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
         let _codex_home = EnvGuard::set(ENV_CODEX_HOME, Some("D:/custom-codex-home"));
         let _userprofile = EnvGuard::set(ENV_USERPROFILE, Some("C:/Users/test"));
 
@@ -383,6 +631,7 @@ mod tests {
 
     #[test]
     fn resolve_codex_home_dir_falls_back_to_userprofile() {
+        let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
         let _codex_home = EnvGuard::set(ENV_CODEX_HOME, None);
         let _userprofile = EnvGuard::set(ENV_USERPROFILE, Some("C:/Users/test"));
         let _home = EnvGuard::set(ENV_HOME, None);
@@ -437,6 +686,94 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("gpt-5.4-mini")
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn build_codex_provider_config_only_replaces_managed_provider() {
+        let existing = r#"model = "gpt-5.5"
+model_provider = "openai"
+review_model = "gpt-5.5"
+
+# BEGIN CODEXMANAGER CLI CONFIG
+model = "deepseek-v4-pro"
+model_provider = "cm"
+review_model = "deepseek-v4-pro"
+# END CODEXMANAGER CLI CONFIG
+
+[model_providers.codexmanager]
+name = "Old"
+base_url = "http://old.example/v1"
+wire_api = "responses"
+
+[model_providers.codexmanager.auth]
+command = "old-token-command"
+
+[model_providers.other]
+name = "Other"
+base_url = "http://other.example/v1"
+
+[projects.'C:\Users\test\repo']
+trust_level = "trusted"
+"#;
+
+        let merged = build_codex_provider_config(
+            existing,
+            "codexmanager",
+            "CodexManager Local",
+            "http://localhost:48760/v1",
+            "CODEXMANAGER_API_KEY",
+        );
+
+        assert!(merged.contains("model = \"gpt-5.5\""));
+        assert!(merged.contains("model_provider = \"openai\""));
+        assert!(merged.contains("review_model = \"gpt-5.5\""));
+        assert!(merged.contains("[model_providers.codexmanager]"));
+        assert!(merged.contains("name = \"CodexManager Local\""));
+        assert!(merged.contains("base_url = \"http://localhost:48760/v1\""));
+        assert!(merged.contains("wire_api = \"responses\""));
+        assert!(merged.contains("env_key = \"CODEXMANAGER_API_KEY\""));
+        assert!(merged.contains("[model_providers.other]"));
+        assert!(merged.contains("[projects.'C:\\Users\\test\\repo']"));
+        assert!(!merged.contains("BEGIN CODEXMANAGER CLI CONFIG"));
+        assert!(!merged.contains("deepseek-v4-pro"));
+        assert!(!merged.contains("http://old.example/v1"));
+        assert!(!merged.contains("old-token-command"));
+        assert_eq!(merged.matches("[model_providers.codexmanager]").count(), 1);
+    }
+
+    #[test]
+    fn write_codex_provider_config_file_writes_only_config_toml() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("codexmanager-provider-{unique}"));
+        let config_path = root.join(CODEX_CONFIG_FILE);
+        fs::create_dir_all(&root).expect("create temp dir");
+        fs::write(
+            &config_path,
+            r#"model = "gpt-5.5"
+model_provider = "openai"
+"#,
+        )
+        .expect("write config");
+
+        write_codex_provider_config_file(
+            &config_path,
+            "codexmanager",
+            "CodexManager Local",
+            "http://localhost:48760/v1",
+            "CODEXMANAGER_API_KEY",
+        )
+        .expect("write provider config");
+
+        let content = fs::read_to_string(&config_path).expect("read config");
+        assert!(content.contains("model = \"gpt-5.5\""));
+        assert!(content.contains("model_provider = \"openai\""));
+        assert!(content.contains("[model_providers.codexmanager]"));
+        assert!(!root.join("auth.json").exists());
 
         let _ = fs::remove_dir_all(&root);
     }

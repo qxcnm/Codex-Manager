@@ -7,6 +7,7 @@ macro_rules! invoke_handler {
             crate::commands::service::service_initialize,
             crate::commands::service::service_rpc_token,
             crate::commands::service::service_sync_codex_models_cache,
+            crate::commands::service::service_sync_codex_provider_config,
             crate::commands::startup::service_startup_snapshot,
             crate::commands::dashboard::service_dashboard_admin_usage_summary,
             crate::commands::dashboard::service_dashboard_member_summary,
@@ -44,6 +45,7 @@ macro_rules! invoke_handler {
             crate::commands::usage::service_usage_list,
             crate::commands::usage::service_usage_aggregate,
             crate::commands::usage::service_usage_refresh,
+            crate::commands::usage::service_usage_quota_reset,
             // quota
             crate::commands::quota::service_quota_overview,
             crate::commands::quota::service_quota_model_usage,

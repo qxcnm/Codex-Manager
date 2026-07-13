@@ -40,8 +40,8 @@ const AGGREGATE_API_PROVIDER_LABELS: Record<string, string> = {
 };
 
 const AGGREGATE_API_URL_PLACEHOLDERS: Record<string, string> = {
-  codex: "例如：https://api.openai.com/v1",
-  claude: "例如：https://api.anthropic.com/v1",
+  codex: "例如：https://api.openai.com/v1/responses",
+  claude: "例如：https://api.anthropic.com/v1/messages",
 };
 
 type BalanceQueryTemplate = "generic" | "new_api" | "custom";
@@ -880,7 +880,9 @@ export function AggregateApiModal({
                     <div>
                       <Label className="text-sm">{t("自定义 action")}</Label>
                       <p className="text-[11px] text-muted-foreground">
-                        {t("开启后将用该 path 覆盖转发 action（例如 GLM 前缀路径）。")}
+                        {t(
+                          "默认直接使用 URL 原样请求；开启后才在 URL 后使用指定 path。"
+                        )}
                       </p>
                     </div>
                     <Switch
@@ -897,7 +899,7 @@ export function AggregateApiModal({
                       <Input
                         value={action}
                         disabled={!isServiceReady}
-                        placeholder={t("例如：/api/paas/v4/responses")}
+                        placeholder={t("例如：/responses；留空则直接使用 URL")}
                         onChange={(e) => setAction(e.target.value)}
                       />
                     </div>

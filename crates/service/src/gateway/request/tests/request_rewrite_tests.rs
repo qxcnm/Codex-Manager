@@ -3,6 +3,7 @@ use super::{
     apply_request_overrides_with_prompt_cache_key, apply_request_overrides_with_service_tier,
     apply_request_overrides_with_service_tier_and_forced_prompt_cache_key_scope,
     apply_request_overrides_with_service_tier_and_prompt_cache_key_scope, compute_upstream_url,
+    convert_responses_body_to_chat_completions_body,
 };
 use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -335,6 +336,51 @@ fn chat_completions_normalizes_responses_function_tools() {
             .and_then(serde_json::Value::as_str),
         Some("ping")
     );
+}
+
+#[test]
+fn aggregate_chat_bridge_drops_responses_only_tools() {
+    let body = json!({
+        "model": "deepseek-v4-pro",
+        "input": "ping",
+        "tools": [
+            {
+                "type": "image_generation",
+                "output_format": "png"
+            },
+            {
+                "type": "function",
+                "name": "ping",
+                "description": "ping tool",
+                "parameters": { "type": "object", "properties": {} }
+            },
+            {
+                "type": "web_search_preview"
+            }
+        ],
+        "tool_choice": "auto",
+        "parallel_tool_calls": true,
+        "stream": true
+    });
+
+    let out = convert_responses_body_to_chat_completions_body(
+        serde_json::to_vec(&body).expect("serialize request body").as_slice(),
+    )
+    .expect("convert responses body");
+    let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
+    let tools = value
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .expect("tools array");
+
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0]["type"], "function");
+    assert_eq!(tools[0]["function"]["name"], "ping");
+    assert_eq!(
+        value.get("stream").and_then(serde_json::Value::as_bool),
+        Some(false)
+    );
+    assert!(value.get("stream_options").is_none());
 }
 
 /// 函数 `responses_overrides_model_and_reasoning_effort`

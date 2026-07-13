@@ -58,6 +58,25 @@ fn rewrite_path_preserving_query(path: &str, replacement_path: &str) -> String {
     }
 }
 
+pub(crate) fn convert_responses_body_to_chat_completions_body(
+    body: &[u8],
+) -> Result<Vec<u8>, String> {
+    let mut payload = serde_json::from_slice::<Value>(body)
+        .map_err(|err| format!("invalid responses request json: {err}"))?;
+    let obj = payload
+        .as_object_mut()
+        .ok_or_else(|| "responses request body must be an object".to_string())?;
+    let path = "/v1/chat/completions";
+    chat_completions::normalize_responses_payload(path, obj);
+    chat_completions::ensure_reasoning_effort(path, obj);
+    chat_completions::retain_chat_bridge_function_tools(obj);
+    obj.insert("stream".to_string(), Value::Bool(false));
+    obj.remove("stream_options");
+    chat_completions::retain_official_fields(path, obj);
+    serde_json::to_vec(&payload)
+        .map_err(|err| format!("serialize chat completions request failed: {err}"))
+}
+
 /// 函数 `is_codex_backend_base`
 ///
 /// 作者: gaohongshun

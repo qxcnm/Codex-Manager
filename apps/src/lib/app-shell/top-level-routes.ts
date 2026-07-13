@@ -120,12 +120,6 @@ export const TOP_LEVEL_ROUTE_CONFIG = [
     section: "system",
     roles: ["system_admin", "admin"],
   },
-  {
-    path: "/author",
-    label: "赞助与推荐",
-    section: "system",
-    roles: ["system_admin", "admin"],
-  },
 ] as const;
 
 export type TopLevelRoutePath = (typeof TOP_LEVEL_ROUTE_CONFIG)[number]["path"];

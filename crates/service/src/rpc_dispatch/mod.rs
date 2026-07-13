@@ -190,6 +190,7 @@ const MEMBER_METHOD_ALLOWLIST: &[&str] = &[
     "account/usage/list",
     "account/usage/read",
     "account/usage/refresh",
+    "account/usage/resetQuota",
     "account/warmup",
     "accountManager/password/change",
     "accountManager/profile/update",

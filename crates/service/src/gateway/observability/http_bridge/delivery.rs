@@ -756,6 +756,9 @@ fn convert_success_body_for_adapter(
         ResponseAdapter::ChatCompletionsFromResponses => {
             convert_responses_body_to_chat_completions(body)
         }
+        ResponseAdapter::ResponsesFromChatCompletions => {
+            convert_chat_completions_body_to_responses(body)
+        }
         ResponseAdapter::CompactFromChatCompletions => {
             convert_chat_completions_body_to_compact(body)
         }
@@ -916,6 +919,363 @@ fn collect_chat_completion_message_text(value: &Value, out: &mut String) {
     }
 }
 
+fn chat_usage_to_responses_usage(usage: &Value) -> Value {
+    let input_tokens = usage
+        .get("input_tokens")
+        .or_else(|| usage.get("prompt_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let output_tokens = usage
+        .get("output_tokens")
+        .or_else(|| usage.get("completion_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let total_tokens = usage
+        .get("total_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(input_tokens + output_tokens);
+    let mut mapped = json!({
+        "input_tokens": input_tokens.max(0),
+        "output_tokens": output_tokens.max(0),
+        "total_tokens": total_tokens.max(0)
+    });
+    if let Some(details) = usage
+        .get("input_tokens_details")
+        .or_else(|| usage.get("prompt_tokens_details"))
+    {
+        mapped["input_tokens_details"] = details.clone();
+    }
+    if let Some(details) = usage
+        .get("output_tokens_details")
+        .or_else(|| usage.get("completion_tokens_details"))
+    {
+        mapped["output_tokens_details"] = details.clone();
+    }
+    mapped
+}
+
+fn collect_chat_tool_calls(message: &Value) -> Vec<Value> {
+    let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    tool_calls
+        .iter()
+        .filter_map(|tool_call| {
+            let function = tool_call.get("function")?;
+            let name = function
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?;
+            let arguments = function
+                .get("arguments")
+                .and_then(Value::as_str)
+                .unwrap_or("{}");
+            let call_id = tool_call
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("call_codexmanager");
+            Some(json!({
+                "type": "function_call",
+                "id": call_id,
+                "call_id": call_id,
+                "name": name,
+                "arguments": arguments
+            }))
+        })
+        .collect()
+}
+
+fn chat_completions_body_to_responses_value(body: &[u8]) -> Option<Value> {
+    let value = serde_json::from_slice::<Value>(body).ok()?;
+    let choice = value
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())?;
+    let message = choice.get("message").unwrap_or(choice);
+    let mut text = String::new();
+    if let Some(content) = message.get("content") {
+        collect_chat_completion_message_text(content, &mut text);
+    } else if let Some(delta) = choice.get("delta").and_then(|delta| delta.get("content")) {
+        collect_chat_completion_message_text(delta, &mut text);
+    }
+    let reasoning_text = message
+        .get("reasoning_content")
+        .or_else(|| message.get("reasoning"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("resp_codexmanager_chat");
+    let model = value
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("gpt-5.4");
+    let created = value.get("created").and_then(Value::as_i64).unwrap_or(0);
+    let mut output = Vec::new();
+    if !reasoning_text.is_empty() {
+        output.push(json!({
+            "type": "reasoning",
+            "id": "rs_codexmanager_chat",
+            "summary": [{
+                "type": "summary_text",
+                "text": reasoning_text
+            }]
+        }));
+    }
+    let tool_calls = collect_chat_tool_calls(message);
+    output.extend(tool_calls);
+    if !text.trim().is_empty() || output.is_empty() {
+        output.push(json!({
+            "type": "message",
+            "role": "assistant",
+            "content": [{
+                "type": "output_text",
+                "text": text
+            }]
+        }));
+    }
+    let mut response = json!({
+        "id": id,
+        "object": "response",
+        "created_at": created,
+        "model": model,
+        "status": "completed",
+        "output": output,
+        "output_text": text
+    });
+    if let Some(usage) = value.get("usage") {
+        response["usage"] = chat_usage_to_responses_usage(usage);
+    }
+    Some(response)
+}
+
+fn convert_chat_completions_body_to_responses(body: &[u8]) -> Option<Vec<u8>> {
+    serde_json::to_vec(&chat_completions_body_to_responses_value(body)?).ok()
+}
+
+fn append_responses_sse_event(out: &mut Vec<u8>, event: &str, payload: Value) {
+    out.extend_from_slice(
+        format!(
+            "event: {event}\ndata: {}\n\n",
+            serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string())
+        )
+        .as_bytes(),
+    );
+}
+
+fn insert_stream_item_id(payload: &mut Value, item: &Value) {
+    let Some(item_id) = item.get("id").and_then(Value::as_str) else {
+        return;
+    };
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert(
+            "item_id".to_string(),
+            Value::String(item_id.to_string()),
+        );
+    }
+}
+
+fn stream_output_item_with_status(item: &Value, status: &str) -> Value {
+    let mut next = item.clone();
+    if let Some(obj) = next.as_object_mut() {
+        obj.insert("status".to_string(), Value::String(status.to_string()));
+    }
+    next
+}
+
+fn stream_output_item_added_value(item: &Value) -> Value {
+    let mut next = stream_output_item_with_status(item, "in_progress");
+    if next.get("type").and_then(Value::as_str) == Some("message") {
+        if let Some(obj) = next.as_object_mut() {
+            obj.insert("content".to_string(), Value::Array(Vec::new()));
+        }
+    }
+    next
+}
+
+fn ensure_stream_output_item_metadata(response: &mut Value) {
+    let response_id = response
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("resp_codexmanager_chat")
+        .to_string();
+    let Some(items) = response.get_mut("output").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for (index, item) in items.iter_mut().enumerate() {
+        let Some(obj) = item.as_object_mut() else {
+            continue;
+        };
+        let item_type = obj
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("item")
+            .to_string();
+        obj.entry("id".to_string()).or_insert_with(|| {
+            let prefix = match item_type.as_str() {
+                "message" => "msg",
+                "function_call" => "fc",
+                "reasoning" => "rs",
+                _ => "item",
+            };
+            Value::String(format!("{prefix}_{response_id}_{index}"))
+        });
+        obj.entry("status".to_string())
+            .or_insert_with(|| Value::String("completed".to_string()));
+    }
+}
+
+fn chat_completion_body_to_responses_sse(body: &[u8]) -> Vec<u8> {
+    let mut response = chat_completions_body_to_responses_value(body).unwrap_or_else(|| json!({
+        "id": "resp_codexmanager_chat",
+        "object": "response",
+        "status": "completed",
+        "output": [],
+        "output_text": ""
+    }));
+    ensure_stream_output_item_metadata(&mut response);
+    let id = response
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("resp_codexmanager_chat");
+    let model = response
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("gpt-5.4");
+    let created = response.get("created_at").and_then(Value::as_i64).unwrap_or(0);
+    let created_payload = json!({
+        "type": "response.created",
+        "response": {
+            "id": id,
+            "object": "response",
+            "created_at": created,
+            "model": model,
+            "status": "in_progress"
+        }
+    });
+    let mut out = Vec::new();
+    append_responses_sse_event(&mut out, "response.created", created_payload.clone());
+    append_responses_sse_event(
+        &mut out,
+        "response.in_progress",
+        json!({
+            "type": "response.in_progress",
+            "response": created_payload["response"].clone()
+        }),
+    );
+    if let Some(items) = response.get("output").and_then(Value::as_array) {
+        for (idx, item) in items.iter().enumerate() {
+            let added_item = stream_output_item_added_value(item);
+            append_responses_sse_event(
+                &mut out,
+                "response.output_item.added",
+                json!({
+                    "type": "response.output_item.added",
+                    "response_id": id,
+                    "output_index": idx,
+                    "item": added_item
+                }),
+            );
+
+            if item.get("type").and_then(Value::as_str) == Some("message") {
+                if let Some(content) = item.get("content").and_then(Value::as_array) {
+                    for (content_idx, part) in content.iter().enumerate() {
+                        let mut added_part = part.clone();
+                        if part.get("type").and_then(Value::as_str) == Some("output_text") {
+                            if let Some(obj) = added_part.as_object_mut() {
+                                obj.insert("text".to_string(), Value::String(String::new()));
+                            }
+                        }
+                        let mut part_added_payload = json!({
+                            "type": "response.content_part.added",
+                            "response_id": id,
+                            "output_index": idx,
+                            "content_index": content_idx,
+                            "part": added_part
+                        });
+                        insert_stream_item_id(&mut part_added_payload, item);
+                        append_responses_sse_event(
+                            &mut out,
+                            "response.content_part.added",
+                            part_added_payload,
+                        );
+
+                        if part.get("type").and_then(Value::as_str) == Some("output_text") {
+                            let text = part.get("text").and_then(Value::as_str).unwrap_or("");
+                            if !text.is_empty() {
+                                let mut delta_payload = json!({
+                                    "type": "response.output_text.delta",
+                                    "response_id": id,
+                                    "output_index": idx,
+                                    "content_index": content_idx,
+                                    "delta": text
+                                });
+                                insert_stream_item_id(&mut delta_payload, item);
+                                append_responses_sse_event(
+                                    &mut out,
+                                    "response.output_text.delta",
+                                    delta_payload,
+                                );
+                            }
+
+                            let mut text_done_payload = json!({
+                                "type": "response.output_text.done",
+                                "response_id": id,
+                                "output_index": idx,
+                                "content_index": content_idx,
+                                "text": text
+                            });
+                            insert_stream_item_id(&mut text_done_payload, item);
+                            append_responses_sse_event(
+                                &mut out,
+                                "response.output_text.done",
+                                text_done_payload,
+                            );
+                        }
+
+                        let mut part_done_payload = json!({
+                            "type": "response.content_part.done",
+                            "response_id": id,
+                            "output_index": idx,
+                            "content_index": content_idx,
+                            "part": part
+                        });
+                        insert_stream_item_id(&mut part_done_payload, item);
+                        append_responses_sse_event(
+                            &mut out,
+                            "response.content_part.done",
+                            part_done_payload,
+                        );
+                    }
+                }
+            }
+
+            let done_item = stream_output_item_with_status(item, "completed");
+            append_responses_sse_event(
+                &mut out,
+                "response.output_item.done",
+                json!({
+                    "type": "response.output_item.done",
+                    "response_id": id,
+                    "output_index": idx,
+                    "item": done_item
+                }),
+            );
+        }
+    }
+    let completed_payload = json!({
+        "type": "response.completed",
+        "response": response
+    });
+    append_responses_sse_event(&mut out, "response.completed", completed_payload);
+    out.extend_from_slice(b"data: [DONE]\n\n");
+    out
+}
+
 fn convert_chat_completions_body_to_compact(body: &[u8]) -> Option<Vec<u8>> {
     let value = serde_json::from_slice::<Value>(body).ok()?;
     let mut text = String::new();
@@ -1048,6 +1408,14 @@ fn convert_error_body_for_adapter(response_adapter: ResponseAdapter, message: &s
             }
         }))
         .unwrap_or_else(|_| message.as_bytes().to_vec()),
+        ResponseAdapter::ResponsesFromChatCompletions => serde_json::to_vec(&json!({
+            "error": {
+                "message": message,
+                "type": "upstream_error",
+                "code": "upstream_error"
+            }
+        }))
+        .unwrap_or_else(|_| message.as_bytes().to_vec()),
         ResponseAdapter::CompactFromChatCompletions => serde_json::to_vec(&json!({
             "error": {
                 "message": message,
@@ -1081,6 +1449,7 @@ fn compatibility_stream_content_type(
     match response_adapter {
         ResponseAdapter::AnthropicMessagesFromResponses => "text/event-stream",
         ResponseAdapter::ChatCompletionsFromResponses => "text/event-stream",
+        ResponseAdapter::ResponsesFromChatCompletions => "text/event-stream",
         ResponseAdapter::CompactFromChatCompletions => "application/json",
         ResponseAdapter::ImagesB64JsonFromResponses | ResponseAdapter::ImagesUrlFromResponses => {
             "text/event-stream"
@@ -2213,6 +2582,47 @@ pub(crate) fn respond_with_upstream(
                     None,
                 ));
             }
+            ResponseAdapter::ResponsesFromChatCompletions => {
+                let upstream_body = upstream
+                    .bytes()
+                    .map_err(|err| format!("read upstream body failed: {err}"))?;
+                let usage = serde_json::from_slice::<Value>(upstream_body.as_ref())
+                    .ok()
+                    .map(|value| parse_usage_from_json(&value))
+                    .unwrap_or_default();
+                let response_body = chat_completion_body_to_responses_sse(upstream_body.as_ref());
+                let len = Some(response_body.len());
+                let response = Response::new(
+                    status,
+                    headers,
+                    std::io::Cursor::new(response_body),
+                    len,
+                    None,
+                );
+                let delivery_error = request.respond(response).err().map(|err| err.to_string());
+                return Ok(with_bridge_debug_meta(
+                    UpstreamResponseBridgeResult {
+                        usage,
+                        stream_terminal_seen: true,
+                        stream_terminal_error: None,
+                        delivery_error,
+                        upstream_error_hint: None,
+                        delivered_status_code: None,
+                        upstream_request_id: None,
+                        upstream_cf_ray: None,
+                        upstream_auth_error: None,
+                        upstream_identity_error_code: None,
+                        upstream_content_type: None,
+                        last_sse_event_type: Some("response.completed".to_string()),
+                    },
+                    &upstream_request_id,
+                    &upstream_cf_ray,
+                    &upstream_auth_error,
+                    &upstream_identity_error_code,
+                    &upstream_content_type,
+                    None,
+                ));
+            }
             ResponseAdapter::CompactFromChatCompletions => unreachable!(),
             ResponseAdapter::ImagesB64JsonFromResponses
             | ResponseAdapter::ImagesUrlFromResponses => {
@@ -2901,6 +3311,7 @@ pub(crate) fn respond_with_upstream(
         }
         ResponseAdapter::AnthropicMessagesFromResponses
         | ResponseAdapter::ChatCompletionsFromResponses
+        | ResponseAdapter::ResponsesFromChatCompletions
         | ResponseAdapter::ImagesB64JsonFromResponses
         | ResponseAdapter::ImagesUrlFromResponses
         | ResponseAdapter::GeminiJson
@@ -3185,6 +3596,47 @@ pub(crate) fn respond_with_stream_upstream(
                         upstream_identity_error_code: None,
                         upstream_content_type: None,
                         last_sse_event_type: None,
+                    },
+                    &upstream_request_id,
+                    &upstream_cf_ray,
+                    &upstream_auth_error,
+                    &upstream_identity_error_code,
+                    &upstream_content_type,
+                    None,
+                ));
+            }
+            ResponseAdapter::ResponsesFromChatCompletions => {
+                let upstream_body = upstream
+                    .read_all_bytes()
+                    .map_err(|err| format!("read upstream body failed: {err}"))?;
+                let usage = serde_json::from_slice::<Value>(upstream_body.as_ref())
+                    .ok()
+                    .map(|value| parse_usage_from_json(&value))
+                    .unwrap_or_default();
+                let response_body = chat_completion_body_to_responses_sse(upstream_body.as_ref());
+                let len = Some(response_body.len());
+                let response = Response::new(
+                    status,
+                    headers,
+                    std::io::Cursor::new(response_body),
+                    len,
+                    None,
+                );
+                let delivery_error = request.respond(response).err().map(|err| err.to_string());
+                return Ok(with_bridge_debug_meta(
+                    UpstreamResponseBridgeResult {
+                        usage,
+                        stream_terminal_seen: true,
+                        stream_terminal_error: None,
+                        delivery_error,
+                        upstream_error_hint: None,
+                        delivered_status_code: None,
+                        upstream_request_id: None,
+                        upstream_cf_ray: None,
+                        upstream_auth_error: None,
+                        upstream_identity_error_code: None,
+                        upstream_content_type: None,
+                        last_sse_event_type: Some("response.completed".to_string()),
                     },
                     &upstream_request_id,
                     &upstream_cf_ray,
@@ -3847,6 +4299,7 @@ pub(crate) fn respond_with_stream_upstream(
         }
         ResponseAdapter::AnthropicMessagesFromResponses
         | ResponseAdapter::ChatCompletionsFromResponses
+        | ResponseAdapter::ResponsesFromChatCompletions
         | ResponseAdapter::ImagesB64JsonFromResponses
         | ResponseAdapter::ImagesUrlFromResponses
         | ResponseAdapter::GeminiJson
@@ -3882,6 +4335,7 @@ fn resolve_stream_keepalive_frame(
         }
         ResponseAdapter::AnthropicMessagesFromResponses
         | ResponseAdapter::ChatCompletionsFromResponses
+        | ResponseAdapter::ResponsesFromChatCompletions
         | ResponseAdapter::CompactFromChatCompletions
         | ResponseAdapter::ImagesB64JsonFromResponses
         | ResponseAdapter::ImagesUrlFromResponses
@@ -3896,9 +4350,10 @@ fn resolve_stream_keepalive_frame(
 mod tests {
     use super::{
         build_passthrough_non_success_message, classify_compact_non_success_kind,
+        chat_completion_body_to_responses_sse,
         collect_non_stream_json_from_sse_bytes, compact_non_success_body_should_be_normalized,
         compact_success_body_is_valid, convert_chat_completions_body_to_compact,
-        convert_responses_body_to_chat_completions,
+        convert_chat_completions_body_to_responses, convert_responses_body_to_chat_completions,
         convert_responses_body_to_gemini_generate_content, convert_responses_body_to_images,
         force_openai_responses_stream_content_type, gemini_cli_wrap_response_envelope,
         merge_usage_from_body_without_output_text, write_streaming_chunked_response, HTTPVersion,
@@ -4318,6 +4773,100 @@ mod tests {
             value["choices"][0]["message"]["reasoning_content"],
             "先想一下"
         );
+    }
+
+    #[test]
+    fn chat_completions_body_converts_to_responses_shape() {
+        let body = json!({
+            "id": "chatcmpl_1",
+            "created": 1775900000,
+            "model": "deepseek-v4-pro",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "OK",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "shell",
+                            "arguments": "{\"cmd\":\"pwd\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {
+                "prompt_tokens": 3,
+                "completion_tokens": 2,
+                "total_tokens": 5
+            }
+        });
+
+        let mapped = convert_chat_completions_body_to_responses(
+            serde_json::to_vec(&body).expect("body").as_slice(),
+        )
+        .expect("convert responses body");
+        let value: serde_json::Value = serde_json::from_slice(&mapped).expect("parse mapped body");
+
+        assert_eq!(value["id"], "chatcmpl_1");
+        assert_eq!(value["model"], "deepseek-v4-pro");
+        assert_eq!(value["output_text"], "OK");
+        assert_eq!(value["output"][0]["type"], "function_call");
+        assert_eq!(value["output"][0]["name"], "shell");
+        assert_eq!(value["usage"]["input_tokens"], 3);
+        assert_eq!(value["usage"]["output_tokens"], 2);
+    }
+
+    #[test]
+    fn chat_completions_body_to_responses_sse_declares_text_part_before_delta() {
+        let body = json!({
+            "id": "chatcmpl_stream",
+            "created": 1775900000,
+            "model": "deepseek-v4-pro",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "STREAM_OK"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 3,
+                "completion_tokens": 2,
+                "total_tokens": 5
+            }
+        });
+
+        let sse = String::from_utf8(chat_completion_body_to_responses_sse(
+            serde_json::to_vec(&body).expect("body").as_slice(),
+        ))
+        .expect("sse utf8");
+
+        let mut cursor = 0;
+        for marker in [
+            "event: response.created",
+            "event: response.in_progress",
+            "event: response.output_item.added",
+            "event: response.content_part.added",
+            "event: response.output_text.delta",
+            "event: response.output_text.done",
+            "event: response.content_part.done",
+            "event: response.output_item.done",
+            "event: response.completed",
+            "data: [DONE]",
+        ] {
+            let offset = sse[cursor..]
+                .find(marker)
+                .unwrap_or_else(|| panic!("missing or out-of-order marker {marker}"));
+            cursor += offset + marker.len();
+        }
+
+        assert!(sse.contains("\"output_index\":0"));
+        assert!(sse.contains("\"content_index\":0"));
+        assert!(sse.contains("\"item_id\":\"msg_chatcmpl_stream_0\""));
+        assert!(sse.contains("\"delta\":\"STREAM_OK\""));
+        assert!(sse.contains("\"text\":\"STREAM_OK\""));
     }
 
     #[test]

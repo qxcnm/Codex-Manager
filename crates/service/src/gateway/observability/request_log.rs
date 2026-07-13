@@ -307,6 +307,7 @@ fn response_adapter_label(value: super::ResponseAdapter) -> &'static str {
         super::ResponseAdapter::Passthrough => "Passthrough",
         super::ResponseAdapter::AnthropicMessagesFromResponses => "AnthropicMessagesFromResponses",
         super::ResponseAdapter::ChatCompletionsFromResponses => "ChatCompletionsFromResponses",
+        super::ResponseAdapter::ResponsesFromChatCompletions => "ResponsesFromChatCompletions",
         super::ResponseAdapter::CompactFromChatCompletions => "CompactFromChatCompletions",
         super::ResponseAdapter::ImagesB64JsonFromResponses => "ImagesB64JsonFromResponses",
         super::ResponseAdapter::ImagesUrlFromResponses => "ImagesUrlFromResponses",

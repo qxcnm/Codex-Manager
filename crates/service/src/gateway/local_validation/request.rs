@@ -1554,11 +1554,21 @@ fn apply_passthrough_request_overrides(
     bool,
     Option<String>,
 ) {
+    let incoming_request_meta = super::super::parse_request_metadata(&body);
+    let incoming_model = incoming_request_meta
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let (default_effective_model, effective_reasoning, effective_service_tier) =
         resolve_effective_request_overrides(api_key);
-    let effective_model = model_override
-        .map(str::to_string)
-        .or(default_effective_model);
+    let effective_model = model_override.map(str::to_string).or_else(|| {
+        if incoming_model.is_some() {
+            None
+        } else {
+            default_effective_model
+        }
+    });
     let rewritten_body =
         super::super::apply_request_overrides_with_service_tier_and_prompt_cache_key_scope(
             path,

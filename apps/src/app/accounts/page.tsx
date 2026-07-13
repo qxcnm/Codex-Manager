@@ -48,6 +48,7 @@ export default function AccountsPage() {
     isServiceReady,
     refreshAccount,
     refreshAccountRt,
+    resetAccountQuota,
     refreshAllAccountRt,
     refreshAllAccounts,
     refreshAccountList,
@@ -63,6 +64,7 @@ export default function AccountsPage() {
     isExporting,
     isWarmingUpAccounts,
     isRefreshingRtAccountId,
+    isResettingQuotaAccountId,
     isRefreshingAllRtAccounts,
     isDeletingMany,
     isCleaningAccountsByStatus,
@@ -642,6 +644,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
       isRefreshingAllAccounts={isRefreshingAllAccounts}
       isRefreshingAccountId={isRefreshingAccountId}
       isRefreshingRtAccountId={isRefreshingRtAccountId}
+      isResettingQuotaAccountId={isResettingQuotaAccountId}
       isRefreshingAllRtAccounts={isRefreshingAllRtAccounts}
       isExporting={isExporting}
       isWarmingUpAccounts={isWarmingUpAccounts}
@@ -695,6 +698,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
       refreshAllAccountRt={refreshAllAccountRt}
       refreshAccountList={refreshAccountList}
       refreshAccountRt={refreshAccountRt}
+      resetAccountQuota={resetAccountQuota}
       importByFile={importByFile}
       importByDirectory={importByDirectory}
       refreshAccount={refreshAccount}

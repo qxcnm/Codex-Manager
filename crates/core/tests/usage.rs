@@ -1,4 +1,6 @@
-use codexmanager_core::usage::{accounts_check_endpoint, parse_usage_snapshot, usage_endpoint};
+use codexmanager_core::usage::{
+    accounts_check_endpoint, parse_usage_snapshot, rate_limit_reset_endpoint, usage_endpoint,
+};
 use serde_json::json;
 
 /// 函数 `usage_snapshot_parsed`
@@ -51,6 +53,12 @@ fn usage_snapshot_parsed() {
                 }
             }
         ],
+        "rate_limit_reset_credits": {
+            "available_count": 2,
+            "credits": [
+                { "expires_at": "2026-07-14T00:00:00Z" }
+            ]
+        },
         "credits": { "balance": 12.5 }
     });
 
@@ -65,6 +73,7 @@ fn usage_snapshot_parsed() {
         serde_json::from_str(snap.credits_json.as_deref().expect("credits json"))
             .expect("parse credits json");
     assert_eq!(credits["balance"], 12.5);
+    assert_eq!(credits["rate_limit_reset_credits"]["available_count"], 2);
     let extras = credits["_codexmanager_extra_rate_limits"]
         .as_array()
         .expect("extra rate limits array");
@@ -79,6 +88,12 @@ fn usage_snapshot_parsed() {
 
     let url = usage_endpoint("https://chatgpt.com");
     assert_eq!(url, "https://chatgpt.com/backend-api/wham/usage");
+
+    let reset_url = rate_limit_reset_endpoint("https://chatgpt.com");
+    assert_eq!(
+        reset_url,
+        "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
+    );
 
     let accounts_check_url = accounts_check_endpoint("https://chatgpt.com");
     assert_eq!(

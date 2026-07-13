@@ -6,7 +6,7 @@ use codexmanager_core::rpc::types::{
     AggregateApiTestResult, ManagedModelSourceModelEntry,
 };
 use codexmanager_core::storage::{
-    now_ts, AggregateApi, AggregateApiSupplierModel, ModelSourceModel,
+    now_ts, AggregateApi, AggregateApiSupplierModel, ModelSourceModel, Storage,
 };
 use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
@@ -31,7 +31,9 @@ const CUSTOM_BALANCE_AUTH_BALANCE_BEARER: &str = "balance_bearer";
 const CUSTOM_BALANCE_AUTH_NONE: &str = "none";
 const CLAUDE_DEFAULT_PROBE_MODEL: &str = "claude-haiku-4-5-20251001";
 const ALIBABA_CODING_PLAN_PROBE_MODEL: &str = "qwen3.5-plus";
+const DEEPSEEK_DEFAULT_PROBE_MODEL: &str = "deepseek-v4-pro";
 const MAX_DISCOVERED_MODEL_IDS: usize = 512;
+const MAX_CODEX_PROBE_MODELS: usize = 8;
 const AGGREGATE_API_MODEL_SOURCE_KIND: &str = "aggregate_api";
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -170,6 +172,13 @@ fn normalize_auth_type(value: Option<String>) -> Result<String, String> {
     }
 }
 
+const RAW_ACTION_MARKER: &str = "@raw";
+
+fn is_raw_action_marker(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    matches!(normalized.as_str(), "raw" | "@raw" | "__raw__")
+}
+
 fn normalize_action(value: Option<String>) -> Result<Option<String>, String> {
     let Some(raw) = value else {
         return Ok(None);
@@ -177,6 +186,9 @@ fn normalize_action(value: Option<String>) -> Result<Option<String>, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Ok(None);
+    }
+    if is_raw_action_marker(trimmed) {
+        return Ok(Some(RAW_ACTION_MARKER.to_string()));
     }
     let normalized = trimmed.to_string();
     let lower = normalized.to_ascii_lowercase();
@@ -541,7 +553,7 @@ fn normalize_action_override(
 
 #[cfg(test)]
 mod tests {
-    use codexmanager_core::storage::AggregateApi;
+    use codexmanager_core::storage::{now_ts, AggregateApi, ModelSourceModel, Storage};
     use serde_json::Value;
     use std::sync::mpsc;
     use std::thread;
@@ -556,6 +568,7 @@ mod tests {
         probe_codex_endpoint, provider_default_url, CustomBalanceQueryConfig,
         AGGREGATE_API_PROVIDER_CLAUDE, AGGREGATE_API_PROVIDER_GEMINI,
         ALIBABA_CODING_PLAN_PROBE_MODEL, CLAUDE_DEFAULT_PROBE_MODEL,
+        DEEPSEEK_DEFAULT_PROBE_MODEL,
     };
 
     fn aggregate_api_with_action(action: Option<&str>) -> AggregateApi {
@@ -601,6 +614,19 @@ mod tests {
     }
 
     #[test]
+    fn action_override_enabled_and_raw_normalizes_marker() {
+        let value = normalize_action_override(Some(true), Some("raw".to_string())).unwrap();
+        assert_eq!(value, Some(Some("@raw".to_string())));
+    }
+
+    #[test]
+    fn default_action_uses_base_url_without_default_path() {
+        let api = aggregate_api_with_action(None);
+        let path = action_path_or_default(&api, "/v1/messages?beta=true");
+        assert_eq!(path, "");
+    }
+
+    #[test]
     fn empty_action_uses_base_url_without_default_path() {
         let api = aggregate_api_with_action(Some(""));
         let path = action_path_or_default(&api, "/v1/messages?beta=true");
@@ -608,7 +634,14 @@ mod tests {
     }
 
     #[test]
-    fn codex_models_probe_url_appends_client_version() {
+    fn raw_action_uses_base_url_without_default_path() {
+        let api = aggregate_api_with_action(Some("@raw"));
+        let path = action_path_or_default(&api, "/v1/messages?beta=true");
+        assert_eq!(path, "");
+    }
+
+    #[test]
+    fn codex_models_probe_url_defaults_to_configured_url_with_client_version() {
         let _guard = crate::test_env_guard();
         crate::gateway::set_codex_user_agent_version("0.101.0")
             .expect("set default codex user agent version");
@@ -765,6 +798,28 @@ mod tests {
     }
 
     #[test]
+    fn generic_balance_extractor_accepts_deepseek_balance_infos_shape() {
+        let body: Value = serde_json::from_str(
+            r#"{
+                "is_available": true,
+                "balance_infos": [{
+                    "currency": "CNY",
+                    "total_balance": "42.5",
+                    "granted_balance": "2.5",
+                    "topped_up_balance": "40"
+                }]
+            }"#,
+        )
+        .expect("parse deepseek balance body");
+
+        let snapshot = extract_generic_balance(&body).expect("extract deepseek balance");
+
+        assert!(snapshot.is_valid);
+        assert_eq!(snapshot.remaining, Some(42.5));
+        assert_eq!(snapshot.unit.as_deref(), Some("CNY"));
+    }
+
+    #[test]
     fn custom_balance_config_normalizes_and_extracts_paths() {
         let normalized = normalize_custom_balance_query_config(Some(
             r#"{
@@ -857,7 +912,7 @@ mod tests {
             .expect("captured request");
         join.join().expect("join mock server");
         assert_eq!(captured.0, "POST");
-        assert_eq!(captured.1, "/v1/messages?beta=true");
+        assert_eq!(captured.1, "/");
         let body: Value = serde_json::from_str(captured.2.as_str()).expect("parse body");
         assert_eq!(body["model"], "qwen3.5-plus");
     }
@@ -896,7 +951,132 @@ mod tests {
             .build()
             .expect("build client");
 
-        let status = probe_codex_endpoint(&client, &api, "secret").expect("probe succeeds");
+        let status = probe_codex_endpoint(&client, None, &api, "secret").expect("probe succeeds");
+
+        assert_eq!(status, 200);
+        let captured = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("captured request");
+        join.join().expect("join mock server");
+        assert_eq!(captured.0, "POST");
+        assert_eq!(captured.1, "/chat/completions");
+        let body: Value = serde_json::from_str(captured.2.as_str()).expect("parse body");
+        assert_eq!(body["model"], "qwen3.5-plus");
+    }
+
+    #[test]
+    fn codex_probe_defaults_deepseek_root_url_to_chat_completions() {
+        let server = Server::http("127.0.0.1:0").expect("start mock server");
+        let base_url = format!("http://{}", server.server_addr());
+        let (tx, rx) = mpsc::channel();
+        let join = thread::spawn(move || {
+            let request = server
+                .recv_timeout(Duration::from_secs(2))
+                .expect("receive model list request")
+                .expect("model list request present");
+            tx.send((request.method().as_str().to_string(), request.url().to_string(), None))
+                .expect("send model list request");
+            request
+                .respond(Response::from_string("").with_status_code(StatusCode(404)))
+                .expect("respond model list");
+
+            let mut request = server
+                .recv_timeout(Duration::from_secs(2))
+                .expect("receive chat completions request")
+                .expect("chat completions request present");
+            let mut body = String::new();
+            request
+                .as_reader()
+                .read_to_string(&mut body)
+                .expect("read request body");
+            tx.send((
+                request.method().as_str().to_string(),
+                request.url().to_string(),
+                Some(body),
+            ))
+            .expect("send chat completions request");
+            request
+                .respond(Response::from_string(r#"{"id":"chatcmpl_probe"}"#))
+                .expect("respond chat completions");
+        });
+
+        let mut api = aggregate_api_with_action(None);
+        api.provider_type = "codex".to_string();
+        api.supplier_name = Some("DeepSeek".to_string());
+        api.url = base_url;
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("build client");
+
+        let status = probe_codex_endpoint(&client, None, &api, "secret").expect("probe succeeds");
+
+        assert_eq!(status, 200);
+        let first = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("first captured request");
+        let second = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("second captured request");
+        join.join().expect("join mock server");
+        assert_eq!(first.0, "GET");
+        assert!(first.1.starts_with("/models"));
+        assert_eq!(second.0, "POST");
+        assert_eq!(second.1, "/chat/completions");
+        let second_body: Value =
+            serde_json::from_str(second.2.as_deref().expect("second body")).expect("parse body");
+        assert_eq!(second_body["model"], DEEPSEEK_DEFAULT_PROBE_MODEL);
+    }
+
+    #[test]
+    fn codex_probe_uses_aggregate_source_model_before_discovery() {
+        let server = Server::http("127.0.0.1:0").expect("start mock server");
+        let base_url = format!("http://{}/v1", server.server_addr());
+        let (tx, rx) = mpsc::channel();
+        let join = thread::spawn(move || {
+            let mut request = server
+                .recv_timeout(Duration::from_secs(2))
+                .expect("receive chat completions request")
+                .expect("chat completions request present");
+            let mut body = String::new();
+            request
+                .as_reader()
+                .read_to_string(&mut body)
+                .expect("read request body");
+            tx.send((request.method().as_str().to_string(), request.url().to_string(), body))
+                .expect("send chat completions request");
+            request
+                .respond(Response::from_string(r#"{"id":"chatcmpl_probe"}"#))
+                .expect("respond chat completions");
+        });
+
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+        storage
+            .upsert_model_source_model(&ModelSourceModel {
+                source_kind: "aggregate_api".to_string(),
+                source_id: "agg-test".to_string(),
+                upstream_model: "provider-owned-model".to_string(),
+                display_name: Some("Provider Owned Model".to_string()),
+                status: "available".to_string(),
+                discovery_kind: "manual".to_string(),
+                last_synced_at: None,
+                extra_json: "{}".to_string(),
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("seed source model");
+        let mut api = aggregate_api_with_action(None);
+        api.provider_type = "codex".to_string();
+        api.url = base_url;
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("build client");
+
+        let status =
+            probe_codex_endpoint(&client, Some(&storage), &api, "secret").expect("probe succeeds");
 
         assert_eq!(status, 200);
         let captured = rx
@@ -906,7 +1086,7 @@ mod tests {
         assert_eq!(captured.0, "POST");
         assert_eq!(captured.1, "/v1/chat/completions");
         let body: Value = serde_json::from_str(captured.2.as_str()).expect("parse body");
-        assert_eq!(body["model"], "qwen3.5-plus");
+        assert_eq!(body["model"], "provider-owned-model");
     }
 
     #[test]
@@ -973,7 +1153,7 @@ mod tests {
         assert_eq!(first.0, "GET");
         assert_eq!(first.1, "/v1/models");
         assert_eq!(second.0, "POST");
-        assert_eq!(second.1, "/v1/messages?beta=true");
+        assert_eq!(second.1, "/");
         let second_body: Value =
             serde_json::from_str(second.2.as_deref().expect("second body")).expect("parse body");
         assert_eq!(second_body["model"], "provider-model");
@@ -1041,8 +1221,8 @@ mod tests {
             .expect("second captured request");
         join.join().expect("join mock server");
         assert_eq!(models_request.0, "/apps/anthropic/v1/models");
-        assert_eq!(first.0, "/apps/anthropic/v1/messages?beta=true");
-        assert_eq!(second.0, "/apps/anthropic/v1/messages?beta=true");
+        assert_eq!(first.0, "/apps/anthropic");
+        assert_eq!(second.0, "/apps/anthropic");
         let first_body: Value = serde_json::from_str(first.1.as_str()).expect("parse first body");
         let second_body: Value =
             serde_json::from_str(second.1.as_str()).expect("parse second body");
@@ -1059,9 +1239,25 @@ fn serialize_userpass_secret(username: &str, password: &str) -> Result<String, S
     serde_json::to_string(&secret).map_err(|_| "invalid username/password".to_string())
 }
 
-fn action_path_or_default(api: &AggregateApi, default: &str) -> String {
+fn action_path_or_default(api: &AggregateApi, _default: &str) -> String {
     match api.action.as_deref().map(str::trim) {
         Some("") => String::new(),
+        Some(value) if is_raw_action_marker(value) => String::new(),
+        Some(value) => {
+            if value.starts_with('/') {
+                value.to_string()
+            } else {
+                format!("/{value}")
+            }
+        }
+        None => String::new(),
+    }
+}
+
+fn codex_action_path_or_default(api: &AggregateApi, default: &str) -> String {
+    match api.action.as_deref().map(str::trim) {
+        Some("") => String::new(),
+        Some(value) if is_raw_action_marker(value) => String::new(),
         Some(value) => {
             if value.starts_with('/') {
                 value.to_string()
@@ -1267,6 +1463,32 @@ fn normalize_probe_url(base_url: &str, suffix: &str) -> String {
     }
 }
 
+fn normalize_codex_probe_url(base_url: &str, suffix: &str) -> String {
+    let base = base_url.trim().trim_end_matches('/');
+    let suffix = suffix.trim();
+    if suffix.is_empty() {
+        return base.to_string();
+    }
+    if let Ok(mut url) = reqwest::Url::parse(base) {
+        let (path_part, query_part) = suffix
+            .split_once('?')
+            .map_or((suffix, None), |(path, query)| (path, Some(query)));
+        let suffix_path = path_part.trim_start_matches('/');
+        let base_path = url.path().trim_end_matches('/');
+        let combined_path = if base_path.is_empty() || base_path == "/" {
+            format!("/{suffix_path}")
+        } else if suffix_path.is_empty() {
+            base_path.to_string()
+        } else {
+            format!("{base_path}/{suffix_path}")
+        };
+        url.set_path(combined_path.as_str());
+        url.set_query(query_part.filter(|query| !query.trim().is_empty()));
+        return url.to_string();
+    }
+    format!("{base}/{}", suffix.trim_start_matches('/'))
+}
+
 /// 函数 `read_first_chunk`
 ///
 /// 作者: gaohongshun
@@ -1460,6 +1682,20 @@ fn first_string(value: &serde_json::Value, paths: &[&[&str]]) -> Option<String> 
         .find_map(|path| json_string(json_path(value, path)))
 }
 
+fn first_balance_info(value: &serde_json::Value) -> Option<&serde_json::Value> {
+    value
+        .get("balance_infos")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|items| items.first())
+        .or_else(|| {
+            value
+                .get("data")
+                .and_then(|data| data.get("balance_infos"))
+                .and_then(serde_json::Value::as_array)
+                .and_then(|items| items.first())
+        })
+}
+
 fn custom_number(value: &serde_json::Value, path: Option<&str>, multiplier: f64) -> Option<f64> {
     path.and_then(|path| json_number(json_path_dot(value, path)))
         .map(|value| value * multiplier)
@@ -1486,6 +1722,10 @@ fn extract_generic_balance(
         .or_else(|| json_bool(json_path(value, &["data", "isValid"])))
         .or_else(|| json_bool(json_path(value, &["data", "is_valid"])))
         .unwrap_or(true);
+    let is_available = json_bool(json_path(value, &["is_available"]))
+        .or_else(|| json_bool(json_path(value, &["data", "is_available"])))
+        .unwrap_or(true);
+    let balance_info = first_balance_info(value);
     let status = first_string(value, &[&["status"], &["data", "status"]]);
     let status_valid = status
         .as_deref()
@@ -1507,7 +1747,7 @@ fn extract_generic_balance(
             &["data", "error"],
         ],
     );
-    let is_valid = success && is_active && status_valid;
+    let is_valid = success && is_active && is_available && status_valid;
     let remaining = first_number(
         value,
         &[
@@ -1521,7 +1761,10 @@ fn extract_generic_balance(
             &["data", "quota", "remaining"],
             &["credits", "balance"],
         ],
-    );
+    )
+    .or_else(|| json_number(balance_info.and_then(|info| info.get("total_balance"))))
+    .or_else(|| json_number(balance_info.and_then(|info| info.get("remaining"))))
+    .or_else(|| json_number(balance_info.and_then(|info| info.get("balance"))));
     if is_valid && remaining.is_none() {
         return Err("balance response missing remaining field".to_string());
     }
@@ -1538,6 +1781,7 @@ fn extract_generic_balance(
                 &["data", "currency"],
             ],
         )
+        .or_else(|| json_string(balance_info.and_then(|info| info.get("currency"))))
         .or_else(|| Some("USD".to_string())),
         plan_name: first_string(
             value,
@@ -1559,7 +1803,8 @@ fn extract_generic_balance(
                 &["data", "total"],
                 &["data", "quota", "limit"],
             ],
-        ),
+        )
+        .or_else(|| json_number(balance_info.and_then(|info| info.get("total")))),
         used: first_number(
             value,
             &[
@@ -1570,7 +1815,8 @@ fn extract_generic_balance(
                 &["data", "used_quota"],
                 &["data", "quota", "used"],
             ],
-        ),
+        )
+        .or_else(|| json_number(balance_info.and_then(|info| info.get("used")))),
         extra: None,
     })
 }
@@ -1869,6 +2115,53 @@ fn probe_codex_only_for_provider(provider_type: &str) -> bool {
     )
 }
 
+fn aggregate_url_path(url: &str) -> Option<String> {
+    reqwest::Url::parse(url).ok().map(|url| url.path().to_string())
+}
+
+fn aggregate_url_looks_like_openai_chat_base(url: &str) -> bool {
+    let Some(path) = aggregate_url_path(url) else {
+        return false;
+    };
+    let normalized = path.trim().trim_end_matches('/').to_ascii_lowercase();
+    normalized.is_empty() || normalized == "/" || normalized.ends_with("/v1")
+}
+
+fn aggregate_api_text(api: &AggregateApi) -> String {
+    format!(
+        "{} {}",
+        api.supplier_name.as_deref().unwrap_or_default(),
+        api.url.as_str()
+    )
+    .to_ascii_lowercase()
+}
+
+fn is_deepseek_aggregate_api(api: &AggregateApi) -> bool {
+    let text = aggregate_api_text(api);
+    text.contains("deepseek") || text.contains("api.deepseek.com")
+}
+
+fn codex_probe_default_model(api: &AggregateApi) -> &'static str {
+    if is_deepseek_aggregate_api(api) {
+        DEEPSEEK_DEFAULT_PROBE_MODEL
+    } else {
+        "gpt-4o-mini"
+    }
+}
+
+fn codex_probe_default_response_path(api: &AggregateApi, action_hint: &str) -> &'static str {
+    if action_hint.contains("chat/completions") {
+        return "/chat/completions";
+    }
+    if action_hint.contains("responses") {
+        return "/responses";
+    }
+    if aggregate_url_looks_like_openai_chat_base(api.url.as_str()) {
+        return "/chat/completions";
+    }
+    "/responses"
+}
+
 fn is_alibaba_claude_compat_url(url: &str) -> bool {
     let normalized = url.trim().to_ascii_lowercase();
     normalized.contains("dashscope.aliyuncs.com/apps/anthropic")
@@ -2033,49 +2326,9 @@ fn add_codex_probe_headers(
 }
 
 fn build_codex_models_probe_url(api: &AggregateApi) -> String {
-    let probe_path = action_path_or_default(api, "/models");
-    let url = normalize_probe_url(api.url.as_str(), probe_path.as_str());
+    let probe_path = codex_action_path_or_default(api, "/models");
+    let url = normalize_codex_probe_url(api.url.as_str(), probe_path.as_str());
     append_client_version_query(url.as_str())
-}
-
-/// 函数 `probe_codex_models_endpoint`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - client: 参数 client
-/// - base_url: 参数 base_url
-/// - secret: 参数 secret
-///
-/// # 返回
-/// 返回函数执行结果
-fn probe_codex_models_endpoint(
-    client: &reqwest::blocking::Client,
-    api: &AggregateApi,
-    secret: &str,
-) -> Result<i64, String> {
-    let url = build_codex_models_probe_url(api);
-    let builder = client.get(url.as_str());
-    let (builder, updated_url) = apply_probe_auth(builder, url.clone(), api, secret)?;
-    let builder = if updated_url != url {
-        let rebuilt = client.get(updated_url.as_str());
-        let (rebuilt, _) = apply_probe_auth(rebuilt, updated_url, api, secret)?;
-        rebuilt
-    } else {
-        builder
-    };
-    let response = add_codex_probe_headers(builder)?
-        .send()
-        .map_err(|err| err.to_string())?;
-
-    let status_code = response.status().as_u16() as i64;
-    if !response.status().is_success() {
-        return Err(format!("codex models probe http_status={status_code}"));
-    }
-    read_first_chunk(response)?;
-    Ok(status_code)
 }
 
 fn discover_codex_models_endpoint(
@@ -2108,6 +2361,92 @@ fn discover_codex_models_endpoint(
     Ok(models)
 }
 
+fn codex_source_models_for_api(storage: Option<&Storage>, api: &AggregateApi) -> Vec<String> {
+    let Some(storage) = storage else {
+        return Vec::new();
+    };
+    match storage.list_model_source_models(Some(AGGREGATE_API_MODEL_SOURCE_KIND), Some(&api.id)) {
+        Ok(models) => models
+            .into_iter()
+            .filter(|model| model.status == "available")
+            .map(|model| model.upstream_model)
+            .collect(),
+        Err(err) => {
+            log::warn!(
+                "event=aggregate_api_probe_source_models_failed api_id={} error={}",
+                api.id,
+                err
+            );
+            Vec::new()
+        }
+    }
+}
+
+fn codex_probe_models_for_api(
+    storage: Option<&Storage>,
+    client: &reqwest::blocking::Client,
+    api: &AggregateApi,
+    secret: &str,
+) -> (Vec<String>, Option<String>) {
+    let mut models = Vec::new();
+    if let Some(model_override) = api
+        .model_override
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        push_unique_model(&mut models, model_override);
+        return (models, None);
+    }
+
+    for model in codex_source_models_for_api(storage, api) {
+        if models.len() >= MAX_CODEX_PROBE_MODELS {
+            break;
+        }
+        push_unique_model(&mut models, model.as_str());
+    }
+    if !models.is_empty() {
+        if models.len() < MAX_CODEX_PROBE_MODELS {
+            push_unique_model(&mut models, codex_probe_default_model(api));
+        }
+        return (models, None);
+    }
+
+    let discovery_error = match discover_codex_models_endpoint(client, api, secret) {
+        Ok(discovered) => {
+            for model in discovered {
+                if models.len() >= MAX_CODEX_PROBE_MODELS {
+                    break;
+                }
+                push_unique_model(&mut models, model.as_str());
+            }
+            None
+        }
+        Err(err) => Some(err),
+    };
+
+    if models.len() < MAX_CODEX_PROBE_MODELS {
+        push_unique_model(&mut models, codex_probe_default_model(api));
+    }
+    (models, discovery_error)
+}
+
+fn build_codex_probe_body_for_path(probe_path: &str, probe_model: &str) -> serde_json::Value {
+    if probe_path.to_ascii_lowercase().contains("chat/completions") {
+        json!({
+            "model": probe_model,
+            "messages": [{"role":"user","content":"hi"}],
+            "stream": false
+        })
+    } else {
+        let mut body = build_codex_probe_body();
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("model".to_string(), json!(probe_model));
+        }
+        body
+    }
+}
+
 /// 函数 `probe_codex_responses_endpoint`
 ///
 /// 作者: gaohongshun
@@ -2125,22 +2464,17 @@ fn probe_codex_responses_endpoint(
     client: &reqwest::blocking::Client,
     api: &AggregateApi,
     secret: &str,
+    probe_model: &str,
 ) -> Result<i64, String> {
     let action_hint = api
         .action
         .as_deref()
         .map(str::trim)
-        .unwrap_or("/responses")
+        .unwrap_or_default()
         .to_ascii_lowercase();
-    let default_path = if action_hint.contains("chat/completions") {
-        "/chat/completions"
-    } else if action_hint.contains("responses") {
-        "/responses"
-    } else {
-        "/responses"
-    };
-    let probe_path = action_path_or_default(api, default_path);
-    let url = normalize_probe_url(api.url.as_str(), probe_path.as_str());
+    let default_path = codex_probe_default_response_path(api, action_hint.as_str());
+    let probe_path = codex_action_path_or_default(api, default_path);
+    let url = normalize_codex_probe_url(api.url.as_str(), probe_path.as_str());
     let builder = client.post(url.as_str());
     let (builder, updated_url) = apply_probe_auth(builder, url.clone(), api, secret)?;
     let builder = if updated_url != url {
@@ -2150,24 +2484,15 @@ fn probe_codex_responses_endpoint(
     } else {
         builder
     };
-    let request_body = if probe_path.to_ascii_lowercase().contains("chat/completions") {
-        json!({
-            "model": api.model_override.as_deref().unwrap_or("gpt-4o-mini"),
-            "messages": [{"role":"user","content":"hi"}],
-            "stream": false
-        })
-    } else if let Some(model_override) = api.model_override.as_deref() {
-        let mut body = build_codex_probe_body();
-        if let Some(obj) = body.as_object_mut() {
-            obj.insert("model".to_string(), json!(model_override));
-        }
-        body
+    let request_body = build_codex_probe_body_for_path(probe_path.as_str(), probe_model);
+    let accept = if probe_path.to_ascii_lowercase().contains("chat/completions") {
+        "application/json"
     } else {
-        build_codex_probe_body()
+        "text/event-stream"
     };
     let response = add_codex_probe_headers(builder)?
         .header("content-type", "application/json")
-        .header("accept", "text/event-stream")
+        .header("accept", accept)
         .json(&request_body)
         .send()
         .map_err(|err| err.to_string())?;
@@ -2195,34 +2520,26 @@ fn probe_codex_responses_endpoint(
 /// 返回函数执行结果
 fn probe_codex_endpoint(
     client: &reqwest::blocking::Client,
+    storage: Option<&Storage>,
     api: &AggregateApi,
     secret: &str,
 ) -> Result<i64, String> {
-    let has_model_override = api
-        .model_override
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
-    if has_model_override {
-        return probe_codex_responses_endpoint(client, api, secret);
+    let (models, discovery_error) = codex_probe_models_for_api(storage, client, api, secret);
+    let mut errors = Vec::new();
+    if let Some(err) = discovery_error {
+        errors.push(err);
     }
-
-    let models_result = probe_codex_models_endpoint(client, api, secret);
-    if let Ok(code) = models_result {
-        return Ok(code);
+    for model in models {
+        match probe_codex_responses_endpoint(client, api, secret, model.as_str()) {
+            Ok(code) => return Ok(code),
+            Err(err) => errors.push(format!("model={model}; {err}")),
+        }
     }
-    let models_err = models_result
-        .err()
-        .unwrap_or_else(|| "codex models probe failed".to_string());
-    let responses_result = probe_codex_responses_endpoint(client, api, secret);
-    if let Ok(code) = responses_result {
-        return Ok(code);
+    if errors.is_empty() {
+        Err("codex probe has no candidate model".to_string())
+    } else {
+        Err(errors.join("; "))
     }
-
-    let responses_err = responses_result
-        .err()
-        .unwrap_or_else(|| "codex responses probe failed".to_string());
-    Err(format!("{models_err}; {responses_err}"))
 }
 
 /// 函数 `probe_claude_endpoint`
@@ -3035,9 +3352,9 @@ pub(crate) fn test_aggregate_api_connection(
         AGGREGATE_API_PROVIDER_CLAUDE => probe_claude_endpoint(&client, &api, &secret),
         AGGREGATE_API_PROVIDER_GEMINI => probe_gemini_endpoint(&client, &api, &secret),
         _ if probe_codex_only_for_provider(provider_type.as_str()) => {
-            probe_codex_endpoint(&client, &api, &secret)
+            probe_codex_endpoint(&client, Some(&storage), &api, &secret)
         }
-        _ => probe_codex_endpoint(&client, &api, &secret),
+        _ => probe_codex_endpoint(&client, Some(&storage), &api, &secret),
     };
     let (ok, status_code, last_error) = match result {
         Ok(code) => (true, Some(code), None),

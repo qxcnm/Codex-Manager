@@ -11,6 +11,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,6 +26,7 @@ import {
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
 import { accountClient } from "@/lib/api/account-client";
 import { appClient } from "@/lib/api/app-client";
+import { serviceClient } from "@/lib/api/service-client";
 import { useAppStore } from "@/lib/store/useAppStore";
 import { useI18n } from "@/lib/i18n/provider";
 import { copyTextToClipboard } from "@/lib/utils/clipboard";
@@ -42,7 +44,7 @@ import {
 import { toast } from "sonner";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { Key, Clipboard, ShieldCheck, Info } from "lucide-react";
-import type { ApiKey, ApiKeyOwner, AppUser } from "@/types";
+import type { Account, AggregateApi, ApiKey, ApiKeyOwner, AppUser } from "@/types";
 
 const PROTOCOL_LABELS: Record<string, string> = {
   openai_compat: "通配兼容 (Codex / Claude Code / Gemini CLI)",
@@ -86,6 +88,42 @@ const ACCOUNT_PLAN_FILTER_LABELS: Record<string, string> = {
   edu: "Edu",
   unknown: "未知计划",
 };
+
+const ROTATION_ACCOUNT = "account_rotation";
+const ROTATION_AGGREGATE_API = "aggregate_api_rotation";
+const ROTATION_HYBRID = "hybrid_rotation";
+const SOURCE_KIND_OPENAI_ACCOUNT = "openai_account";
+const ALL_AGGREGATE_APIS_VALUE = "__all__";
+
+function normalizePlanKey(value?: string | null): string {
+  return String(value || "").trim().toLowerCase() || "unknown";
+}
+
+function accountMatchesPlanFilter(account: Account, planFilter: string): boolean {
+  const normalizedFilter = normalizePlanKey(planFilter);
+  if (!normalizedFilter || normalizedFilter === "all") return true;
+  return normalizePlanKey(account.planType) === normalizedFilter;
+}
+
+function isActiveAggregateApi(api: AggregateApi): boolean {
+  return String(api.status || "").trim().toLowerCase() === "active";
+}
+
+function aggregateApiDisplayName(api: AggregateApi): string {
+  const name = String(api.supplierName || "").trim();
+  return name ? `${name} (${api.url})` : api.url;
+}
+
+function buildCodexManagerGatewayBaseUrl(addr?: string | null): string {
+  const normalized = String(addr || "localhost:48760").trim() || "localhost:48760";
+  const withScheme = /^https?:\/\//i.test(normalized)
+    ? normalized
+    : `http://${normalized}`;
+  const withoutTrailingSlash = withScheme.replace(/\/+$/, "");
+  return withoutTrailingSlash.endsWith("/v1")
+    ? withoutTrailingSlash
+    : `${withoutTrailingSlash}/v1`;
+}
 
 interface ApiKeyModalProps {
   open: boolean;
@@ -134,13 +172,14 @@ export function ApiKeyModal({
 }: ApiKeyModalProps) {
   const { t } = useI18n();
   const serviceStatus = useAppStore((state) => state.serviceStatus);
-  const { canAccessManagementRpc } = useRuntimeCapabilities();
+  const { canAccessManagementRpc, isDesktopRuntime } = useRuntimeCapabilities();
   const [name, setName] = useState("");
   const [protocolType, setProtocolType] = useState("openai_compat");
   const [modelSlug, setModelSlug] = useState("");
   const [reasoningEffort, setReasoningEffort] = useState("");
   const [serviceTier, setServiceTier] = useState("");
-  const [rotationStrategy, setRotationStrategy] = useState("account_rotation");
+  const [rotationStrategy, setRotationStrategy] = useState(ROTATION_ACCOUNT);
+  const [aggregateApiId, setAggregateApiId] = useState("");
   const [accountPlanFilter, setAccountPlanFilter] = useState("all");
   const [quotaLimitValue, setQuotaLimitValue] = useState("");
   const [quotaLimitUnit, setQuotaLimitUnit] = useState<QuotaLimitUnit>("k");
@@ -148,14 +187,19 @@ export function ApiKeyModal({
   const [customKey, setCustomKey] = useState("");
   const [ownerUserId, setOwnerUserId] = useState("");
   const [generatedKey, setGeneratedKey] = useState("");
+  const [syncCodexProviderConfig, setSyncCodexProviderConfig] = useState(false);
 
   const [isLoading, setIsLoading] = useState(false);
   const queryClient = useQueryClient();
   const isServiceReady = canAccessManagementRpc && serviceStatus.connected;
   const memberOwnershipEnabled = isAdminMode && showMemberOwnership;
   const usesAccountPlanFilter =
-    rotationStrategy === "account_rotation" ||
-    rotationStrategy === "hybrid_rotation";
+    rotationStrategy === ROTATION_ACCOUNT ||
+    rotationStrategy === ROTATION_HYBRID;
+  const usesAggregateRouting =
+    rotationStrategy === ROTATION_AGGREGATE_API ||
+    rotationStrategy === ROTATION_HYBRID;
+  const usesAggregateApiSelector = rotationStrategy === ROTATION_AGGREGATE_API;
   const billableUsers = useMemo(
     () => appUsers.filter((user) => userCanOwnApiKey(user)),
     [appUsers],
@@ -184,15 +228,140 @@ export function ApiKeyModal({
     enabled: open && isServiceReady,
   });
 
+  const { data: aggregateApis } = useQuery({
+    queryKey: ["aggregate-apis"],
+    queryFn: () => accountClient.listAggregateApis(),
+    enabled: open && isServiceReady && isAdminMode && usesAggregateRouting,
+  });
+
+  const { data: accountList } = useQuery({
+    queryKey: ["accounts", "api-key-modal"],
+    queryFn: () => accountClient.list(),
+    enabled: open && isServiceReady && isAdminMode && usesAccountPlanFilter,
+  });
+
+  const { data: modelRouting } = useQuery({
+    queryKey: ["model-routing"],
+    queryFn: () => accountClient.listManagedModelRouting(),
+    enabled: open && isServiceReady && isAdminMode,
+  });
+
   const selectedModelInfo = useMemo(
     () => findBestMatchingModel(models?.models || [], modelSlug),
     [modelSlug, models?.models],
   );
 
+  const aggregateApiItems = aggregateApis || [];
+  const activeAggregateApis = useMemo(
+    () => aggregateApiItems.filter(isActiveAggregateApi),
+    [aggregateApiItems],
+  );
+  const aggregateApiSelectItems = useMemo(() => {
+    const selectedId = String(aggregateApiId || "").trim();
+    if (!selectedId) return activeAggregateApis;
+    const selected = aggregateApiItems.find((api) => api.id === selectedId);
+    if (!selected || activeAggregateApis.some((api) => api.id === selectedId)) {
+      return activeAggregateApis;
+    }
+    return [selected, ...activeAggregateApis];
+  }, [activeAggregateApis, aggregateApiId, aggregateApiItems]);
+
+  const eligibleAccountIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const account of accountList?.items || []) {
+      if (
+        String(account.status || "").trim().toLowerCase() === "active" &&
+        account.hasToken &&
+        accountMatchesPlanFilter(account, accountPlanFilter)
+      ) {
+        ids.add(account.id);
+      }
+    }
+    return ids;
+  }, [accountList?.items, accountPlanFilter]);
+
+  const aggregateSourceIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (!usesAggregateRouting) return ids;
+    const selectedId = String(aggregateApiId || "").trim();
+    if (usesAggregateApiSelector && selectedId) {
+      ids.add(selectedId);
+      return ids;
+    }
+    for (const api of activeAggregateApis) {
+      ids.add(api.id);
+    }
+    return ids;
+  }, [
+    activeAggregateApis,
+    aggregateApiId,
+    usesAggregateApiSelector,
+    usesAggregateRouting,
+  ]);
+
+  const routeSupportedModelSlugs = useMemo(() => {
+    if (!isAdminMode) return null;
+    if (usesAccountPlanFilter && !modelRouting) return null;
+    const slugs = new Set<string>();
+    const hasAccountList = Boolean(accountList);
+    const hasAggregateApiList = Boolean(aggregateApis);
+
+    if (usesAccountPlanFilter) {
+      for (const mapping of modelRouting?.mappings || []) {
+        if (!mapping.enabled || mapping.sourceKind !== SOURCE_KIND_OPENAI_ACCOUNT) {
+          continue;
+        }
+        if (!hasAccountList || eligibleAccountIds.has(mapping.sourceId)) {
+          slugs.add(mapping.platformModelSlug);
+        }
+      }
+      if (hasAccountList) {
+        for (const account of accountList?.items || []) {
+          if (!eligibleAccountIds.has(account.id)) continue;
+          for (const slug of account.modelSlugs || []) {
+            const normalized = String(slug || "").trim();
+            if (normalized) slugs.add(normalized);
+          }
+        }
+      }
+    }
+
+    if (usesAggregateRouting) {
+      if (hasAggregateApiList) {
+        for (const api of aggregateApiItems) {
+          if (!aggregateSourceIds.has(api.id)) continue;
+          for (const slug of api.modelSlugs || []) {
+            const normalized = String(slug || "").trim();
+            if (normalized) slugs.add(normalized);
+          }
+        }
+      }
+    }
+
+    return slugs;
+  }, [
+    accountList,
+    aggregateApiItems,
+    aggregateApis,
+    aggregateSourceIds,
+    eligibleAccountIds,
+    isAdminMode,
+    modelRouting,
+    usesAccountPlanFilter,
+    usesAggregateRouting,
+  ]);
+
   const visibleModels = useMemo(() => {
     const catalog = models?.models || [];
     const selectedSlug = String(modelSlug || "").trim();
     const baseModels = catalog.filter((model) => {
+      if (
+        routeSupportedModelSlugs &&
+        !routeSupportedModelSlugs.has(model.slug) &&
+        model.slug !== selectedSlug
+      ) {
+        return false;
+      }
       if (model.supportedInApi) {
         return true;
       }
@@ -209,7 +378,7 @@ export function ApiKeyModal({
       ];
     }
     return baseModels;
-  }, [modelSlug, models?.models, selectedModelInfo]);
+  }, [modelSlug, models?.models, routeSupportedModelSlugs, selectedModelInfo]);
 
   const modelLabelMap = Object.fromEntries(
     visibleModels.map((model) => [model.slug, model.displayName || model.slug]),
@@ -230,7 +399,8 @@ export function ApiKeyModal({
       setModelSlug("");
       setReasoningEffort("");
       setServiceTier("");
-      setRotationStrategy("account_rotation");
+      setRotationStrategy(ROTATION_ACCOUNT);
+      setAggregateApiId("");
       setAccountPlanFilter("all");
       setQuotaLimitValue("");
       setQuotaLimitUnit("k");
@@ -240,6 +410,7 @@ export function ApiKeyModal({
         memberOwnershipEnabled && distributionEnabled ? billableUsers[0]?.id || "" : "",
       );
       setGeneratedKey("");
+      setSyncCodexProviderConfig(false);
       return;
     }
 
@@ -248,7 +419,8 @@ export function ApiKeyModal({
     setModelSlug(apiKey.modelSlug || "");
     setReasoningEffort(apiKey.reasoningEffort || "");
     setServiceTier(normalizeEditableServiceTier(apiKey.serviceTier));
-    setRotationStrategy(apiKey.rotationStrategy || "account_rotation");
+    setRotationStrategy(apiKey.rotationStrategy || ROTATION_ACCOUNT);
+    setAggregateApiId(apiKey.aggregateApiId || "");
     setAccountPlanFilter(apiKey.accountPlanFilter || "all");
     const resolvedQuotaUnit = resolveQuotaLimitUnit(apiKey.quotaLimitTokens);
     setQuotaLimitUnit(resolvedQuotaUnit);
@@ -258,6 +430,7 @@ export function ApiKeyModal({
     setGeneratedKey("");
     setCustomKey("");
     setUpstreamBaseUrl(apiKey.upstreamBaseUrl || "");
+    setSyncCodexProviderConfig(false);
     setOwnerUserId(
       memberOwnershipEnabled && apiKeyOwner?.ownerKind === "user"
         ? apiKeyOwner.ownerUserId || ""
@@ -268,9 +441,16 @@ export function ApiKeyModal({
     apiKeyOwner,
     billableUsers,
     distributionEnabled,
+    isDesktopRuntime,
     memberOwnershipEnabled,
     open,
   ]);
+
+  useEffect(() => {
+    if (!usesAggregateApiSelector && aggregateApiId) {
+      setAggregateApiId("");
+    }
+  }, [aggregateApiId, usesAggregateApiSelector]);
 
   const handleQuotaLimitUnitChange = (unit: QuotaLimitUnit) => {
     const currentTokens = parseQuotaLimitTokens(quotaLimitValue, quotaLimitUnit);
@@ -323,7 +503,11 @@ export function ApiKeyModal({
         protocolType,
         upstreamBaseUrl: upstreamBaseUrl || null,
         staticHeadersJson: null,
-        rotationStrategy: isAdminMode ? rotationStrategy : "account_rotation",
+        rotationStrategy: isAdminMode ? rotationStrategy : ROTATION_ACCOUNT,
+        aggregateApiId:
+          isAdminMode && usesAggregateApiSelector && aggregateApiId
+            ? aggregateApiId
+            : null,
         accountPlanFilter:
           isAdminMode && usesAccountPlanFilter && accountPlanFilter !== "all"
             ? accountPlanFilter
@@ -351,6 +535,16 @@ export function ApiKeyModal({
           projectId: null,
         });
         await onOwnerSaved?.();
+      }
+
+      if (isDesktopRuntime && syncCodexProviderConfig) {
+        await serviceClient.syncCodexProviderConfig({
+          baseUrl: buildCodexManagerGatewayBaseUrl(serviceStatus.addr),
+          providerId: "codexmanager",
+          providerName: "CodexManager Local",
+          envKey: "CODEXMANAGER_API_KEY",
+        });
+        toast.success(t("已更新本机 Codex CLI custom provider 配置"));
       }
 
       await Promise.all([
@@ -529,42 +723,87 @@ export function ApiKeyModal({
             </div>
           ) : null}
 
+          {isAdminMode && usesAggregateApiSelector ? (
+            <div className="grid gap-2">
+              <Label>{t("聚合 API 来源")}</Label>
+              <Select
+                value={aggregateApiId || ALL_AGGREGATE_APIS_VALUE}
+                onValueChange={(val) =>
+                  setAggregateApiId(
+                    val === ALL_AGGREGATE_APIS_VALUE ? "" : String(val || ""),
+                  )
+                }
+                disabled={!isServiceReady}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue>
+                    {(value) => {
+                      const selectedId = String(value || "");
+                      if (!selectedId || selectedId === ALL_AGGREGATE_APIS_VALUE) {
+                        return t("全部启用聚合 API");
+                      }
+                      const selected = aggregateApiSelectItems.find(
+                        (api) => api.id === selectedId,
+                      );
+                      return selected ? aggregateApiDisplayName(selected) : selectedId;
+                    }}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent align="start">
+                  <SelectGroup>
+                    <SelectItem value={ALL_AGGREGATE_APIS_VALUE}>
+                      {t("全部启用聚合 API")}
+                    </SelectItem>
+                    {aggregateApiSelectItems.map((api) => (
+                      <SelectItem key={api.id} value={api.id}>
+                        {aggregateApiDisplayName(api)}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">
+                {t("选择具体来源后，这把平台密钥只使用该聚合 API，模型列表也只显示该来源可路由模型。")}
+              </p>
+            </div>
+          ) : null}
+
           {memberOwnershipEnabled ? (
-          <div className="grid gap-2">
-            <Label>{t("归属成员")}</Label>
-            <Select
-              value={ownerUserId || "__none__"}
-              onValueChange={(val) =>
-                setOwnerUserId(val === "__none__" ? "" : String(val || ""))
-              }
-              disabled={!isServiceReady || billableUsers.length === 0}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder={t("选择可分发成员")}>
-                  {(value) => {
-                    const id = String(value || "");
-                    if (!id || id === "__none__") return t("未分配");
-                    return appUserLabel(billableUsersById.get(id));
-                  }}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent align="start">
-                    <SelectGroup>
-                <SelectItem value="__none__">{t("未分配")}</SelectItem>
-                {billableUsers.map((user) => (
-                  <SelectItem key={user.id} value={user.id}>
-                    {appUserLabel(user)}
-                  </SelectItem>
-                ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <p className="text-[11px] text-muted-foreground">
-              {distributionEnabled
-                ? t("额度分发开启时，平台 Key 必须归属到一个成员钱包。")
-                : t("未开启额度分发时可先不分配，开启后再补齐归属。")}
-            </p>
-          </div>
+            <div className="grid gap-2">
+              <Label>{t("归属成员")}</Label>
+              <Select
+                value={ownerUserId || "__none__"}
+                onValueChange={(val) =>
+                  setOwnerUserId(val === "__none__" ? "" : String(val || ""))
+                }
+                disabled={!isServiceReady || billableUsers.length === 0}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder={t("选择可分发成员")}>
+                    {(value) => {
+                      const id = String(value || "");
+                      if (!id || id === "__none__") return t("未分配");
+                      return appUserLabel(billableUsersById.get(id));
+                    }}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent align="start">
+                  <SelectGroup>
+                    <SelectItem value="__none__">{t("未分配")}</SelectItem>
+                    {billableUsers.map((user) => (
+                      <SelectItem key={user.id} value={user.id}>
+                        {appUserLabel(user)}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">
+                {distributionEnabled
+                  ? t("额度分发开启时，平台 Key 必须归属到一个成员钱包。")
+                  : t("未开启额度分发时可先不分配，开启后再补齐归属。")}
+              </p>
+            </div>
           ) : null}
 
           <div className="grid gap-2">
@@ -592,9 +831,9 @@ export function ApiKeyModal({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent align="end">
-                    <SelectGroup>
-                  <SelectItem value="k">{t("K")}</SelectItem>
-                  <SelectItem value="m">{t("M")}</SelectItem>
+                  <SelectGroup>
+                    <SelectItem value="k">{t("K")}</SelectItem>
+                    <SelectItem value="m">{t("M")}</SelectItem>
                   </SelectGroup>
                 </SelectContent>
               </Select>
@@ -740,6 +979,29 @@ export function ApiKeyModal({
               </p>
             </div>
           </div>
+
+          {isDesktopRuntime ? (
+            <div className="flex items-start gap-3 rounded-md border border-border/70 bg-muted/30 p-3">
+              <Checkbox
+                id="syncCodexProviderConfig"
+                checked={syncCodexProviderConfig}
+                disabled={!isServiceReady}
+                onCheckedChange={(checked) =>
+                  setSyncCodexProviderConfig(checked === true)
+                }
+              />
+              <div className="grid gap-1">
+                <Label htmlFor="syncCodexProviderConfig" className="text-sm">
+                  {t("同步本机 Codex CLI custom provider")}
+                </Label>
+                <p className="text-[11px] leading-5 text-muted-foreground">
+                  {t(
+                    "仅更新 `~/.codex/config.toml` 里的 `[model_providers.codexmanager]`，不会修改默认模型、model_provider、review_model，也不会写入 `auth.json`。",
+                  )}
+                </p>
+              </div>
+            </div>
+          ) : null}
 
           {generatedKey && (
             <div className="space-y-2 pt-4 border-t">

@@ -9,7 +9,6 @@ export const ROOT_PAGE_PATHS = [
   "/plugins",
   "/logs",
   "/settings",
-  "/author",
 ] as const;
 
 export type RootPagePath = (typeof ROOT_PAGE_PATHS)[number];

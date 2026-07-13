@@ -5,6 +5,7 @@ use codexmanager_core::{
         UsageSnapshotRecord,
     },
 };
+use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::account_plan::resolve_effective_account_plan;
@@ -315,6 +316,7 @@ fn to_account_summary_with_reason(
     model_slugs: Vec<String>,
     quota_capacity_primary_window_tokens: Option<i64>,
     quota_capacity_secondary_window_tokens: Option<i64>,
+    quota_reset_available_count: Option<i64>,
 ) -> AccountSummary {
     AccountSummary {
         id: acc.id,
@@ -336,7 +338,40 @@ fn to_account_summary_with_reason(
         model_slugs,
         quota_capacity_primary_window_tokens,
         quota_capacity_secondary_window_tokens,
+        quota_reset_available_count,
     }
+}
+
+fn value_to_non_negative_i64(value: &Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        .or_else(|| {
+            value
+                .as_f64()
+                .filter(|value| value.is_finite())
+                .map(|value| value.trunc() as i64)
+        })
+        .map(|value| value.max(0))
+}
+
+fn quota_reset_available_count_from_usage(usage: Option<&UsageSnapshotRecord>) -> Option<i64> {
+    let credits_json = usage?.credits_json.as_deref()?.trim();
+    if credits_json.is_empty() {
+        return None;
+    }
+    let value = serde_json::from_str::<Value>(credits_json).ok()?;
+    [
+        "/rate_limit_reset_credits/available_count",
+        "/rate_limit_reset_credits/availableCount",
+        "/rateLimitResetCredits/available_count",
+        "/rateLimitResetCredits/availableCount",
+        "/available_count",
+        "/availableCount",
+    ]
+    .into_iter()
+    .filter_map(|path| value.pointer(path))
+    .find_map(value_to_non_negative_i64)
 }
 
 /// 函数 `to_account_summaries`
@@ -467,6 +502,8 @@ fn map_account_summary(
         .cloned()
         .unwrap_or_default();
     let quota_override = quota_overrides.get(&account_id);
+    let quota_reset_available_count =
+        quota_reset_available_count_from_usage(usages.get(&account_id));
     let (fallback_plan_type, plan_type_raw) = match plan {
         Some(value) => (Some(value.normalized), value.raw),
         None => (None, None),
@@ -489,5 +526,6 @@ fn map_account_summary(
         model_slugs,
         quota_override.and_then(|value| value.primary_window_tokens),
         quota_override.and_then(|value| value.secondary_window_tokens),
+        quota_reset_available_count,
     )
 }

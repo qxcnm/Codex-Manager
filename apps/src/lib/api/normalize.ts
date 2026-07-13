@@ -407,6 +407,9 @@ export function normalizeAccount(item: unknown, usage?: AccountUsage | null): Ac
   const hasToken = typeof rawHasToken === "boolean" ? Boolean(rawHasToken) : true;
   const availability = calcAvailability(usage, { status, statusReason, hasToken });
   const usageBuckets = getUsageDisplayBuckets(usage);
+  const quotaResetAvailableCount = toNullableNumber(
+    source.quotaResetAvailableCount ?? source.quota_reset_available_count
+  );
 
   return {
     id,
@@ -447,6 +450,10 @@ export function normalizeAccount(item: unknown, usage?: AccountUsage | null): Ac
       source.quotaCapacitySecondaryWindowTokens ??
         source.quota_capacity_secondary_window_tokens
     ),
+    quotaResetAvailableCount:
+      quotaResetAvailableCount == null
+        ? null
+        : Math.max(0, Math.trunc(quotaResetAvailableCount)),
     isAvailable: availability.level === "ok",
     isLowQuota: isLowQuotaUsage(usage),
     lastRefreshAt: usage?.capturedAt ?? null,

@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 const EXTRA_RATE_LIMITS_JSON_KEY: &str = "_codexmanager_extra_rate_limits";
+const RATE_LIMIT_RESET_CREDITS_JSON_KEY: &str = "rate_limit_reset_credits";
 
 #[derive(Debug, Clone)]
 pub struct UsageSnapshot {
@@ -112,8 +113,12 @@ fn collect_extra_rate_limits(value: &Value) -> Vec<Value> {
 fn serialize_credits_payload(
     credits: Option<&Value>,
     extra_rate_limits: &[Value],
+    rate_limit_reset_credits: Option<&Value>,
 ) -> Option<String> {
-    if extra_rate_limits.is_empty() {
+    let has_reset_credits = rate_limit_reset_credits
+        .map(|value| !value.is_null())
+        .unwrap_or(false);
+    if extra_rate_limits.is_empty() && !has_reset_credits {
         return credits.and_then(|value| (!value.is_null()).then(|| value.to_string()));
     }
 
@@ -126,10 +131,15 @@ fn serialize_credits_payload(
         }
         _ => serde_json::Map::new(),
     };
-    payload.insert(
-        EXTRA_RATE_LIMITS_JSON_KEY.to_string(),
-        Value::Array(extra_rate_limits.to_vec()),
-    );
+    if !extra_rate_limits.is_empty() {
+        payload.insert(
+            EXTRA_RATE_LIMITS_JSON_KEY.to_string(),
+            Value::Array(extra_rate_limits.to_vec()),
+        );
+    }
+    if let Some(value) = rate_limit_reset_credits.filter(|value| !value.is_null()) {
+        payload.insert(RATE_LIMIT_RESET_CREDITS_JSON_KEY.to_string(), value.clone());
+    }
     Some(Value::Object(payload).to_string())
 }
 
@@ -171,6 +181,15 @@ pub fn usage_endpoint(base_url: &str) -> String {
         format!("{base}/wham/usage")
     } else {
         format!("{base}/api/codex/usage")
+    }
+}
+
+pub fn rate_limit_reset_endpoint(base_url: &str) -> String {
+    let base = normalize_base_url(base_url);
+    if base.contains("/backend-api") {
+        format!("{base}/wham/rate-limit-reset-credits/consume")
+    } else {
+        format!("{base}/api/codex/rate-limit-reset-credits/consume")
     }
 }
 
@@ -234,7 +253,14 @@ pub fn parse_usage_snapshot(value: &Value) -> UsageSnapshot {
         .pointer("/rate_limit/secondary_window/reset_at")
         .and_then(Value::as_i64);
     let extra_rate_limits = collect_extra_rate_limits(value);
-    let credits_json = serialize_credits_payload(value.get("credits"), &extra_rate_limits);
+    let rate_limit_reset_credits = value
+        .get("rate_limit_reset_credits")
+        .or_else(|| value.get("rateLimitResetCredits"));
+    let credits_json = serialize_credits_payload(
+        value.get("credits"),
+        &extra_rate_limits,
+        rate_limit_reset_credits,
+    );
 
     UsageSnapshot {
         used_percent,

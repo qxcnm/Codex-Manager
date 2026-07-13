@@ -14,7 +14,9 @@ use crate::usage_account_meta::{
     build_workspace_map_from_accounts, clean_header_value, derive_account_meta, patch_account_meta,
     patch_account_meta_cached, workspace_header_for_account,
 };
-use crate::usage_http::{fetch_account_subscription, fetch_usage_snapshot};
+use crate::usage_http::{
+    consume_rate_limit_reset_credit, fetch_account_subscription, fetch_usage_snapshot,
+};
 use crate::usage_keepalive::{is_keepalive_error_ignorable, run_gateway_keepalive_once};
 use crate::usage_scheduler::{
     parse_interval_secs, DEFAULT_GATEWAY_KEEPALIVE_FAILURE_BACKOFF_MAX_SECS,
@@ -493,6 +495,108 @@ pub(crate) fn refresh_usage_for_account(account_id: &str) -> Result<(), String> 
     }
     record_usage_refresh_metrics(true, started_at);
     notify_usage_refresh_completed("single", 1, 1);
+    Ok(())
+}
+
+pub(crate) fn reset_usage_quota_for_account(account_id: &str) -> Result<(), String> {
+    let normalized_account_id = account_id.trim();
+    if normalized_account_id.is_empty() {
+        return Err("account_id is required".to_string());
+    }
+    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let token = storage
+        .find_token_by_account_id(normalized_account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "account token not found".to_string())?;
+    let account = storage
+        .find_account_by_id(normalized_account_id)
+        .map_err(|e| e.to_string())?;
+    let workspace_id = account.as_ref().and_then(workspace_header_for_account);
+
+    consume_rate_limit_reset_for_token(&storage, &token, workspace_id.as_deref())
+}
+
+fn consume_rate_limit_reset_for_token(
+    storage: &Storage,
+    token: &Token,
+    workspace_id: Option<&str>,
+) -> Result<(), String> {
+    let issuer =
+        std::env::var("CODEXMANAGER_ISSUER").unwrap_or_else(|_| DEFAULT_ISSUER.to_string());
+    let client_id =
+        std::env::var("CODEXMANAGER_CLIENT_ID").unwrap_or_else(|_| DEFAULT_CLIENT_ID.to_string());
+    let base_url = std::env::var("CODEXMANAGER_USAGE_BASE_URL")
+        .unwrap_or_else(|_| "https://chatgpt.com".to_string());
+
+    let mut current = token.clone();
+    let mut resolved_workspace_id = workspace_id.map(|value| value.to_string());
+    let (derived_chatgpt_id, derived_workspace_id) = derive_account_meta(&current);
+    if resolved_workspace_id.is_none() {
+        resolved_workspace_id = derived_workspace_id
+            .clone()
+            .or_else(|| derived_chatgpt_id.clone());
+    }
+    patch_account_meta(
+        storage,
+        &current.account_id,
+        derived_chatgpt_id.clone(),
+        derived_workspace_id.clone(),
+    );
+    let mut active_workspace_id = clean_header_value(resolved_workspace_id);
+    let mut active_subscription_account_id =
+        clean_header_value(derived_chatgpt_id.or_else(|| active_workspace_id.clone()));
+    let mut bearer = current.access_token.clone();
+
+    if let Err(err) =
+        consume_rate_limit_reset_credit(&base_url, &bearer, active_workspace_id.as_deref())
+    {
+        if should_retry_usage_refresh_with_token(&current, &err) {
+            if let Err(refresh_err) = refresh_and_persist_access_token(
+                storage,
+                &mut current,
+                &issuer,
+                &client_id,
+                token_refresh_ahead_secs(),
+            ) {
+                mark_usage_unreachable_if_needed(storage, &current.account_id, &refresh_err);
+                return Err(refresh_err);
+            }
+            let (refreshed_chatgpt_id, refreshed_workspace_id) = derive_account_meta(&current);
+            patch_account_meta(
+                storage,
+                &current.account_id,
+                refreshed_chatgpt_id.clone(),
+                refreshed_workspace_id.clone(),
+            );
+            active_workspace_id =
+                clean_header_value(refreshed_workspace_id.or_else(|| refreshed_chatgpt_id.clone()));
+            active_subscription_account_id =
+                clean_header_value(refreshed_chatgpt_id.or_else(|| active_workspace_id.clone()));
+            bearer = current.access_token.clone();
+            if let Err(reset_err) =
+                consume_rate_limit_reset_credit(&base_url, &bearer, active_workspace_id.as_deref())
+            {
+                mark_usage_unreachable_if_needed(storage, &current.account_id, &reset_err);
+                return Err(reset_err);
+            }
+        } else {
+            mark_usage_unreachable_if_needed(storage, &current.account_id, &err);
+            return Err(err);
+        }
+    }
+
+    if let Err(refresh_err) = refresh_account_snapshot(
+        storage,
+        &current.account_id,
+        &base_url,
+        &bearer,
+        active_workspace_id.as_deref(),
+        active_subscription_account_id.as_deref(),
+    ) {
+        mark_usage_unreachable_if_needed(storage, &current.account_id, &refresh_err);
+        return Err(refresh_err);
+    }
+    notify_usage_refresh_completed("quota_reset", 1, 1);
     Ok(())
 }
 

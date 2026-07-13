@@ -39,6 +39,14 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
             };
             super::ok_or_error(result)
         }
+        "account/usage/resetQuota" => {
+            let account_id =
+                super::str_param(req, "accountId").or_else(|| super::str_param(req, "account_id"));
+            let result = account_id
+                .ok_or_else(|| "accountId is required".to_string())
+                .and_then(usage_refresh::reset_usage_quota_for_account);
+            super::ok_or_error(result)
+        }
         _ => return None,
     };
 

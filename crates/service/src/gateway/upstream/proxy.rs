@@ -157,7 +157,8 @@ fn model_route_error(
         .list_model_catalog_models("default")
         .map_err(|err| (500, format!("model_catalog_read_failed: {err}")))?
         .into_iter()
-        .any(|item| item.slug == model);
+        .any(|item| item.slug == model)
+        || crate::apikey_models::is_builtin_platform_model_slug(model);
     if !model_exists {
         return Err((404, format!("model_not_found: {model}")));
     }
@@ -167,16 +168,58 @@ fn model_route_error(
         }
         return Err((500, err));
     }
-    let mappings = storage
-        .list_enabled_model_source_mappings_for_platform(model)
-        .map_err(|err| (500, format!("model_mapping_read_failed: {err}")))?;
-    if !mappings
-        .into_iter()
-        .any(|mapping| source_mapping_matches_route(mapping.source_kind.as_str(), execution_plan))
-    {
+    let account_mapping_matches =
+        account_mapping_matches_route(storage, model, execution_plan).map_err(|err| (500, err))?;
+    let aggregate_source_matches =
+        aggregate_source_model_matches_route(storage, model, execution_plan);
+    if !account_mapping_matches && !aggregate_source_matches {
         return Err((503, format!("model_unavailable: {model}")));
     }
     Ok(())
+}
+
+fn account_mapping_matches_route(
+    storage: &codexmanager_core::storage::Storage,
+    model: &str,
+    execution_plan: super::executor::GatewayUpstreamExecutionPlan,
+) -> Result<bool, String> {
+    let route_allows_account = matches!(
+        execution_plan.route_kind,
+        GatewayUpstreamRouteKind::AccountRotation | GatewayUpstreamRouteKind::HybridAccountFirst
+    );
+    if !route_allows_account {
+        return Ok(false);
+    }
+    storage
+        .list_enabled_model_source_mappings_for_platform(model)
+        .map_err(|err| format!("model_mapping_read_failed: {err}"))
+        .map(|mappings| {
+            mappings
+                .into_iter()
+                .any(|mapping| mapping.source_kind == "openai_account")
+        })
+}
+
+fn aggregate_source_model_matches_route(
+    storage: &codexmanager_core::storage::Storage,
+    model: &str,
+    execution_plan: super::executor::GatewayUpstreamExecutionPlan,
+) -> bool {
+    let route_allows_aggregate = matches!(
+        execution_plan.route_kind,
+        GatewayUpstreamRouteKind::AggregateApi | GatewayUpstreamRouteKind::HybridAccountFirst
+    );
+    if !route_allows_aggregate {
+        return false;
+    }
+    storage
+        .list_model_source_models(Some("aggregate_api"), None)
+        .map(|source_models| {
+            source_models.into_iter().any(|source_model| {
+                source_model.status == "available" && source_model.upstream_model.trim() == model
+            })
+        })
+        .unwrap_or(false)
 }
 
 fn bootstrap_model_routes_for_plan(
@@ -193,19 +236,6 @@ fn bootstrap_model_routes_for_plan(
         GatewayUpstreamRouteKind::HybridAccountFirst => {
             let _ = crate::apikey_models::bootstrap_account_pool_model_routes(storage, false);
             let _ = crate::apikey_models::bootstrap_aggregate_api_model_routes(storage);
-        }
-    }
-}
-
-fn source_mapping_matches_route(
-    source_kind: &str,
-    execution_plan: super::executor::GatewayUpstreamExecutionPlan,
-) -> bool {
-    match execution_plan.route_kind {
-        GatewayUpstreamRouteKind::AccountRotation => source_kind == "openai_account",
-        GatewayUpstreamRouteKind::AggregateApi => source_kind == "aggregate_api",
-        GatewayUpstreamRouteKind::HybridAccountFirst => {
-            source_kind == "openai_account" || source_kind == "aggregate_api"
         }
     }
 }
@@ -274,7 +304,7 @@ fn respond_model_route_error(
 
 #[allow(clippy::too_many_arguments)]
 fn resolve_aggregate_candidates_for_route(
-    storage: &crate::storage_helpers::StorageHandle,
+    storage: &codexmanager_core::storage::Storage,
     protocol_type: &str,
     aggregate_api_id: Option<&str>,
     model_for_log: Option<&str>,
@@ -293,12 +323,18 @@ fn resolve_aggregate_candidates_for_route(
     candidates = candidates
         .into_iter()
         .filter_map(|mut api| {
-            let mapping = storage
-                .find_enabled_model_source_mapping(model, "aggregate_api", api.id.as_str())
-                .ok()
-                .flatten()?;
-            api.model_override = Some(mapping.upstream_model);
-            Some(api)
+            let source_has_model = storage
+                .list_model_source_models(Some("aggregate_api"), Some(api.id.as_str()))
+                .ok()?
+                .into_iter()
+                .any(|source_model| {
+                    source_model.status == "available"
+                        && source_model.upstream_model.trim() == model
+                });
+            if source_has_model {
+                api.model_override = None;
+            }
+            source_has_model.then_some(api)
         })
         .collect();
     if candidates.is_empty() {
@@ -897,8 +933,8 @@ pub(in super::super) fn proxy_validated_request(
 mod tests {
     use super::{
         exhausted_gateway_error_for_log, hybrid_route_error_message, model_route_error,
-        provider_upstream_hint, request_deadline_for_path, resolve_upstream_is_stream,
-        respond_when_account_candidates_empty,
+        provider_upstream_hint, request_deadline_for_path, resolve_aggregate_candidates_for_route,
+        resolve_upstream_is_stream, respond_when_account_candidates_empty,
         should_fallback_to_aggregate_after_account_exhaustion,
         should_try_provider_executor_aggregate_route,
     };
@@ -1165,7 +1201,7 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_route_model_validation_bootstraps_aggregate_source() {
+    fn aggregate_route_model_validation_uses_aggregate_source_model() {
         let storage = Storage::open_in_memory().expect("open storage");
         storage.init().expect("init storage");
         insert_test_aggregate_api(&storage, "agg-route");
@@ -1184,14 +1220,93 @@ mod tests {
             Some("vendor-route"),
             execution_plan(GatewayUpstreamRouteKind::AggregateApi),
         )
-        .expect("aggregate route should bootstrap source mapping");
+        .expect("aggregate route should accept its own source model");
 
         let mappings = storage
             .list_enabled_model_source_mappings_for_platform("vendor-route")
             .expect("list mappings");
-        assert_eq!(mappings.len(), 1);
-        assert_eq!(mappings[0].source_kind, "aggregate_api");
-        assert_eq!(mappings[0].source_id, "agg-route");
+        assert!(mappings.is_empty());
+    }
+
+    #[test]
+    fn aggregate_route_exact_source_model_does_not_require_rewrite_mapping() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        insert_test_aggregate_api(&storage, "agg-deepseek");
+        storage
+            .update_aggregate_api_model_override("agg-deepseek", Some("gpt-5.2"))
+            .expect("seed stale model override");
+        storage
+            .upsert_discovered_model_source_models(
+                "aggregate_api",
+                "agg-deepseek",
+                &["deepseek-v4-pro".to_string()],
+                "synced",
+            )
+            .expect("seed aggregate source model");
+
+        let candidates = resolve_aggregate_candidates_for_route(
+            &storage,
+            crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+            Some("agg-deepseek"),
+            Some("deepseek-v4-pro"),
+        )
+        .expect("resolve aggregate candidates");
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].id, "agg-deepseek");
+        assert_eq!(candidates[0].model_override, None);
+    }
+
+    #[test]
+    fn aggregate_route_ignores_platform_to_source_model_mapping() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        seed_platform_catalog(&storage, "gpt-5.2");
+        insert_test_aggregate_api(&storage, "agg-deepseek");
+        storage
+            .upsert_discovered_model_source_models(
+                "aggregate_api",
+                "agg-deepseek",
+                &["deepseek-v4-pro".to_string()],
+                "synced",
+            )
+            .expect("seed aggregate source model");
+        let now = now_ts();
+        storage
+            .upsert_model_source_mapping(&ModelSourceMapping {
+                id: "mapping-gpt-to-deepseek".to_string(),
+                platform_model_slug: "gpt-5.2".to_string(),
+                source_kind: "aggregate_api".to_string(),
+                source_id: "agg-deepseek".to_string(),
+                upstream_model: "deepseek-v4-pro".to_string(),
+                enabled: true,
+                priority: 100,
+                weight: 1,
+                billing_model_slug: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("seed legacy aggregate mapping");
+
+        let route_err = model_route_error(
+            &storage,
+            "key-route",
+            Some("gpt-5.2"),
+            execution_plan(GatewayUpstreamRouteKind::AggregateApi),
+        )
+        .expect_err("aggregate route must not accept mapped platform models");
+        assert_eq!(route_err.0, 503);
+        assert!(route_err.1.contains("model_unavailable"));
+
+        let candidate_err = resolve_aggregate_candidates_for_route(
+            &storage,
+            crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+            Some("agg-deepseek"),
+            Some("gpt-5.2"),
+        )
+        .expect_err("aggregate candidates must require an exact source model");
+        assert!(candidate_err.contains("model_unavailable"));
     }
 
     #[test]
@@ -1229,7 +1344,7 @@ mod tests {
     }
 
     #[test]
-    fn hybrid_model_validation_accepts_aggregate_mapping() {
+    fn hybrid_model_validation_accepts_aggregate_source_model() {
         let storage = Storage::open_in_memory().expect("open storage");
         storage.init().expect("init storage");
         insert_test_aggregate_api(&storage, "agg-hybrid");
@@ -1248,6 +1363,6 @@ mod tests {
             Some("vendor-hybrid"),
             execution_plan(GatewayUpstreamRouteKind::HybridAccountFirst),
         )
-        .expect("hybrid route should accept aggregate mapping");
+        .expect("hybrid route should accept aggregate source model");
     }
 }

@@ -148,7 +148,8 @@ pub(crate) use request_log::{RequestLogTraceContext, RequestLogUsage};
 use request_rewrite::apply_request_overrides_with_service_tier_and_prompt_cache_key;
 use request_rewrite::{
     apply_request_overrides_with_service_tier_and_forced_prompt_cache_key_scope,
-    apply_request_overrides_with_service_tier_and_prompt_cache_key_scope, compute_upstream_url,
+    apply_request_overrides_with_service_tier_and_prompt_cache_key_scope,
+    convert_responses_body_to_chat_completions_body, compute_upstream_url,
 };
 pub(super) use thread_anchor::{
     resolve_fallback_thread_anchor, resolve_local_conversation_id_with_sticky_fallback,

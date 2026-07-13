@@ -11,7 +11,6 @@ import {
   FileText,
   Route,
   Settings,
-  UserRound,
   ChevronLeft,
   ChevronRight,
   type LucideIcon,
@@ -46,7 +45,6 @@ const NAV_ITEM_BY_PATH = new Map<TopLevelRoutePath, { icon: LucideIcon }>([
   ["/plugins", { icon: Puzzle }],
   ["/logs", { icon: FileText }],
   ["/settings", { icon: Settings }],
-  ["/author", { icon: UserRound }],
 ]);
 
 type SidebarNavItem = {

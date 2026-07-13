@@ -871,6 +871,7 @@ fn latest_usage_cte_sql() -> &'static str {
             window_minutes,
             secondary_used_percent,
             secondary_window_minutes,
+            credits_json,
             ROW_NUMBER() OVER (
                 PARTITION BY account_id
                 ORDER BY captured_at DESC, id DESC
@@ -903,17 +904,34 @@ fn available_usage_clause(usage_alias: &str) -> String {
     )
 }
 
-/// 函数 `gateway_available_usage_clause`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - usage_alias: 参数 usage_alias
-///
-/// # 返回
-/// 返回函数执行结果
+fn workspace_plan_expr(value_expr: &str) -> String {
+    format!(
+        "({value_expr} LIKE '%business%'
+          OR {value_expr} LIKE '%team%'
+          OR {value_expr} LIKE '%enterprise%'
+          OR {value_expr} LIKE '%education%'
+          OR {value_expr} = 'edu')"
+    )
+}
+
+fn workspace_plan_clause(account_alias: &str, usage_alias: &str) -> String {
+    let subscription_account_plan =
+        workspace_plan_expr("LOWER(TRIM(COALESCE(s.account_plan_type, '')))");
+    let subscription_plan = workspace_plan_expr("LOWER(TRIM(COALESCE(s.plan_type, '')))");
+    let usage_plan = workspace_plan_expr(&format!(
+        "LOWER(COALESCE({usage_alias}.credits_json, ''))"
+    ));
+    format!(
+        "({usage_plan}
+          OR EXISTS (
+            SELECT 1
+            FROM account_subscriptions s
+            WHERE s.account_id = {account_alias}.id
+              AND ({subscription_account_plan} OR {subscription_plan})
+          ))"
+    )
+}
+
 /// 函数 `account_usage_filter_clause`
 ///
 /// 作者: gaohongshun
@@ -935,8 +953,16 @@ fn account_usage_filter_clause(
     match mode {
         AccountUsageQueryMode::ActiveAvailable => format!(
             "LOWER(TRIM(COALESCE({account_alias}.status, ''))) NOT IN ('inactive', 'disabled', 'unavailable', 'limited', 'banned')
-             AND ({usage_alias}.account_id IS NULL OR ({}))",
-            available_usage_clause(usage_alias)
+             AND (
+                {usage_alias}.account_id IS NULL
+                OR ({})
+                OR (
+                    ({usage_alias}.used_percent IS NULL OR {usage_alias}.window_minutes IS NULL)
+                    AND ({})
+                )
+             )",
+            available_usage_clause(usage_alias),
+            workspace_plan_clause(account_alias, usage_alias)
         ),
         AccountUsageQueryMode::LowQuota => format!(
             "{usage_alias}.account_id IS NOT NULL
@@ -1221,6 +1247,52 @@ mod tests {
                 "acc-active-ok".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn list_gateway_candidates_keeps_business_subscription_without_usage_quota() {
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        let now = now_ts();
+
+        let business = sample_account("acc-business", "active", now);
+        storage.insert_account(&business).expect("insert account");
+        storage
+            .insert_token(&sample_token(business.id.as_str(), now))
+            .expect("insert token");
+        storage
+            .upsert_account_subscription(
+                business.id.as_str(),
+                true,
+                Some("business"),
+                Some("business"),
+                None,
+                None,
+            )
+            .expect("insert subscription");
+        storage
+            .insert_usage_snapshot(&UsageSnapshotRecord {
+                account_id: business.id.clone(),
+                used_percent: None,
+                window_minutes: None,
+                resets_at: None,
+                secondary_used_percent: None,
+                secondary_window_minutes: None,
+                secondary_resets_at: None,
+                credits_json: None,
+                captured_at: now,
+            })
+            .expect("insert usage");
+
+        let candidates = storage
+            .list_gateway_candidates()
+            .expect("list gateway candidates");
+        let ids = candidates
+            .into_iter()
+            .map(|(account, _)| account.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec!["acc-business".to_string()]);
     }
 
     #[test]

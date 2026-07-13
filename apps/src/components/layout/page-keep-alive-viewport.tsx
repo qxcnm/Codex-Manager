@@ -44,7 +44,6 @@ const LAZY_PAGE_COMPONENTS: Record<
   "/plugins": lazy(() => import("@/app/plugins/page")),
   "/logs": lazy(() => import("@/app/logs/page")),
   "/settings": lazy(() => import("@/app/settings/page")),
-  "/author": lazy(() => import("@/app/author/page")),
 };
 
 const ROOT_PAGE_COMPONENT = lazy(() => import("@/app/page"));

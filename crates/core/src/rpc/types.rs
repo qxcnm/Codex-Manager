@@ -196,6 +196,7 @@ pub struct AccountSummary {
     pub model_slugs: Vec<String>,
     pub quota_capacity_primary_window_tokens: Option<i64>,
     pub quota_capacity_secondary_window_tokens: Option<i64>,
+    pub quota_reset_available_count: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

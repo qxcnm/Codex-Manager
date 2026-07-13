@@ -750,7 +750,7 @@ fn aggregate_passthrough_applies_model_reasoning_and_service_tier_overrides_with
         Some("high"),
         Some("fast"),
     );
-    let body = br#"{"model":"gpt-4.1","input":"hi","reasoning":{"effort":"low"}}"#.to_vec();
+    let body = br#"{"input":"hi","reasoning":{"effort":"low"}}"#.to_vec();
 
     let (
         rewritten_body,
@@ -783,6 +783,44 @@ fn aggregate_passthrough_applies_model_reasoning_and_service_tier_overrides_with
     assert_eq!(reasoning_for_log.as_deref(), Some("high"));
     assert_eq!(service_tier_for_log, None);
     assert_eq!(effective_service_tier_for_log.as_deref(), Some("fast"));
+}
+
+#[test]
+fn aggregate_passthrough_preserves_explicit_custom_model_over_key_default() {
+    let api_key = sample_api_key(
+        crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        Some("gpt-5.2"),
+        Some("high"),
+        None,
+    );
+    let body =
+        br#"{"model":"deepseek-v4-pro","input":"hi","reasoning":{"effort":"low"}}"#.to_vec();
+
+    let (
+        rewritten_body,
+        model_for_log,
+        reasoning_for_log,
+        _service_tier_for_log,
+        _effective_service_tier_for_log,
+        _has_prompt_cache_key,
+        _request_shape,
+    ) = apply_passthrough_request_overrides("/v1/responses", body, &api_key, None, None);
+    let payload: Value = serde_json::from_slice(&rewritten_body).expect("json body");
+
+    assert_eq!(
+        payload.get("model").and_then(Value::as_str),
+        Some("deepseek-v4-pro")
+    );
+    assert_eq!(
+        payload
+            .get("reasoning")
+            .and_then(Value::as_object)
+            .and_then(|reasoning| reasoning.get("effort"))
+            .and_then(Value::as_str),
+        Some("high")
+    );
+    assert_eq!(model_for_log.as_deref(), Some("deepseek-v4-pro"));
+    assert_eq!(reasoning_for_log.as_deref(), Some("high"));
 }
 
 #[test]
@@ -819,7 +857,7 @@ fn hybrid_passthrough_fallback_body_uses_aggregate_override_shape() {
         Some("high"),
         Some("fast"),
     );
-    let body = br#"{"model":"gpt-4.1","input":"hi","reasoning":{"effort":"low"}}"#.to_vec();
+    let body = br#"{"input":"hi","reasoning":{"effort":"low"}}"#.to_vec();
 
     let mut passthrough_body =
         apply_passthrough_request_overrides("/v1/responses", body, &api_key, None, None).0;
@@ -1446,7 +1484,7 @@ fn aggregate_passthrough_preserves_fast_service_tier_for_log_when_request_is_rew
         payload.get("service_tier").and_then(Value::as_str),
         Some("priority")
     );
-    assert_eq!(model_for_log.as_deref(), Some("gpt-5.4"));
+    assert_eq!(model_for_log.as_deref(), Some("gpt-4.1"));
     assert_eq!(reasoning_for_log.as_deref(), Some("high"));
     assert_eq!(service_tier_for_log.as_deref(), Some("fast"));
     assert_eq!(effective_service_tier_for_log.as_deref(), Some("fast"));
@@ -1480,7 +1518,7 @@ fn codex_backend_passthrough_maps_fast_to_priority_but_keeps_fast_for_log() {
         Some("priority")
     );
     assert_eq!(request_meta.service_tier.as_deref(), Some("fast"));
-    assert_eq!(model_for_log.as_deref(), Some("gpt-5.4"));
+    assert_eq!(model_for_log.as_deref(), Some("gpt-4.1"));
     assert_eq!(reasoning_for_log.as_deref(), Some("high"));
     assert_eq!(service_tier_for_log, None);
     assert_eq!(effective_service_tier_for_log.as_deref(), Some("fast"));

@@ -427,6 +427,19 @@ export function useAccounts() {
     },
   });
 
+  const resetAccountQuotaMutation = useMutation({
+    mutationFn: (accountId: string) => accountClient.resetUsageQuota(accountId),
+    onSuccess: () => {
+      toast.success(t("额度重置成功"));
+    },
+    onError: (error: unknown) => {
+      toast.error(`${t("额度重置失败")}: ${getAppErrorMessage(error)}`);
+    },
+    onSettled: async () => {
+      await invalidateAll();
+    },
+  });
+
   const refreshAllAccountRtMutation = useMutation({
     mutationFn: () => accountClient.refreshAllChatgptAuthTokens(),
     onSuccess: (result: RefreshAllRtResult) => {
@@ -757,6 +770,15 @@ export function useAccounts() {
       }
       refreshAccountRtMutation.mutate(targetAccountId);
     },
+    resetAccountQuota: (accountId: string) => {
+      if (!ensureServiceReady("额度重置")) return;
+      const targetAccountId = accountId.trim();
+      if (!targetAccountId) {
+        toast.error(t("未找到当前账号，请刷新后重试"));
+        return;
+      }
+      resetAccountQuotaMutation.mutate(targetAccountId);
+    },
     refreshAllAccountRt: () => {
       if (!ensureServiceReady("刷新 AT/RT")) return;
       if (!accounts.length) {
@@ -854,6 +876,11 @@ export function useAccounts() {
       refreshAccountRtMutation.isPending &&
       typeof refreshAccountRtMutation.variables === "string"
         ? refreshAccountRtMutation.variables
+        : "",
+    isResettingQuotaAccountId:
+      resetAccountQuotaMutation.isPending &&
+      typeof resetAccountQuotaMutation.variables === "string"
+        ? resetAccountQuotaMutation.variables
         : "",
     isRefreshingAllRtAccounts: refreshAllAccountRtMutation.isPending,
     isRefreshingAllAccounts: refreshAllMutation.isPending,

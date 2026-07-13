@@ -69,6 +69,20 @@ export const serviceClient = {
       etag: params.etag || null,
       fetchedAt: params.fetchedAt || new Date().toISOString(),
     }),
+  syncCodexProviderConfig: (params: {
+    baseUrl: string;
+    providerId?: string | null;
+    providerName?: string | null;
+    envKey?: string | null;
+    codexHome?: string | null;
+  }) =>
+    invoke<unknown>("service_sync_codex_provider_config", {
+      baseUrl: params.baseUrl,
+      providerId: params.providerId || "codexmanager",
+      providerName: params.providerName || "CodexManager Local",
+      envKey: params.envKey || "CODEXMANAGER_API_KEY",
+      codexHome: params.codexHome || null,
+    }),
 
   async getGatewayTransport(): Promise<GatewayTransportSettings> {
     const result = await invoke<unknown>("service_gateway_transport_get", withAddr());

@@ -345,6 +345,7 @@ export function createWebCommandMap(
     service_usage_read: { rpcMethod: "account/usage/read" },
     service_usage_list: { rpcMethod: "account/usage/list" },
     service_usage_refresh: { rpcMethod: "account/usage/refresh" },
+    service_usage_quota_reset: { rpcMethod: "account/usage/resetQuota" },
     service_usage_aggregate: { rpcMethod: "account/usage/aggregate" },
     service_quota_overview: { rpcMethod: "quota/overview" },
     service_quota_model_usage: { rpcMethod: "quota/modelUsage" },

@@ -1,6 +1,9 @@
 use chrono::DateTime;
-use codexmanager_core::usage::{accounts_check_endpoint, usage_endpoint};
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
+use codexmanager_core::usage::{
+    accounts_check_endpoint, rate_limit_reset_endpoint, usage_endpoint,
+};
+use rand::{rngs::OsRng, RngCore};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, CONTENT_TYPE};
 use reqwest::Client;
 use reqwest::Proxy;
 use std::collections::HashMap;
@@ -638,6 +641,71 @@ fn build_usage_request_headers(workspace_id: Option<&str>) -> HeaderMap {
     headers
 }
 
+fn build_rate_limit_reset_request_headers(workspace_id: Option<&str>) -> HeaderMap {
+    let mut headers = build_usage_request_headers(workspace_id);
+    headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers.insert(
+        HeaderName::from_static("openai-beta"),
+        HeaderValue::from_static("codex-1"),
+    );
+    headers.insert(
+        HeaderName::from_static("oai-language"),
+        HeaderValue::from_static("zh-CN"),
+    );
+    headers.insert(
+        HeaderName::from_static("origin"),
+        HeaderValue::from_static("https://chatgpt.com"),
+    );
+    headers.insert(
+        HeaderName::from_static("referer"),
+        HeaderValue::from_static("https://chatgpt.com/codex"),
+    );
+    headers.insert(
+        HeaderName::from_static("sec-fetch-site"),
+        HeaderValue::from_static("none"),
+    );
+    headers.insert(
+        HeaderName::from_static("sec-fetch-mode"),
+        HeaderValue::from_static("no-cors"),
+    );
+    headers.insert(
+        HeaderName::from_static("sec-fetch-dest"),
+        HeaderValue::from_static("empty"),
+    );
+    headers.insert(
+        HeaderName::from_static("priority"),
+        HeaderValue::from_static("u=4"),
+    );
+    headers
+}
+
+fn generate_redeem_request_id() -> String {
+    let mut bytes = [0_u8; 16];
+    OsRng.fill_bytes(&mut bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    )
+}
+
 /// 函数 `resolve_refresh_token_url`
 ///
 /// 作者: gaohongshun
@@ -775,6 +843,15 @@ fn summarize_usage_error_response(
     force_html_error: bool,
 ) -> String {
     summarize_endpoint_error_response("usage", status, headers, body, force_html_error)
+}
+
+fn summarize_rate_limit_reset_error_response(
+    status: reqwest::StatusCode,
+    headers: &HeaderMap,
+    body: &str,
+    force_html_error: bool,
+) -> String {
+    summarize_endpoint_error_response("quota reset", status, headers, body, force_html_error)
 }
 
 /// 函数 `summarize_subscription_error_response`
@@ -1007,6 +1084,18 @@ pub(crate) fn fetch_usage_snapshot(
     run_usage_future(fetch_usage_snapshot_async(base_url, bearer, workspace_id))
 }
 
+pub(crate) fn consume_rate_limit_reset_credit(
+    base_url: &str,
+    bearer: &str,
+    workspace_id: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    run_usage_future(consume_rate_limit_reset_credit_async(
+        base_url,
+        bearer,
+        workspace_id,
+    ))
+}
+
 /// 函数 `fetch_account_subscription`
 ///
 /// 作者: gaohongshun
@@ -1107,6 +1196,64 @@ async fn fetch_usage_snapshot_async(
     read_response_json(resp, USAGE_HTTP_TOTAL_TIMEOUT)
         .await
         .map_err(|e| format!("read usage endpoint json failed: {e}"))
+}
+
+async fn consume_rate_limit_reset_credit_async(
+    base_url: &str,
+    bearer: &str,
+    workspace_id: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let url = rate_limit_reset_endpoint(base_url);
+    let redeem_request_id = generate_redeem_request_id();
+    let body = serde_json::json!({ "redeem_request_id": redeem_request_id });
+    let build_request = || {
+        let client = usage_http_client();
+        client
+            .post(&url)
+            .header("Authorization", format!("Bearer {bearer}"))
+            .headers(build_rate_limit_reset_request_headers(workspace_id))
+            .json(&body)
+    };
+    let resp = match build_request().send().await {
+        Ok(resp) => resp,
+        Err(first_err) => {
+            rebuild_usage_http_client();
+            let retried = build_request().send().await;
+            match retried {
+                Ok(resp) => resp,
+                Err(second_err) => {
+                    return Err(format!(
+                        "{}; retry_after_client_rebuild: {}",
+                        first_err, second_err
+                    ));
+                }
+            }
+        }
+    };
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let headers = resp.headers().clone();
+        let body = read_response_text(resp, USAGE_HTTP_TOTAL_TIMEOUT).await?;
+        return Err(summarize_rate_limit_reset_error_response(
+            status, &headers, &body, false,
+        ));
+    }
+    let content_type = resp
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    if crate::gateway::is_html_content_type(content_type) {
+        let status = resp.status();
+        let headers = resp.headers().clone();
+        let body = read_response_text(resp, USAGE_HTTP_TOTAL_TIMEOUT).await?;
+        return Err(summarize_rate_limit_reset_error_response(
+            status, &headers, &body, true,
+        ));
+    }
+    read_response_json(resp, USAGE_HTTP_TOTAL_TIMEOUT)
+        .await
+        .map_err(|e| format!("read quota reset endpoint json failed: {e}"))
 }
 
 async fn fetch_accounts_check_response_async(

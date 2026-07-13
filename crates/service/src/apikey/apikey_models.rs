@@ -18,6 +18,10 @@ use crate::gateway;
 use crate::storage_helpers;
 
 const CODEX_IMAGE_TOOL_MODEL: &str = "gpt-image-2";
+const DEEPSEEK_BUILTIN_MODELS: &[(&str, &str)] = &[
+    ("deepseek-v4-pro", "DeepSeek V4 Pro"),
+    ("deepseek-v4-flash", "DeepSeek V4 Flash"),
+];
 const MODEL_CACHE_SCOPE_DEFAULT: &str = "default";
 const MODEL_SOURCE_KIND_REMOTE: &str = "remote";
 const MODEL_SOURCE_KIND_CUSTOM: &str = "custom";
@@ -121,6 +125,14 @@ pub(crate) fn read_managed_model_catalog(
 
 fn is_codex_image_tool_slug(slug: &str) -> bool {
     slug.trim().eq_ignore_ascii_case(CODEX_IMAGE_TOOL_MODEL)
+}
+
+pub(crate) fn is_builtin_platform_model_slug(slug: &str) -> bool {
+    let slug = slug.trim();
+    is_codex_image_tool_slug(slug)
+        || DEEPSEEK_BUILTIN_MODELS
+            .iter()
+            .any(|(model_slug, _)| slug.eq_ignore_ascii_case(model_slug))
 }
 
 fn model_is_catalog_text_model(model: &ModelInfo) -> bool {
@@ -358,11 +370,13 @@ pub(crate) fn upsert_managed_model_source_model(
     if record.source_kind == ROUTING_SOURCE_KIND_OPENAI_ACCOUNT
         || record.source_kind == ROUTING_SOURCE_KIND_AGGREGATE_API
     {
+        let create_source_mappings = record.source_kind == ROUTING_SOURCE_KIND_OPENAI_ACCOUNT;
         auto_associate_source_models(
             &storage,
             record.source_kind.as_str(),
             record.source_id.as_str(),
             true,
+            create_source_mappings,
         )?;
     }
     Ok(source_model_entry(record))
@@ -468,6 +482,7 @@ pub(crate) fn bootstrap_aggregate_api_model_routes(storage: &Storage) -> Result<
             ROUTING_SOURCE_KIND_AGGREGATE_API,
             source_id.as_str(),
             true,
+            false,
         )?;
     }
     Ok(())
@@ -477,7 +492,13 @@ pub(crate) fn auto_associate_aggregate_api_source_models(
     storage: &Storage,
     source_id: &str,
 ) -> Result<(), String> {
-    auto_associate_source_models(storage, ROUTING_SOURCE_KIND_AGGREGATE_API, source_id, true)
+    auto_associate_source_models(
+        storage,
+        ROUTING_SOURCE_KIND_AGGREGATE_API,
+        source_id,
+        true,
+        false,
+    )
 }
 
 fn sync_openai_account_source_models_with_options(
@@ -537,6 +558,7 @@ fn sync_openai_account_source_models_with_options(
             storage,
             ROUTING_SOURCE_KIND_OPENAI_ACCOUNT,
             account.id.as_str(),
+            true,
             true,
         )?;
     }
@@ -659,6 +681,7 @@ where
                     ROUTING_SOURCE_KIND_AGGREGATE_API,
                     api.id.as_str(),
                     true,
+                    false,
                 )?;
                 synced_any = true;
             }
@@ -823,15 +846,8 @@ fn auto_associate_source_models(
     source_kind: &str,
     source_id: &str,
     auto_create_platform_models: bool,
+    create_source_mappings: bool,
 ) -> Result<(), String> {
-    let existing_source_platform_mappings = storage
-        .list_model_source_mappings(None)
-        .map_err(|err| format!("list model mappings failed: {err}"))?
-        .into_iter()
-        .filter(|mapping| mapping.source_kind == source_kind && mapping.source_id == source_id)
-        .map(|mapping| mapping.platform_model_slug)
-        .collect::<HashSet<_>>();
-
     let source_models = storage
         .list_model_source_models(Some(source_kind), Some(source_id))
         .map_err(|err| format!("list source models failed: {err}"))?
@@ -892,6 +908,18 @@ fn auto_associate_source_models(
     if platform_slugs.is_empty() {
         return Ok(());
     }
+
+    if !create_source_mappings {
+        return Ok(());
+    }
+
+    let existing_source_platform_mappings = storage
+        .list_model_source_mappings(None)
+        .map_err(|err| format!("list model mappings failed: {err}"))?
+        .into_iter()
+        .filter(|mapping| mapping.source_kind == source_kind && mapping.source_id == source_id)
+        .map(|mapping| mapping.platform_model_slug)
+        .collect::<HashSet<_>>();
 
     let now = now_ts();
     for source_model in source_models {
@@ -1098,49 +1126,102 @@ fn codex_image_tool_model_info() -> ModelInfo {
     model
 }
 
-pub(crate) fn ensure_codex_image_tool_model_listed(models: &ModelsResponse) -> ModelsResponse {
-    if models.models.iter().any(|item| {
-        item.slug
-            .trim()
-            .eq_ignore_ascii_case(CODEX_IMAGE_TOOL_MODEL)
-    }) {
-        return models.clone();
-    }
+fn deepseek_builtin_model_info(slug: &str, display_name: &str) -> ModelInfo {
+    let mut model = ModelInfo {
+        slug: slug.to_string(),
+        display_name: display_name.to_string(),
+        description: Some("Built-in custom model for DeepSeek aggregate API routes.".to_string()),
+        supported_in_api: true,
+        visibility: Some("list".to_string()),
+        input_modalities: vec!["text".to_string()],
+        ..Default::default()
+    };
+    model
+        .extra
+        .insert("provider".to_string(), serde_json::json!("deepseek"));
+    model
+        .extra
+        .insert("builtin_custom".to_string(), serde_json::json!(true));
+    model
+}
+
+fn builtin_platform_model_infos() -> Vec<(ModelInfo, &'static str)> {
+    let mut models = Vec::with_capacity(1 + DEEPSEEK_BUILTIN_MODELS.len());
+    models.push((codex_image_tool_model_info(), MODEL_SOURCE_KIND_REMOTE));
+    models.extend(DEEPSEEK_BUILTIN_MODELS.iter().map(|(slug, display_name)| {
+        (
+            deepseek_builtin_model_info(slug, display_name),
+            MODEL_SOURCE_KIND_CUSTOM,
+        )
+    }));
+    models
+}
+
+pub(crate) fn ensure_builtin_platform_models_listed(models: &ModelsResponse) -> ModelsResponse {
     let mut augmented = models.clone();
-    augmented.models.push(codex_image_tool_model_info());
-    augmented.extra.remove("etag");
+    let mut changed = false;
+    for (model, _) in builtin_platform_model_infos() {
+        if augmented
+            .models
+            .iter()
+            .any(|item| item.slug.trim().eq_ignore_ascii_case(model.slug.as_str()))
+        {
+            continue;
+        }
+        augmented.models.push(model);
+        changed = true;
+    }
+    if changed {
+        augmented.extra.remove("etag");
+    }
     augmented
 }
 
-fn ensure_codex_image_tool_model_in_catalog(
+pub(crate) fn ensure_codex_image_tool_model_listed(models: &ModelsResponse) -> ModelsResponse {
+    ensure_builtin_platform_models_listed(models)
+}
+
+fn ensure_builtin_platform_models_in_catalog(
     catalog: &ManagedModelCatalogResult,
 ) -> ManagedModelCatalogResult {
-    if catalog.items.iter().any(|item| {
-        item.model
-            .slug
-            .trim()
-            .eq_ignore_ascii_case(CODEX_IMAGE_TOOL_MODEL)
-    }) {
-        return catalog.clone();
-    }
-
     let mut augmented = catalog.clone();
-    let sort_index = augmented
+    let mut sort_index = augmented
         .items
         .iter()
         .map(|item| item.sort_index)
         .max()
         .unwrap_or(-1)
         + 1;
-    augmented.items.push(ManagedModelCatalogEntry {
-        model: codex_image_tool_model_info(),
-        source_kind: MODEL_SOURCE_KIND_REMOTE.to_string(),
-        user_edited: false,
-        sort_index,
-        updated_at: 0,
-    });
-    augmented.extra.remove("etag");
+    let mut changed = false;
+    for (model, source_kind) in builtin_platform_model_infos() {
+        if augmented.items.iter().any(|item| {
+            item.model
+                .slug
+                .trim()
+                .eq_ignore_ascii_case(model.slug.as_str())
+        }) {
+            continue;
+        }
+        augmented.items.push(ManagedModelCatalogEntry {
+            model,
+            source_kind: source_kind.to_string(),
+            user_edited: false,
+            sort_index,
+            updated_at: 0,
+        });
+        sort_index += 1;
+        changed = true;
+    }
+    if changed {
+        augmented.extra.remove("etag");
+    }
     augmented
+}
+
+fn ensure_codex_image_tool_model_in_catalog(
+    catalog: &ManagedModelCatalogResult,
+) -> ManagedModelCatalogResult {
+    ensure_builtin_platform_models_in_catalog(catalog)
 }
 
 fn normalize_managed_model_catalog(
@@ -2257,7 +2338,7 @@ mod tests {
     }
 
     #[test]
-    fn model_options_response_appends_codex_image_tool_model() {
+    fn model_options_response_appends_builtin_models() {
         let response = ModelsResponse {
             models: vec![ModelInfo {
                 slug: "gpt-5.4-mini".to_string(),
@@ -2276,7 +2357,12 @@ mod tests {
                 .iter()
                 .map(|model| model.slug.as_str())
                 .collect::<Vec<_>>(),
-            vec!["gpt-5.4-mini", "gpt-image-2"]
+            vec![
+                "gpt-5.4-mini",
+                "gpt-image-2",
+                "deepseek-v4-pro",
+                "deepseek-v4-flash",
+            ]
         );
         let image_model = augmented
             .models
@@ -2297,11 +2383,18 @@ mod tests {
                 .and_then(Value::as_str),
             Some("image")
         );
+        let deepseek_model = augmented
+            .models
+            .iter()
+            .find(|model| model.slug == "deepseek-v4-pro")
+            .expect("deepseek built-in model");
+        assert_eq!(deepseek_model.display_name, "DeepSeek V4 Pro");
+        assert_eq!(deepseek_model.input_modalities, vec!["text".to_string()]);
         assert!(!augmented.extra.contains_key("etag"));
     }
 
     #[test]
-    fn managed_catalog_response_appends_codex_image_tool_model_once() {
+    fn managed_catalog_response_appends_builtin_models_once() {
         let catalog = ManagedModelCatalogResult {
             items: vec![ManagedModelCatalogEntry {
                 model: ModelInfo {
@@ -2321,9 +2414,15 @@ mod tests {
         let augmented = ensure_codex_image_tool_model_in_catalog(&catalog);
         let response = managed_catalog_to_models_response(&augmented);
 
-        assert_eq!(augmented.items.len(), 1);
-        assert_eq!(response.models.len(), 1);
+        assert_eq!(augmented.items.len(), 3);
+        assert_eq!(response.models.len(), 3);
         assert_eq!(response.models[0].display_name, "Existing Image Model");
+        let deepseek_entry = augmented
+            .items
+            .iter()
+            .find(|item| item.model.slug == "deepseek-v4-pro")
+            .expect("deepseek catalog entry");
+        assert_eq!(deepseek_entry.source_kind, MODEL_SOURCE_KIND_CUSTOM);
     }
 
     #[test]
@@ -2348,9 +2447,11 @@ mod tests {
         save_model_options_with_storage(&storage, &payload).expect("seed structured catalog");
 
         let response = read_model_options_from_storage(&storage).expect("read models");
-        assert_eq!(response.models.len(), 2);
+        assert_eq!(response.models.len(), 4);
         assert_eq!(response.models[0].slug, "gpt-5.4");
         assert_eq!(response.models[1].slug, "gpt-image-2");
+        assert_eq!(response.models[2].slug, "deepseek-v4-pro");
+        assert_eq!(response.models[3].slug, "deepseek-v4-flash");
         assert_eq!(response.extra.get("etag").and_then(Value::as_str), None);
 
         let scope = storage
@@ -2597,6 +2698,7 @@ mod tests {
             ROUTING_SOURCE_KIND_OPENAI_ACCOUNT,
             "acc-source",
             true,
+            true,
         )
         .expect("auto associate");
 
@@ -2629,16 +2731,19 @@ mod tests {
             )
             .expect("seed aggregate source models");
 
-        auto_associate_source_models(&storage, ROUTING_SOURCE_KIND_AGGREGATE_API, "agg-1", true)
-            .expect("auto associate");
+        auto_associate_source_models(
+            &storage,
+            ROUTING_SOURCE_KIND_AGGREGATE_API,
+            "agg-1",
+            true,
+            false,
+        )
+        .expect("auto associate");
 
         let mappings = storage
             .list_enabled_model_source_mappings_for_platform("gpt-known")
             .expect("list known mappings");
-        assert_eq!(mappings.len(), 1);
-        assert_eq!(mappings[0].source_kind, ROUTING_SOURCE_KIND_AGGREGATE_API);
-        assert_eq!(mappings[0].source_id, "agg-1");
-        assert_eq!(mappings[0].upstream_model, "gpt-known");
+        assert!(mappings.is_empty());
 
         let catalog =
             read_managed_model_catalog_from_storage(&storage).expect("read platform catalog");
@@ -2649,17 +2754,11 @@ mod tests {
         let vendor_mappings = storage
             .list_enabled_model_source_mappings_for_platform("vendor-only")
             .expect("list vendor mappings");
-        assert_eq!(vendor_mappings.len(), 1);
-        assert_eq!(
-            vendor_mappings[0].source_kind,
-            ROUTING_SOURCE_KIND_AGGREGATE_API
-        );
-        assert_eq!(vendor_mappings[0].source_id, "agg-1");
-        assert_eq!(vendor_mappings[0].upstream_model, "vendor-only");
+        assert!(vendor_mappings.is_empty());
     }
 
     #[test]
-    fn aggregate_route_bootstrap_links_existing_source_models() {
+    fn aggregate_route_bootstrap_imports_existing_source_models_without_mapping() {
         let storage = Storage::open_in_memory().expect("open storage");
         storage.init().expect("init storage");
         insert_test_aggregate_api(&storage, "agg-bootstrap", "active");
@@ -2683,9 +2782,7 @@ mod tests {
         let mappings = storage
             .list_enabled_model_source_mappings_for_platform("vendor-bootstrap")
             .expect("list mappings");
-        assert_eq!(mappings.len(), 1);
-        assert_eq!(mappings[0].source_kind, ROUTING_SOURCE_KIND_AGGREGATE_API);
-        assert_eq!(mappings[0].source_id, "agg-bootstrap");
+        assert!(mappings.is_empty());
     }
 
     #[test]
@@ -2711,16 +2808,14 @@ mod tests {
             .any(|item| item.source_kind == ROUTING_SOURCE_KIND_AGGREGATE_API
                 && item.source_id == "agg-routing"
                 && item.upstream_model == "vendor-routing"));
-        assert!(result.mappings.iter().any(|item| item.source_kind
-            == ROUTING_SOURCE_KIND_AGGREGATE_API
-            && item.source_id == "agg-routing"
-            && item.platform_model_slug == "vendor-routing"
-            && item.upstream_model == "vendor-routing"
-            && item.enabled));
+        assert!(!result
+            .mappings
+            .iter()
+            .any(|item| item.source_kind == ROUTING_SOURCE_KIND_AGGREGATE_API));
     }
 
     #[test]
-    fn aggregate_source_sync_creates_platform_models_and_mappings() {
+    fn aggregate_source_sync_creates_platform_models_without_mappings() {
         let storage = Storage::open_in_memory().expect("open storage");
         storage.init().expect("init storage");
         insert_test_aggregate_api(&storage, "agg-sync", "active");
@@ -2740,13 +2835,11 @@ mod tests {
         let mappings = storage
             .list_enabled_model_source_mappings_for_platform("vendor-sync")
             .expect("list mappings");
-        assert_eq!(mappings.len(), 1);
-        assert_eq!(mappings[0].source_kind, ROUTING_SOURCE_KIND_AGGREGATE_API);
-        assert_eq!(mappings[0].source_id, "agg-sync");
+        assert!(mappings.is_empty());
     }
 
     #[test]
-    fn aggregate_supplier_import_association_creates_platform_route() {
+    fn aggregate_supplier_import_association_creates_platform_model_without_mapping() {
         let storage = Storage::open_in_memory().expect("open storage");
         storage.init().expect("init storage");
         insert_test_aggregate_api(&storage, "agg-template", "active");
@@ -2771,9 +2864,7 @@ mod tests {
         let mappings = storage
             .list_enabled_model_source_mappings_for_platform("vendor-template")
             .expect("list mappings");
-        assert_eq!(mappings.len(), 1);
-        assert_eq!(mappings[0].source_kind, ROUTING_SOURCE_KIND_AGGREGATE_API);
-        assert_eq!(mappings[0].source_id, "agg-template");
+        assert!(mappings.is_empty());
     }
 
     #[test]
@@ -3010,13 +3101,10 @@ mod tests {
             .items
             .iter()
             .any(|item| item.model.slug == "vendor-old"));
-        assert_eq!(
-            storage
-                .list_enabled_model_source_mappings_for_platform("vendor-old")
-                .expect("list initial mapping")
-                .len(),
-            1
-        );
+        assert!(storage
+            .list_enabled_model_source_mappings_for_platform("vendor-old")
+            .expect("list initial mapping")
+            .is_empty());
 
         sync_aggregate_api_source_models_with_discovery(
             &storage,
@@ -3058,8 +3146,7 @@ mod tests {
         let new_mappings = storage
             .list_enabled_model_source_mappings_for_platform("vendor-new")
             .expect("list new mappings");
-        assert_eq!(new_mappings.len(), 1);
-        assert_eq!(new_mappings[0].source_id, "agg-changing");
+        assert!(new_mappings.is_empty());
     }
 
     #[test]
@@ -3136,6 +3223,7 @@ mod tests {
             ROUTING_SOURCE_KIND_OPENAI_ACCOUNT,
             "acc-disabled",
             true,
+            true,
         )
         .expect("auto associate");
 
@@ -3181,6 +3269,7 @@ mod tests {
             &storage,
             ROUTING_SOURCE_KIND_OPENAI_ACCOUNT,
             "acc-override",
+            true,
             true,
         )
         .expect("auto associate");

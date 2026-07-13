@@ -132,7 +132,7 @@ Service 侧还会按请求路径识别协议：
 | `providerType` | 否 | `codex` | 供应商类型。 |
 | `supplierName` | 是 | 无 | 供应商显示名。 |
 | `sort` | 否 | `0` | 候选排序值，越小越靠前。 |
-| `url` | 否 | 按 providerType 默认 | 上游 base URL，只允许 `http` / `https`，尾部 `/` 会被移除。 |
+| `url` | 否 | 按 providerType 默认 | 上游请求 URL，只允许 `http` / `https`，尾部 `/` 会被移除。默认会原样作为请求地址使用。 |
 | `status` | 否 | `active` | `active` 或 `disabled`。 |
 | `authType` | 否 | `apikey` | `apikey` 或 `userpass`。 |
 | `key` | API Key 鉴权时是 | 无 | 聚合 API 的上游密钥，单独存储。 |
@@ -140,7 +140,7 @@ Service 侧还会按请求路径识别协议：
 | `authCustomEnabled` | 否 | 不变/关闭 | 是否启用自定义鉴权参数。 |
 | `authParams` | 自定义鉴权时是 | 无 | JSON 对象，见下文。 |
 | `actionCustomEnabled` | 否 | 不变/关闭 | 是否启用自定义请求路径。 |
-| `action` | 否 | 原始请求路径 | 自定义 action path，只能是相对路径。 |
+| `action` | 否 | 空路径 | 自定义 action path，只能是相对路径；仅启用自定义 action 时才会追加到 `url` 后。 |
 | `modelOverride` | 否 | 无 | 固定上游模型；为空或 `auto` 表示不覆盖。 |
 | `balanceQueryEnabled` | 否 | `false` | 是否启用余额查询。 |
 | `balanceQueryTemplate` | 否 | `generic` | 余额查询模板。 |
@@ -168,11 +168,11 @@ Service 侧还会按请求路径识别协议：
 | `claude` | `https://api.anthropic.com/v1` |
 | `gemini` | `https://generativelanguage.googleapis.com` |
 
-注意：请求转发时会保留 `url` 的路径前缀，然后追加客户端原始路径或自定义 action。也就是说，如果 `url` 写成 `https://api.example.com/v1`，客户端又请求 `/v1/chat/completions`，最终会变成 `https://api.example.com/v1/v1/chat/completions`。生产配置建议：
+注意：未启用自定义 action 时，请求转发会直接使用 `url` 原样请求，不追加客户端原始路径。生产配置建议：
 
-- 通用 OpenAI-compatible 供应商：`url` 写根地址，例如 `https://api.example.com`。
-- 供应商必须带固定前缀时：把前缀写进 `url`，把真实接口路径交给客户端原始路径或 action。
-- 已经把 `url` 写到 `/v1` 的供应商：启用 action，并把 action 写成 `/chat/completions`、`/responses` 这类不重复 `/v1` 的路径。
+- 通用 OpenAI-compatible 供应商：`url` 直接写最终接口地址，例如 `https://api.example.com/v1/responses`。
+- 供应商必须带固定前缀时：把完整最终路径写进 `url`。
+- 需要按供应商固定 path 覆盖时：启用 action，并把 action 写成 `/chat/completions`、`/responses` 这类路径。
 
 ### status
 
@@ -200,16 +200,16 @@ Service 侧还会按请求路径识别协议：
 
 ## action 和 URL 拼接规则
 
-聚合 API 最终上游地址由 `url` 和 action path 组成。
+聚合 API 最终上游地址默认就是 `url`；只有启用自定义 action 时才由 `url` 和 action path 组成。
 
 ### 未启用 action
 
-如果没有启用自定义 action，使用客户端原始请求路径：
+如果没有启用自定义 action，直接使用 `url` 原样请求：
 
 ```text
-url=https://api.example.com
+url=https://api.example.com/v1/responses
 client path=/v1/chat/completions
-final=https://api.example.com/v1/chat/completions
+final=https://api.example.com/v1/responses
 ```
 
 ### 启用 action
@@ -227,7 +227,8 @@ action 规则：
 - 只能是路径，不能是完整 URL。
 - `responses` 会自动规范成 `/responses`。
 - `action` 里可以带 query，例如 `/v1/messages?beta=true`。
-- 空 action 等价于没有自定义 action。
+- `action` 写成 `@raw`、`raw` 或 `__raw__` 时，也会直接使用 `url` 原样请求。
+- 空 action 等价于没有自定义 action，即直接使用 `url`。
 
 ### base URL 带路径前缀
 

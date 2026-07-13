@@ -36,6 +36,7 @@ export interface Account {
   modelSlugs: string[];
   quotaCapacityPrimaryWindowTokens: number | null;
   quotaCapacitySecondaryWindowTokens: number | null;
+  quotaResetAvailableCount: number | null;
   isAvailable: boolean;
   isLowQuota: boolean;
   lastRefreshAt: number | null;

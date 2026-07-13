@@ -489,6 +489,13 @@ export const accountClient = {
       )
     );
   },
+  resetUsageQuota: (accountId: string) => {
+    const targetAccountId = accountId.trim();
+    return invoke(
+      "service_usage_quota_reset",
+      withAddr({ accountId: targetAccountId, account_id: targetAccountId })
+    );
+  },
   async aggregateUsage(): Promise<UsageAggregateSummary> {
     const result = await invoke<unknown>("service_usage_aggregate", withAddr());
     return normalizeUsageAggregateSummary(result);
