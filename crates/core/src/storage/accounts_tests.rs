@@ -1841,20 +1841,24 @@ fn list_active_account_codex_profile_candidates_for_ids_filters_active_and_reads
         ])
         .expect("list codex profile account candidates");
 
-    assert_eq!(targets.len(), 2);
-    assert_eq!(targets[0].id, "acc-second-codex-profile");
-    assert_eq!(targets[0].label, "Second Codex");
-    assert_eq!(targets[0].issuer, "issuer-second");
+    assert_eq!(targets.len(), 3);
+    assert_eq!(targets[0].id, "acc-disabled-codex-profile");
+    assert_eq!(targets[0].label, "Disabled Codex");
+    assert_eq!(targets[0].status, "disabled");
+
+    assert_eq!(targets[1].id, "acc-second-codex-profile");
+    assert_eq!(targets[1].label, "Second Codex");
+    assert_eq!(targets[1].issuer, "issuer-second");
     assert_eq!(
-        targets[0].chatgpt_account_id.as_deref(),
+        targets[1].chatgpt_account_id.as_deref(),
         Some("cgpt-second")
     );
-    assert_eq!(targets[0].workspace_id.as_deref(), Some("ws-second"));
-    assert_eq!(targets[0].group_name.as_deref(), Some("group-second"));
-    assert_eq!(targets[0].status, " ACTIVE ");
-    assert_eq!(targets[1].id, "acc-first-codex-profile");
-    assert_eq!(targets[1].label, "First Codex");
-    assert_eq!(targets[1].issuer, "issuer-first");
+    assert_eq!(targets[1].workspace_id.as_deref(), Some("ws-second"));
+    assert_eq!(targets[1].group_name.as_deref(), Some("group-second"));
+    assert_eq!(targets[1].status, " ACTIVE ");
+    assert_eq!(targets[2].id, "acc-first-codex-profile");
+    assert_eq!(targets[2].label, "First Codex");
+    assert_eq!(targets[2].issuer, "issuer-first");
 }
 
 #[test]

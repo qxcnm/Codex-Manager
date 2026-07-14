@@ -1675,8 +1675,7 @@ fn active_account_codex_profile_candidates_for_ids_chunk_sql(condition: &str) ->
     format!(
         "SELECT id, label, issuer, chatgpt_account_id, workspace_id, group_name, status, sort, updated_at
          FROM accounts
-         WHERE {condition}
-           AND LOWER(TRIM(COALESCE(status, ''))) = 'active'"
+         WHERE {condition}"
     )
 }
 

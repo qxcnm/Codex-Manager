@@ -238,7 +238,7 @@ fn list_candidates_uses_active_account_projection_and_usable_tokens() {
 
     let result = list_candidates().expect("list candidates");
 
-    assert_eq!(result.accounts.len(), 1);
+    assert_eq!(result.accounts.len(), 2);
     let account = &result.accounts[0];
     assert_eq!(account.id, "acc-active-candidate");
     assert_eq!(account.label, "Active Candidate");
@@ -254,6 +254,12 @@ fn list_candidates_uses_active_account_projection_and_usable_tokens() {
     );
     assert_eq!(account.issuer, "issuer-acc-active-candidate");
     assert_eq!(account.last_refresh, 123);
+
+    let account_disabled = &result.accounts[1];
+    assert_eq!(account_disabled.id, "acc-disabled-candidate");
+    assert_eq!(account_disabled.label, "Disabled Candidate");
+    assert_eq!(account_disabled.status, "disabled");
+
     cleanup_profile(&dir);
 }
 

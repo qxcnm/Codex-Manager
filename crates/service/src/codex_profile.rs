@@ -295,9 +295,7 @@ pub(crate) fn apply_direct_account(
         .find_account_direct_auth_profile_by_id(account_id)
         .map_err(|err| format!("read account failed: {err}"))?
         .ok_or_else(|| "account not found".to_string())?;
-    if account.status.trim() != "active" {
-        return Err("account is not active".to_string());
-    }
+
     let mut token = storage
         .find_token_by_account_id(account_id)
         .map_err(|err| format!("read token failed: {err}"))?

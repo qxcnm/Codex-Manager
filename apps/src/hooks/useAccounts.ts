@@ -578,7 +578,7 @@ export function useAccounts() {
       toast.error(`${t("刷新失败")}: ${formatUsageRefreshErrorMessage(error, t)}`);
     },
     onSettled: async () => {
-      await invalidateUsageData();
+      await invalidateAccountData();
     },
   });
 
@@ -591,7 +591,7 @@ export function useAccounts() {
       toast.error(`${t("刷新失败")}: ${formatUsageRefreshErrorMessage(error, t)}`);
     },
     onSettled: async () => {
-      await invalidateUsageData();
+      await invalidateAccountData();
     },
   });
 
