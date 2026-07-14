@@ -798,7 +798,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     onCheckedChange={toggleSelectAllVisible}
                   />
                 </TableHead>
-                <TableHead className="w-[220px] min-w-[220px] max-w-[220px] whitespace-normal">
+                <TableHead className="w-[260px] min-w-[260px] max-w-[260px] whitespace-normal">
                   {t("账号信息")}
                 </TableHead>
                 <TableHead className="min-w-[450px] text-center">
@@ -888,7 +888,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                           onCheckedChange={() => toggleSelect(account.id)}
                         />
                       </TableCell>
-                      <TableCell className="w-[220px] min-w-[220px] max-w-[220px] whitespace-normal">
+                      <TableCell className="w-[260px] min-w-[260px] max-w-[260px] whitespace-normal">
                         <AccountInfoCell
                           account={account}
                           isPreferred={account.preferred}

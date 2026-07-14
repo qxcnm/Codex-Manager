@@ -104,9 +104,6 @@ const NavItem = memo(({
     {isSidebarOpen && (
       <>
         <span className="truncate font-medium">{itemName}</span>
-        <span className="ml-auto font-mono text-[10px] text-muted-foreground/60">
-          {String(index + 1).padStart(2, "0")}
-        </span>
       </>
     )}
   </a>
