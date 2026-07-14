@@ -1,5 +1,5 @@
 use chrono::DateTime;
-use codexmanager_core::usage::{accounts_check_endpoint, usage_endpoint};
+use codexmanager_core::usage::{accounts_check_endpoint, rate_limit_reset_credits_endpoint, usage_endpoint};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
 use reqwest::Client;
 use std::collections::HashMap;
@@ -1004,6 +1004,51 @@ pub(crate) fn fetch_usage_snapshot(
     workspace_id: Option<&str>,
 ) -> Result<serde_json::Value, String> {
     run_usage_future(fetch_usage_snapshot_async(base_url, bearer, workspace_id))
+}
+
+pub(crate) fn fetch_rate_limit_reset_credits(
+    base_url: &str,
+    bearer: &str,
+    workspace_id: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    run_usage_future(fetch_rate_limit_reset_credits_async(
+        base_url,
+        bearer,
+        workspace_id,
+    ))
+}
+
+async fn fetch_rate_limit_reset_credits_async(
+    base_url: &str,
+    bearer: &str,
+    workspace_id: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let url = rate_limit_reset_credits_endpoint(base_url);
+    let build_request = || {
+        let client = usage_http_client();
+        let mut req = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {bearer}"));
+        let request_headers = build_usage_request_headers(workspace_id);
+        if !request_headers.is_empty() {
+            req = req.headers(request_headers);
+        }
+        req
+    };
+    let resp = match build_request().send().await {
+        Ok(resp) => resp,
+        Err(_) => {
+            rebuild_usage_http_client();
+            build_request().send().await.map_err(|e| e.to_string())?
+        }
+    };
+    if !resp.status().is_success() {
+        return Err(format!("rate-limit-reset-credits status: {}", resp.status()));
+    }
+    let body = read_response_text(resp, USAGE_HTTP_TOTAL_TIMEOUT).await?;
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("parse rate-limit-reset-credits JSON failed: {e}"))?;
+    Ok(parsed)
 }
 
 /// 函数 `fetch_account_subscription`

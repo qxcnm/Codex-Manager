@@ -72,7 +72,11 @@ import {
 } from "@/components/ui/tooltip";
 import { useI18n } from "@/lib/i18n/provider";
 import { cn } from "@/lib/utils";
-import { formatCompactNumber } from "@/lib/utils/usage";
+import {
+  formatCompactNumber,
+  formatRemainingDurationFromSeconds,
+  formatTsFromSeconds,
+} from "@/lib/utils/usage";
 import type { Account } from "@/types";
 import {
   type AccountEditorState,
@@ -92,6 +96,22 @@ import {
   formatStatusFilterLabel,
   getAccountStatusAction,
 } from "@/app/accounts/accounts-page-helpers";
+
+function formatExpirationDate(isoString: string): string {
+  try {
+    const date = new Date(isoString);
+    if (isNaN(date.getTime())) return isoString;
+    const now = new Date();
+    const month = date.getMonth() + 1;
+    const day = date.getDate();
+    if (date.getFullYear() !== now.getFullYear()) {
+      return `${date.getFullYear()}.${month}.${day}`;
+    }
+    return `${month}.${day}`;
+  } catch {
+    return isoString;
+  }
+}
 
 interface PlanTypeOption {
   value: string;
@@ -778,11 +798,14 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     onCheckedChange={toggleSelectAllVisible}
                   />
                 </TableHead>
-                <TableHead className="w-[clamp(280px,34vw,440px)] min-w-[280px] max-w-[440px] whitespace-normal">
+                <TableHead className="w-[240px] min-w-[240px] max-w-[240px] whitespace-normal">
                   {t("账号信息")}
                 </TableHead>
-                <TableHead className="min-w-[300px] text-center">
+                <TableHead className="min-w-[420px] text-center">
                   {t("额度详情")}
+                </TableHead>
+                <TableHead className="w-[130px] min-w-[130px] text-center">
+                  {t("可用重置")}
                 </TableHead>
                 <TableHead className="w-[132px]">{t("顺序")}</TableHead>
                 <TableHead className="w-[112px]">{t("状态")}</TableHead>
@@ -808,6 +831,12 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                         <Skeleton className="h-4 w-40" />
                       </div>
                     </TableCell>
+                    <TableCell className="w-[130px] min-w-[130px]">
+                      <div className="space-y-2">
+                        <Skeleton className="h-4 w-24" />
+                        <Skeleton className="h-4 w-24" />
+                      </div>
+                    </TableCell>
                     <TableCell>
                       <Skeleton className="h-4 w-10" />
                     </TableCell>
@@ -821,7 +850,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                 ))
               ) : visibleAccounts.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-48 text-center">
+                  <TableCell colSpan={7} className="h-48 text-center">
                     <div className="flex flex-col items-center justify-center gap-2 text-muted-foreground">
                       <Search className="h-8 w-8 opacity-20" />
                       <p>{t("未找到符合条件的账号")}</p>
@@ -906,6 +935,54 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                             </span>
                           )}
                         </div>
+                      </TableCell>
+                      <TableCell className="align-top w-[130px] min-w-[130px] text-center">
+                        {(() => {
+                          let resetCredits: { available_count: number; credits?: any[] } | null = null;
+                          try {
+                            if (account.usage?.creditsJson) {
+                              const parsed = JSON.parse(account.usage.creditsJson);
+                              if (parsed && parsed.rate_limit_reset_credits) {
+                                resetCredits = parsed.rate_limit_reset_credits;
+                              }
+                            }
+                          } catch (e) {
+                            // ignore
+                          }
+
+                          if (!resetCredits || resetCredits.available_count === 0) {
+                            return <div className="text-center text-xs text-muted-foreground/60">--</div>;
+                          }
+
+                          const activeCredits = (resetCredits.credits || [])
+                            .filter((item: any) => item.status === "available")
+                            .sort(
+                              (a: any, b: any) =>
+                                new Date(a.expires_at).getTime() - new Date(b.expires_at).getTime(),
+                            );
+
+                          if (activeCredits.length === 0) {
+                            return <div className="text-center text-xs text-muted-foreground/60">--</div>;
+                          }
+
+                          return (
+                            <div className="flex flex-col gap-1.5 items-center justify-center">
+                              <span className="inline-flex items-center rounded-full bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50">
+                                {t("可用")} {resetCredits.available_count} {t("次")}
+                              </span>
+                              <div className="flex flex-col gap-0.5 text-[10px] text-muted-foreground/90 font-medium">
+                                {activeCredits.map((item: any) => {
+                                  const formattedDate = formatExpirationDate(item.expires_at);
+                                  return (
+                                    <div key={item.credit_id} className="whitespace-nowrap text-center">
+                                      {formattedDate}{t("到期")}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1">

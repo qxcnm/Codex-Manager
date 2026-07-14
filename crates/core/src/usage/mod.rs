@@ -174,6 +174,15 @@ pub fn usage_endpoint(base_url: &str) -> String {
     }
 }
 
+pub fn rate_limit_reset_credits_endpoint(base_url: &str) -> String {
+    let base = normalize_base_url(base_url);
+    if base.contains("/backend-api") {
+        format!("{base}/wham/rate-limit-reset-credits")
+    } else {
+        format!("{base}/api/codex/rate-limit-reset-credits")
+    }
+}
+
 /// 函数 `subscription_endpoint`
 ///
 /// 作者: gaohongshun
@@ -234,7 +243,26 @@ pub fn parse_usage_snapshot(value: &Value) -> UsageSnapshot {
         .pointer("/rate_limit/secondary_window/reset_at")
         .and_then(Value::as_i64);
     let extra_rate_limits = collect_extra_rate_limits(value);
-    let credits_json = serialize_credits_payload(value.get("credits"), &extra_rate_limits);
+    let mut credits_json = serialize_credits_payload(value.get("credits"), &extra_rate_limits);
+
+    if let Some(resets) = value.get("rate_limit_reset_credits") {
+        if let Some(ref mut json_str) = credits_json {
+            if let Ok(mut parsed_credits) = serde_json::from_str::<Value>(json_str) {
+                if let Some(obj) = parsed_credits.as_object_mut() {
+                    obj.insert("rate_limit_reset_credits".to_string(), resets.clone());
+                    if let Ok(serialized) = serde_json::to_string(&parsed_credits) {
+                        *json_str = serialized;
+                    }
+                }
+            }
+        } else {
+            let mut obj = serde_json::Map::new();
+            obj.insert("rate_limit_reset_credits".to_string(), resets.clone());
+            if let Ok(serialized) = serde_json::to_string(&Value::Object(obj)) {
+                credits_json = Some(serialized);
+            }
+        }
+    }
 
     UsageSnapshot {
         used_percent,

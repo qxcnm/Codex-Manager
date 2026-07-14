@@ -14,7 +14,7 @@ use crate::usage_account_meta::{
     clean_header_value, derive_account_meta, patch_account_meta, patch_account_meta_cached,
     resolve_workspace_id_for_account,
 };
-use crate::usage_http::{fetch_account_subscription, fetch_usage_snapshot};
+use crate::usage_http::{fetch_account_subscription, fetch_rate_limit_reset_credits, fetch_usage_snapshot};
 use crate::usage_keepalive::{is_keepalive_error_ignorable, run_gateway_keepalive_once};
 use crate::usage_scheduler::{
     parse_interval_secs, DEFAULT_GATEWAY_KEEPALIVE_FAILURE_BACKOFF_MAX_SECS,
@@ -660,7 +660,12 @@ fn refresh_account_snapshot(
             .map_err(|err| format!("store account subscription failed: {err}"))?;
     }
 
-    let value = fetch_usage_snapshot(base_url, bearer, workspace_id)?;
+    let mut value = fetch_usage_snapshot(base_url, bearer, workspace_id)?;
+    if let Ok(resets) = fetch_rate_limit_reset_credits(base_url, bearer, workspace_id) {
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("rate_limit_reset_credits".to_string(), resets);
+        }
+    }
     let status = classify_usage_status_from_snapshot_value(&value);
     store_usage_snapshot(storage, account_id, value)?;
     Ok(status)
