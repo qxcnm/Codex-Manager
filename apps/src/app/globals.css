@@ -591,7 +591,10 @@
 [data-appearance='modern'] [data-slot="chart-tooltip"],
 [data-appearance='modern'] [data-slot="tooltip-content"],
 [data-appearance='modern'] .sonner-toast,
-[data-appearance='modern'] .table-sticky-action-head,
+[data-appearance='modern'] .table-sticky-action-head {
+  background: var(--table-header-bg), var(--glass-floating);
+}
+
 [data-appearance='modern'] .table-sticky-action-cell {
   background: var(--glass-floating);
 }
@@ -773,7 +776,7 @@ tr {
 
 .table-sticky-action-head {
   z-index: 4;
-  background: var(--console-panel-strong);
+  background: var(--table-header-bg), var(--console-panel-strong);
 }
 
 .table-sticky-action-cell {
