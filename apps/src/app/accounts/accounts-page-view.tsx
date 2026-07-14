@@ -798,13 +798,13 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     onCheckedChange={toggleSelectAllVisible}
                   />
                 </TableHead>
-                <TableHead className="w-[240px] min-w-[240px] max-w-[240px] whitespace-normal">
+                <TableHead className="w-[200px] min-w-[200px] max-w-[200px] whitespace-normal">
                   {t("账号信息")}
                 </TableHead>
-                <TableHead className="min-w-[420px] text-center">
+                <TableHead className="min-w-[450px] text-center">
                   {t("额度详情")}
                 </TableHead>
-                <TableHead className="w-[130px] min-w-[130px] text-center">
+                <TableHead className="w-[110px] min-w-[110px] max-w-[110px] text-center">
                   {t("可用重置")}
                 </TableHead>
                 <TableHead className="w-[132px]">{t("顺序")}</TableHead>
@@ -831,7 +831,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                         <Skeleton className="h-4 w-40" />
                       </div>
                     </TableCell>
-                    <TableCell className="w-[130px] min-w-[130px]">
+                    <TableCell className="w-[110px] min-w-[110px] max-w-[110px]">
                       <div className="space-y-2">
                         <Skeleton className="h-4 w-24" />
                         <Skeleton className="h-4 w-24" />
@@ -888,7 +888,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                           onCheckedChange={() => toggleSelect(account.id)}
                         />
                       </TableCell>
-                      <TableCell className="w-[clamp(280px,34vw,440px)] min-w-[280px] max-w-[440px] whitespace-normal align-top">
+                      <TableCell className="w-[200px] min-w-[200px] max-w-[200px] whitespace-normal">
                         <AccountInfoCell
                           account={account}
                           isPreferred={account.preferred}
@@ -936,7 +936,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                           )}
                         </div>
                       </TableCell>
-                      <TableCell className="align-top w-[130px] min-w-[130px] text-center">
+                      <TableCell className="w-[110px] min-w-[110px] max-w-[110px] text-center">
                         {(() => {
                           let resetCredits: { available_count: number; credits?: any[] } | null = null;
                           try {
