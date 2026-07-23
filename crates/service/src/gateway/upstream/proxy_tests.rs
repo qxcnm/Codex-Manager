@@ -1,15 +1,15 @@
 use super::{
-    exhausted_gateway_error_for_log, hybrid_route_error_message, model_route_error,
-    provider_upstream_hint, request_deadline_for_path, resolve_aggregate_candidates_for_route,
-    resolve_upstream_is_stream, respond_when_account_candidates_empty,
-    should_fallback_to_aggregate_after_account_exhaustion,
-    should_try_provider_executor_aggregate_route,
+    exhausted_gateway_error_for_log, has_enabled_aggregate_api_route,
+    has_enabled_default_account_pool_route, hybrid_route_error_message, provider_upstream_hint,
+    request_deadline_for_path, resolve_aggregate_candidates_for_route, resolve_upstream_is_stream,
+    respond_when_account_candidates_empty, should_fallback_to_aggregate_after_account_exhaustion,
+    should_try_provider_executor_aggregate_route, validate_model_route,
 };
 use crate::gateway::upstream::executor::{
     GatewayUpstreamExecutionPlan, GatewayUpstreamExecutorKind, GatewayUpstreamRouteKind,
 };
 use codexmanager_core::storage::{
-    now_ts, Account, AggregateApi, ManagedModelV2Upsert, ModelRouteV2, Storage,
+    now_ts, Account, AggregateApi, ManagedModelV2, ManagedModelV2Upsert, ModelRouteV2, Storage,
 };
 use std::time::{Duration, Instant};
 
@@ -143,6 +143,23 @@ fn add_model_route_v2(
         .expect("save V2 model route");
 }
 
+fn model_with_routes(routes: &[(&str, &str)]) -> ManagedModelV2 {
+    ManagedModelV2 {
+        routes: routes
+            .iter()
+            .map(|(source_kind, source_id)| ModelRouteV2 {
+                source_kind: (*source_kind).to_string(),
+                source_id: (*source_id).to_string(),
+                upstream_model: "test-upstream".to_string(),
+                enabled: true,
+                weight: 1,
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+
 #[test]
 fn aggregate_route_model_validation_accepts_model_override_candidate() {
     let storage = Storage::open_in_memory().expect("open storage");
@@ -156,7 +173,7 @@ fn aggregate_route_model_validation_accepts_model_override_candidate() {
         "MiniMax-M3",
     );
 
-    model_route_error(
+    validate_model_route(
         &storage,
         "key-route",
         Some("gpt-5.4"),
@@ -268,42 +285,61 @@ fn request_deadline_for_responses_uses_upstream_stream_semantics() {
 }
 
 #[test]
-fn only_explicit_aggregate_route_uses_aggregate_candidates() {
+fn aggregate_strategy_and_hybrid_aggregate_only_use_aggregate_candidates_directly() {
     assert!(should_try_provider_executor_aggregate_route(
         GatewayUpstreamExecutionPlan {
             executor_kind: GatewayUpstreamExecutorKind::Claude,
             route_kind: GatewayUpstreamRouteKind::AggregateApi,
-        }
+        },
+        None,
     ));
     assert!(should_try_provider_executor_aggregate_route(
         GatewayUpstreamExecutionPlan {
             executor_kind: GatewayUpstreamExecutorKind::Gemini,
             route_kind: GatewayUpstreamRouteKind::AggregateApi,
-        }
+        },
+        None,
     ));
     assert!(!should_try_provider_executor_aggregate_route(
         GatewayUpstreamExecutionPlan {
             executor_kind: GatewayUpstreamExecutorKind::Claude,
             route_kind: GatewayUpstreamRouteKind::AccountRotation,
-        }
+        },
+        None,
     ));
     assert!(should_try_provider_executor_aggregate_route(
         GatewayUpstreamExecutionPlan {
             executor_kind: GatewayUpstreamExecutorKind::CodexResponses,
             route_kind: GatewayUpstreamRouteKind::AggregateApi,
-        }
+        },
+        None,
     ));
     assert!(!should_try_provider_executor_aggregate_route(
         GatewayUpstreamExecutionPlan {
             executor_kind: GatewayUpstreamExecutorKind::Gemini,
             route_kind: GatewayUpstreamRouteKind::AccountRotation,
-        }
+        },
+        None,
     ));
     assert!(!should_try_provider_executor_aggregate_route(
         GatewayUpstreamExecutionPlan {
             executor_kind: GatewayUpstreamExecutorKind::CodexResponses,
             route_kind: GatewayUpstreamRouteKind::AccountRotation,
-        }
+        },
+        None,
+    ));
+
+    let hybrid = execution_plan(GatewayUpstreamRouteKind::HybridAccountFirst);
+    let aggregate_only = model_with_routes(&[("aggregate_api", "agg-test")]);
+    let dual_route =
+        model_with_routes(&[("account_pool", "default"), ("aggregate_api", "agg-test")]);
+    assert!(should_try_provider_executor_aggregate_route(
+        hybrid,
+        Some(&aggregate_only),
+    ));
+    assert!(!should_try_provider_executor_aggregate_route(
+        hybrid,
+        Some(&dual_route),
     ));
 }
 
@@ -322,9 +358,9 @@ fn hybrid_account_first_keeps_account_empty_for_aggregate_fallback() {
         route_kind: GatewayUpstreamRouteKind::AggregateApi,
     };
 
-    assert!(!respond_when_account_candidates_empty(hybrid));
-    assert!(respond_when_account_candidates_empty(account_only));
-    assert!(respond_when_account_candidates_empty(aggregate_only));
+    assert!(!respond_when_account_candidates_empty(hybrid, None));
+    assert!(respond_when_account_candidates_empty(account_only, None));
+    assert!(respond_when_account_candidates_empty(aggregate_only, None));
 }
 
 #[test]
@@ -333,19 +369,60 @@ fn only_hybrid_falls_back_to_aggregate_after_account_exhaustion() {
         GatewayUpstreamExecutionPlan {
             executor_kind: GatewayUpstreamExecutorKind::CodexResponses,
             route_kind: GatewayUpstreamRouteKind::HybridAccountFirst,
-        }
+        },
+        None,
     ));
     assert!(!should_fallback_to_aggregate_after_account_exhaustion(
         GatewayUpstreamExecutionPlan {
             executor_kind: GatewayUpstreamExecutorKind::CodexResponses,
             route_kind: GatewayUpstreamRouteKind::AccountRotation,
-        }
+        },
+        None,
     ));
     assert!(!should_fallback_to_aggregate_after_account_exhaustion(
         GatewayUpstreamExecutionPlan {
             executor_kind: GatewayUpstreamExecutorKind::CodexResponses,
             route_kind: GatewayUpstreamRouteKind::AggregateApi,
-        }
+        },
+        None,
+    ));
+}
+
+#[test]
+fn hybrid_account_only_does_not_fallback_to_aggregate() {
+    let hybrid = GatewayUpstreamExecutionPlan {
+        executor_kind: GatewayUpstreamExecutorKind::CodexResponses,
+        route_kind: GatewayUpstreamRouteKind::HybridAccountFirst,
+    };
+    let account_only = model_with_routes(&[("account_pool", "default")]);
+
+    assert!(respond_when_account_candidates_empty(
+        hybrid,
+        Some(&account_only),
+    ));
+    assert!(!should_fallback_to_aggregate_after_account_exhaustion(
+        hybrid,
+        Some(&account_only),
+    ));
+}
+
+#[test]
+fn hybrid_dual_route_keeps_account_first_and_aggregate_fallback() {
+    let hybrid = execution_plan(GatewayUpstreamRouteKind::HybridAccountFirst);
+    let dual_route =
+        model_with_routes(&[("account_pool", "default"), ("aggregate_api", "agg-test")]);
+
+    assert!(!should_try_provider_executor_aggregate_route(
+        hybrid,
+        Some(&dual_route),
+    ));
+    assert!(!respond_when_account_candidates_empty(
+        hybrid,
+        Some(&dual_route),
+    ));
+    assert!(should_fallback_to_aggregate_after_account_exhaustion(
+        hybrid,
+        Some(&dual_route),
     ));
 }
 
@@ -390,7 +467,7 @@ fn aggregate_route_model_validation_uses_explicit_v2_route() {
         "vendor-upstream",
     );
 
-    model_route_error(
+    validate_model_route(
         &storage,
         "key-route",
         Some("vendor-route"),
@@ -501,7 +578,7 @@ fn account_route_model_validation_ignores_aggregate_only_mapping() {
         "vendor-account-route",
     );
 
-    let err = model_route_error(
+    let err = validate_model_route(
         &storage,
         "key-route",
         Some("vendor-account-route"),
@@ -526,13 +603,133 @@ fn hybrid_model_validation_accepts_aggregate_mapping() {
         "vendor-hybrid-upstream",
     );
 
-    model_route_error(
+    let model = validate_model_route(
         &storage,
         "key-route",
         Some("vendor-hybrid"),
         execution_plan(GatewayUpstreamRouteKind::HybridAccountFirst),
     )
-    .expect("hybrid route should accept aggregate mapping");
+    .expect("hybrid route should accept aggregate mapping")
+    .expect("configured model");
+
+    assert!(!has_enabled_default_account_pool_route(&model));
+    assert!(has_enabled_aggregate_api_route(&model));
+}
+
+#[test]
+fn hybrid_model_validation_returns_dual_route_configuration() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    add_model_route_v2(
+        &storage,
+        "vendor-hybrid-dual",
+        "account_pool",
+        "default",
+        "vendor-hybrid-dual",
+    );
+    add_model_route_v2(
+        &storage,
+        "vendor-hybrid-dual",
+        "aggregate_api",
+        "agg-hybrid-dual",
+        "vendor-hybrid-upstream",
+    );
+
+    let model = validate_model_route(
+        &storage,
+        "key-route",
+        Some("vendor-hybrid-dual"),
+        execution_plan(GatewayUpstreamRouteKind::HybridAccountFirst),
+    )
+    .expect("hybrid route should accept both route kinds")
+    .expect("configured model");
+
+    assert!(has_enabled_default_account_pool_route(&model));
+    assert!(has_enabled_aggregate_api_route(&model));
+}
+
+#[test]
+fn hybrid_model_validation_ignores_non_default_account_pool_routes() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    add_model_route_v2(
+        &storage,
+        "vendor-hybrid-non-default-pool",
+        "account_pool",
+        "secondary",
+        "vendor-hybrid-non-default-pool",
+    );
+    add_model_route_v2(
+        &storage,
+        "vendor-hybrid-non-default-pool",
+        "aggregate_api",
+        "agg-hybrid-non-default-pool",
+        "vendor-hybrid-upstream",
+    );
+
+    let model = validate_model_route(
+        &storage,
+        "key-route",
+        Some("vendor-hybrid-non-default-pool"),
+        execution_plan(GatewayUpstreamRouteKind::HybridAccountFirst),
+    )
+    .expect("hybrid route should accept its aggregate route")
+    .expect("configured model");
+
+    assert!(!has_enabled_default_account_pool_route(&model));
+    assert!(has_enabled_aggregate_api_route(&model));
+}
+
+#[test]
+fn model_route_validation_ignores_disabled_routes() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    add_model_route_v2(
+        &storage,
+        "vendor-disabled-route",
+        "aggregate_api",
+        "agg-disabled",
+        "vendor-disabled-upstream",
+    );
+    let mut model = storage
+        .get_managed_model_v2("vendor-disabled-route")
+        .expect("read V2 model")
+        .expect("V2 model");
+    model.routes[0].enabled = false;
+    storage
+        .upsert_managed_model_v2(&ManagedModelV2Upsert {
+            previous_slug: Some("vendor-disabled-route".to_string()),
+            model,
+        })
+        .expect("disable V2 model route");
+
+    let error = validate_model_route(
+        &storage,
+        "key-route",
+        Some("vendor-disabled-route"),
+        execution_plan(GatewayUpstreamRouteKind::HybridAccountFirst),
+    )
+    .expect_err("disabled routes should be unavailable");
+
+    assert_eq!(error.0, 503);
+    assert!(error.1.contains("model_unavailable"));
+}
+
+#[test]
+fn model_route_validation_preserves_missing_model_default_paths() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+
+    for route_kind in [
+        GatewayUpstreamRouteKind::AccountRotation,
+        GatewayUpstreamRouteKind::AggregateApi,
+        GatewayUpstreamRouteKind::HybridAccountFirst,
+    ] {
+        let configured_model =
+            validate_model_route(&storage, "key-route", None, execution_plan(route_kind))
+                .expect("requests without a model should keep the strategy default path");
+        assert!(configured_model.is_none());
+    }
 }
 
 #[test]
@@ -563,11 +760,15 @@ fn account_route_model_validation_accepts_direct_upstream_source_model() {
         )
         .expect("seed direct upstream source model");
 
-    model_route_error(
+    let model = validate_model_route(
         &storage,
         "key-route",
         Some("gpt-5.4-mini"),
         execution_plan(GatewayUpstreamRouteKind::AccountRotation),
     )
-    .expect("account route should accept direct upstream source model");
+    .expect("account route should accept direct upstream source model")
+    .expect("configured model");
+
+    assert!(has_enabled_default_account_pool_route(&model));
+    assert!(!has_enabled_aggregate_api_route(&model));
 }

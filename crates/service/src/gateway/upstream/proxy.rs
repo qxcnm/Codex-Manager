@@ -1,5 +1,6 @@
 use crate::apikey_profile::PROTOCOL_ANTHROPIC_NATIVE;
 use crate::gateway::request_log::RequestLogUsage;
+use codexmanager_core::storage::ManagedModelV2;
 use std::time::Instant;
 use tiny_http::Request;
 
@@ -88,11 +89,19 @@ fn request_deadline_for_path(
 
 fn should_try_provider_executor_aggregate_route(
     execution_plan: super::executor::GatewayUpstreamExecutionPlan,
+    configured_model: Option<&ManagedModelV2>,
 ) -> bool {
-    matches!(
-        execution_plan.route_kind,
-        GatewayUpstreamRouteKind::AggregateApi
-    )
+    match execution_plan.route_kind {
+        GatewayUpstreamRouteKind::AggregateApi => true,
+        // 若模型没有配置本地池就直接请求聚合api
+        GatewayUpstreamRouteKind::HybridAccountFirst => {
+            configured_model.is_some_and(|model: &ManagedModelV2| {
+                has_enabled_aggregate_api_route(model)
+                    && !has_enabled_default_account_pool_route(model)
+            })
+        }
+        GatewayUpstreamRouteKind::AccountRotation => false,
+    }
 }
 
 fn is_hybrid_account_first_route(
@@ -106,14 +115,17 @@ fn is_hybrid_account_first_route(
 
 fn respond_when_account_candidates_empty(
     execution_plan: super::executor::GatewayUpstreamExecutionPlan,
+    configured_model: Option<&ManagedModelV2>,
 ) -> bool {
-    !is_hybrid_account_first_route(execution_plan)
+    !should_fallback_to_aggregate_after_account_exhaustion(execution_plan, configured_model)
 }
 
 fn should_fallback_to_aggregate_after_account_exhaustion(
     execution_plan: super::executor::GatewayUpstreamExecutionPlan,
+    configured_model: Option<&ManagedModelV2>,
 ) -> bool {
     is_hybrid_account_first_route(execution_plan)
+        && configured_model.is_none_or(has_enabled_aggregate_api_route)
 }
 
 fn low_quota_candidate_mode_for_protocol(
@@ -143,16 +155,29 @@ fn route_kind_label(value: GatewayUpstreamRouteKind) -> &'static str {
     }
 }
 
-fn model_route_error(
+fn has_enabled_default_account_pool_route(model: &ManagedModelV2) -> bool {
+    model.routes.iter().any(|route| {
+        route.enabled && route.source_kind == "account_pool" && route.source_id == "default"
+    })
+}
+
+fn has_enabled_aggregate_api_route(model: &ManagedModelV2) -> bool {
+    model
+        .routes
+        .iter()
+        .any(|route| route.enabled && route.source_kind == "aggregate_api")
+}
+
+fn validate_model_route(
     storage: &codexmanager_core::storage::Storage,
     key_id: &str,
     model: Option<&str>,
     execution_plan: super::executor::GatewayUpstreamExecutionPlan,
-) -> Result<(), (u16, String)> {
+) -> Result<Option<ManagedModelV2>, (u16, String)> {
     let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(());
+        return Ok(None);
     };
-    let managed_model = storage
+    let managed_model: Option<ManagedModelV2> = storage
         .get_enabled_model_v2(model)
         .map_err(|err| (500, format!("model_catalog_v2_read_failed: {err}")))?;
     let Some(managed_model) = managed_model else {
@@ -181,26 +206,20 @@ fn model_route_error(
         }
         return Err((403, err));
     }
-    let route_source_kinds = source_kinds_for_route(execution_plan);
-    if !managed_model.routes.iter().any(|route| {
-        route.enabled
-            && route_source_kinds
-                .iter()
-                .any(|source_kind| route.source_kind == *source_kind)
-    }) {
+    let route_enabled = match execution_plan.route_kind {
+        GatewayUpstreamRouteKind::AccountRotation => {
+            has_enabled_default_account_pool_route(&managed_model)
+        }
+        GatewayUpstreamRouteKind::AggregateApi => has_enabled_aggregate_api_route(&managed_model),
+        GatewayUpstreamRouteKind::HybridAccountFirst => {
+            has_enabled_default_account_pool_route(&managed_model)
+                || has_enabled_aggregate_api_route(&managed_model)
+        }
+    };
+    if !route_enabled {
         return Err((503, format!("model_unavailable: {model}")));
     }
-    Ok(())
-}
-
-fn source_kinds_for_route(
-    execution_plan: super::executor::GatewayUpstreamExecutionPlan,
-) -> Vec<&'static str> {
-    match execution_plan.route_kind {
-        GatewayUpstreamRouteKind::AccountRotation => vec!["account_pool"],
-        GatewayUpstreamRouteKind::AggregateApi => vec!["aggregate_api"],
-        GatewayUpstreamRouteKind::HybridAccountFirst => vec!["account_pool", "aggregate_api"],
-    }
+    Ok(Some(managed_model))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -727,38 +746,46 @@ pub(in super::super) fn proxy_validated_request(
         route_kind_label(execution_plan.route_kind),
     );
 
-    if let Err((status_code, message)) = model_route_error(
+    let configured_model = match validate_model_route(
         &storage,
         key_id.as_str(),
         model_for_log.as_deref(),
         execution_plan,
     ) {
-        return respond_model_route_error(
-            request,
-            &storage,
-            trace_id.as_str(),
-            key_id.as_str(),
-            original_path.as_str(),
-            path.as_str(),
-            request_method.as_str(),
-            response_adapter,
-            service_tier_for_log.as_deref(),
-            effective_service_tier_for_log.as_deref(),
-            service_tier_source_for_log.as_deref(),
-            gateway_mode_for_log.as_deref(),
-            client_model_for_log.as_deref(),
-            model_for_log.as_deref(),
-            model_source_for_log.as_deref(),
-            client_reasoning_for_log.as_deref(),
-            reasoning_for_log.as_deref(),
-            reasoning_source_for_log.as_deref(),
-            started_at,
-            status_code,
-            message,
-        );
-    }
+        Ok(configured_model) => configured_model,
+        Err((status_code, message)) => {
+            return respond_model_route_error(
+                request,
+                &storage,
+                trace_id.as_str(),
+                key_id.as_str(),
+                original_path.as_str(),
+                path.as_str(),
+                request_method.as_str(),
+                response_adapter,
+                service_tier_for_log.as_deref(),
+                effective_service_tier_for_log.as_deref(),
+                service_tier_source_for_log.as_deref(),
+                gateway_mode_for_log.as_deref(),
+                client_model_for_log.as_deref(),
+                model_for_log.as_deref(),
+                model_source_for_log.as_deref(),
+                client_reasoning_for_log.as_deref(),
+                reasoning_for_log.as_deref(),
+                reasoning_source_for_log.as_deref(),
+                started_at,
+                status_code,
+                message,
+            );
+        }
+    };
 
-    if should_try_provider_executor_aggregate_route(execution_plan) {
+    if should_try_provider_executor_aggregate_route(execution_plan, configured_model.as_ref()) {
+        let (aggregate_path, aggregate_body) = if is_hybrid_account_first_route(execution_plan) {
+            (passthrough_path.as_str(), &passthrough_body)
+        } else {
+            (path.as_str(), &body)
+        };
         match resolve_aggregate_candidates_for_route(
             &storage,
             protocol_type.as_str(),
@@ -772,10 +799,10 @@ pub(in super::super) fn proxy_validated_request(
                     trace_id.as_str(),
                     key_id.as_str(),
                     original_path.as_str(),
-                    path.as_str(),
+                    aggregate_path,
                     request_method.as_str(),
                     &method,
-                    &body,
+                    aggregate_body,
                     client_is_stream,
                     gateway_mode_for_log.as_deref(),
                     client_model_for_log.as_deref(),
@@ -800,7 +827,7 @@ pub(in super::super) fn proxy_validated_request(
                     trace_id.as_str(),
                     key_id.as_str(),
                     original_path.as_str(),
-                    path.as_str(),
+                    aggregate_path,
                     request_method.as_str(),
                     super::super::ResponseAdapter::Passthrough,
                     service_tier_for_log.as_deref(),
@@ -835,7 +862,7 @@ pub(in super::super) fn proxy_validated_request(
         account_group_filter.as_deref(),
         account_plan_filter.as_deref(),
         low_quota_candidate_mode_for_protocol(protocol_type.as_str()),
-        respond_when_account_candidates_empty(execution_plan),
+        respond_when_account_candidates_empty(execution_plan, configured_model.as_ref()),
     ) {
         CandidatePrecheckResult::Ready {
             request,
@@ -924,7 +951,10 @@ pub(in super::super) fn proxy_validated_request(
         trace_id.as_str(),
     );
     let base = setup.upstream_base.as_str();
-    if should_fallback_to_aggregate_after_account_exhaustion(execution_plan) {
+    if should_fallback_to_aggregate_after_account_exhaustion(
+        execution_plan,
+        configured_model.as_ref(),
+    ) {
         prepared_hybrid_aggregate_candidates =
             Some(resolve_hybrid_aggregate_candidates_for_prepare(
                 &storage,
@@ -1036,7 +1066,10 @@ pub(in super::super) fn proxy_validated_request(
         skipped_inflight,
         last_attempt_error.as_deref(),
     );
-    if should_fallback_to_aggregate_after_account_exhaustion(execution_plan) {
+    if should_fallback_to_aggregate_after_account_exhaustion(
+        execution_plan,
+        configured_model.as_ref(),
+    ) {
         match take_or_resolve_aggregate_candidates(
             &mut prepared_hybrid_aggregate_candidates,
             &storage,
