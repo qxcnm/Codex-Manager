@@ -1350,7 +1350,8 @@ fn send_websocket_upstream_request(
         target_url.to_string()
     };
     let request_headers = request_headers.to_vec();
-    let proxy_url = super::super::super::current_upstream_proxy_url_for_account(account_id);
+    let proxy_url =
+        super::super::super::current_websocket_proxy_url_for_account(account_id, ws_url.as_str())?;
     let handshake_timeout = websocket_handshake_timeout(request_deadline);
 
     let (meta_tx, meta_rx) = mpsc::sync_channel::<Result<(), String>>(1);

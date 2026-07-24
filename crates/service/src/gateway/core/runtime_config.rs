@@ -383,6 +383,91 @@ pub(crate) fn upstream_proxy_url_for_account(account_id: &str) -> Option<String>
     current_upstream_proxy_url()
 }
 
+pub(crate) fn websocket_proxy_url_for_account(
+    account_id: &str,
+    target_url: &str,
+) -> Result<Option<String>, String> {
+    if let Some(proxy_url) = upstream_proxy_url_for_account(account_id) {
+        return Ok(Some(proxy_url));
+    }
+    environment_proxy_url_for_target(target_url)
+}
+
+fn environment_proxy_url_for_target(target_url: &str) -> Result<Option<String>, String> {
+    let target = reqwest::Url::parse(target_url.trim())
+        .map_err(|err| format!("invalid websocket target url {target_url}: {err}"))?;
+    if environment_no_proxy_matches(&target) {
+        return Ok(None);
+    }
+
+    let proxy_url = match target.scheme() {
+        "wss" | "https" => {
+            first_environment_proxy(&["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"])
+        }
+        "ws" | "http" => {
+            first_environment_proxy(&["http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"])
+        }
+        _ => None,
+    };
+    normalize_upstream_proxy_url(proxy_url.as_deref())
+        .map_err(|err| format!("invalid websocket environment proxy: {err}"))
+}
+
+fn first_environment_proxy(keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| env_non_empty(key))
+}
+
+fn environment_no_proxy_matches(target: &reqwest::Url) -> bool {
+    let Some(host) = target.host_str().map(|value| value.to_ascii_lowercase()) else {
+        return false;
+    };
+    let target_port = target.port_or_known_default();
+    let Some(raw) = env_non_empty("no_proxy").or_else(|| env_non_empty("NO_PROXY")) else {
+        return false;
+    };
+
+    raw.split(',').any(|entry| {
+        let entry = entry.trim();
+        if entry == "*" {
+            return true;
+        }
+        if entry.is_empty() {
+            return false;
+        }
+
+        let (pattern, port) = split_no_proxy_host_port(entry);
+        if port.is_some() && port != target_port {
+            return false;
+        }
+        let pattern = pattern
+            .trim()
+            .trim_start_matches("*.")
+            .trim_start_matches('.')
+            .trim_end_matches('.')
+            .to_ascii_lowercase();
+        !pattern.is_empty() && (host == pattern || host.ends_with(format!(".{pattern}").as_str()))
+    })
+}
+
+fn split_no_proxy_host_port(entry: &str) -> (&str, Option<u16>) {
+    if let Some(rest) = entry.strip_prefix('[') {
+        if let Some((host, suffix)) = rest.split_once(']') {
+            let port = suffix
+                .strip_prefix(':')
+                .and_then(|value| value.parse().ok());
+            return (host, port);
+        }
+    }
+    if entry.matches(':').count() == 1 {
+        if let Some((host, port)) = entry.rsplit_once(':') {
+            if let Ok(port) = port.parse::<u16>() {
+                return (host, Some(port));
+            }
+        }
+    }
+    (entry, None)
+}
+
 pub(crate) fn upstream_client_for_aggregate_api_candidate(
     aggregate_api_id: &str,
     url: &str,
