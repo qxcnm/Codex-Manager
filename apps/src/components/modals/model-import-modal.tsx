@@ -162,9 +162,9 @@ export function ModelImportModal({
       <DialogContent className="glass-card p-0 sm:max-w-[760px]">
         <div className="max-h-[82vh] overflow-y-auto p-5">
           <DialogHeader>
-            <DialogTitle>{t("从本地 JSON 导入")}</DialogTitle>
+            <DialogTitle>{t("导入到本地网关目录")}</DialogTitle>
             <DialogDescription>
-              {t("支持模型目录导出格式和 Codex catalog 格式；所有导入项都会作为自定义模型处理。")}
+              {t("支持模型目录导出格式和 Codex catalog 格式；所有导入项都会作为本地网关自定义模型处理，不影响直接连接 OpenAI 或使用官方目录的账号池。")}
             </DialogDescription>
           </DialogHeader>
 

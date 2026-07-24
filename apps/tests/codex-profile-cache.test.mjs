@@ -82,6 +82,12 @@ test("模型目录不再暴露 Codex models_cache 覆盖入口", async () => {
   assert.doesNotMatch(tauriService, /service_export_codex_models_cache|models_cache\.json/);
   assert.doesNotMatch(tauriRegistry, /service_export_codex_models_cache/);
   assert.match(readme, /不提供写入或下载 `~\/\.codex\/models_cache\.json`/);
+  assert.match(page, /当前 Codex 模型来源/);
+  assert.match(page, /本地目录是否影响当前 Codex/);
+  assert.match(page, /刷新本地目录/);
+  assert.match(page, /新增网关自定义模型/);
+  assert.match(page, /导入到本地网关目录/);
+  assert.doesNotMatch(page, /本地模型目录是唯一运行时真相源/);
 });
 
 test("平台模式切换透传并持久化 Codex 后台重载开关", async () => {

@@ -69,6 +69,7 @@ test("accounts 模式管理员菜单按任务域分组并保留账号体系入�
   assert.equal(routes.getTopLevelRouteLabel("/account-manager", access), "成员账号");
   assert.equal(routes.getTopLevelRouteLabel("/model-groups", access), "模型组");
   assert.equal(routes.getTopLevelRouteLabel("/platform-mode", access), "Codex 接入方式");
+  assert.equal(routes.getTopLevelRouteLabel("/models", access), "模型与路由");
   assert.equal(routes.getTopLevelRouteLabel("/skills", access), "Skills 与插件");
 });
 

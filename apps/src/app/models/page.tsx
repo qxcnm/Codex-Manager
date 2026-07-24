@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Boxes,
+  Cable,
   CircleDollarSign,
   Database,
   EyeOff,
@@ -28,7 +29,13 @@ import { ModelCatalogModal } from "@/components/modals/model-catalog-modal";
 import { ModelImportModal } from "@/components/modals/model-import-modal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Empty, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
@@ -51,12 +58,21 @@ import {
 } from "@/components/ui/table";
 import { useDesktopPageActive } from "@/hooks/useDesktopPageActive";
 import { isAdminRole, resolveSessionRole, useAppSession } from "@/hooks/useAppSession";
+import {
+  CODEX_PROFILE_MODE_LABELS,
+  useCodexProfileModeStatus,
+} from "@/hooks/useCodexProfileModeStatus";
 import { useManagedModels } from "@/hooks/useManagedModels";
 import { usePageTransitionReady } from "@/hooks/usePageTransitionReady";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
 import { accountClient } from "@/lib/api/account-client";
+import {
+  CODEX_PROFILE_CANDIDATES_QUERY_KEY,
+  codexProfileClient,
+} from "@/lib/api/codex-profile-client";
 import { microusdToUsdPerMillion } from "@/lib/api/managed-models-v2";
 import { useI18n } from "@/lib/i18n/provider";
+import type { CodexProfileApiKeyCandidate } from "@/types";
 import type {
   ManagedModelBatchRouteAssignmentV2,
   ManagedModelV2,
@@ -83,6 +99,46 @@ const MODEL_FILTER_LABELS: Record<ModelFilter, string> = {
   route_missing: "路由缺失",
   hidden: "已隐藏",
 };
+
+const ROTATION_STRATEGY_LABELS: Record<string, string> = {
+  account_rotation: "OpenAI 账号池",
+  aggregate_api_rotation: "聚合 API",
+  hybrid_rotation: "混合路由",
+};
+
+function routeStrategyLabel(
+  candidate: CodexProfileApiKeyCandidate | undefined,
+  t: (message: string) => string,
+): string {
+  if (!candidate) return t("无法确认");
+  return t(
+    ROTATION_STRATEGY_LABELS[candidate.rotationStrategy] ||
+      candidate.rotationStrategy ||
+      "无法确认",
+  );
+}
+
+function catalogSourceLabel(
+  candidate: CodexProfileApiKeyCandidate | undefined,
+  t: (message: string) => string,
+): string {
+  if (candidate?.catalogSource === "official") return t("OpenAI 官方目录");
+  if (candidate?.catalogSource === "managed") {
+    return t("CodexManager 本地目录");
+  }
+  return t("无法确认");
+}
+
+function CatalogStatusFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-border/60 bg-background/40 p-3">
+      <p className="text-[11px] text-muted-foreground">{label}</p>
+      <p className="mt-1 break-words text-sm font-semibold text-foreground">
+        {value}
+      </p>
+    </div>
+  );
+}
 
 function modelFilterLabel(
   filter: ModelFilter,
@@ -181,6 +237,7 @@ export default function ModelsPage() {
   const role = resolveSessionRole(session, isSessionLoading, isDesktopRuntime);
   const isAdminMode = isAdminRole(role);
   const isPageActive = useDesktopPageActive("/models/");
+  const codexModeStatus = useCodexProfileModeStatus({ enabled: isAdminMode });
   const {
     models,
     stats,
@@ -222,6 +279,55 @@ export default function ModelsPage() {
     staleTime: 60_000,
     retry: 1,
   });
+
+  const codexCandidatesQuery = useQuery({
+    queryKey: CODEX_PROFILE_CANDIDATES_QUERY_KEY,
+    queryFn: () => codexProfileClient.listCandidates(),
+    enabled: isAdminMode && isServiceReady && isPageActive,
+    staleTime: 5_000,
+    retry: 1,
+  });
+  const activeApiKey = codexModeStatus.status?.selectedApiKeyId
+    ? codexCandidatesQuery.data?.apiKeys.find(
+        (candidate) =>
+          candidate.id === codexModeStatus.status?.selectedApiKeyId,
+      )
+    : undefined;
+  const codexMode = codexModeStatus.status?.mode ?? null;
+  const currentConnection = codexMode
+    ? t(CODEX_PROFILE_MODE_LABELS[codexMode])
+    : t("无法确认");
+  const currentRoute =
+    codexMode === "direct_account"
+      ? t("所选 OpenAI 账号")
+      : codexMode === "gateway"
+        ? routeStrategyLabel(activeApiKey, t)
+        : t("无法确认");
+  const currentCatalog =
+    codexMode === "direct_account"
+      ? t("OpenAI 官方目录")
+      : codexMode === "gateway"
+        ? catalogSourceLabel(activeApiKey, t)
+        : t("无法确认");
+  const isLocalCatalogActive =
+    codexMode === "gateway" && activeApiKey?.catalogSource === "managed"
+      ? true
+      : codexMode === "direct_account" ||
+          (codexMode === "gateway" && activeApiKey?.catalogSource === "official")
+        ? false
+        : null;
+  const localCatalogEffect =
+    isLocalCatalogActive === true
+      ? t("当前生效")
+      : isLocalCatalogActive === false
+        ? t("当前不生效")
+        : t("无法确认");
+  const catalogImpactDescription =
+    isLocalCatalogActive === true
+      ? t("当前平台密钥使用本地网关目录；下方模型、路由和可见性设置会影响当前 Codex。")
+      : isLocalCatalogActive === false
+        ? t("当前 Codex 跟随 OpenAI 官方目录；下方设置仅供使用本地目录的平台密钥，不会改变当前模型列表。")
+        : t("尚未确认当前 Codex 的目录来源；请先在 Codex 接入方式页面检查配置。");
 
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<ModelFilter>("all");
@@ -316,13 +422,13 @@ export default function ModelsPage() {
     if (deleteSlugs.length === 1) {
       const model = models.find((item) => item.slug === deleteSlugs[0]);
       return model?.origin === "builtin"
-        ? t("内置模型 {slug} 将被隐藏并禁用，数据不会删除。", {
+        ? t("内置模型 {slug} 将从本地网关目录隐藏并禁用，数据不会删除。此操作不影响直接连接 OpenAI 或使用官方目录的账号池。", {
             slug: model.slug,
           })
-        : t("确定要永久删除自定义模型 {slug} 吗？", { slug: deleteSlugs[0] });
+        : t("确定要从本地网关目录永久删除自定义模型 {slug} 吗？此操作不影响直接连接 OpenAI 或使用官方目录的账号池。", { slug: deleteSlugs[0] });
     }
     return t(
-      "将处理 {count} 个模型：{builtin} 个内置模型会被隐藏并禁用，其余自定义模型会被删除。",
+      "将处理本地网关目录中的 {count} 个模型：{builtin} 个内置模型会被隐藏并禁用，其余自定义模型会被删除。此操作不影响直接连接 OpenAI 或使用官方目录的账号池。",
       { count: deleteSlugs.length, builtin: builtinCount },
     );
   }, [deleteSlugs, models, t]);
@@ -331,8 +437,8 @@ export default function ModelsPage() {
     <>
       <PageWorkspace>
         <PageHeader
-          title={isAdminMode ? t("模型管理") : t("可用模型")}
-          description={t("本地模型目录是唯一运行时真相源；价格、路由和指令策略会原子保存。")}
+          title={isAdminMode ? t("模型与路由") : t("可用模型")}
+          description={t("配置 CodexManager 本地网关目录中的模型、价格、路由和指令策略。")}
           actions={
             <>
               <Button
@@ -342,7 +448,7 @@ export default function ModelsPage() {
                 onClick={() => void refreshLocal()}
               >
                 <RefreshCw className={`mr-1.5 h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
-                {t("重新读取")}
+                {t("刷新本地目录")}
               </Button>
               {isAdminMode ? (
                 <Button
@@ -352,7 +458,7 @@ export default function ModelsPage() {
                   onClick={() => setImportOpen(true)}
                 >
                   <FileJson className="mr-1.5 h-4 w-4" />
-                  {t("从本地 JSON 导入")}
+                  {t("导入到本地网关目录")}
                 </Button>
               ) : null}
               {isAdminMode ? (
@@ -362,12 +468,42 @@ export default function ModelsPage() {
                   onClick={openNewModel}
                 >
                   <Plus className="mr-1.5 h-4 w-4" />
-                  {t("新增自定义模型")}
+                  {t("新增网关自定义模型")}
                 </Button>
               ) : null}
             </>
           }
         />
+
+        {isAdminMode ? (
+          <Card className="border-primary/20 bg-primary/5">
+            <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Cable className="h-4 w-4 text-primary" />
+                  {t("当前 Codex 模型来源")}
+                </CardTitle>
+                <CardDescription className="mt-1.5">
+                  {catalogImpactDescription}
+                </CardDescription>
+              </div>
+              <Badge
+                variant={isLocalCatalogActive ? "default" : "secondary"}
+              >
+                {t("本地目录")}：{localCatalogEffect}
+              </Badge>
+            </CardHeader>
+            <CardContent className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              <CatalogStatusFact label={t("接入方式")} value={currentConnection} />
+              <CatalogStatusFact label={t("请求路由")} value={currentRoute} />
+              <CatalogStatusFact label={t("模型来源")} value={currentCatalog} />
+              <CatalogStatusFact
+                label={t("本地目录是否影响当前 Codex")}
+                value={localCatalogEffect}
+              />
+            </CardContent>
+          </Card>
+        ) : null}
 
         <section className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
           <MetricCard title={t("总数")} value={stats.total} icon={Database} tone="blue" />
@@ -382,7 +518,7 @@ export default function ModelsPage() {
           <CardHeader className="border-b border-border/50 px-4 py-3">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div>
-                <CardTitle>{t("模型目录明细")}</CardTitle>
+                <CardTitle>{t("本地网关模型目录")}</CardTitle>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {t("显示来源、启用状态、价格状态、指令模式和路由状态。")}
                   {isAdminMode ? (
@@ -581,7 +717,7 @@ export default function ModelsPage() {
                                 <Button type="button" variant="ghost" size="icon" disabled={isModelOperationPending} aria-label={t("编辑模型 {slug}", { slug: model.slug })} onClick={() => openEditor(model.slug)}>
                                   <PencilLine className="h-4 w-4" />
                                 </Button>
-                                <Button type="button" variant="ghost" size="icon" disabled={isModelOperationPending} aria-label={model.origin === "builtin" ? t("隐藏模型 {slug}", { slug: model.slug }) : t("删除模型 {slug}", { slug: model.slug })} onClick={() => setDeleteSlugs([model.slug])}>
+                                <Button type="button" variant="ghost" size="icon" disabled={isModelOperationPending} aria-label={model.origin === "builtin" ? t("从本地网关目录隐藏模型 {slug}", { slug: model.slug }) : t("从本地网关目录删除模型 {slug}", { slug: model.slug })} onClick={() => setDeleteSlugs([model.slug])}>
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
                               </div>
@@ -641,9 +777,9 @@ export default function ModelsPage() {
           onOpenChange={(open) => {
             if (!open) setDeleteSlugs([]);
           }}
-          title={deleteSlugs.length > 1 ? t("批量删除模型") : t("删除模型")}
+          title={deleteSlugs.length > 1 ? t("从本地网关目录批量移除模型") : t("从本地网关目录移除模型")}
           description={confirmDeleteDescription}
-          confirmText={isDeleting ? t("处理中...") : t("删除")}
+          confirmText={isDeleting ? t("处理中...") : t("移除")}
           confirmVariant="destructive"
           onConfirm={async () => {
             const targets = [...deleteSlugs];

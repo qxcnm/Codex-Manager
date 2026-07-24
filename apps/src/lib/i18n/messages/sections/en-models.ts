@@ -3,6 +3,38 @@
 import type { MessageCatalog } from "../types";
 
 export const EN_MODELS_MESSAGES: MessageCatalog = {
+  模型与路由: "Models and routing",
+  "配置 CodexManager 本地网关目录中的模型、价格、路由和指令策略。":
+    "Configure models, prices, routes, and instruction policies in the local CodexManager gateway catalog.",
+  刷新本地目录: "Refresh local catalog",
+  "本地网关模型目录已刷新": "Local gateway model catalog refreshed",
+  "导入到本地网关目录": "Import into local gateway catalog",
+  "新增网关自定义模型": "Add custom gateway model",
+  "当前 Codex 模型来源": "Current Codex model source",
+  当前生效: "Currently active",
+  当前不生效: "Not active for current Codex",
+  本地目录: "Local catalog",
+  "本地目录是否影响当前 Codex": "Does the local catalog affect current Codex?",
+  "当前平台密钥使用本地网关目录；下方模型、路由和可见性设置会影响当前 Codex。":
+    "The current platform key uses the local gateway catalog. The model, route, and visibility settings below affect the current Codex session.",
+  "当前 Codex 跟随 OpenAI 官方目录；下方设置仅供使用本地目录的平台密钥，不会改变当前模型列表。":
+    "The current Codex session follows the official OpenAI catalog. The settings below apply only to platform keys that use the local catalog and will not change the current model list.",
+  "尚未确认当前 Codex 的目录来源；请先在 Codex 接入方式页面检查配置。":
+    "The current Codex catalog source is not confirmed. Check the configuration on the Codex Connection page.",
+  本地网关模型目录: "Local gateway model catalog",
+  "从本地网关目录隐藏模型 {slug}": "Hide model {slug} from local gateway catalog",
+  "从本地网关目录删除模型 {slug}": "Delete model {slug} from local gateway catalog",
+  "内置模型 {slug} 将从本地网关目录隐藏并禁用，数据不会删除。此操作不影响直接连接 OpenAI 或使用官方目录的账号池。":
+    "Built-in model {slug} will be hidden and disabled in the local gateway catalog without deleting its data. This does not affect direct OpenAI connections or account pools that use the official catalog.",
+  "确定要从本地网关目录永久删除自定义模型 {slug} 吗？此操作不影响直接连接 OpenAI 或使用官方目录的账号池。":
+    "Permanently delete custom model {slug} from the local gateway catalog? This does not affect direct OpenAI connections or account pools that use the official catalog.",
+  "将处理本地网关目录中的 {count} 个模型：{builtin} 个内置模型会被隐藏并禁用，其余自定义模型会被删除。此操作不影响直接连接 OpenAI 或使用官方目录的账号池。":
+    "Process {count} models in the local gateway catalog: {builtin} built-in models will be hidden and disabled, and the custom models will be deleted. This does not affect direct OpenAI connections or account pools that use the official catalog.",
+  从本地网关目录批量移除模型: "Remove models from local gateway catalog",
+  从本地网关目录移除模型: "Remove model from local gateway catalog",
+  移除: "Remove",
+  "支持模型目录导出格式和 Codex catalog 格式；所有导入项都会作为本地网关自定义模型处理，不影响直接连接 OpenAI 或使用官方目录的账号池。":
+    "Supports model catalog exports and Codex catalog JSON. Every imported item becomes a custom local gateway model and does not affect direct OpenAI connections or account pools that use the official catalog.",
   可用模型: "Available models",
   模型管理: "Model management",
   "本地模型目录是唯一运行时真相源；价格、路由和 instructions policy 原子保存。":

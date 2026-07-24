@@ -491,7 +491,7 @@ export function useManagedModels() {
       if (!ensureServiceReady("读取模型")) return null;
       try {
         const result = await reloadCatalog();
-        toast.success(t("模型目录已重新读取"));
+        toast.success(t("本地网关模型目录已刷新"));
         return result;
       } catch (error) {
         toast.error(`${t("读取模型失败")}: ${getAppErrorMessage(error)}`);
