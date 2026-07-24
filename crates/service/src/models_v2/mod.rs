@@ -97,9 +97,8 @@ pub(crate) fn delete(slug: &str) -> Result<(), String> {
 pub(super) fn sync_active_gateway_catalog_best_effort(
     storage: &codexmanager_core::storage::Storage,
 ) {
-    if let Err(err) = crate::codex_profile::sync_active_gateway_model_catalog_from_storage(storage)
-    {
-        log::warn!("event=sync_active_gateway_model_catalog_failed error={err}");
+    if let Err(err) = crate::codex_profile::sync_active_gateway_profile_from_storage(storage) {
+        log::warn!("event=sync_active_gateway_profile_failed error={err}");
     }
 }
 

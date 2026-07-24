@@ -155,12 +155,13 @@ pub(crate) fn update_api_key_model(
             .map_err(|e| e.to_string())?;
     }
 
+    let has_protocol_type = protocol_type.is_some();
     let has_upstream_base_url = upstream_base_url.is_some();
     let has_static_headers_json = static_headers_json.is_some();
     let normalized_upstream_base_url = normalize_upstream_base_url(upstream_base_url)?;
     let normalized_static_headers_json = normalize_static_headers_json(static_headers_json)?;
 
-    if protocol_type.is_some() || has_upstream_base_url || has_static_headers_json {
+    if has_protocol_type || has_upstream_base_url || has_static_headers_json {
         let current = storage
             .find_api_key_profile_config_by_id(key_id)
             .map_err(|e| e.to_string())?
@@ -191,6 +192,9 @@ pub(crate) fn update_api_key_model(
                     .or(current.service_tier.as_deref()),
             )
             .map_err(|e| e.to_string())?;
+    }
+    if update_routing_config || has_protocol_type || has_upstream_base_url {
+        crate::codex_profile::sync_active_gateway_profile_for_api_key(&storage, key_id)?;
     }
     Ok(())
 }

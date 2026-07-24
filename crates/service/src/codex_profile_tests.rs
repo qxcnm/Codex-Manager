@@ -158,6 +158,7 @@ name = "Other"
         Some(input.to_string()),
         "http://127.0.0.1:48770/v1",
         &managed_catalog,
+        true,
     )
     .expect("patch gateway");
 
@@ -168,6 +169,15 @@ name = "Other"
     assert!(output.contains("supports_websockets = true"));
     assert!(output.contains("model_catalog_json = \"/tmp/codexmanager/gateway-models.json\""));
     assert!(output.contains("[model_providers.other]"));
+
+    let without_websocket = patch_config_for_gateway(
+        Some(output),
+        "http://127.0.0.1:48770/v1",
+        &managed_catalog,
+        false,
+    )
+    .expect("disable gateway websocket");
+    assert!(without_websocket.contains("supports_websockets = false"));
 }
 
 #[test]
@@ -205,6 +215,7 @@ fn invalid_toml_is_rejected() {
         Some("bad = [".to_string()),
         "http://x/v1",
         Path::new("/tmp/gateway-models.json"),
+        false,
     )
     .is_err());
 }

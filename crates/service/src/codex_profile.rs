@@ -397,6 +397,7 @@ pub(crate) fn apply_gateway(
         previous_model_catalog_for_gateway(&profile_dir, current_config.as_deref())?;
     let paths = managed_profile_paths(&profile_dir)?;
     let catalog_policy = gateway_catalog_policy(&storage, gateway_auth.id.as_str())?;
+    let supports_websockets = gateway_supports_websockets(&storage, gateway_auth.id.as_str())?;
     crate::codex_model_catalog::write_gateway_model_catalog(
         &storage,
         &paths.gateway_model_catalog_path,
@@ -407,6 +408,7 @@ pub(crate) fn apply_gateway(
         current_config,
         &gateway_base_url,
         &paths.gateway_model_catalog_path,
+        supports_websockets,
     )?;
     write_profile_files(
         &profile_dir,
@@ -1994,6 +1996,7 @@ fn patch_config_for_gateway(
     content: Option<String>,
     base_url: &str,
     managed_catalog_path: &Path,
+    supports_websockets: bool,
 ) -> Result<String, String> {
     let mut doc = parse_config(content.as_deref().unwrap_or(""))?;
     doc.as_table_mut()
@@ -2027,13 +2030,11 @@ fn patch_config_for_gateway(
     provider.insert("name", toml_value("CodexManager"));
     provider.insert("base_url", toml_value(base_url));
     provider.insert("wire_api", toml_value("responses"));
-    provider.insert("supports_websockets", toml_value(true));
+    provider.insert("supports_websockets", toml_value(supports_websockets));
     Ok(doc.to_string())
 }
 
-pub(crate) fn sync_active_gateway_model_catalog_from_storage(
-    storage: &Storage,
-) -> Result<bool, String> {
+pub(crate) fn sync_active_gateway_profile_from_storage(storage: &Storage) -> Result<bool, String> {
     let Some(state) = load_state() else {
         return Ok(false);
     };
@@ -2047,12 +2048,37 @@ pub(crate) fn sync_active_gateway_model_catalog_from_storage(
         .as_deref()
         .ok_or_else(|| "active gateway profile is missing api key id".to_string())?;
     let catalog_policy = gateway_catalog_policy(storage, api_key_id)?;
+    let supports_websockets = gateway_supports_websockets(storage, api_key_id)?;
     crate::codex_model_catalog::write_gateway_model_catalog(
         storage,
         &paths.gateway_model_catalog_path,
         catalog_policy,
     )?;
+    let gateway_base_url = normalize_gateway_base_url(state.gateway_base_url.as_deref());
+    let current_config = read_optional(&profile_dir.join(CONFIG_FILE))?;
+    let config_toml = patch_config_for_gateway(
+        current_config,
+        &gateway_base_url,
+        &paths.gateway_model_catalog_path,
+        supports_websockets,
+    )?;
+    write_atomic(&profile_dir.join(CONFIG_FILE), &config_toml)?;
     Ok(true)
+}
+
+pub(crate) fn sync_active_gateway_profile_for_api_key(
+    storage: &Storage,
+    api_key_id: &str,
+) -> Result<bool, String> {
+    let Some(state) = load_state() else {
+        return Ok(false);
+    };
+    if !matches!(state.mode, CodexProfileMode::Gateway)
+        || state.api_key_id.as_deref() != Some(api_key_id)
+    {
+        return Ok(false);
+    }
+    sync_active_gateway_profile_from_storage(storage)
 }
 
 fn gateway_catalog_policy(
@@ -2066,6 +2092,14 @@ fn gateway_catalog_policy(
     Ok(rotation_strategy_catalog_policy(
         api_key.rotation_strategy.as_str(),
     ))
+}
+
+fn gateway_supports_websockets(storage: &Storage, api_key_id: &str) -> Result<bool, String> {
+    let api_key = storage
+        .find_api_key_by_id(api_key_id)
+        .map_err(|err| format!("read api key websocket config failed: {err}"))?
+        .ok_or_else(|| "api key not found".to_string())?;
+    Ok(crate::gateway::gateway_supports_official_responses_websocket(&api_key))
 }
 
 fn rotation_strategy_catalog_policy(
