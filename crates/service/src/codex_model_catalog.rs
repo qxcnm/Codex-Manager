@@ -1,44 +1,48 @@
 use codexmanager_core::rpc::types::ModelsResponse;
 use codexmanager_core::storage::Storage;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GatewayCatalogPolicy {
+    OfficialAccountPool,
+    Managed,
+}
+
 pub(crate) fn write_gateway_model_catalog(
     storage: &Storage,
     catalog_path: &Path,
-    use_official_account_catalog: bool,
+    policy: GatewayCatalogPolicy,
 ) -> Result<usize, String> {
-    let catalog = crate::models_v2::text_generation_models_response_with_storage(storage)?;
-    let official_metadata = load_official_model_metadata()?;
-    let content = if use_official_account_catalog {
-        let custom_model_slugs = storage
-            .list_api_models_v2()
-            .map_err(|err| format!("list custom account-pool models failed: {err}"))?
-            .into_iter()
-            .filter(|model| model.origin == "custom")
-            .map(|model| model.slug)
-            .collect();
-        serialize_account_pool_model_catalog(&catalog, &official_metadata, &custom_model_slugs)?
-    } else {
-        serialize_gateway_model_catalog_with_official(&catalog, &official_metadata)?
+    let (content, models_count) = match policy {
+        GatewayCatalogPolicy::OfficialAccountPool => {
+            let official_models = load_official_model_catalog()?;
+            let models_count = official_models.len();
+            (
+                serialize_account_pool_model_catalog(&official_models)?,
+                models_count,
+            )
+        }
+        GatewayCatalogPolicy::Managed => {
+            let catalog = crate::models_v2::text_generation_models_response_with_storage(storage)?;
+            let models_count = catalog.models.len();
+            (serialize_gateway_model_catalog(&catalog)?, models_count)
+        }
     };
     write_atomic(catalog_path, &content)?;
-    Ok(catalog.models.len())
+    Ok(models_count)
 }
 
-#[derive(Debug, Default)]
-struct OfficialModelMetadata {
-    by_slug: HashMap<String, Value>,
-}
-
-fn load_official_model_metadata() -> Result<OfficialModelMetadata, String> {
+fn load_official_model_catalog() -> Result<Vec<Value>, String> {
     let codex_home = crate::codex_profile::resolve_profile_dir(None)?;
     let cache_path = codex_home.join("models_cache.json");
     if !cache_path.is_file() {
-        return Ok(OfficialModelMetadata::default());
+        return Err(format!(
+            "official Codex model cache not found: {}",
+            cache_path.display()
+        ));
     }
 
     let content = fs::read_to_string(&cache_path).map_err(|err| {
@@ -53,101 +57,31 @@ fn load_official_model_metadata() -> Result<OfficialModelMetadata, String> {
             cache_path.display()
         )
     })?;
-    official_model_metadata_from_value(&value)
+    official_model_catalog_from_value(&value)
 }
 
-fn official_model_metadata_from_value(value: &Value) -> Result<OfficialModelMetadata, String> {
+fn official_model_catalog_from_value(value: &Value) -> Result<Vec<Value>, String> {
     let models = value
         .get("models")
         .and_then(Value::as_array)
         .ok_or_else(|| "official Codex model cache is missing models array".to_string())?;
-    let mut metadata = OfficialModelMetadata::default();
+    if models.is_empty() {
+        return Err("official Codex model cache is empty".to_string());
+    }
     for model in models {
-        let Some(slug) = model.get("slug").and_then(Value::as_str) else {
-            continue;
-        };
-        metadata.by_slug.insert(slug.to_string(), model.clone());
-    }
-    Ok(metadata)
-}
-
-fn model_has_instruction_template(model_messages: Option<&Value>) -> bool {
-    model_messages
-        .and_then(Value::as_object)
-        .and_then(|messages| messages.get("instructions_template"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
-}
-
-fn merge_model_messages(target: &mut Option<Value>, source: Option<&Value>) {
-    let Some(source) = source.and_then(Value::as_object) else {
-        return;
-    };
-    if target.is_none() {
-        *target = Some(Value::Object(source.clone()));
-        return;
-    }
-    let Some(target) = target.as_mut().and_then(Value::as_object_mut) else {
-        return;
-    };
-    for (key, value) in source {
-        let should_fill = match target.get(key) {
-            None | Some(Value::Null) => true,
-            Some(Value::String(value)) => value.trim().is_empty(),
-            Some(_) => false,
-        };
-        if should_fill {
-            target.insert(key.clone(), value.clone());
-        }
-    }
-}
-
-fn fill_missing_official_metadata(
-    model: &mut codexmanager_core::rpc::types::ModelInfo,
-    official_metadata: &OfficialModelMetadata,
-) {
-    let exact = official_metadata.by_slug.get(&model.slug);
-
-    if model
-        .base_instructions
-        .as_deref()
-        .map(str::trim)
-        .is_none_or(|value| value.is_empty())
-    {
-        model.base_instructions = exact
-            .and_then(|source| source.get("base_instructions"))
+        let slug = model
+            .get("slug")
             .and_then(Value::as_str)
-            .map(str::to_string);
-    }
-    if !model_has_instruction_template(model.model_messages.as_ref()) {
-        merge_model_messages(
-            &mut model.model_messages,
-            exact.and_then(|source| source.get("model_messages")),
-        );
-    }
-
-    if let Some(exact) = exact {
-        for (target, key) in [
-            (&mut model.availability_nux, "availability_nux"),
-            (&mut model.upgrade, "upgrade"),
-        ] {
-            if target.as_ref().is_none_or(Value::is_null) {
-                *target = exact.get(key).cloned();
-            }
+            .map(str::trim)
+            .unwrap_or_default();
+        if slug.is_empty() {
+            return Err("official Codex model cache contains a model without slug".to_string());
         }
     }
+    Ok(models.clone())
 }
 
-#[cfg(test)]
 fn serialize_gateway_model_catalog(catalog: &ModelsResponse) -> Result<String, String> {
-    serialize_gateway_model_catalog_with_official(catalog, &OfficialModelMetadata::default())
-}
-
-fn serialize_gateway_model_catalog_with_official(
-    catalog: &ModelsResponse,
-    official_metadata: &OfficialModelMetadata,
-) -> Result<String, String> {
     if catalog.models.is_empty() {
         return Err(
             "managed model catalog is empty; refusing to replace the Codex catalog".to_string(),
@@ -155,7 +89,7 @@ fn serialize_gateway_model_catalog_with_official(
     }
     let mut catalog = catalog.clone();
     for model in &mut catalog.models {
-        prepare_managed_model(model, official_metadata)?;
+        prepare_managed_model(model);
     }
     let mut content = serde_json::to_string_pretty(&catalog)
         .map_err(|err| format!("serialize managed model catalog failed: {err}"))?;
@@ -163,58 +97,24 @@ fn serialize_gateway_model_catalog_with_official(
     Ok(content)
 }
 
-fn serialize_account_pool_model_catalog(
-    catalog: &ModelsResponse,
-    official_metadata: &OfficialModelMetadata,
-    custom_model_slugs: &HashSet<String>,
-) -> Result<String, String> {
-    if catalog.models.is_empty() {
+fn serialize_account_pool_model_catalog(official_models: &[Value]) -> Result<String, String> {
+    if official_models.is_empty() {
         return Err(
-            "managed model catalog is empty; refusing to replace the Codex catalog".to_string(),
-        );
-    }
-
-    let mut models = Vec::with_capacity(catalog.models.len());
-    for model in &catalog.models {
-        if let Some(official) = official_metadata.by_slug.get(&model.slug) {
-            // Account-pool mode intentionally preserves the complete official object. New Codex
-            // fields therefore flow through without requiring a matching Manager release.
-            models.push(official.clone());
-            continue;
-        }
-
-        // Official entries missing from the current Codex catalog are intentionally omitted so
-        // account-pool mode follows removals as well as additions. Only explicit Manager custom
-        // aliases retain the compatibility fallback.
-        if !custom_model_slugs.contains(&model.slug) {
-            continue;
-        }
-        let mut fallback = model.clone();
-        prepare_managed_model(&mut fallback, official_metadata)?;
-        models.push(
-            serde_json::to_value(fallback)
-                .map_err(|err| format!("serialize account-pool fallback model failed: {err}"))?,
-        );
-    }
-
-    if models.is_empty() {
-        return Err(
-            "official Codex model cache has no enabled account-pool models; refusing to replace the Codex catalog"
+            "official Codex model cache is empty; refusing to replace the Codex catalog"
                 .to_string(),
         );
     }
 
-    let mut content = serde_json::to_string_pretty(&serde_json::json!({ "models": models }))
-        .map_err(|err| format!("serialize account-pool model catalog failed: {err}"))?;
+    // Preserve every official object verbatim. Account-pool mode must not depend on Manager's
+    // built-in model list, enabled flags, or schema knowledge.
+    let mut content =
+        serde_json::to_string_pretty(&serde_json::json!({ "models": official_models }))
+            .map_err(|err| format!("serialize account-pool model catalog failed: {err}"))?;
     content.push('\n');
     Ok(content)
 }
 
-fn prepare_managed_model(
-    model: &mut codexmanager_core::rpc::types::ModelInfo,
-    official_metadata: &OfficialModelMetadata,
-) -> Result<(), String> {
-    fill_missing_official_metadata(model, official_metadata);
+fn prepare_managed_model(model: &mut codexmanager_core::rpc::types::ModelInfo) {
     if model
         .shell_type
         .as_deref()
@@ -249,32 +149,17 @@ fn prepare_managed_model(
             .entry(key.to_string())
             .or_insert(serde_json::Value::Null);
     }
-    model
-        .extra
-        .entry("use_responses_lite".to_string())
-        .or_insert(serde_json::Value::Bool(false));
+    // Managed aggregate and hybrid catalogs keep the established full Responses transport.
+    // Responses Lite requires official prompt metadata and must remain exclusive to the raw
+    // official account-pool catalog.
+    model.extra.insert(
+        "use_responses_lite".to_string(),
+        serde_json::Value::Bool(false),
+    );
     model
         .extra
         .entry("include_skills_usage_instructions".to_string())
         .or_insert(serde_json::Value::Bool(false));
-
-    let uses_responses_lite = model
-        .extra
-        .get("use_responses_lite")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let has_base_instructions = model
-        .base_instructions
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
-    if uses_responses_lite && !has_base_instructions {
-        return Err(format!(
-            "model {} enables Responses Lite but official base instructions are unavailable; refusing to replace the Codex catalog",
-            model.slug
-        ));
-    }
-    Ok(())
 }
 
 fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
@@ -410,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn gateway_catalog_fills_official_instruction_metadata() {
+    fn managed_catalog_disables_responses_lite_without_official_metadata() {
         let mut model = ModelInfo {
             slug: "gpt-test".to_string(),
             display_name: "GPT Test".to_string(),
@@ -423,152 +308,55 @@ mod tests {
             models: vec![model],
             ..ModelsResponse::default()
         };
-        let official = official_model_metadata_from_value(&serde_json::json!({
-            "models": [{
-                "slug": "gpt-test",
-                "base_instructions": "official instructions",
-                "model_messages": {
-                    "instructions_template": "official template",
-                    "instructions_variables": {"personality_default": ""}
-                },
-                "availability_nux": {"message": "new"},
-                "upgrade": null
-            }]
-        }))
-        .expect("parse official metadata");
 
-        let content = serialize_gateway_model_catalog_with_official(&catalog, &official)
-            .expect("serialize catalog");
+        let content = serialize_gateway_model_catalog(&catalog).expect("serialize catalog");
         let value: Value = serde_json::from_str(&content).expect("parse catalog");
         let model = &value["models"][0];
 
-        assert_eq!(
-            model["base_instructions"].as_str(),
-            Some("official instructions")
-        );
-        assert_eq!(
-            model["model_messages"]["instructions_template"].as_str(),
-            Some("official template")
-        );
-        assert_eq!(model["availability_nux"]["message"].as_str(), Some("new"));
-        assert!(model["upgrade"].is_null());
-        assert_eq!(model["use_responses_lite"].as_bool(), Some(true));
+        assert_eq!(model["base_instructions"].as_str(), Some(""));
+        assert_eq!(model["use_responses_lite"].as_bool(), Some(false));
     }
 
     #[test]
-    fn account_pool_catalog_preserves_complete_official_model_object() {
-        let catalog = ModelsResponse {
-            models: vec![ModelInfo {
-                slug: "gpt-test".to_string(),
-                display_name: "Manager Name".to_string(),
-                shell_type: Some("manager_shell".to_string()),
-                ..ModelInfo::default()
-            }],
-            ..ModelsResponse::default()
-        };
-        let official = official_model_metadata_from_value(&serde_json::json!({
+    fn account_pool_catalog_preserves_complete_official_catalog() {
+        let official = official_model_catalog_from_value(&serde_json::json!({
             "models": [{
                 "slug": "gpt-test",
                 "display_name": "Official Name",
                 "shell_type": "official_shell",
                 "base_instructions": "official instructions",
                 "future_codex_field": {"revision": 7}
+            }, {
+                "slug": "future-model-manager-does-not-know",
+                "display_name": "Future Model",
+                "future_codex_field": true
             }]
         }))
-        .expect("parse official metadata");
+        .expect("parse official catalog");
 
-        let content = serialize_account_pool_model_catalog(&catalog, &official, &HashSet::new())
+        let content = serialize_account_pool_model_catalog(&official)
             .expect("serialize account-pool catalog");
         let value: Value = serde_json::from_str(&content).expect("parse catalog");
         let model = &value["models"][0];
 
+        assert_eq!(value["models"].as_array().map(Vec::len), Some(2));
         assert_eq!(model["display_name"].as_str(), Some("Official Name"));
         assert_eq!(model["shell_type"].as_str(), Some("official_shell"));
         assert_eq!(model["future_codex_field"]["revision"].as_i64(), Some(7));
         assert!(model.get("max_context_window").is_none());
-    }
-
-    #[test]
-    fn account_pool_catalog_keeps_custom_model_fallback() {
-        let catalog = ModelsResponse {
-            models: vec![ModelInfo {
-                slug: "custom-alias".to_string(),
-                display_name: "Custom Alias".to_string(),
-                ..ModelInfo::default()
-            }],
-            ..ModelsResponse::default()
-        };
-
-        let content = serialize_account_pool_model_catalog(
-            &catalog,
-            &OfficialModelMetadata::default(),
-            &HashSet::from(["custom-alias".to_string()]),
-        )
-        .expect("serialize custom fallback");
-        let value: Value = serde_json::from_str(&content).expect("parse catalog");
-
-        assert_eq!(value["models"][0]["slug"].as_str(), Some("custom-alias"));
         assert_eq!(
-            value["models"][0]["shell_type"].as_str(),
-            Some("shell_command")
+            value["models"][1]["slug"].as_str(),
+            Some("future-model-manager-does-not-know")
         );
     }
 
     #[test]
-    fn account_pool_catalog_omits_stale_builtin_model() {
-        let catalog = ModelsResponse {
-            models: vec![
-                ModelInfo {
-                    slug: "retired-official-model".to_string(),
-                    display_name: "Retired".to_string(),
-                    ..ModelInfo::default()
-                },
-                ModelInfo {
-                    slug: "current-official-model".to_string(),
-                    display_name: "Generated Current".to_string(),
-                    ..ModelInfo::default()
-                },
-            ],
-            ..ModelsResponse::default()
-        };
-        let official = official_model_metadata_from_value(&serde_json::json!({
-            "models": [{
-                "slug": "current-official-model",
-                "display_name": "Official Current"
-            }]
+    fn official_catalog_rejects_missing_slug() {
+        let err = official_model_catalog_from_value(&serde_json::json!({
+            "models": [{"display_name": "Broken"}]
         }))
-        .expect("parse official metadata");
-
-        let content = serialize_account_pool_model_catalog(&catalog, &official, &HashSet::new())
-            .expect("serialize account-pool catalog");
-        let value: Value = serde_json::from_str(&content).expect("parse catalog");
-
-        assert_eq!(value["models"].as_array().map(Vec::len), Some(1));
-        assert_eq!(
-            value["models"][0]["slug"].as_str(),
-            Some("current-official-model")
-        );
-    }
-
-    #[test]
-    fn gateway_catalog_rejects_responses_lite_without_instructions() {
-        let mut model = ModelInfo {
-            slug: "gpt-lite".to_string(),
-            display_name: "GPT Lite".to_string(),
-            ..ModelInfo::default()
-        };
-        model
-            .extra
-            .insert("use_responses_lite".to_string(), Value::Bool(true));
-        let catalog = ModelsResponse {
-            models: vec![model],
-            ..ModelsResponse::default()
-        };
-
-        let err = serialize_gateway_model_catalog(&catalog)
-            .expect_err("Responses Lite without instructions must fail");
-        assert!(err.contains("gpt-lite"));
-        assert!(err.contains("Responses Lite"));
+        .expect_err("missing slug must fail");
+        assert!(err.contains("without slug"));
     }
 
     #[test]
