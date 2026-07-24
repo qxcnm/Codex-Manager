@@ -32,6 +32,30 @@ import type {
   CodexProfileStatus,
 } from "@/types";
 
+type Translate = (
+  value: string,
+  params?: Record<string, string | number>,
+) => string;
+
+const ROTATION_STRATEGY_LABELS: Record<string, string> = {
+  account_rotation: "OpenAI 账号池",
+  aggregate_api_rotation: "聚合 API",
+  hybrid_rotation: "混合路由",
+};
+
+function rotationStrategyLabel(strategy: string, t: Translate): string {
+  return t(ROTATION_STRATEGY_LABELS[strategy] || strategy || "无法确认");
+}
+
+function catalogSourceLabel(
+  source: CodexProfileApiKeyCandidate["catalogSource"] | undefined,
+  t: Translate,
+): string {
+  if (source === "official") return t("OpenAI 官方目录");
+  if (source === "managed") return t("CodexManager 本地目录");
+  return t("无法确认");
+}
+
 function ModeFact({ label, value }: { label: string; value: string }) {
   const displayValue = value || "-";
   const valueSizeClass =
@@ -114,6 +138,70 @@ function MetadataItem({
   );
 }
 
+function ConnectionPreview({
+  t,
+  connection,
+  route,
+  catalog,
+  telemetry,
+  reloadAfterSwitch,
+}: {
+  t: Translate;
+  connection: string;
+  route: string;
+  catalog: string;
+  telemetry: string;
+  reloadAfterSwitch: boolean;
+}) {
+  const facts = [
+    [t("接入方式"), connection],
+    [t("请求路由"), route],
+    [t("模型来源"), catalog],
+    [t("日志与统计"), telemetry],
+    [
+      t("重载行为"),
+      reloadAfterSwitch ? t("切换后尝试重载后台") : t("下次启动时生效"),
+    ],
+  ];
+  return (
+    <div className="grid gap-2 rounded-xl border border-border/60 bg-muted/20 p-3">
+      <p className="text-xs font-semibold text-foreground">{t("应用后")}</p>
+      <dl className="grid gap-1.5 text-xs">
+        {facts.map(([label, value]) => (
+          <div
+            key={label}
+            className="grid grid-cols-[minmax(5.5rem,0.8fr)_minmax(0,1.4fr)] gap-3"
+          >
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="min-w-0 break-words text-right font-medium text-foreground">
+              {value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+function GatewayCandidateText({
+  candidate,
+  label,
+  t,
+}: {
+  candidate: CodexProfileApiKeyCandidate;
+  label: string;
+  t: Translate;
+}) {
+  return (
+    <span className="grid min-w-0 gap-0.5 text-left">
+      <PlatformSelectText value={label} />
+      <span className="min-w-0 whitespace-normal break-words text-[11px] leading-snug text-muted-foreground">
+        {rotationStrategyLabel(candidate.rotationStrategy, t)} · {catalogSourceLabel(candidate.catalogSource, t)}
+      </span>
+    </span>
+  );
+}
+
 export function ReloadAfterSwitchOption({
   t,
   enabled,
@@ -158,6 +246,7 @@ export function CurrentModeCard({
   codexHome,
   activeAccountValue,
   activeKeyValue,
+  activeApiKey,
   lastAppliedAtLabel,
   modeDescription,
 }: {
@@ -175,17 +264,37 @@ export function CurrentModeCard({
   codexHome: string;
   activeAccountValue: string;
   activeKeyValue: string;
+  activeApiKey: CodexProfileApiKeyCandidate | undefined;
   lastAppliedAtLabel: string;
   modeDescription: string;
 }) {
+  const connection = status ? t(CODEX_PROFILE_MODE_LABELS[status.mode]) : "-";
+  const route =
+    status?.mode === "direct_account"
+      ? t("所选 OpenAI 账号")
+      : status?.mode === "gateway"
+        ? rotationStrategyLabel(activeApiKey?.rotationStrategy || "", t)
+        : "-";
+  const catalog =
+    status?.mode === "direct_account"
+      ? t("OpenAI 官方目录")
+      : status?.mode === "gateway"
+        ? catalogSourceLabel(activeApiKey?.catalogSource, t)
+        : "-";
+  const telemetry =
+    status?.mode === "gateway"
+      ? t("CodexManager 可记录")
+      : status?.mode === "direct_account"
+        ? t("CodexManager 不记录")
+        : "-";
   return (
     <Card className="overflow-hidden border-primary/20 bg-primary/5 shadow-sm lg:col-span-2 xl:col-span-1">
       <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between xl:flex-col 2xl:flex-row">
         <div>
           <CardTitle className="flex flex-wrap items-center gap-2 text-xl">
-            {t("当前模式")}
+            {t("当前 Codex 接入")}
             <Badge variant={isGatewayActive ? "default" : "secondary"}>
-              {status ? t(CODEX_PROFILE_MODE_LABELS[status.mode]) : "-"}
+              {connection}
             </Badge>
           </CardTitle>
           <CardDescription className="mt-2 text-sm">{modeDescription}</CardDescription>
@@ -208,6 +317,9 @@ export function CurrentModeCard({
         <ModeFact label={t("Codex profile")} value={codexHome || "-"} />
         <ModeFact label={t("当前账号")} value={activeAccountValue} />
         <ModeFact label={t("当前平台 Key")} value={activeKeyValue} />
+        <ModeFact label={t("请求路由")} value={route} />
+        <ModeFact label={t("模型来源")} value={catalog} />
+        <ModeFact label={t("日志与统计")} value={telemetry} />
         <ModeFact label={t("最后应用")} value={lastAppliedAtLabel} />
       </CardContent>
     </Card>
@@ -225,6 +337,7 @@ export function DirectAccountCard({
   onSelectAccount,
   onApply,
   isPending,
+  reloadAfterSwitch,
   accountLabel,
 }: {
   t: (value: string, params?: Record<string, string | number>) => string;
@@ -237,6 +350,7 @@ export function DirectAccountCard({
   onSelectAccount: (value: string | null) => void;
   onApply: () => void;
   isPending: boolean;
+  reloadAfterSwitch: boolean;
   accountLabel: (account: CodexProfileAccountCandidate) => string;
 }) {
   return (
@@ -249,7 +363,7 @@ export function DirectAccountCard({
       <CardHeader>
         <div className="flex flex-wrap items-center gap-2">
           <UserRoundCheck className="size-4 text-primary" />
-          <CardTitle>{t("账号直连")}</CardTitle>
+          <CardTitle>{t("直接连接 OpenAI")}</CardTitle>
           {isDirectActive ? <Badge>{t("正在使用")}</Badge> : null}
         </div>
         <CardDescription>
@@ -261,7 +375,7 @@ export function DirectAccountCard({
       <CardContent className="grid gap-4">
         {candidates.length === 0 && !isLoading ? (
           <div className="grid gap-3 rounded-xl border border-dashed border-border/70 bg-muted/25 p-4 text-sm text-muted-foreground">
-            <p>{t("没有可用于账号直连的 active OpenAI 账号。")}</p>
+            <p>{t("没有可用于直接连接 OpenAI 的 active 账号。")}</p>
             <ActionLink href="/accounts">{t("去添加 OpenAI 账号")}</ActionLink>
           </div>
         ) : (
@@ -305,6 +419,14 @@ export function DirectAccountCard({
             </p>
           </div>
         )}
+        <ConnectionPreview
+          t={t}
+          connection={t("直接连接 OpenAI")}
+          route={t("所选 OpenAI 账号")}
+          catalog={t("OpenAI 官方目录")}
+          telemetry={t("CodexManager 不记录")}
+          reloadAfterSwitch={reloadAfterSwitch}
+        />
         <Button
           type="button"
           onClick={onApply}
@@ -312,7 +434,7 @@ export function DirectAccountCard({
           className="w-fit"
         >
           {isPending ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
-          {isDirectActive ? t("重新应用账号直连") : t("切换到账号直连")}
+          {isDirectActive ? t("重新应用直接连接") : t("切换为直接连接 OpenAI")}
         </Button>
       </CardContent>
     </Card>
@@ -331,6 +453,8 @@ export function GatewayModeCard({
   gatewayBaseUrl,
   onApply,
   isPending,
+  selectedApiKey,
+  reloadAfterSwitch,
   keyLabel,
 }: {
   t: (value: string, params?: Record<string, string | number>) => string;
@@ -344,6 +468,8 @@ export function GatewayModeCard({
   gatewayBaseUrl: string;
   onApply: () => void;
   isPending: boolean;
+  selectedApiKey: CodexProfileApiKeyCandidate | undefined;
+  reloadAfterSwitch: boolean;
   keyLabel: (key: CodexProfileApiKeyCandidate) => string;
 }) {
   return (
@@ -356,7 +482,7 @@ export function GatewayModeCard({
       <CardHeader>
         <div className="flex flex-wrap items-center gap-2">
           <Network className="size-4 text-primary" />
-          <CardTitle>{t("本地网关")}</CardTitle>
+          <CardTitle>{t("通过 CodexManager")}</CardTitle>
           {isGatewayActive ? <Badge>{t("正在使用")}</Badge> : null}
         </div>
         <CardDescription>
@@ -368,7 +494,7 @@ export function GatewayModeCard({
       <CardContent className="grid gap-4">
         {candidates.length === 0 && !isLoading ? (
           <div className="grid gap-3 rounded-xl border border-dashed border-border/70 bg-muted/25 p-4 text-sm text-muted-foreground">
-            <p>{t("没有可用于本地网关的平台密钥。")}</p>
+            <p>{t("没有可用于 CodexManager 转发的平台密钥。")}</p>
             <ActionLink href="/apikeys">{t("去创建平台密钥")}</ActionLink>
           </div>
         ) : (
@@ -383,10 +509,14 @@ export function GatewayModeCard({
                 <SelectValue placeholder={t("选择平台密钥")}>
                   {(value) => {
                     const key = candidates.find((item) => item.id === value);
-                    return (
-                      <PlatformSelectText
-                        value={key ? keyLabel(key) : t("选择平台密钥")}
+                    return key ? (
+                      <GatewayCandidateText
+                        candidate={key}
+                        label={keyLabel(key)}
+                        t={t}
                       />
+                    ) : (
+                      <PlatformSelectText value={t("选择平台密钥")} />
                     );
                   }}
                 </SelectValue>
@@ -400,7 +530,7 @@ export function GatewayModeCard({
                     const label = keyLabel(key);
                     return (
                       <SelectItem key={key.id} value={key.id} className="items-start py-2">
-                        <PlatformSelectText value={label} />
+                        <GatewayCandidateText candidate={key} label={label} t={t} />
                       </SelectItem>
                     );
                   })}
@@ -412,6 +542,18 @@ export function GatewayModeCard({
             </p>
           </div>
         )}
+        <ConnectionPreview
+          t={t}
+          connection={t("通过 CodexManager")}
+          route={
+            selectedApiKey
+              ? rotationStrategyLabel(selectedApiKey.rotationStrategy, t)
+              : t("请选择平台密钥")
+          }
+          catalog={catalogSourceLabel(selectedApiKey?.catalogSource, t)}
+          telemetry={t("CodexManager 可记录")}
+          reloadAfterSwitch={reloadAfterSwitch}
+        />
         <Button
           type="button"
           onClick={onApply}
@@ -419,7 +561,7 @@ export function GatewayModeCard({
           className="w-fit"
         >
           {isPending ? <Loader2 className="size-4 animate-spin" /> : <Network className="size-4" />}
-          {isGatewayActive ? t("重新应用本地网关") : t("切换到本地网关")}
+          {isGatewayActive ? t("重新应用 CodexManager 接入") : t("切换为通过 CodexManager")}
         </Button>
       </CardContent>
     </Card>

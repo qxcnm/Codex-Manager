@@ -92,12 +92,12 @@ export function modeImpact(
   t: (value: string, params?: Record<string, string | number>) => string,
 ): string {
   if (mode === "direct_account") {
-    return t("当前为账号直连，Codex CLI 直连 OpenAI，CodexManager 无法统计 CLI 请求日志和用量。");
+    return t("Codex 直接连接 OpenAI，并跟随 OpenAI 官方模型目录；CodexManager 不参与请求转发或模型目录管理。");
   }
   if (mode === "gateway") {
-    return t("当前为本地网关，Codex CLI 经过 CodexManager 转发，请求日志、Token 和费用统计可用。");
+    return t("Codex 请求由 CodexManager 转发；实际路由和模型目录取决于当前平台密钥的配置。");
   }
-  return t("选择账号直连或本地网关后，CodexManager 会接管该 Codex profile 的 auth.json / config.toml。");
+  return t("选择接入方式后，CodexManager 会接管该 Codex profile 的 auth.json / config.toml。");
 }
 
 export function usePlatformModePageState(
@@ -248,7 +248,7 @@ export function usePlatformModePageState(
       }),
     onSuccess: async (nextStatus) => {
       await refreshAll();
-      toast.success(t("已切换到账号直连"));
+      toast.success(t("已切换为直接连接 OpenAI"));
       showHistoryRepairToast(nextStatus.historyRepair);
       showRuntimeReloadToast(nextStatus.runtimeReload);
     },
@@ -267,7 +267,7 @@ export function usePlatformModePageState(
       }),
     onSuccess: async (nextStatus) => {
       await refreshAll();
-      toast.success(t("已切换到本地网关"));
+      toast.success(t("已切换为通过 CodexManager"));
       showHistoryRepairToast(nextStatus.historyRepair);
       showRuntimeReloadToast(nextStatus.runtimeReload);
     },

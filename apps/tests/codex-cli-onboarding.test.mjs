@@ -20,7 +20,9 @@ const platformModeState = await fs.readFile(
 test("Codex onboarding routes configuration through Platform Mode", () => {
   assert.match(source, /await onAcknowledge\(dismissPermanently\)/);
   assert.match(source, /buildStaticRouteUrl\("\/platform-mode"\)/);
-  assert.match(source, /打开平台模式/);
+  assert.match(source, /打开 Codex 接入方式/);
+  assert.match(source, /直接连接 OpenAI/);
+  assert.match(source, /通过 CodexManager/);
   assert.match(platformModeState, /codexProfileClient\.applyGateway\(\{/);
 });
 

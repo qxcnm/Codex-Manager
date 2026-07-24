@@ -12,8 +12,8 @@ import type { CodexProfileMode } from "@/types";
 export const CODEX_PROFILE_MODE_LABELS: Record<CodexProfileMode, string> = {
   missing: "未发现配置",
   unmanaged: "未托管",
-  direct_account: "账号直连",
-  gateway: "本地网关",
+  direct_account: "直接连接 OpenAI",
+  gateway: "通过 CodexManager",
   managed_unknown: "托管状态未知",
 };
 

@@ -32,7 +32,7 @@ const GUIDE_STEPS = [
   {
     icon: ShieldCheck,
     title: "第一步：确认服务已连接",
-    description: "先确认 CodexManager 本地服务可用，再选择 Codex 接入模式。",
+    description: "先确认 CodexManager 本地服务可用，再选择 Codex 接入方式。",
     details: [
       "顶部或设置页显示“服务已连接”。",
       "默认网关地址是 `http://localhost:48760/v1`。",
@@ -42,16 +42,16 @@ const GUIDE_STEPS = [
     icon: KeyRound,
     title: "第二步：准备账号或平台密钥",
     description:
-      "账号直连需要 active OpenAI 账号；本地网关需要可用的平台密钥。",
+      "直接连接 OpenAI 需要 active 账号；通过 CodexManager 需要可用的平台密钥。",
     details: ["去添加 OpenAI 账号", "去创建平台密钥"],
   },
   {
     icon: Cable,
-    title: "第三步：在平台模式应用配置",
+    title: "第三步：应用 Codex 接入方式",
     description:
-      "选择模式与目标后点击应用，页面会调用现有 profile 接口写入配置。",
+      "选择接入方式与目标后点击应用，页面会调用现有 profile 接口写入配置。",
     details: [
-      "选择账号直连或本地网关后，CodexManager 会接管该 Codex profile 的 auth.json / config.toml。",
+      "选择直接连接 OpenAI 或通过 CodexManager 后，CodexManager 会接管该 Codex profile 的 auth.json / config.toml。",
       "无需复制配置模板，也不要把账号 token 手动写进 auth.json。",
     ],
   },
@@ -157,7 +157,7 @@ export function CodexCliOnboardingDialog({
               </DialogTitle>
               <DialogDescription className="text-xs leading-5 md:text-sm">
                 {t(
-                  "无需手动编辑 auth.json 或 config.toml。CodexManager 会通过平台模式安全写入并备份 Codex profile。",
+                  "无需手动编辑 auth.json 或 config.toml。CodexManager 会通过 Codex 接入方式页面安全写入并备份 Codex profile。",
                 )}
               </DialogDescription>
             </div>
@@ -232,18 +232,18 @@ export function CodexCliOnboardingDialog({
             <section className="min-w-0 rounded-md border border-border/60 bg-background/55 p-4 shadow-sm">
               <div className="space-y-1 border-b border-border/50 pb-3">
                 <h3 className="text-base font-semibold leading-7 text-foreground">
-                  {t("平台模式选择")}
+                  {t("Codex 接入方式")}
                 </h3>
                 <p className="text-sm leading-6 text-muted-foreground">
                   {t(
-                    "请统一使用平台模式，避免 provider、模型目录和运行时重载配置彼此不一致。",
+                    "请统一在 Codex 接入方式页面切换连接，避免 provider、模型目录和运行时重载配置彼此不一致。",
                   )}
                 </p>
               </div>
 
               <div className="mt-3 space-y-3">
                 <div className="rounded-md border border-border/60 bg-background/70 p-3">
-                  <div className="font-medium text-foreground">{t("账号直连")}</div>
+                  <div className="font-medium text-foreground">{t("直接连接 OpenAI")}</div>
                   <p className="mt-1 text-sm leading-6 text-muted-foreground">
                     {t(
                       "直连 OpenAI 官方后端，不经过 CodexManager 网关；不会产生 CodexManager 请求日志，仪表盘用量统计不可用。",
@@ -251,7 +251,7 @@ export function CodexCliOnboardingDialog({
                   </p>
                 </div>
                 <div className="rounded-md border border-primary/20 bg-primary/5 p-3">
-                  <div className="font-medium text-foreground">{t("本地网关")}</div>
+                  <div className="font-medium text-foreground">{t("通过 CodexManager")}</div>
                   <p className="mt-1 text-sm leading-6 text-muted-foreground">
                     {t(
                       "通过 CodexManager 本地网关转发 Codex CLI 请求；请求日志、Token、费用估算和仪表盘统计可用。",
@@ -265,7 +265,7 @@ export function CodexCliOnboardingDialog({
                   disabled={isSaving}
                 >
                   <Cable className="h-4 w-4" />
-                  {isSaving ? t("保存中...") : t("打开平台模式")}
+                  {isSaving ? t("保存中...") : t("打开 Codex 接入方式")}
                 </Button>
               </div>
             </section>

@@ -52,6 +52,14 @@ function accountLabel(account: CodexProfileAccountCandidate): string {
 export default function PlatformModePage() {
   const { t } = useI18n();
   const state = usePlatformModePageState(t);
+  const selectedApiKey = state.candidates.apiKeys.find(
+    (item) => item.id === state.selectedApiKeyId,
+  );
+  const activeApiKey = state.status?.selectedApiKeyId
+    ? state.candidates.apiKeys.find(
+        (item) => item.id === state.status?.selectedApiKeyId,
+      )
+    : undefined;
 
   return (
     <main className="flex w-full flex-col gap-5 px-4 py-4 md:px-6">
@@ -61,9 +69,9 @@ export default function PlatformModePage() {
             <TerminalSquare className="size-5" />
           </div>
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">{t("平台模式选择")}</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">{t("Codex 接入方式")}</h1>
             <p className="text-sm text-muted-foreground">
-              {t("选择 Codex CLI 直连账号，或通过 CodexManager 本地网关接入。")}
+              {t("选择 Codex 直接连接 OpenAI，或通过 CodexManager 进行转发与管理。")}
             </p>
           </div>
         </div>
@@ -123,6 +131,7 @@ export default function PlatformModePage() {
           codexHome={state.status?.codexHome || "-"}
           activeAccountValue={state.activeAccountValue}
           activeKeyValue={state.activeKeyValue}
+          activeApiKey={activeApiKey}
           lastAppliedAtLabel={formatTime(state.status?.lastAppliedAt ?? null)}
           modeDescription={modeImpact(state.status?.mode ?? null, t)}
         />
@@ -138,6 +147,7 @@ export default function PlatformModePage() {
           onSelectAccount={(value) => state.setSelectedAccountIdDraft(String(value || ""))}
           onApply={() => state.applyDirectMutation.mutate()}
           isPending={state.applyDirectMutation.isPending}
+          reloadAfterSwitch={state.reloadAfterSwitch}
           accountLabel={accountLabel}
         />
 
@@ -153,6 +163,8 @@ export default function PlatformModePage() {
           gatewayBaseUrl={state.gatewayBaseUrl}
           onApply={() => state.applyGatewayMutation.mutate()}
           isPending={state.applyGatewayMutation.isPending}
+          selectedApiKey={selectedApiKey}
+          reloadAfterSwitch={state.reloadAfterSwitch}
           keyLabel={keyLabel}
         />
       </div>

@@ -73,7 +73,7 @@ export const TOP_LEVEL_ROUTE_CONFIG = [
   },
   {
     path: "/platform-mode",
-    label: "平台模式选择",
+    label: "Codex 接入方式",
     section: "platform-config",
     roles: ["system_admin", "admin"],
   },

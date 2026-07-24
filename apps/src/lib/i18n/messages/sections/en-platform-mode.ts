@@ -3,6 +3,59 @@
 import type { MessageCatalog } from "../types";
 
 export const EN_PLATFORM_MODE_MESSAGES: MessageCatalog = {
+  "Codex 接入方式": "Codex Connection",
+  "选择 Codex 直接连接 OpenAI，或通过 CodexManager 进行转发与管理。":
+    "Choose whether Codex connects directly to OpenAI or is routed and managed through CodexManager.",
+  "直接连接 OpenAI": "Connect directly to OpenAI",
+  "通过 CodexManager": "Use CodexManager",
+  "当前 Codex 接入": "Current Codex connection",
+  接入方式: "Connection",
+  请求路由: "Request routing",
+  模型来源: "Model source",
+  "日志与统计": "Logs and analytics",
+  重载行为: "Reload behavior",
+  应用后: "After applying",
+  "OpenAI 官方目录": "Official OpenAI catalog",
+  "CodexManager 本地目录": "CodexManager local catalog",
+  "聚合 API": "Aggregated API",
+  混合路由: "Hybrid routing",
+  "所选 OpenAI 账号": "Selected OpenAI account",
+  "CodexManager 可记录": "Recorded by CodexManager",
+  "CodexManager 不记录": "Not recorded by CodexManager",
+  "切换后尝试重载后台": "Attempt a background reload after switching",
+  "下次启动时生效": "Takes effect on the next start",
+  无法确认: "Unable to determine",
+  请选择平台密钥: "Select a platform key",
+  "没有可用于直接连接 OpenAI 的 active 账号。":
+    "No active OpenAI account is available for a direct connection.",
+  "没有可用于 CodexManager 转发的平台密钥。":
+    "No platform key is available for CodexManager routing.",
+  "重新应用直接连接": "Reapply direct connection",
+  "切换为直接连接 OpenAI": "Connect directly to OpenAI",
+  "重新应用 CodexManager 接入": "Reapply CodexManager connection",
+  "切换为通过 CodexManager": "Switch to CodexManager",
+  "已切换为直接连接 OpenAI": "Now connecting directly to OpenAI",
+  "已切换为通过 CodexManager": "Now using CodexManager",
+  "Codex 直接连接 OpenAI，并跟随 OpenAI 官方模型目录；CodexManager 不参与请求转发或模型目录管理。":
+    "Codex connects directly to OpenAI and follows the official OpenAI model catalog. CodexManager does not route requests or manage the catalog.",
+  "Codex 请求由 CodexManager 转发；实际路由和模型目录取决于当前平台密钥的配置。":
+    "Codex requests are routed by CodexManager. The selected platform key determines the routing and model catalog.",
+  "选择接入方式后，CodexManager 会接管该 Codex profile 的 auth.json / config.toml。":
+    "After you choose a connection, CodexManager manages auth.json and config.toml for this Codex profile.",
+  "请统一在 Codex 接入方式页面切换连接，避免 provider、模型目录和运行时重载配置彼此不一致。":
+    "Switch connections from the Codex Connection page so the provider, model catalog, and runtime reload settings stay consistent.",
+  "打开 Codex 接入方式": "Open Codex Connection",
+  "先确认 CodexManager 本地服务可用，再选择 Codex 接入方式。":
+    "Confirm that the local CodexManager service is available, then choose how Codex connects.",
+  "直接连接 OpenAI 需要 active 账号；通过 CodexManager 需要可用的平台密钥。":
+    "A direct OpenAI connection requires an active account; CodexManager routing requires an available platform key.",
+  "第三步：应用 Codex 接入方式": "Step 3: Apply the Codex connection",
+  "选择接入方式与目标后点击应用，页面会调用现有 profile 接口写入配置。":
+    "Choose the connection and target, then apply it. The page writes the configuration through the existing profile API.",
+  "选择直接连接 OpenAI 或通过 CodexManager 后，CodexManager 会接管该 Codex profile 的 auth.json / config.toml。":
+    "After you choose direct OpenAI or CodexManager, CodexManager manages auth.json and config.toml for this Codex profile.",
+  "无需手动编辑 auth.json 或 config.toml。CodexManager 会通过 Codex 接入方式页面安全写入并备份 Codex profile。":
+    "You do not need to edit auth.json or config.toml manually. CodexManager safely writes and backs up the Codex profile from the Codex Connection page.",
   平台模式选择: "Platform Mode",
   "选择 Codex CLI 直连账号，或通过 CodexManager 本地网关接入。":
     "Choose a direct Codex CLI account connection or route through the CodexManager local gateway.",

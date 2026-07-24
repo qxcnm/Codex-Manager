@@ -43,15 +43,21 @@ test("平台模式页面可见时会主动刷新候选列表", async () => {
   assert.match(source, /pickAvailableCandidateId/);
 });
 
-test("平台模式页面采用当前模式优先的切换结构", async () => {
+test("Codex 接入方式页面展示当前状态和切换影响", async () => {
   const source = `${await readSource("src/app/platform-mode/page.tsx")}\n${await readSource("src/app/platform-mode/page-sections.tsx")}`;
-  assert.match(source, /平台模式选择/);
+  assert.match(source, /Codex 接入方式/);
   assert.match(source, /state\.mode === "web-gateway"/);
   assert.match(source, /Web \/ Docker 模式/);
   assert.match(source, /\/api\/rpc 写入 codexmanager-service/);
-  assert.match(source, /当前模式/);
-  assert.match(source, /账号直连/);
-  assert.match(source, /本地网关/);
+  assert.match(source, /当前 Codex 接入/);
+  assert.match(source, /直接连接 OpenAI/);
+  assert.match(source, /通过 CodexManager/);
+  assert.match(source, /OpenAI 账号池/);
+  assert.match(source, /聚合 API/);
+  assert.match(source, /混合路由/);
+  assert.match(source, /OpenAI 官方目录/);
+  assert.match(source, /CodexManager 本地目录/);
+  assert.match(source, /应用后/);
   assert.match(source, /高级与恢复/);
   assert.match(source, /不会产生 CodexManager 请求日志/);
   assert.match(source, /请求日志、Token、费用估算和仪表盘统计可用/);
