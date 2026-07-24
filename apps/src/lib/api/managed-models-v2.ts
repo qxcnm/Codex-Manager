@@ -160,6 +160,7 @@ export function managedModelV2ToModelInfo(model: ManagedModelV2): ModelInfo {
     supportsReasoningSummaries: booleanCapability(
       model,
       false,
+      "supports_reasoning_summary_parameter",
       "supportsReasoningSummaries",
       "supports_reasoning_summaries",
     ),
@@ -317,6 +318,7 @@ export function serializeManagedModelV2ForCodexCache(
     supports_reasoning_summary_parameter: booleanCapability(
       model,
       false,
+      "supports_reasoning_summary_parameter",
       "supportsReasoningSummaries",
       "supports_reasoning_summaries",
     ),

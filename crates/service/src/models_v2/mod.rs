@@ -270,7 +270,11 @@ pub(crate) fn model_info(model: &ManagedModelV2) -> ModelInfo {
         })),
         supports_reasoning_summaries: capability(
             model,
-            &["supports_reasoning_summaries", "supportsReasoningSummaries"],
+            &[
+                "supports_reasoning_summary_parameter",
+                "supports_reasoning_summaries",
+                "supportsReasoningSummaries",
+            ],
         )
         .and_then(Value::as_bool),
         default_reasoning_summary: capability(

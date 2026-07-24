@@ -155,7 +155,7 @@ fn parse_codex_model(
         "serviceTiers": service_tiers,
         "inputModalities": input_modalities,
         "supportsParallelToolCalls": bool_field(object,&["supports_parallel_tool_calls","supportsParallelToolCalls"],false),
-        "supportsReasoningSummaries": bool_field(object,&["supports_reasoning_summaries","supportsReasoningSummaries"],false),
+        "supportsReasoningSummaries": bool_field(object,&["supports_reasoning_summary_parameter","supports_reasoning_summaries","supportsReasoningSummaries"],false),
         "supportsVerbosity": bool_field(object,&["support_verbosity","supportsVerbosity"],false),
         "supportsImageDetailOriginal": bool_field(object,&["supports_image_detail_original","supportsImageDetailOriginal"],false),
         "supportsSearchTool": bool_field(object,&["supports_search_tool","supportsSearchTool"],false),

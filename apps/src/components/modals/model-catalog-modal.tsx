@@ -96,7 +96,13 @@ const DEFAULT_CAPABILITIES = {
   reasoningEfforts: [],
   serviceTiers: [],
   inputModalities: ["text", "image"],
-  supportsParallelToolCalls: true,
+  supportsParallelToolCalls: false,
+  supportsReasoningSummaries: false,
+  defaultReasoningSummary: "auto",
+  supportsVerbosity: false,
+  truncationMode: "tokens",
+  truncationLimit: 10000,
+  experimentalSupportedTools: [],
 };
 
 function aggregateApiDisplayName(

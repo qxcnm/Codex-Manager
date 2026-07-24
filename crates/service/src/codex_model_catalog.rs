@@ -124,6 +124,7 @@ fn prepare_managed_model(model: &mut codexmanager_core::rpc::types::ModelInfo) {
     {
         model.shell_type = Some("shell_command".to_string());
     }
+    model.visibility.get_or_insert_with(|| "list".to_string());
     model.base_instructions.get_or_insert_with(String::new);
     model
         .availability_nux
@@ -136,6 +137,21 @@ fn prepare_managed_model(model: &mut codexmanager_core::rpc::types::ModelInfo) {
             "approvals": null,
         })
     });
+    model
+        .default_reasoning_summary
+        .get_or_insert_with(|| "auto".to_string());
+    model.support_verbosity.get_or_insert(false);
+    model
+        .web_search_tool_type
+        .get_or_insert_with(|| "text".to_string());
+    model.truncation_policy.get_or_insert_with(|| {
+        codexmanager_core::rpc::types::ModelTruncationPolicy {
+            mode: "tokens".to_string(),
+            limit: 10_000,
+            ..Default::default()
+        }
+    });
+    model.supports_parallel_tool_calls.get_or_insert(false);
     model.effective_context_window_percent.get_or_insert(95);
 
     let max_context_window = model.context_window.unwrap_or(200_000);
@@ -155,6 +171,10 @@ fn prepare_managed_model(model: &mut codexmanager_core::rpc::types::ModelInfo) {
     model.extra.insert(
         "use_responses_lite".to_string(),
         serde_json::Value::Bool(false),
+    );
+    model.extra.insert(
+        "supports_reasoning_summary_parameter".to_string(),
+        serde_json::Value::Bool(model.supports_reasoning_summaries.unwrap_or(false)),
     );
     model
         .extra
@@ -245,6 +265,31 @@ mod tests {
             Some("shell_command")
         );
         assert_eq!(value["models"][0]["base_instructions"].as_str(), Some(""));
+        assert_eq!(value["models"][0]["visibility"].as_str(), Some("list"));
+        assert_eq!(
+            value["models"][0]["default_reasoning_summary"].as_str(),
+            Some("auto")
+        );
+        assert_eq!(
+            value["models"][0]["support_verbosity"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            value["models"][0]["truncation_policy"]["mode"].as_str(),
+            Some("tokens")
+        );
+        assert_eq!(
+            value["models"][0]["truncation_policy"]["limit"].as_i64(),
+            Some(10_000)
+        );
+        assert_eq!(
+            value["models"][0]["supports_parallel_tool_calls"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            value["models"][0]["supports_reasoning_summary_parameter"].as_bool(),
+            Some(false)
+        );
         assert!(value["models"][0]["availability_nux"].is_null());
         assert!(value["models"][0]["upgrade"].is_null());
         assert_eq!(
