@@ -210,6 +210,19 @@ fn invalid_toml_is_rejected() {
 }
 
 #[test]
+fn only_account_rotation_uses_official_account_catalog() {
+    assert!(rotation_strategy_uses_official_account_catalog(
+        crate::apikey_profile::ROTATION_ACCOUNT
+    ));
+    assert!(!rotation_strategy_uses_official_account_catalog(
+        crate::apikey_profile::ROTATION_AGGREGATE_API
+    ));
+    assert!(!rotation_strategy_uses_official_account_catalog(
+        crate::apikey_profile::ROTATION_HYBRID
+    ));
+}
+
+#[test]
 fn usable_account_token_candidates_by_account_indexes_candidates() {
     let candidates = usable_account_token_candidates_by_account(vec![
         AccountTokenCandidate {

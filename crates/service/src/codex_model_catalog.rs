@@ -1,7 +1,7 @@
 use codexmanager_core::rpc::types::ModelsResponse;
 use codexmanager_core::storage::Storage;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -9,10 +9,22 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub(crate) fn write_gateway_model_catalog(
     storage: &Storage,
     catalog_path: &Path,
+    use_official_account_catalog: bool,
 ) -> Result<usize, String> {
     let catalog = crate::models_v2::text_generation_models_response_with_storage(storage)?;
     let official_metadata = load_official_model_metadata()?;
-    let content = serialize_gateway_model_catalog_with_official(&catalog, &official_metadata)?;
+    let content = if use_official_account_catalog {
+        let custom_model_slugs = storage
+            .list_api_models_v2()
+            .map_err(|err| format!("list custom account-pool models failed: {err}"))?
+            .into_iter()
+            .filter(|model| model.origin == "custom")
+            .map(|model| model.slug)
+            .collect();
+        serialize_account_pool_model_catalog(&catalog, &official_metadata, &custom_model_slugs)?
+    } else {
+        serialize_gateway_model_catalog_with_official(&catalog, &official_metadata)?
+    };
     write_atomic(catalog_path, &content)?;
     Ok(catalog.models.len())
 }
@@ -143,71 +155,126 @@ fn serialize_gateway_model_catalog_with_official(
     }
     let mut catalog = catalog.clone();
     for model in &mut catalog.models {
-        fill_missing_official_metadata(model, official_metadata);
-        if model
-            .shell_type
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_none()
-        {
-            model.shell_type = Some("shell_command".to_string());
-        }
-        model.base_instructions.get_or_insert_with(String::new);
-        model
-            .availability_nux
-            .get_or_insert(serde_json::Value::Null);
-        model.upgrade.get_or_insert(serde_json::Value::Null);
-        model.model_messages.get_or_insert_with(|| {
-            serde_json::json!({
-                "instructions_template": "",
-                "instructions_variables": null,
-                "approvals": null,
-            })
-        });
-        model.effective_context_window_percent.get_or_insert(95);
-
-        let max_context_window = model.context_window.unwrap_or(200_000);
-        model
-            .extra
-            .entry("max_context_window".to_string())
-            .or_insert_with(|| serde_json::json!(max_context_window));
-        for key in ["comp_hash", "tool_mode", "multi_agent_version"] {
-            model
-                .extra
-                .entry(key.to_string())
-                .or_insert(serde_json::Value::Null);
-        }
-        model
-            .extra
-            .entry("use_responses_lite".to_string())
-            .or_insert(serde_json::Value::Bool(false));
-        model
-            .extra
-            .entry("include_skills_usage_instructions".to_string())
-            .or_insert(serde_json::Value::Bool(false));
-
-        let uses_responses_lite = model
-            .extra
-            .get("use_responses_lite")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let has_base_instructions = model
-            .base_instructions
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty());
-        if uses_responses_lite && !has_base_instructions {
-            return Err(format!(
-                "model {} enables Responses Lite but official base instructions are unavailable; refusing to replace the Codex catalog",
-                model.slug
-            ));
-        }
+        prepare_managed_model(model, official_metadata)?;
     }
     let mut content = serde_json::to_string_pretty(&catalog)
         .map_err(|err| format!("serialize managed model catalog failed: {err}"))?;
     content.push('\n');
     Ok(content)
+}
+
+fn serialize_account_pool_model_catalog(
+    catalog: &ModelsResponse,
+    official_metadata: &OfficialModelMetadata,
+    custom_model_slugs: &HashSet<String>,
+) -> Result<String, String> {
+    if catalog.models.is_empty() {
+        return Err(
+            "managed model catalog is empty; refusing to replace the Codex catalog".to_string(),
+        );
+    }
+
+    let mut models = Vec::with_capacity(catalog.models.len());
+    for model in &catalog.models {
+        if let Some(official) = official_metadata.by_slug.get(&model.slug) {
+            // Account-pool mode intentionally preserves the complete official object. New Codex
+            // fields therefore flow through without requiring a matching Manager release.
+            models.push(official.clone());
+            continue;
+        }
+
+        // Official entries missing from the current Codex catalog are intentionally omitted so
+        // account-pool mode follows removals as well as additions. Only explicit Manager custom
+        // aliases retain the compatibility fallback.
+        if !custom_model_slugs.contains(&model.slug) {
+            continue;
+        }
+        let mut fallback = model.clone();
+        prepare_managed_model(&mut fallback, official_metadata)?;
+        models.push(
+            serde_json::to_value(fallback)
+                .map_err(|err| format!("serialize account-pool fallback model failed: {err}"))?,
+        );
+    }
+
+    if models.is_empty() {
+        return Err(
+            "official Codex model cache has no enabled account-pool models; refusing to replace the Codex catalog"
+                .to_string(),
+        );
+    }
+
+    let mut content = serde_json::to_string_pretty(&serde_json::json!({ "models": models }))
+        .map_err(|err| format!("serialize account-pool model catalog failed: {err}"))?;
+    content.push('\n');
+    Ok(content)
+}
+
+fn prepare_managed_model(
+    model: &mut codexmanager_core::rpc::types::ModelInfo,
+    official_metadata: &OfficialModelMetadata,
+) -> Result<(), String> {
+    fill_missing_official_metadata(model, official_metadata);
+    if model
+        .shell_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        model.shell_type = Some("shell_command".to_string());
+    }
+    model.base_instructions.get_or_insert_with(String::new);
+    model
+        .availability_nux
+        .get_or_insert(serde_json::Value::Null);
+    model.upgrade.get_or_insert(serde_json::Value::Null);
+    model.model_messages.get_or_insert_with(|| {
+        serde_json::json!({
+            "instructions_template": "",
+            "instructions_variables": null,
+            "approvals": null,
+        })
+    });
+    model.effective_context_window_percent.get_or_insert(95);
+
+    let max_context_window = model.context_window.unwrap_or(200_000);
+    model
+        .extra
+        .entry("max_context_window".to_string())
+        .or_insert_with(|| serde_json::json!(max_context_window));
+    for key in ["comp_hash", "tool_mode", "multi_agent_version"] {
+        model
+            .extra
+            .entry(key.to_string())
+            .or_insert(serde_json::Value::Null);
+    }
+    model
+        .extra
+        .entry("use_responses_lite".to_string())
+        .or_insert(serde_json::Value::Bool(false));
+    model
+        .extra
+        .entry("include_skills_usage_instructions".to_string())
+        .or_insert(serde_json::Value::Bool(false));
+
+    let uses_responses_lite = model
+        .extra
+        .get("use_responses_lite")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let has_base_instructions = model
+        .base_instructions
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    if uses_responses_lite && !has_base_instructions {
+        return Err(format!(
+            "model {} enables Responses Lite but official base instructions are unavailable; refusing to replace the Codex catalog",
+            model.slug
+        ));
+    }
+    Ok(())
 }
 
 fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
@@ -386,6 +453,101 @@ mod tests {
         assert_eq!(model["availability_nux"]["message"].as_str(), Some("new"));
         assert!(model["upgrade"].is_null());
         assert_eq!(model["use_responses_lite"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn account_pool_catalog_preserves_complete_official_model_object() {
+        let catalog = ModelsResponse {
+            models: vec![ModelInfo {
+                slug: "gpt-test".to_string(),
+                display_name: "Manager Name".to_string(),
+                shell_type: Some("manager_shell".to_string()),
+                ..ModelInfo::default()
+            }],
+            ..ModelsResponse::default()
+        };
+        let official = official_model_metadata_from_value(&serde_json::json!({
+            "models": [{
+                "slug": "gpt-test",
+                "display_name": "Official Name",
+                "shell_type": "official_shell",
+                "base_instructions": "official instructions",
+                "future_codex_field": {"revision": 7}
+            }]
+        }))
+        .expect("parse official metadata");
+
+        let content = serialize_account_pool_model_catalog(&catalog, &official, &HashSet::new())
+            .expect("serialize account-pool catalog");
+        let value: Value = serde_json::from_str(&content).expect("parse catalog");
+        let model = &value["models"][0];
+
+        assert_eq!(model["display_name"].as_str(), Some("Official Name"));
+        assert_eq!(model["shell_type"].as_str(), Some("official_shell"));
+        assert_eq!(model["future_codex_field"]["revision"].as_i64(), Some(7));
+        assert!(model.get("max_context_window").is_none());
+    }
+
+    #[test]
+    fn account_pool_catalog_keeps_custom_model_fallback() {
+        let catalog = ModelsResponse {
+            models: vec![ModelInfo {
+                slug: "custom-alias".to_string(),
+                display_name: "Custom Alias".to_string(),
+                ..ModelInfo::default()
+            }],
+            ..ModelsResponse::default()
+        };
+
+        let content = serialize_account_pool_model_catalog(
+            &catalog,
+            &OfficialModelMetadata::default(),
+            &HashSet::from(["custom-alias".to_string()]),
+        )
+        .expect("serialize custom fallback");
+        let value: Value = serde_json::from_str(&content).expect("parse catalog");
+
+        assert_eq!(value["models"][0]["slug"].as_str(), Some("custom-alias"));
+        assert_eq!(
+            value["models"][0]["shell_type"].as_str(),
+            Some("shell_command")
+        );
+    }
+
+    #[test]
+    fn account_pool_catalog_omits_stale_builtin_model() {
+        let catalog = ModelsResponse {
+            models: vec![
+                ModelInfo {
+                    slug: "retired-official-model".to_string(),
+                    display_name: "Retired".to_string(),
+                    ..ModelInfo::default()
+                },
+                ModelInfo {
+                    slug: "current-official-model".to_string(),
+                    display_name: "Generated Current".to_string(),
+                    ..ModelInfo::default()
+                },
+            ],
+            ..ModelsResponse::default()
+        };
+        let official = official_model_metadata_from_value(&serde_json::json!({
+            "models": [{
+                "slug": "current-official-model",
+                "display_name": "Official Current"
+            }]
+        }))
+        .expect("parse official metadata");
+
+        let content = serialize_account_pool_model_catalog(&catalog, &official, &HashSet::new())
+            .expect("serialize account-pool catalog");
+        let value: Value = serde_json::from_str(&content).expect("parse catalog");
+
+        assert_eq!(value["models"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            value["models"][0]["slug"].as_str(),
+            Some("current-official-model")
+        );
     }
 
     #[test]

@@ -396,9 +396,12 @@ pub(crate) fn apply_gateway(
     let previous_model_catalog_json =
         previous_model_catalog_for_gateway(&profile_dir, current_config.as_deref())?;
     let paths = managed_profile_paths(&profile_dir)?;
+    let use_official_account_catalog =
+        gateway_uses_official_account_catalog(&storage, gateway_auth.id.as_str())?;
     crate::codex_model_catalog::write_gateway_model_catalog(
         &storage,
         &paths.gateway_model_catalog_path,
+        use_official_account_catalog,
     )?;
     let auth_json = build_gateway_auth_json(&secret)?;
     let config_toml = patch_config_for_gateway(
@@ -2040,11 +2043,34 @@ pub(crate) fn sync_active_gateway_model_catalog_from_storage(
     }
     let profile_dir = PathBuf::from(state.profile_dir);
     let paths = managed_profile_paths(&profile_dir)?;
+    let api_key_id = state
+        .api_key_id
+        .as_deref()
+        .ok_or_else(|| "active gateway profile is missing api key id".to_string())?;
+    let use_official_account_catalog = gateway_uses_official_account_catalog(storage, api_key_id)?;
     crate::codex_model_catalog::write_gateway_model_catalog(
         storage,
         &paths.gateway_model_catalog_path,
+        use_official_account_catalog,
     )?;
     Ok(true)
+}
+
+fn gateway_uses_official_account_catalog(
+    storage: &Storage,
+    api_key_id: &str,
+) -> Result<bool, String> {
+    let api_key = storage
+        .find_api_key_by_id(api_key_id)
+        .map_err(|err| format!("read api key routing config failed: {err}"))?
+        .ok_or_else(|| "api key not found".to_string())?;
+    Ok(rotation_strategy_uses_official_account_catalog(
+        api_key.rotation_strategy.as_str(),
+    ))
+}
+
+fn rotation_strategy_uses_official_account_catalog(rotation_strategy: &str) -> bool {
+    rotation_strategy == crate::apikey_profile::ROTATION_ACCOUNT
 }
 
 fn parse_config(content: &str) -> Result<DocumentMut, String> {
