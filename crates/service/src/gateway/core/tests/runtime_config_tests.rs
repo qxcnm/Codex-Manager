@@ -717,6 +717,127 @@ fn upstream_proxy_url_for_account_prefers_explicit_account_proxy() {
 }
 
 #[test]
+fn websocket_proxy_url_for_account_falls_back_to_lowercase_https_proxy() {
+    let _guard = crate::test_env_guard();
+    let db = TestDbGuard::new("runtime-websocket-env-proxy");
+    seed_account(db.path(), "acc-env");
+    let _managed_proxy = EnvGuard::clear(ENV_UPSTREAM_PROXY_URL);
+    let _pool_proxy = EnvGuard::clear(ENV_PROXY_LIST);
+    let _upper_https_proxy = EnvGuard::clear("HTTPS_PROXY");
+    let _https_proxy = EnvGuard::set("https_proxy", "http://127.0.0.1:58438");
+    let _all_proxy = EnvGuard::clear("all_proxy");
+    let _upper_all_proxy = EnvGuard::clear("ALL_PROXY");
+    let _no_proxy = EnvGuard::clear("no_proxy");
+    let _upper_no_proxy = EnvGuard::clear("NO_PROXY");
+
+    reload_from_env();
+
+    assert_eq!(
+        websocket_proxy_url_for_account(
+            "acc-env",
+            "wss://chatgpt.com/backend-api/codex/responses",
+        )
+        .expect("resolve websocket proxy")
+        .as_deref(),
+        Some("http://127.0.0.1:58438")
+    );
+}
+
+#[test]
+fn websocket_proxy_url_for_account_prefers_managed_proxy_over_environment() {
+    let _guard = crate::test_env_guard();
+    let db = TestDbGuard::new("runtime-websocket-managed-proxy");
+    seed_account(db.path(), "acc-managed");
+    let _managed_proxy = EnvGuard::set(ENV_UPSTREAM_PROXY_URL, "http://127.0.0.1:7001");
+    let _pool_proxy = EnvGuard::clear(ENV_PROXY_LIST);
+    let _upper_https_proxy = EnvGuard::clear("HTTPS_PROXY");
+    let _https_proxy = EnvGuard::set("https_proxy", "http://127.0.0.1:7002");
+    let _all_proxy = EnvGuard::clear("all_proxy");
+    let _upper_all_proxy = EnvGuard::clear("ALL_PROXY");
+    let _no_proxy = EnvGuard::clear("no_proxy");
+    let _upper_no_proxy = EnvGuard::clear("NO_PROXY");
+
+    reload_from_env();
+
+    assert_eq!(
+        websocket_proxy_url_for_account(
+            "acc-managed",
+            "wss://chatgpt.com/backend-api/codex/responses",
+        )
+        .expect("resolve websocket proxy")
+        .as_deref(),
+        Some("http://127.0.0.1:7001")
+    );
+}
+
+#[test]
+fn websocket_environment_proxy_honors_no_proxy_host_and_port() {
+    let _guard = crate::test_env_guard();
+    let db = TestDbGuard::new("runtime-websocket-no-proxy");
+    seed_account(db.path(), "acc-bypass");
+    let _managed_proxy = EnvGuard::clear(ENV_UPSTREAM_PROXY_URL);
+    let _pool_proxy = EnvGuard::clear(ENV_PROXY_LIST);
+    let _upper_https_proxy = EnvGuard::clear("HTTPS_PROXY");
+    let _https_proxy = EnvGuard::set("https_proxy", "http://127.0.0.1:58438");
+    let _all_proxy = EnvGuard::clear("all_proxy");
+    let _upper_all_proxy = EnvGuard::clear("ALL_PROXY");
+    let _upper_no_proxy = EnvGuard::clear("NO_PROXY");
+    let _no_proxy = EnvGuard::set("no_proxy", ".example.test, chatgpt.com:443");
+
+    reload_from_env();
+
+    assert_eq!(
+        websocket_proxy_url_for_account(
+            "acc-bypass",
+            "wss://chatgpt.com/backend-api/codex/responses",
+        )
+        .expect("resolve bypassed websocket proxy"),
+        None
+    );
+    assert_eq!(
+        websocket_proxy_url_for_account(
+            "acc-bypass",
+            "wss://api.example.test/backend-api/codex/responses",
+        )
+        .expect("resolve suffix-bypassed websocket proxy"),
+        None
+    );
+    assert_eq!(
+        websocket_proxy_url_for_account(
+            "acc-bypass",
+            "wss://chatgpt.com:444/backend-api/codex/responses",
+        )
+        .expect("resolve non-bypassed websocket proxy")
+        .as_deref(),
+        Some("http://127.0.0.1:58438")
+    );
+}
+
+#[test]
+fn websocket_environment_proxy_is_fail_closed_when_invalid() {
+    let _guard = crate::test_env_guard();
+    let db = TestDbGuard::new("runtime-websocket-invalid-env-proxy");
+    seed_account(db.path(), "acc-invalid");
+    let _managed_proxy = EnvGuard::clear(ENV_UPSTREAM_PROXY_URL);
+    let _pool_proxy = EnvGuard::clear(ENV_PROXY_LIST);
+    let _upper_https_proxy = EnvGuard::clear("HTTPS_PROXY");
+    let _https_proxy = EnvGuard::set("https_proxy", "://invalid");
+    let _all_proxy = EnvGuard::clear("all_proxy");
+    let _upper_all_proxy = EnvGuard::clear("ALL_PROXY");
+    let _no_proxy = EnvGuard::clear("no_proxy");
+    let _upper_no_proxy = EnvGuard::clear("NO_PROXY");
+
+    reload_from_env();
+
+    let error = websocket_proxy_url_for_account(
+        "acc-invalid",
+        "wss://chatgpt.com/backend-api/codex/responses",
+    )
+    .expect_err("invalid environment proxy must fail closed");
+    assert!(error.contains("invalid websocket environment proxy"));
+}
+
+#[test]
 fn upstream_client_for_account_uses_explicit_proxy_before_global_and_pool() {
     let _guard = crate::test_env_guard();
     let db = TestDbGuard::new("runtime-account-proxy-explicit");

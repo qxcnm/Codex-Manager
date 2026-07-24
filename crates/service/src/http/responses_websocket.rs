@@ -1008,7 +1008,8 @@ async fn connect_account_upstream_websocket(
         resolve_upstream_authorization_for_websocket(account.clone(), token).await?;
     let request = build_upstream_websocket_request(ws_url, account, &authorization, context)
         .map_err(|err| err.message)?;
-    let proxy_url = crate::gateway::current_upstream_proxy_url_for_account(account.id.as_str());
+    let proxy_url =
+        crate::gateway::current_websocket_proxy_url_for_account(account.id.as_str(), ws_url)?;
     let first_error =
         match connect_upstream_websocket_request_detailed(request, ws_url, proxy_url.as_deref())
             .await

@@ -817,8 +817,11 @@ pub(crate) fn apply_async_upstream_proxy(
     runtime_config::apply_async_upstream_proxy(builder, proxy_url, invalid_event)
 }
 
-pub(crate) fn current_upstream_proxy_url_for_account(account_id: &str) -> Option<String> {
-    runtime_config::upstream_proxy_url_for_account(account_id)
+pub(crate) fn current_websocket_proxy_url_for_account(
+    account_id: &str,
+    target_url: &str,
+) -> Result<Option<String>, String> {
+    runtime_config::websocket_proxy_url_for_account(account_id, target_url)
 }
 
 /// 函数 `set_upstream_proxy_url`
