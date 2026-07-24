@@ -1414,6 +1414,21 @@ export const EN_MESSAGES: MessageCatalog = {
   下一步: "Next",
   已经是最后一步: "Already on the last step",
   "Codex 首次接入引导": "Codex first-time setup guide",
+  "无需手动编辑 auth.json 或 config.toml。CodexManager 会通过平台模式安全写入并备份 Codex profile。":
+    "You do not need to edit auth.json or config.toml manually. CodexManager writes and backs up the Codex profile safely through Platform Mode.",
+  "先确认 CodexManager 本地服务可用，再选择 Codex 接入模式。":
+    "Confirm that the CodexManager local service is available, then choose how Codex should connect.",
+  "第二步：准备账号或平台密钥": "Step 2: Prepare an account or platform key",
+  "账号直连需要 active OpenAI 账号；本地网关需要可用的平台密钥。":
+    "Direct mode requires an active OpenAI account; local gateway mode requires an available platform key.",
+  "第三步：在平台模式应用配置": "Step 3: Apply the configuration in Platform Mode",
+  "选择模式与目标后点击应用，页面会调用现有 profile 接口写入配置。":
+    "Choose a mode and target, then apply it. The page uses the existing profile API to write the configuration.",
+  "无需复制配置模板，也不要把账号 token 手动写进 auth.json。":
+    "Do not copy configuration templates or manually write account tokens into auth.json.",
+  "请统一使用平台模式，避免 provider、模型目录和运行时重载配置彼此不一致。":
+    "Use Platform Mode for all changes so the provider, model catalog, and runtime reload settings stay consistent.",
+  "打开平台模式": "Open Platform Mode",
   "只需要准备 `auth.json` 和 `config.toml` 两个文件。没有勾选“不再显示”时，下次进入软件仍会看到它。":
     "Prepare only `auth.json` and `config.toml`. If you do not check “Don't show again”, this guide will appear next time you open the app.",
   "右侧只保留基础配置；复制后按实际端口改 `base_url` 即可。":
