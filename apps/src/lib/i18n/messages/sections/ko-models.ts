@@ -13,7 +13,6 @@ export const KO_MODELS_MESSAGES: MessageCatalog = {
   模型目录已重新读取: "모델 카탈로그를 다시 읽었습니다",
   读取模型失败: "모델을 읽지 못했습니다",
   "从本地 JSON 导入": "로컬 JSON 가져오기",
-  "导出到本地 Codex 缓存": "로컬 Codex 캐시로 내보내기",
   "导出中...": "내보내는 중...",
   新增自定义模型: "사용자 정의 모델 추가",
   总数: "전체",
@@ -173,12 +172,6 @@ export const KO_MODELS_MESSAGES: MessageCatalog = {
   导入模型: "모델 가져오기",
   "已导入 {count} 个模型": "모델 {count}개를 가져왔습니다",
   模型目录为空: "모델 카탈로그가 비어 있습니다",
-  "当前服务未返回可用的 Codex CLI 标识":
-    "현재 서비스가 사용 가능한 Codex CLI 식별자를 반환하지 않았습니다",
   当前环境不支持浏览器导出: "현재 환경은 브라우저 내보내기를 지원하지 않습니다",
-  "当前环境不支持导出 Codex 缓存": "현재 환경은 Codex 캐시 내보내기를 지원하지 않습니다",
-  "已导出到本地 Codex 缓存": "로컬 Codex 캐시로 내보냈습니다",
-  "Codex 缓存已下载，请保存到 `~/.codex/models_cache.json`":
-    "Codex 캐시가 다운로드되었습니다. `~/.codex/models_cache.json`에 저장하세요.",
   导出失败: "내보내기 실패",
 };

@@ -62,14 +62,20 @@ test("平台模式页面采用当前模式优先的切换结构", async () => {
   assert.match(source, /href=\{buildStaticRouteUrl\(href\)\}/);
 });
 
-test("模型目录不再自动覆盖 Codex models_cache", async () => {
+test("模型目录不再暴露 Codex models_cache 覆盖入口", async () => {
   const hook = await readSource("src/hooks/useManagedModels.ts");
+  const page = await readSource("src/app/models/page.tsx");
+  const client = await readSource("src/lib/api/service-client.ts");
+  const tauriService = await readSource("src-tauri/src/commands/service.rs");
+  const tauriRegistry = await readSource("src-tauri/src/commands/registry.rs");
   const readme = await readSource("README.md");
-  const exportCalls = hook.match(/exportCodexModelsCache\(/g) || [];
 
-  assert.equal(exportCalls.length, 1, "cache writes should only remain in explicit export");
-  assert.match(hook, /const exportMutation = useMutation/);
-  assert.match(readme, /不会自动改写 `~\/\.codex\/models_cache\.json`/);
+  assert.doesNotMatch(hook, /exportCodexModelsCache|exportCodexCache|models_cache\.json/);
+  assert.doesNotMatch(page, /导出到本地 Codex 缓存|canExportCodexCache/);
+  assert.doesNotMatch(client, /service_export_codex_models_cache/);
+  assert.doesNotMatch(tauriService, /service_export_codex_models_cache|models_cache\.json/);
+  assert.doesNotMatch(tauriRegistry, /service_export_codex_models_cache/);
+  assert.match(readme, /不提供写入或下载 `~\/\.codex\/models_cache\.json`/);
 });
 
 test("平台模式切换透传并持久化 Codex 后台重载开关", async () => {

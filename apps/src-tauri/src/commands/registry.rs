@@ -6,7 +6,6 @@ macro_rules! invoke_handler {
             crate::commands::service::service_stop,
             crate::commands::service::service_initialize,
             crate::commands::service::service_rpc_token,
-            crate::commands::service::service_export_codex_models_cache,
             crate::commands::codex_profile::service_codex_profile_get,
             crate::commands::codex_profile::service_codex_profile_set_config,
             crate::commands::codex_profile::service_codex_profile_list_candidates,

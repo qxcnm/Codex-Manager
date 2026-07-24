@@ -6,7 +6,6 @@ import {
   Boxes,
   CircleDollarSign,
   Database,
-  Download,
   EyeOff,
   FileJson,
   GitBranch,
@@ -196,8 +195,6 @@ export default function ModelsPage() {
     assignModelRoutes,
     previewImport,
     commitImport,
-    exportCodexCache,
-    canExportCodexCache,
     isRefreshing,
     isSaving,
     isUpdatingModelState,
@@ -206,7 +203,6 @@ export default function ModelsPage() {
     isDeleting,
     isAssigningRoutes,
     isImporting,
-    isExporting,
   } = useManagedModels();
   usePageTransitionReady("/models/", !isServiceReady || !isLoading);
   const isModelOperationPending =
@@ -359,15 +355,6 @@ export default function ModelsPage() {
                   {t("从本地 JSON 导入")}
                 </Button>
               ) : null}
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!canExportCodexCache || isExporting}
-                onClick={() => void exportCodexCache()}
-              >
-                <Download className="mr-1.5 h-4 w-4" />
-                {isExporting ? t("导出中...") : t("导出到本地 Codex 缓存")}
-              </Button>
               {isAdminMode ? (
                 <Button
                   size="sm"

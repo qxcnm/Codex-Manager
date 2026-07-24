@@ -63,21 +63,6 @@ export const serviceClient = {
     );
     return normalizeStartupSnapshot(result);
   },
-  exportCodexModelsCache: (params: {
-    userAgent: string;
-    models: Array<Record<string, unknown>>;
-    codexHome?: string | null;
-    etag?: string | null;
-    fetchedAt?: string;
-  }) =>
-    invoke<unknown>("service_export_codex_models_cache", {
-      userAgent: params.userAgent,
-      models: params.models,
-      codexHome: params.codexHome || null,
-      etag: params.etag || null,
-      fetchedAt: params.fetchedAt || new Date().toISOString(),
-    }),
-
   async getGatewayTransport(): Promise<GatewayTransportSettings> {
     const result = await invoke<unknown>("service_gateway_transport_get", withAddr());
     return readGatewayTransportSettings(result);
