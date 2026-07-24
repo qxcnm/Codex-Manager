@@ -20,7 +20,52 @@ fn serialize_gateway_model_catalog(catalog: &ModelsResponse) -> Result<String, S
             "managed model catalog is empty; refusing to replace the Codex catalog".to_string(),
         );
     }
-    let mut content = serde_json::to_string_pretty(catalog)
+    let mut catalog = catalog.clone();
+    for model in &mut catalog.models {
+        if model
+            .shell_type
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+        {
+            model.shell_type = Some("shell_command".to_string());
+        }
+        model.base_instructions.get_or_insert_with(String::new);
+        model
+            .availability_nux
+            .get_or_insert(serde_json::Value::Null);
+        model.upgrade.get_or_insert(serde_json::Value::Null);
+        model.model_messages.get_or_insert_with(|| {
+            serde_json::json!({
+                "instructions_template": "",
+                "instructions_variables": null,
+                "approvals": null,
+            })
+        });
+        model.effective_context_window_percent.get_or_insert(95);
+
+        let max_context_window = model.context_window.unwrap_or(200_000);
+        model
+            .extra
+            .entry("max_context_window".to_string())
+            .or_insert_with(|| serde_json::json!(max_context_window));
+        for key in ["comp_hash", "tool_mode", "multi_agent_version"] {
+            model
+                .extra
+                .entry(key.to_string())
+                .or_insert(serde_json::Value::Null);
+        }
+        model
+            .extra
+            .entry("use_responses_lite".to_string())
+            .or_insert(serde_json::Value::Bool(false));
+        model
+            .extra
+            .entry("include_skills_usage_instructions".to_string())
+            .or_insert(serde_json::Value::Bool(false));
+    }
+    let mut content = serde_json::to_string_pretty(&catalog)
         .map_err(|err| format!("serialize managed model catalog failed: {err}"))?;
     content.push('\n');
     Ok(content)
@@ -104,7 +149,58 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&content).expect("parse catalog");
 
         assert_eq!(value["models"][0]["slug"].as_str(), Some("gpt-test"));
+        assert_eq!(
+            value["models"][0]["shell_type"].as_str(),
+            Some("shell_command")
+        );
+        assert_eq!(value["models"][0]["base_instructions"].as_str(), Some(""));
+        assert!(value["models"][0]["availability_nux"].is_null());
+        assert!(value["models"][0]["upgrade"].is_null());
+        assert_eq!(
+            value["models"][0]["model_messages"]["instructions_template"].as_str(),
+            Some("")
+        );
+        assert_eq!(
+            value["models"][0]["effective_context_window_percent"].as_i64(),
+            Some(95)
+        );
+        assert_eq!(
+            value["models"][0]["max_context_window"].as_i64(),
+            Some(200_000)
+        );
+        assert!(value["models"][0]["comp_hash"].is_null());
+        assert!(value["models"][0]["tool_mode"].is_null());
+        assert!(value["models"][0]["multi_agent_version"].is_null());
+        assert_eq!(
+            value["models"][0]["use_responses_lite"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            value["models"][0]["include_skills_usage_instructions"].as_bool(),
+            Some(false)
+        );
         assert!(content.ends_with('\n'));
+    }
+
+    #[test]
+    fn gateway_catalog_preserves_explicit_shell_type() {
+        let catalog = ModelsResponse {
+            models: vec![ModelInfo {
+                slug: "gpt-test".to_string(),
+                display_name: "GPT Test".to_string(),
+                shell_type: Some("custom_shell".to_string()),
+                ..ModelInfo::default()
+            }],
+            ..ModelsResponse::default()
+        };
+
+        let content = serialize_gateway_model_catalog(&catalog).expect("serialize catalog");
+        let value: serde_json::Value = serde_json::from_str(&content).expect("parse catalog");
+
+        assert_eq!(
+            value["models"][0]["shell_type"].as_str(),
+            Some("custom_shell")
+        );
     }
 
     #[test]

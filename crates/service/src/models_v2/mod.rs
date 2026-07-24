@@ -191,6 +191,51 @@ pub(crate) fn model_info(model: &ManagedModelV2) -> ModelInfo {
             "supports_text_generation".to_string(),
             serde_json::json!(supports_text_generation(model)),
         ),
+        (
+            "max_context_window".to_string(),
+            serde_json::json!(model
+                .max_context_window
+                .or(model.context_window)
+                .unwrap_or(200_000)),
+        ),
+        (
+            "comp_hash".to_string(),
+            capability(model, &["comp_hash", "compHash"])
+                .cloned()
+                .unwrap_or(Value::Null),
+        ),
+        (
+            "tool_mode".to_string(),
+            capability(model, &["tool_mode", "toolMode"])
+                .cloned()
+                .unwrap_or(Value::Null),
+        ),
+        (
+            "multi_agent_version".to_string(),
+            capability(model, &["multi_agent_version", "multiAgentVersion"])
+                .cloned()
+                .unwrap_or(Value::Null),
+        ),
+        (
+            "use_responses_lite".to_string(),
+            capability(model, &["use_responses_lite", "useResponsesLite"])
+                .and_then(Value::as_bool)
+                .map(Value::Bool)
+                .unwrap_or(Value::Bool(false)),
+        ),
+        (
+            "include_skills_usage_instructions".to_string(),
+            capability(
+                model,
+                &[
+                    "include_skills_usage_instructions",
+                    "includeSkillsUsageInstructions",
+                ],
+            )
+            .and_then(Value::as_bool)
+            .map(Value::Bool)
+            .unwrap_or(Value::Bool(false)),
+        ),
     ]);
     ModelInfo {
         slug: model.slug.clone(),
@@ -198,12 +243,32 @@ pub(crate) fn model_info(model: &ManagedModelV2) -> ModelInfo {
         description: model.description.clone(),
         default_reasoning_level: model.default_reasoning_effort.clone(),
         supported_reasoning_levels,
+        shell_type: capability(model, &["shell_type", "shellType"])
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .or_else(|| supports_text_generation(model).then(|| "shell_command".to_string())),
         visibility: Some(model.visibility.clone()),
         supported_in_api: model.supported_in_api,
         priority: model.sort_order,
         service_tiers,
-        base_instructions: None,
-        model_messages: None,
+        availability_nux: Some(
+            capability(model, &["availability_nux", "availabilityNux"])
+                .cloned()
+                .unwrap_or(Value::Null),
+        ),
+        upgrade: Some(
+            capability(model, &["upgrade"])
+                .cloned()
+                .unwrap_or(Value::Null),
+        ),
+        base_instructions: Some(String::new()),
+        model_messages: Some(serde_json::json!({
+            "instructions_template": "",
+            "instructions_variables": null,
+            "approvals": null,
+        })),
         supports_reasoning_summaries: capability(
             model,
             &["supports_reasoning_summaries", "supportsReasoningSummaries"],
@@ -239,6 +304,15 @@ pub(crate) fn model_info(model: &ManagedModelV2) -> ModelInfo {
         )
         .and_then(Value::as_bool),
         context_window: model.context_window,
+        effective_context_window_percent: capability(
+            model,
+            &[
+                "effective_context_window_percent",
+                "effectiveContextWindowPercent",
+            ],
+        )
+        .and_then(Value::as_i64)
+        .or(Some(95)),
         input_modalities: string_list(&["input_modalities", "inputModalities"]),
         supports_search_tool: capability(model, &["supports_search_tool", "supportsSearchTool"])
             .and_then(Value::as_bool),
@@ -287,6 +361,20 @@ mod tests {
         storage.init().expect("init storage");
 
         let all = models_response_with_storage(&storage).expect("full models response");
+        let text_model = all
+            .models
+            .iter()
+            .find(|model| model.slug == "gpt-5.6-sol")
+            .expect("text model");
+        assert_eq!(text_model.shell_type.as_deref(), Some("shell_command"));
+        assert_eq!(text_model.base_instructions.as_deref(), Some(""));
+        assert_eq!(text_model.effective_context_window_percent, Some(95));
+        assert_eq!(text_model.extra["max_context_window"], 372_000);
+        assert_eq!(text_model.extra["comp_hash"], "3000");
+        assert_eq!(text_model.extra["tool_mode"], "code_mode_only");
+        assert_eq!(text_model.extra["multi_agent_version"], "v2");
+        assert_eq!(text_model.extra["use_responses_lite"], true);
+        assert_eq!(text_model.extra["include_skills_usage_instructions"], false);
         let image = all
             .models
             .iter()
@@ -307,6 +395,27 @@ mod tests {
             .expect("text generation models response");
         assert!(!text.models.iter().any(|model| model.slug == "gpt-image-2"));
         assert_eq!(text.models.len() + 1, all.models.len());
+    }
+
+    #[test]
+    fn text_model_without_shell_capability_uses_codex_compatible_default() {
+        let model = ManagedModelV2 {
+            slug: "custom-text-model".to_string(),
+            display_name: "Custom Text Model".to_string(),
+            capabilities: serde_json::json!({}),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            model_info(&model).shell_type.as_deref(),
+            Some("shell_command")
+        );
+        let info = model_info(&model);
+        assert_eq!(info.base_instructions.as_deref(), Some(""));
+        assert_eq!(info.effective_context_window_percent, Some(95));
+        assert_eq!(info.extra["max_context_window"], 200_000);
+        assert_eq!(info.extra["comp_hash"], Value::Null);
+        assert_eq!(info.extra["use_responses_lite"], false);
     }
 
     #[test]
