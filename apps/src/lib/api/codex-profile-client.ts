@@ -215,6 +215,13 @@ function normalizeApiKeyCandidate(
     reasoningEffort: toNullableString(
       source.reasoningEffort ?? source.reasoning_effort,
     ),
+    rotationStrategy:
+      asString(source.rotationStrategy ?? source.rotation_strategy) ||
+      "account_rotation",
+    catalogSource:
+      asString(source.catalogSource ?? source.catalog_source) === "managed"
+        ? "managed"
+        : "official",
   };
 }
 

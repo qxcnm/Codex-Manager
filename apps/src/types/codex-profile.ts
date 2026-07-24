@@ -84,6 +84,8 @@ export interface CodexProfileApiKeyCandidate {
   status: string;
   modelSlug: string | null;
   reasoningEffort: string | null;
+  rotationStrategy: string;
+  catalogSource: "official" | "managed";
 }
 
 export interface CodexProfileCandidates {

@@ -374,6 +374,7 @@ fn api_key_codex_profile_candidates_read_minimal_active_profile_fields() {
     active.name = Some("Active profile".to_string());
     active.model_slug = Some("fallback-model".to_string());
     active.reasoning_effort = Some("low".to_string());
+    active.rotation_strategy = "hybrid_rotation".to_string();
     active.created_at = 100;
     let mut disabled = make_test_api_key(2);
     disabled.id = "key-disabled-profile".to_string();
@@ -403,6 +404,7 @@ fn api_key_codex_profile_candidates_read_minimal_active_profile_fields() {
     assert_eq!(candidates[0].name.as_deref(), Some("Active profile"));
     assert_eq!(candidates[0].model_slug.as_deref(), Some("profile-model"));
     assert_eq!(candidates[0].reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(candidates[0].rotation_strategy, "hybrid_rotation");
     assert_eq!(candidates[0].status, "active");
 }
 

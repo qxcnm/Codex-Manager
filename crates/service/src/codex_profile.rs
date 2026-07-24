@@ -108,6 +108,8 @@ pub(crate) struct CodexProfileApiKeyCandidate {
     pub status: String,
     pub model_slug: Option<String>,
     pub reasoning_effort: Option<String>,
+    pub rotation_strategy: String,
+    pub catalog_source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -517,12 +519,21 @@ fn api_key_candidate(api_key: ApiKeyCodexProfileCandidate) -> Option<CodexProfil
     if !api_key_status_is_active(&api_key.status) {
         return None;
     }
+    let catalog_source =
+        match crate::codex_model_catalog::gateway_catalog_policy_for_rotation_strategy(
+            api_key.rotation_strategy.as_str(),
+        ) {
+            crate::codex_model_catalog::GatewayCatalogPolicy::OfficialAccountPool => "official",
+            crate::codex_model_catalog::GatewayCatalogPolicy::Managed => "managed",
+        };
     Some(CodexProfileApiKeyCandidate {
         id: api_key.id,
         name: api_key.name,
         status: api_key.status,
         model_slug: api_key.model_slug,
         reasoning_effort: api_key.reasoning_effort,
+        rotation_strategy: api_key.rotation_strategy,
+        catalog_source: catalog_source.to_string(),
     })
 }
 

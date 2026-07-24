@@ -243,6 +243,28 @@ fn rotation_strategy_selects_catalog_ownership() {
 }
 
 #[test]
+fn api_key_candidates_expose_route_and_catalog_ownership() {
+    for (rotation_strategy, catalog_source) in [
+        (crate::apikey_profile::ROTATION_ACCOUNT, "official"),
+        (crate::apikey_profile::ROTATION_AGGREGATE_API, "managed"),
+        (crate::apikey_profile::ROTATION_HYBRID, "managed"),
+    ] {
+        let candidate = api_key_candidate(ApiKeyCodexProfileCandidate {
+            id: format!("key-{rotation_strategy}"),
+            name: Some("Platform key".to_string()),
+            model_slug: None,
+            reasoning_effort: None,
+            rotation_strategy: rotation_strategy.to_string(),
+            status: "active".to_string(),
+        })
+        .expect("active candidate");
+
+        assert_eq!(candidate.rotation_strategy, rotation_strategy);
+        assert_eq!(candidate.catalog_source, catalog_source);
+    }
+}
+
+#[test]
 fn usable_account_token_candidates_by_account_indexes_candidates() {
     let candidates = usable_account_token_candidates_by_account(vec![
         AccountTokenCandidate {
