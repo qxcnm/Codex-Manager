@@ -704,6 +704,14 @@ fn main() {
         }
     }
 
+    println!("Waiting for web gateway readiness...");
+    if !wait_for_service_ready(&web_open_addr, 120) {
+        eprintln!("web gateway failed health check: http://{web_open_addr}/health");
+        let _ = web_child.kill();
+        let _ = service_child.kill();
+        std::process::exit(1);
+    }
+
     let should_exit = Arc::new(AtomicBool::new(false));
     {
         let flag = Arc::clone(&should_exit);
