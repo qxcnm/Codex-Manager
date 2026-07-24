@@ -403,6 +403,7 @@ pub(crate) fn apply_gateway(
     let supports_websockets = gateway_supports_websockets(&storage, gateway_auth.id.as_str())?;
     crate::codex_model_catalog::write_gateway_model_catalog(
         &storage,
+        gateway_auth.id.as_str(),
         &paths.gateway_model_catalog_path,
         catalog_policy,
     )?;
@@ -2055,6 +2056,7 @@ pub(crate) fn sync_active_gateway_profile_from_storage(storage: &Storage) -> Res
     let supports_websockets = gateway_supports_websockets(storage, api_key_id)?;
     crate::codex_model_catalog::write_gateway_model_catalog(
         storage,
+        api_key_id,
         &paths.gateway_model_catalog_path,
         catalog_policy,
     )?;

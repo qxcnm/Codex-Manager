@@ -1,9 +1,16 @@
 use codexmanager_core::rpc::types::ModelsResponse;
-use codexmanager_core::storage::Storage;
+use codexmanager_core::storage::{Account, Storage};
+use reqwest::header::{ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, ETAG, USER_AGENT};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+const OFFICIAL_CATALOG_CACHE_DIR: &str = "official-model-catalogs";
+const OFFICIAL_CATALOG_CACHE_TTL_SECS: i64 = 300;
+static OFFICIAL_CATALOG_SYNC_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GatewayCatalogPolicy {
@@ -41,7 +48,7 @@ pub(crate) fn models_response_for_gateway_key(
     let policy = gateway_catalog_policy_for_api_key(storage, api_key_id)?;
     let response = match policy {
         GatewayCatalogPolicy::OfficialAccountPool => {
-            let value = load_official_model_cache()?;
+            let value = load_or_sync_official_model_catalog(storage, api_key_id)?;
             official_models_response_from_value(value)?
         }
         GatewayCatalogPolicy::Managed => crate::models_v2::models_response_with_storage(storage)?,
@@ -57,12 +64,13 @@ fn official_models_response_from_value(value: Value) -> Result<ModelsResponse, S
 
 pub(crate) fn write_gateway_model_catalog(
     storage: &Storage,
+    api_key_id: &str,
     catalog_path: &Path,
     policy: GatewayCatalogPolicy,
 ) -> Result<usize, String> {
     let (content, models_count) = match policy {
         GatewayCatalogPolicy::OfficialAccountPool => {
-            let official_cache = load_official_model_cache()?;
+            let official_cache = load_or_sync_official_model_catalog(storage, api_key_id)?;
             let official_models = official_model_catalog_from_value(&official_cache)?;
             let models_count = official_models.len();
             (
@@ -80,28 +88,255 @@ pub(crate) fn write_gateway_model_catalog(
     Ok(models_count)
 }
 
-fn load_official_model_cache() -> Result<Value, String> {
-    let codex_home = crate::codex_profile::resolve_profile_dir(None)?;
-    let cache_path = codex_home.join("models_cache.json");
-    if !cache_path.is_file() {
+fn load_or_sync_official_model_catalog(
+    storage: &Storage,
+    api_key_id: &str,
+) -> Result<Value, String> {
+    let client_version = crate::gateway::current_codex_user_agent_version();
+    let cache_path = official_catalog_cache_path(api_key_id);
+    let now = chrono::Utc::now().timestamp();
+    let cached = load_compatible_official_snapshot(&cache_path, &client_version);
+    if cached
+        .as_ref()
+        .is_some_and(|value| official_snapshot_is_fresh(value, now))
+    {
+        return Ok(cached.expect("checked above"));
+    }
+
+    let sync_lock = OFFICIAL_CATALOG_SYNC_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = crate::lock_utils::lock_recover(sync_lock, "official_catalog_sync");
+
+    // Another caller may have completed the refresh while this caller waited for the lock.
+    let cached = load_compatible_official_snapshot(&cache_path, &client_version);
+    if cached
+        .as_ref()
+        .is_some_and(|value| official_snapshot_is_fresh(value, chrono::Utc::now().timestamp()))
+    {
+        return Ok(cached.expect("checked above"));
+    }
+
+    match fetch_official_model_catalog(storage, api_key_id, &client_version) {
+        Ok((response, etag)) => {
+            let snapshot = build_official_snapshot(response, &client_version, etag.as_deref())?;
+            write_official_snapshot(&cache_path, &snapshot)?;
+            Ok(snapshot)
+        }
+        Err(err) => match cached {
+            Some(snapshot) => {
+                log::warn!(
+                    "refresh official Codex model catalog failed; using stale snapshot for client_version {client_version}: {err}"
+                );
+                Ok(snapshot)
+            }
+            None => Err(format!(
+                "refresh official Codex model catalog failed and no snapshot exists for client_version {client_version}: {err}"
+            )),
+        },
+    }
+}
+
+fn fetch_official_model_catalog(
+    storage: &Storage,
+    api_key_id: &str,
+    client_version: &str,
+) -> Result<(Value, Option<String>), String> {
+    let api_key = storage
+        .find_api_key_by_id(api_key_id)
+        .map_err(|err| format!("read api key routing config failed: {err}"))?
+        .ok_or_else(|| "api key not found".to_string())?;
+    let upstream_base = crate::gateway::gateway_resolve_effective_upstream_base(&api_key);
+    if !crate::gateway::gateway_should_send_chatgpt_account_header(&upstream_base) {
         return Err(format!(
-            "official Codex model cache not found: {}",
-            cache_path.display()
+            "account-pool model sync requires the official ChatGPT Codex backend, got {upstream_base}"
         ));
     }
 
-    let content = fs::read_to_string(&cache_path).map_err(|err| {
-        format!(
-            "read official Codex model cache failed ({}): {err}",
+    let (models_url, _) =
+        crate::gateway::gateway_compute_upstream_url(&upstream_base, "/v1/models");
+    let mut models_url = reqwest::Url::parse(&models_url)
+        .map_err(|err| format!("build official Codex model endpoint failed: {err}"))?;
+    models_url
+        .query_pairs_mut()
+        .append_pair("client_version", client_version);
+
+    let routed = crate::gateway::gateway_collect_routed_candidates_with_log_source(
+        storage, api_key_id, None,
+    )?;
+    if routed.candidates.is_empty() {
+        return Err("no available OpenAI account for official model sync".to_string());
+    }
+
+    let mut errors = Vec::new();
+    for (account, mut token) in routed.candidates {
+        let result = (|| {
+            let bearer =
+                crate::gateway::gateway_resolve_openai_bearer_token(storage, &account, &mut token)?;
+            let client = crate::gateway::upstream_client_for_account(account.id.as_str())?;
+            let mut request = client
+                .get(models_url.clone())
+                .header(
+                    AUTHORIZATION,
+                    crate::agent_identity::format_upstream_authorization(&bearer),
+                )
+                .header(ACCEPT, "application/json")
+                .header(ACCEPT_ENCODING, "identity")
+                .header(USER_AGENT, crate::gateway::current_codex_user_agent())
+                .header("originator", crate::gateway::current_wire_originator());
+            if let Some(account_id) = official_chatgpt_account_id(&account, &upstream_base) {
+                request = request.header("ChatGPT-Account-ID", account_id);
+            }
+            let response = request
+                .send()
+                .map_err(|err| format!("request official Codex model endpoint failed: {err}"))?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().unwrap_or_default();
+                return Err(format!(
+                    "official Codex model endpoint returned {status}: {}",
+                    truncate_error_body(&body)
+                ));
+            }
+            let response_etag = response
+                .headers()
+                .get(ETAG)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+            let value = response
+                .json::<Value>()
+                .map_err(|err| format!("decode official Codex model response failed: {err}"))?;
+            official_model_catalog_from_value(&value)?;
+            Ok((value, response_etag))
+        })();
+        match result {
+            Ok(value) => return Ok(value),
+            Err(err) => errors.push(format!("account {}: {err}", account.id)),
+        }
+    }
+    Err(errors.join("; "))
+}
+
+fn official_chatgpt_account_id<'a>(account: &'a Account, upstream_base: &str) -> Option<&'a str> {
+    if !crate::gateway::gateway_should_send_chatgpt_account_header(upstream_base) {
+        return None;
+    }
+    account
+        .chatgpt_account_id
+        .as_deref()
+        .or(account.workspace_id.as_deref())
+}
+
+fn official_catalog_cache_path(api_key_id: &str) -> PathBuf {
+    let mut hasher = Sha256::new();
+    hasher.update(api_key_id.trim().as_bytes());
+    crate::process_env::db_dir()
+        .join(OFFICIAL_CATALOG_CACHE_DIR)
+        .join(format!("{:x}.json", hasher.finalize()))
+}
+
+fn load_compatible_official_snapshot(cache_path: &Path, client_version: &str) -> Option<Value> {
+    if !cache_path.is_file() {
+        return None;
+    }
+    let content = match fs::read_to_string(cache_path) {
+        Ok(content) => content,
+        Err(err) => {
+            log::warn!(
+                "read official Codex model snapshot failed ({}): {err}",
+                cache_path.display()
+            );
+            return None;
+        }
+    };
+    let value: Value = match serde_json::from_str(&content) {
+        Ok(value) => value,
+        Err(err) => {
+            log::warn!(
+                "parse official Codex model snapshot failed ({}): {err}",
+                cache_path.display()
+            );
+            return None;
+        }
+    };
+    if !official_snapshot_matches_client_version(&value, client_version) {
+        return None;
+    }
+    if let Err(err) = official_model_catalog_from_value(&value) {
+        log::warn!(
+            "validate official Codex model snapshot failed ({}): {err}",
             cache_path.display()
-        )
-    })?;
-    serde_json::from_str(&content).map_err(|err| {
-        format!(
-            "parse official Codex model cache failed ({}): {err}",
-            cache_path.display()
-        )
-    })
+        );
+        return None;
+    }
+    Some(value)
+}
+
+fn official_snapshot_matches_client_version(value: &Value, client_version: &str) -> bool {
+    value.get("client_version").and_then(Value::as_str) == Some(client_version)
+}
+
+fn official_snapshot_is_fresh(value: &Value, now: i64) -> bool {
+    let Some(fetched_at) = value.get("fetched_at").and_then(Value::as_str) else {
+        return false;
+    };
+    let Ok(fetched_at) = chrono::DateTime::parse_from_rfc3339(fetched_at) else {
+        return false;
+    };
+    now.saturating_sub(fetched_at.timestamp()) <= OFFICIAL_CATALOG_CACHE_TTL_SECS
+}
+
+fn build_official_snapshot(
+    mut response: Value,
+    client_version: &str,
+    etag: Option<&str>,
+) -> Result<Value, String> {
+    official_model_catalog_from_value(&response)?;
+    set_snapshot_fetch_metadata(&mut response, client_version, etag)?;
+    Ok(response)
+}
+
+fn set_snapshot_fetch_metadata(
+    snapshot: &mut Value,
+    client_version: &str,
+    etag: Option<&str>,
+) -> Result<(), String> {
+    let object = snapshot
+        .as_object_mut()
+        .ok_or_else(|| "official Codex model response is not a JSON object".to_string())?;
+    object.insert(
+        "fetched_at".to_string(),
+        Value::String(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+    );
+    object.insert(
+        "client_version".to_string(),
+        Value::String(client_version.to_string()),
+    );
+    match etag.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(etag) => {
+            object.insert("etag".to_string(), Value::String(etag.to_string()));
+        }
+        None => {
+            object.remove("etag");
+        }
+    }
+    Ok(())
+}
+
+fn write_official_snapshot(cache_path: &Path, snapshot: &Value) -> Result<(), String> {
+    let mut content = serde_json::to_string_pretty(snapshot)
+        .map_err(|err| format!("serialize official Codex model snapshot failed: {err}"))?;
+    content.push('\n');
+    write_atomic(cache_path, &content)
+}
+
+fn truncate_error_body(body: &str) -> String {
+    const MAX_CHARS: usize = 2_048;
+    let mut chars = body.chars();
+    let preview: String = chars.by_ref().take(MAX_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{preview}...")
+    } else {
+        preview
+    }
 }
 
 fn official_model_catalog_from_value(value: &Value) -> Result<Vec<Value>, String> {
@@ -468,6 +703,58 @@ mod tests {
             response.models[0].extra["future_codex_field"]["revision"],
             9
         );
+    }
+
+    #[test]
+    fn official_snapshot_is_scoped_to_exact_client_version() {
+        let snapshot = serde_json::json!({
+            "client_version": "0.145.0",
+            "models": [{"slug": "gpt-test"}]
+        });
+
+        assert!(official_snapshot_matches_client_version(
+            &snapshot, "0.145.0"
+        ));
+        assert!(!official_snapshot_matches_client_version(
+            &snapshot, "0.146.0"
+        ));
+    }
+
+    #[test]
+    fn official_snapshot_uses_five_minute_ttl() {
+        let snapshot = serde_json::json!({
+            "fetched_at": "2026-07-24T00:00:00Z",
+            "models": [{"slug": "gpt-test"}]
+        });
+        let fetched_at = chrono::DateTime::parse_from_rfc3339("2026-07-24T00:00:00Z")
+            .expect("timestamp")
+            .timestamp();
+
+        assert!(official_snapshot_is_fresh(&snapshot, fetched_at + 299));
+        assert!(official_snapshot_is_fresh(&snapshot, fetched_at + 300));
+        assert!(!official_snapshot_is_fresh(&snapshot, fetched_at + 301));
+    }
+
+    #[test]
+    fn official_snapshot_preserves_unknown_response_fields() {
+        let snapshot = build_official_snapshot(
+            serde_json::json!({
+                "models": [{
+                    "slug": "future-model",
+                    "future_codex_field": {"revision": 11}
+                }],
+                "future_top_level_field": true
+            }),
+            "0.145.0",
+            Some("W/\"catalog\""),
+        )
+        .expect("build snapshot");
+
+        assert_eq!(snapshot["client_version"], "0.145.0");
+        assert_eq!(snapshot["etag"], "W/\"catalog\"");
+        assert_eq!(snapshot["future_top_level_field"], true);
+        assert_eq!(snapshot["models"][0]["future_codex_field"]["revision"], 11);
+        assert!(snapshot["fetched_at"].as_str().is_some());
     }
 
     #[test]
