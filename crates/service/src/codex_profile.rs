@@ -396,7 +396,10 @@ pub(crate) fn apply_gateway(
     let previous_model_catalog_json =
         previous_model_catalog_for_gateway(&profile_dir, current_config.as_deref())?;
     let paths = managed_profile_paths(&profile_dir)?;
-    let catalog_policy = gateway_catalog_policy(&storage, gateway_auth.id.as_str())?;
+    let catalog_policy = crate::codex_model_catalog::gateway_catalog_policy_for_api_key(
+        &storage,
+        gateway_auth.id.as_str(),
+    )?;
     let supports_websockets = gateway_supports_websockets(&storage, gateway_auth.id.as_str())?;
     crate::codex_model_catalog::write_gateway_model_catalog(
         &storage,
@@ -2047,7 +2050,8 @@ pub(crate) fn sync_active_gateway_profile_from_storage(storage: &Storage) -> Res
         .api_key_id
         .as_deref()
         .ok_or_else(|| "active gateway profile is missing api key id".to_string())?;
-    let catalog_policy = gateway_catalog_policy(storage, api_key_id)?;
+    let catalog_policy =
+        crate::codex_model_catalog::gateway_catalog_policy_for_api_key(storage, api_key_id)?;
     let supports_websockets = gateway_supports_websockets(storage, api_key_id)?;
     crate::codex_model_catalog::write_gateway_model_catalog(
         storage,
@@ -2081,35 +2085,12 @@ pub(crate) fn sync_active_gateway_profile_for_api_key(
     sync_active_gateway_profile_from_storage(storage)
 }
 
-fn gateway_catalog_policy(
-    storage: &Storage,
-    api_key_id: &str,
-) -> Result<crate::codex_model_catalog::GatewayCatalogPolicy, String> {
-    let api_key = storage
-        .find_api_key_by_id(api_key_id)
-        .map_err(|err| format!("read api key routing config failed: {err}"))?
-        .ok_or_else(|| "api key not found".to_string())?;
-    Ok(rotation_strategy_catalog_policy(
-        api_key.rotation_strategy.as_str(),
-    ))
-}
-
 fn gateway_supports_websockets(storage: &Storage, api_key_id: &str) -> Result<bool, String> {
     let api_key = storage
         .find_api_key_by_id(api_key_id)
         .map_err(|err| format!("read api key websocket config failed: {err}"))?
         .ok_or_else(|| "api key not found".to_string())?;
     Ok(crate::gateway::gateway_supports_official_responses_websocket(&api_key))
-}
-
-fn rotation_strategy_catalog_policy(
-    rotation_strategy: &str,
-) -> crate::codex_model_catalog::GatewayCatalogPolicy {
-    if rotation_strategy == crate::apikey_profile::ROTATION_ACCOUNT {
-        crate::codex_model_catalog::GatewayCatalogPolicy::OfficialAccountPool
-    } else {
-        crate::codex_model_catalog::GatewayCatalogPolicy::Managed
-    }
 }
 
 fn parse_config(content: &str) -> Result<DocumentMut, String> {

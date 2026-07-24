@@ -67,6 +67,20 @@ fn filter_models_for_key(
     ))
 }
 
+fn filter_models_for_catalog_policy(
+    storage: &codexmanager_core::storage::Storage,
+    key_id: &str,
+    models: ModelsResponse,
+    policy: crate::codex_model_catalog::GatewayCatalogPolicy,
+) -> Result<(ModelsResponse, bool), String> {
+    match policy {
+        crate::codex_model_catalog::GatewayCatalogPolicy::OfficialAccountPool => Ok((models, true)),
+        crate::codex_model_catalog::GatewayCatalogPolicy::Managed => {
+            filter_models_for_key(storage, key_id, models)
+        }
+    }
+}
+
 fn models_etag_header(models: &ModelsResponse) -> Result<Option<tiny_http::Header>, String> {
     let Some(etag) = models.extra.get("etag").and_then(serde_json::Value::as_str) else {
         return Ok(None);
@@ -89,8 +103,15 @@ fn models_etag_header(models: &ModelsResponse) -> Result<Option<tiny_http::Heade
 /// 返回函数执行结果
 fn read_cached_models_response(
     storage: &codexmanager_core::storage::Storage,
-) -> Result<ModelsResponse, String> {
-    crate::models_v2::models_response_with_storage(storage)
+    key_id: &str,
+) -> Result<
+    (
+        ModelsResponse,
+        crate::codex_model_catalog::GatewayCatalogPolicy,
+    ),
+    String,
+> {
+    crate::codex_model_catalog::models_response_for_gateway_key(storage, key_id)
 }
 
 /// 函数 `maybe_respond_local_models`
@@ -134,8 +155,8 @@ pub(super) fn maybe_respond_local_models(
         reasoning_for_log,
         storage,
     };
-    let cached = match read_cached_models_response(storage) {
-        Ok(models) => models,
+    let (cached, catalog_policy) = match read_cached_models_response(storage, key_id) {
+        Ok(result) => result,
         Err(err) => {
             let message = crate::gateway::bilingual_error(
                 "读取模型缓存失败",
@@ -146,9 +167,8 @@ pub(super) fn maybe_respond_local_models(
         }
     };
 
-    let models = cached;
-
-    let (output_models, include_implicit_models) = filter_models_for_key(storage, key_id, models)?;
+    let (output_models, include_implicit_models) =
+        filter_models_for_catalog_policy(storage, key_id, cached, catalog_policy)?;
     let output = if include_implicit_models {
         serialize_models_response(&output_models)
     } else {

@@ -2,6 +2,32 @@ use super::*;
 use codexmanager_core::rpc::types::{ModelInfo, ModelServiceTier, ModelsResponse};
 use serde_json::Value;
 
+#[test]
+fn official_account_catalog_bypasses_manager_key_filters() {
+    let storage = codexmanager_core::storage::Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    let models = ModelsResponse {
+        models: vec![ModelInfo {
+            slug: "future-official-model".to_string(),
+            display_name: "Future Official Model".to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let (filtered, include_implicit) = filter_models_for_catalog_policy(
+        &storage,
+        "missing-key-would-fail-managed-filtering",
+        models,
+        crate::codex_model_catalog::GatewayCatalogPolicy::OfficialAccountPool,
+    )
+    .expect("official catalog bypasses key filter");
+
+    assert!(include_implicit);
+    assert_eq!(filtered.models.len(), 1);
+    assert_eq!(filtered.models[0].slug, "future-official-model");
+}
+
 /// 函数 `serialize_models_response_outputs_codex_and_api_shapes`
 ///
 /// 作者: gaohongshun
@@ -253,7 +279,8 @@ fn local_models_lists_image_model_once_with_image_only_capabilities() {
     let storage = codexmanager_core::storage::Storage::open_in_memory().expect("open storage");
     storage.init().expect("init storage");
 
-    let response = read_cached_models_response(&storage).expect("read local models");
+    let response = crate::models_v2::models_response_with_storage(&storage)
+        .expect("read managed local models");
     assert_eq!(response.models.len(), 8);
     let image_models = response
         .models

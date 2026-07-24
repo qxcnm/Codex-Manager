@@ -223,15 +223,21 @@ fn invalid_toml_is_rejected() {
 #[test]
 fn rotation_strategy_selects_catalog_ownership() {
     assert_eq!(
-        rotation_strategy_catalog_policy(crate::apikey_profile::ROTATION_ACCOUNT),
+        crate::codex_model_catalog::gateway_catalog_policy_for_rotation_strategy(
+            crate::apikey_profile::ROTATION_ACCOUNT
+        ),
         crate::codex_model_catalog::GatewayCatalogPolicy::OfficialAccountPool
     );
     assert_eq!(
-        rotation_strategy_catalog_policy(crate::apikey_profile::ROTATION_AGGREGATE_API),
+        crate::codex_model_catalog::gateway_catalog_policy_for_rotation_strategy(
+            crate::apikey_profile::ROTATION_AGGREGATE_API
+        ),
         crate::codex_model_catalog::GatewayCatalogPolicy::Managed
     );
     assert_eq!(
-        rotation_strategy_catalog_policy(crate::apikey_profile::ROTATION_HYBRID),
+        crate::codex_model_catalog::gateway_catalog_policy_for_rotation_strategy(
+            crate::apikey_profile::ROTATION_HYBRID
+        ),
         crate::codex_model_catalog::GatewayCatalogPolicy::Managed
     );
 }

@@ -11,6 +11,50 @@ pub(crate) enum GatewayCatalogPolicy {
     Managed,
 }
 
+pub(crate) fn gateway_catalog_policy_for_api_key(
+    storage: &Storage,
+    api_key_id: &str,
+) -> Result<GatewayCatalogPolicy, String> {
+    let api_key = storage
+        .find_api_key_by_id(api_key_id)
+        .map_err(|err| format!("read api key routing config failed: {err}"))?
+        .ok_or_else(|| "api key not found".to_string())?;
+    Ok(gateway_catalog_policy_for_rotation_strategy(
+        api_key.rotation_strategy.as_str(),
+    ))
+}
+
+pub(crate) fn gateway_catalog_policy_for_rotation_strategy(
+    rotation_strategy: &str,
+) -> GatewayCatalogPolicy {
+    if rotation_strategy == crate::apikey_profile::ROTATION_ACCOUNT {
+        GatewayCatalogPolicy::OfficialAccountPool
+    } else {
+        GatewayCatalogPolicy::Managed
+    }
+}
+
+pub(crate) fn models_response_for_gateway_key(
+    storage: &Storage,
+    api_key_id: &str,
+) -> Result<(ModelsResponse, GatewayCatalogPolicy), String> {
+    let policy = gateway_catalog_policy_for_api_key(storage, api_key_id)?;
+    let response = match policy {
+        GatewayCatalogPolicy::OfficialAccountPool => {
+            let value = load_official_model_cache()?;
+            official_models_response_from_value(value)?
+        }
+        GatewayCatalogPolicy::Managed => crate::models_v2::models_response_with_storage(storage)?,
+    };
+    Ok((response, policy))
+}
+
+fn official_models_response_from_value(value: Value) -> Result<ModelsResponse, String> {
+    official_model_catalog_from_value(&value)?;
+    serde_json::from_value(value)
+        .map_err(|err| format!("decode official Codex model cache failed: {err}"))
+}
+
 pub(crate) fn write_gateway_model_catalog(
     storage: &Storage,
     catalog_path: &Path,
@@ -18,7 +62,8 @@ pub(crate) fn write_gateway_model_catalog(
 ) -> Result<usize, String> {
     let (content, models_count) = match policy {
         GatewayCatalogPolicy::OfficialAccountPool => {
-            let official_models = load_official_model_catalog()?;
+            let official_cache = load_official_model_cache()?;
+            let official_models = official_model_catalog_from_value(&official_cache)?;
             let models_count = official_models.len();
             (
                 serialize_account_pool_model_catalog(&official_models)?,
@@ -35,7 +80,7 @@ pub(crate) fn write_gateway_model_catalog(
     Ok(models_count)
 }
 
-fn load_official_model_catalog() -> Result<Vec<Value>, String> {
+fn load_official_model_cache() -> Result<Value, String> {
     let codex_home = crate::codex_profile::resolve_profile_dir(None)?;
     let cache_path = codex_home.join("models_cache.json");
     if !cache_path.is_file() {
@@ -51,13 +96,12 @@ fn load_official_model_catalog() -> Result<Vec<Value>, String> {
             cache_path.display()
         )
     })?;
-    let value: Value = serde_json::from_str(&content).map_err(|err| {
+    serde_json::from_str(&content).map_err(|err| {
         format!(
             "parse official Codex model cache failed ({}): {err}",
             cache_path.display()
         )
-    })?;
-    official_model_catalog_from_value(&value)
+    })
 }
 
 fn official_model_catalog_from_value(value: &Value) -> Result<Vec<Value>, String> {
@@ -402,6 +446,28 @@ mod tests {
         }))
         .expect_err("missing slug must fail");
         assert!(err.contains("without slug"));
+    }
+
+    #[test]
+    fn official_models_response_preserves_cache_metadata_and_future_fields() {
+        let response = official_models_response_from_value(serde_json::json!({
+            "fetched_at": "2026-07-24T00:00:00Z",
+            "etag": "W/\"future\"",
+            "client_version": "0.145.0",
+            "models": [{
+                "slug": "future-model",
+                "display_name": "Future Model",
+                "future_codex_field": {"revision": 9}
+            }]
+        }))
+        .expect("decode official response");
+
+        assert_eq!(response.models.len(), 1);
+        assert_eq!(response.extra["etag"], "W/\"future\"");
+        assert_eq!(
+            response.models[0].extra["future_codex_field"]["revision"],
+            9
+        );
     }
 
     #[test]
