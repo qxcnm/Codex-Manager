@@ -3,6 +3,7 @@
 import { useTheme } from "next-themes"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon } from "lucide-react"
+import { cn } from "@/lib/utils"
 
 /**
  * 函数 `Toaster`
@@ -17,13 +18,13 @@ import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon
  * # 返回
  * 返回函数执行结果
  */
-const Toaster = ({ ...props }: ToasterProps) => {
+const Toaster = ({ className, toastOptions, ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme()
 
   return (
     <Sonner
       theme={theme as ToasterProps["theme"]}
-      className="toaster group"
+      className={cn("toaster group pointer-events-none", className)}
       icons={{
         success: (
           <CircleCheckIcon className="size-4" />
@@ -50,8 +51,25 @@ const Toaster = ({ ...props }: ToasterProps) => {
         } as React.CSSProperties
       }
       toastOptions={{
+        ...toastOptions,
         classNames: {
-          toast: "cn-toast",
+          ...toastOptions?.classNames,
+          toast: cn(
+            "cn-toast pointer-events-none",
+            toastOptions?.classNames?.toast,
+          ),
+          actionButton: cn(
+            "pointer-events-auto",
+            toastOptions?.classNames?.actionButton,
+          ),
+          cancelButton: cn(
+            "pointer-events-auto",
+            toastOptions?.classNames?.cancelButton,
+          ),
+          closeButton: cn(
+            "pointer-events-auto",
+            toastOptions?.classNames?.closeButton,
+          ),
         },
       }}
       {...props}

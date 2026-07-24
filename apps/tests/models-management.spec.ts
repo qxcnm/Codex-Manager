@@ -637,6 +637,14 @@ test("重新读取会更新目录并明确反馈成功与失败", async ({ page 
   await page.getByRole("button", { name: "刷新本地目录" }).click();
   await expect(page.getByText("imported-local", { exact: true })).toBeVisible();
   await expect(page.getByText("本地网关模型目录已刷新", { exact: true })).toBeVisible();
+  const refreshToast = page.locator("[data-sonner-toast]", {
+    hasText: "本地网关模型目录已刷新",
+  });
+  await expect(refreshToast).toHaveCSS("pointer-events", "none");
+  await expect(refreshToast.locator("[data-close-button]")).toHaveCSS(
+    "pointer-events",
+    "auto",
+  );
   expect(state.listCalls).toBeGreaterThan(callsBeforeReload);
 
   state.listError = "catalog reload failed";
