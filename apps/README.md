@@ -45,16 +45,15 @@ pnpm exec playwright test
 ### 桌面端
 
 - 通过 Tauri `invoke` 调用本地命令，不走浏览器 `fetch` IPC。
-- 模型管理页只读写模型目录 V2；保存、删除、读取、启动和后台 effect 都不会自动改写 `~/.codex/models_cache.json`。
-- 用户点击“导出到本地 Codex 缓存”后，桌面端才会主动覆盖本地缓存；导出内容的 `base_instructions` 始终为空。
-- 账号直连模式继续使用 Codex 官方模型目录；本地网关模式使用 CodexManager 管理目录下独立生成的 `gateway-models.json`，不会与官方缓存混用。
+- 模型管理页只读写模型目录 V2，不提供写入或下载 `~/.codex/models_cache.json` 的入口。
+- 账号直连模式继续使用 Codex 官方模型目录；本地网关账号池使用 Manager 自有的官方目录快照，聚合/混合模式使用独立生成的 `gateway-models.json`，均不会覆盖官方缓存。
 - 平台模式页提供“切换后重载 Codex 后台”开关；默认开启，只匹配使用目标 `CODEX_HOME` 的 app-server，不会终止前台 Codex CLI。
 
 ### Web 部署
 
 - 必须通过 `codexmanager-web` 提供页面壳与 `/api/runtime`、`/api/rpc` 代理。
 - 只启动前端静态页面，或者只跑一个普通 Next 开发服务器，不足以支撑完整管理页面。
-- Web 端的模型管理页会显示“导出到本地 Codex 缓存”按钮，供用户手动下载 `models_cache.json` 并放入本地 `~/.codex/` 目录；该下载同样只由点击触发。
+- Web 端同样不提供 Codex cache 下载入口；Codex profile 切换统一通过“平台模式选择”页完成。
 
 ## 当前前端重点
 

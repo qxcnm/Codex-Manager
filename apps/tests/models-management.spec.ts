@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
 
 const SETTINGS_SNAPSHOT = {
@@ -76,7 +75,6 @@ type MockState = {
   batchStateUpdateDelayMs: number;
   deletes: string[];
   importCalls: Array<{ method: string; params: JsonObject }>;
-  initializeCalls: number;
   listCalls: number;
   listError: string | null;
   listDelayMs: number;
@@ -278,7 +276,6 @@ async function installMockRuntime(page: Page): Promise<MockState> {
     batchStateUpdateDelayMs: 0,
     deletes: [],
     importCalls: [],
-    initializeCalls: 0,
     listCalls: 0,
     listError: null,
     listDelayMs: 0,
@@ -333,7 +330,6 @@ async function installMockRuntime(page: Page): Promise<MockState> {
       return;
     }
     if (method === "initialize") {
-      state.initializeCalls += 1;
       await ok({
         version: "0.4.0",
         userAgent: "codex_cli_rs/0.1.19",
@@ -1215,7 +1211,7 @@ test("模型目录支持中文展示并为多个模型批量分配路由", async
   }
 });
 
-test("模型目录 V2 完成本地管理、原子保存、导入和主动导出", async ({ page }) => {
+test("模型目录 V2 完成本地管理、原子保存和导入", async ({ page }) => {
   const state = await installMockRuntime(page);
 
   await page.goto("/models/");
@@ -1235,25 +1231,9 @@ test("模型目录 V2 完成本地管理、原子保存、导入和主动导出"
   await expect(page.getByText("codex-auto-review", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "远端并入" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "清理远端旧模型" })).toHaveCount(0);
-  const initializeCallsBeforeExport = state.initializeCalls;
-
-  const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("button", { name: "导出到本地 Codex 缓存" }).click();
-  const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe("models_cache.json");
-  const downloadPath = await download.path();
-  expect(downloadPath).not.toBeNull();
-  const cache = JSON.parse(await readFile(downloadPath!, "utf8"));
-  expect(cache.models).toHaveLength(7);
-  expect(
-    cache.models.some((model: JsonObject) => model.slug === "gpt-image-2"),
-  ).toBe(false);
-  expect(
-    cache.models.every(
-      (model: JsonObject) => model.base_instructions === "",
-    ),
-  ).toBe(true);
-  expect(state.initializeCalls).toBe(initializeCallsBeforeExport + 1);
+  await expect(
+    page.getByRole("button", { name: "导出到本地 Codex 缓存" }),
+  ).toHaveCount(0);
 
   await page.getByRole("button", { name: "新增自定义模型" }).click();
   await page.getByLabel("模型标识（Slug）").fill("my-custom-model");

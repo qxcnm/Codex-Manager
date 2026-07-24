@@ -1,18 +1,12 @@
 "use client";
 
-import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { useDeferredDesktopActivation } from "@/hooks/useDeferredDesktopActivation";
 import { useDesktopPageActive } from "@/hooks/useDesktopPageActive";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
-import {
-  buildCodexModelsCachePayloadV2,
-  managedModelsV2Client,
-  serializeManagedModelsV2ForCodexCache,
-} from "@/lib/api/managed-models-v2";
-import { serviceClient } from "@/lib/api/service-client";
+import { managedModelsV2Client } from "@/lib/api/managed-models-v2";
 import { getAppErrorMessage } from "@/lib/api/transport";
 import { useI18n } from "@/lib/i18n/provider";
 import { useAppStore } from "@/lib/store/useAppStore";
@@ -76,17 +70,12 @@ export function useManagedModels() {
   const queryClient = useQueryClient();
   const { t } = useI18n();
   const serviceStatus = useAppStore((state) => state.serviceStatus);
-  const {
-    canAccessManagementRpc,
-    isDesktopRuntime,
-    canUseBrowserDownloadExport,
-  } = useRuntimeCapabilities();
+  const { canAccessManagementRpc } = useRuntimeCapabilities();
   const isServiceReady = canAccessManagementRpc && serviceStatus.connected;
   const isPageActive = useDesktopPageActive("/models/");
   const isQueryEnabled = useDeferredDesktopActivation(
     isServiceReady && isPageActive,
   );
-  const codexUserAgentRef = useRef("");
 
   const ensureServiceReady = (actionLabel: string): boolean => {
     if (isServiceReady) return true;
@@ -492,73 +481,6 @@ export function useManagedModels() {
     },
   });
 
-  const resolveCodexUserAgent = async (): Promise<string> => {
-    const cachedUserAgent = codexUserAgentRef.current.trim();
-    if (cachedUserAgent.includes("codex_cli_rs/")) return cachedUserAgent;
-    const initializeResult = await serviceClient.initialize(serviceStatus.addr);
-    const userAgent = String(initializeResult.userAgent || "").trim();
-    if (!userAgent.includes("codex_cli_rs/")) {
-      throw new Error(t("当前服务未返回可用的 Codex CLI 标识"));
-    }
-    codexUserAgentRef.current = userAgent;
-    return userAgent;
-  };
-
-  const triggerBrowserDownload = (fileName: string, content: string): void => {
-    if (typeof document === "undefined") {
-      throw new Error(t("当前环境不支持浏览器导出"));
-    }
-    const blob = new Blob([content], {
-      type: "application/json;charset=utf-8",
-    });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = fileName;
-    anchor.style.display = "none";
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 0);
-  };
-
-  const exportMutation = useMutation({
-    mutationFn: async () => {
-      const catalog = query.data ?? (await reloadCatalog());
-      const models = serializeManagedModelsV2ForCodexCache(catalog.items);
-      if (models.length === 0) throw new Error(t("模型目录为空"));
-      const userAgent = await resolveCodexUserAgent();
-
-      if (isDesktopRuntime) {
-        await serviceClient.exportCodexModelsCache({ userAgent, models });
-        return "desktop" as const;
-      }
-      if (!canUseBrowserDownloadExport) {
-        throw new Error(t("当前环境不支持导出 Codex 缓存"));
-      }
-      const payload = buildCodexModelsCachePayloadV2(catalog.items, userAgent);
-      triggerBrowserDownload(
-        "models_cache.json",
-        `${JSON.stringify(payload, null, 2)}\n`,
-      );
-      return "browser" as const;
-    },
-    onSuccess: (mode) => {
-      toast.success(
-        mode === "browser"
-          ? t("Codex 缓存已下载，请保存到 `~/.codex/models_cache.json`")
-          : t("已导出到本地 Codex 缓存"),
-      );
-    },
-    onError: (error: unknown) => {
-      toast.error(`${t("导出失败")}: ${getAppErrorMessage(error)}`);
-    },
-  });
-
-  useEffect(() => {
-    codexUserAgentRef.current = "";
-  }, [serviceStatus.addr]);
-
   return {
     models: query.data?.items || [],
     catalog: query.data || { items: [], stats: EMPTY_STATS },
@@ -624,11 +546,6 @@ export function useManagedModels() {
       if (!ensureServiceReady("导入模型")) return null;
       return commitImportMutation.mutateAsync(input);
     },
-    exportCodexCache: async () => {
-      if (!ensureServiceReady("导出模型目录")) return false;
-      await exportMutation.mutateAsync();
-      return true;
-    },
     isRefreshing: query.isRefetching,
     isSaving: saveMutation.isPending,
     isUpdatingModelState:
@@ -641,10 +558,5 @@ export function useManagedModels() {
     isAssigningRoutes: batchAssignRoutesMutation.isPending,
     isImporting:
       previewImportMutation.isPending || commitImportMutation.isPending,
-    isExporting: exportMutation.isPending,
-    canExportCodexCache:
-      isServiceReady &&
-      Boolean(query.data?.items?.length) &&
-      (isDesktopRuntime || canUseBrowserDownloadExport),
   };
 }

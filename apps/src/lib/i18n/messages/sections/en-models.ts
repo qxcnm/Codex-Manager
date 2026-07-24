@@ -13,7 +13,6 @@ export const EN_MODELS_MESSAGES: MessageCatalog = {
   模型目录已重新读取: "Model catalog reloaded",
   读取模型失败: "Failed to read models",
   "从本地 JSON 导入": "Import local JSON",
-  "导出到本地 Codex 缓存": "Export to local Codex cache",
   "导出中...": "Exporting...",
   新增自定义模型: "Add custom model",
   总数: "Total",
@@ -179,13 +178,6 @@ export const EN_MODELS_MESSAGES: MessageCatalog = {
   导入模型: "Import models",
   "已导入 {count} 个模型": "Imported {count} models",
   模型目录为空: "The model catalog is empty",
-  "当前服务未返回可用的 Codex CLI 标识":
-    "The current service did not return a usable Codex CLI identifier",
   当前环境不支持浏览器导出: "Browser export is unavailable in this environment",
-  "当前环境不支持导出 Codex 缓存":
-    "Codex cache export is unavailable in this environment",
-  "已导出到本地 Codex 缓存": "Exported to the local Codex cache",
-  "Codex 缓存已下载，请保存到 `~/.codex/models_cache.json`":
-    "Codex cache downloaded. Save it to `~/.codex/models_cache.json`.",
   导出失败: "Export failed",
 };
