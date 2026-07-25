@@ -1,13 +1,13 @@
 "use client";
 
 import {
+  useEffect,
   useMemo,
   useState,
   type WheelEvent as ReactWheelEvent,
 } from "react";
-import { RotateCcw } from "lucide-react";
+import { LoaderCircle, RotateCcw } from "lucide-react";
 import {
-  Area,
   CartesianGrid,
   ComposedChart,
   Line,
@@ -37,13 +37,16 @@ export type AdminUsageGranularity = "day" | "hour";
 type AdminUsageMetric = "tokens" | "requests";
 
 const MODEL_SERIES_COLORS = [
-  "var(--chart-1)",
-  "var(--chart-2)",
-  "var(--chart-3)",
-  "var(--chart-4)",
-  "var(--chart-5)",
+  "var(--usage-series-1)",
+  "var(--usage-series-2)",
+  "var(--usage-series-3)",
+  "var(--usage-series-4)",
+  "var(--usage-series-5)",
+  "var(--usage-series-6)",
+  "var(--usage-series-7)",
+  "var(--usage-series-8)",
 ] as const;
-const MAX_SELECTED_MODELS = MODEL_SERIES_COLORS.length;
+const MAX_SELECTED_MODELS = 5;
 
 const SUPPORTED_INTL_LOCALES = ["zh-CN", "en-US", "ru-RU", "ko-KR"] as const;
 const INTL_LOCALE_BY_APP_LOCALE: Record<Exclude<AppLocale, "zh-CN">, string> = {
@@ -99,15 +102,18 @@ export function AdminUsageTrendChart({
   granularity,
   onGranularityChange,
   hourlyAvailable,
+  isRefreshing,
 }: {
   summary: DashboardAdminUsageSummary;
   granularity: AdminUsageGranularity;
   onGranularityChange: (granularity: AdminUsageGranularity) => void;
   hourlyAvailable: boolean;
+  isRefreshing: boolean;
 }) {
   const { t, locale } = useI18n();
   const [metric, setMetric] = useState<AdminUsageMetric>("tokens");
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const [showTotal, setShowTotal] = useState(false);
   const [zoomWindow, setZoomWindow] = useState<{
     startIndex: number;
     endIndex: number;
@@ -127,18 +133,21 @@ export function AdminUsageTrendChart({
   const activeModelSet = useMemo(() => new Set(activeModels), [activeModels]);
   const modelDefinitions = useMemo(
     () =>
-      activeModels.map((model, index) => ({
-        model,
-        key: `model${index}`,
-        color: MODEL_SERIES_COLORS[index],
-      })),
-    [activeModels],
+      activeModels.map((model) => {
+        const stableIndex = Math.max(0, availableModelNames.indexOf(model));
+        return {
+          model,
+          key: `model${stableIndex}`,
+          color: MODEL_SERIES_COLORS[stableIndex % MODEL_SERIES_COLORS.length],
+        };
+      }),
+    [activeModels, availableModelNames],
   );
   const chartConfig = useMemo(() => {
     const config: ChartConfig = {
       total: {
         label: t("全部模型"),
-        color: "var(--primary)",
+        color: "var(--usage-total-line)",
       },
     };
     for (const definition of modelDefinitions) {
@@ -197,6 +206,16 @@ export function AdminUsageTrendChart({
     chartData.length > 1 &&
     (visibleStartIndex > 0 || visibleEndIndex < chartData.length - 1);
 
+  useEffect(() => {
+    let active = true;
+    queueMicrotask(() => {
+      if (active) setZoomWindow(null);
+    });
+    return () => {
+      active = false;
+    };
+  }, [summary.rangeEndTs, summary.rangeStartTs, summary.seriesBucketSeconds]);
+
   const formatMetric = (value: number) =>
     metric === "requests"
       ? new Intl.NumberFormat(intlLocaleFromAppLocale(locale), {
@@ -208,7 +227,7 @@ export function AdminUsageTrendChart({
     [
       0,
       ...visibleChartData.flatMap((row) => [
-        Number(row.total),
+        ...(showTotal ? [Number(row.total)] : []),
         ...modelDefinitions.map((definition) => Number(row[definition.key] ?? 0)),
       ]),
     ],
@@ -315,22 +334,42 @@ export function AdminUsageTrendChart({
             </Button>
           ) : null}
         </div>
-        <p className="text-[11px] text-muted-foreground">
-          {hourlyAvailable
-            ? t("滚轮缩放时间区间，点击模型切换曲线")
-            : t("小时曲线最多支持 31 天区间")}
-        </p>
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          {isRefreshing ? (
+            <span className="inline-flex items-center gap-1.5 text-primary">
+              <LoaderCircle className="size-3 animate-spin" />
+              {t("正在更新曲线")}
+            </span>
+          ) : null}
+          <span>
+            {hourlyAvailable
+              ? t("滚轮缩放时间区间，点击模型切换曲线")
+              : t("小时曲线最多支持 31 天区间")}
+          </span>
+        </div>
       </div>
 
       {availableModelNames.length > 0 ? (
         <div className="flex flex-wrap items-center gap-1.5" aria-label={t("模型曲线")}>
+          <Button
+            type="button"
+            size="sm"
+            variant={showTotal ? "secondary" : "outline"}
+            className="h-7 gap-1.5 px-2 text-xs"
+            aria-pressed={showTotal}
+            onClick={() => setShowTotal((value) => !value)}
+          >
+            <span
+              className="h-0.5 w-3 shrink-0 rounded-full bg-(--usage-total-line)"
+              aria-hidden="true"
+            />
+            {t("全部模型")}
+          </Button>
           {availableModelNames.map((model, index) => {
             const selectedIndex = activeModels.indexOf(model);
             const isSelected = selectedIndex >= 0;
             const disabled = !isSelected && activeModels.length >= MAX_SELECTED_MODELS;
-            const color = isSelected
-              ? MODEL_SERIES_COLORS[selectedIndex]
-              : MODEL_SERIES_COLORS[index % MODEL_SERIES_COLORS.length];
+            const color = MODEL_SERIES_COLORS[index % MODEL_SERIES_COLORS.length];
             return (
               <Button
                 key={model}
@@ -374,20 +413,6 @@ export function AdminUsageTrendChart({
               data={visibleChartData}
               margin={{ top: 18, right: 14, left: 10, bottom: 4 }}
             >
-              <defs>
-                <linearGradient id="fillAdminUsageTotal" x1="0" y1="0" x2="0" y2="1">
-                  <stop
-                    offset="5%"
-                    stopColor="var(--color-total)"
-                    stopOpacity={0.28}
-                  />
-                  <stop
-                    offset="95%"
-                    stopColor="var(--color-total)"
-                    stopOpacity={0.02}
-                  />
-                </linearGradient>
-              </defs>
               <CartesianGrid
                 vertical={false}
                 stroke="rgb(var(--primary-rgb) / 0.16)"
@@ -413,34 +438,39 @@ export function AdminUsageTrendChart({
                   <ChartTooltipContent
                     indicator="line"
                     labelFormatter={(value) => value}
-                    formatter={(value, name) => (
-                      <div className="flex min-w-40 items-center justify-between gap-4">
-                        <span className="truncate text-muted-foreground">
-                          {String(name)}
-                        </span>
-                        <span className="font-mono font-medium text-foreground">
-                          {formatMetric(Number(value))}
-                        </span>
-                      </div>
-                    )}
+                    formatter={(value, name) =>
+                      Number(value) === 0 && String(name) !== "total" ? null : (
+                        <div className="flex min-w-40 items-center justify-between gap-4">
+                          <span className="truncate text-muted-foreground">
+                            {String(name) === "total" ? t("全部模型") : String(name)}
+                          </span>
+                          <span className="font-mono font-medium text-foreground">
+                            {formatMetric(Number(value))}
+                          </span>
+                        </div>
+                      )
+                    }
                   />
                 }
               />
-              <Area
-                dataKey="total"
-                type="monotone"
-                fill="url(#fillAdminUsageTotal)"
-                stroke="var(--color-total)"
-                strokeWidth={2.5}
-                dot={visibleChartData.length <= 31 ? { r: 3, strokeWidth: 2 } : false}
-                activeDot={{ r: 5, strokeWidth: 2 }}
-              />
+              {showTotal ? (
+                <Line
+                  dataKey="total"
+                  name="total"
+                  type="linear"
+                  stroke="var(--color-total)"
+                  strokeWidth={1.5}
+                  strokeDasharray="7 5"
+                  dot={false}
+                  activeDot={{ r: 4, strokeWidth: 2 }}
+                />
+              ) : null}
               {modelDefinitions.map((definition) => (
                 <Line
                   key={definition.model}
                   dataKey={definition.key}
                   name={definition.model}
-                  type="monotone"
+                  type="linear"
                   stroke={`var(--color-${definition.key})`}
                   strokeWidth={2}
                   dot={false}

@@ -41,6 +41,24 @@ test("模型曲线保留原日曲线回退并提供可访问交互", async () =>
   assert.match(chartSource, /export type AdminUsageGranularity = "day" \| "hour"/);
   assert.match(chartSource, /aria-pressed=\{granularity === value\}/);
   assert.match(chartSource, /aria-pressed=\{isSelected\}/);
-  assert.match(chartSource, /MAX_SELECTED_MODELS = MODEL_SERIES_COLORS\.length/);
+  assert.match(chartSource, /const MAX_SELECTED_MODELS = 5/);
+  assert.match(chartSource, /var\(--usage-series-1\)/);
+  assert.match(chartSource, /type="linear"/);
+  assert.match(chartSource, /strokeDasharray="7 5"/);
   assert.match(chartSource, /accessibilityLayer/);
+});
+
+test("模型曲线在查询刷新时保留内容并显示明确反馈", async () => {
+  const [pageSource, chartSource] = await Promise.all([
+    readSource("src/app/page.tsx"),
+    readSource("src/components/dashboard/admin-usage-trend-chart.tsx"),
+  ]);
+
+  assert.match(pageSource, /isFetching: isAdminUsageFetching/);
+  assert.match(
+    pageSource,
+    /isRefreshing=\{isAdminUsageFetching && !isAdminUsageLoading\}/,
+  );
+  assert.match(chartSource, /正在更新曲线/);
+  assert.match(chartSource, /setZoomWindow\(null\)/);
 });

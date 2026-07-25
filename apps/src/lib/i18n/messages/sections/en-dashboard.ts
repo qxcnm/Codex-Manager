@@ -32,6 +32,7 @@ export const EN_DASHBOARD_MESSAGES: MessageCatalog = {
   请求数: "Requests",
   模型曲线: "Model series",
   模型用量趋势图: "Model usage trend chart",
+  正在更新曲线: "Updating chart",
   暂无模型用量数据: "No model usage data yet",
   "滚轮缩放时间区间，点击模型切换曲线":
     "Scroll to zoom the time range; select models to toggle their series",
