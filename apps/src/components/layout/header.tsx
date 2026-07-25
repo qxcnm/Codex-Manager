@@ -169,15 +169,15 @@ export function Header() {
 
   return (
     <>
-      <header className="sticky top-0 z-30 grid min-h-[72px] grid-cols-[minmax(0,1fr)_auto] items-center gap-3 glass-header px-4 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:px-5">
+      <header className="sticky top-0 z-30 grid min-h-[72px] grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5 glass-header px-2 sm:gap-3 sm:px-4 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:px-5">
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
-        <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
-          <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background/80 text-primary shadow-sm">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden sm:gap-3">
+          <div className="relative hidden h-10 w-10 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background/80 text-primary shadow-sm sm:flex">
             <span className="absolute inset-x-2 top-1 h-px bg-primary/25" />
             <span className="absolute inset-x-2 bottom-1 h-px bg-primary/10" />
             <span className="font-mono text-xs font-semibold">CM</span>
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="hidden items-center gap-1.5 font-mono text-[10px] font-semibold uppercase text-primary/70 sm:flex">
               <Cpu className="h-3 w-3" />
               CodexManager Admin Console
@@ -186,14 +186,16 @@ export function Header() {
           </div>
           <Badge
             variant={serviceStatus.connected ? "default" : "secondary"}
-            className="h-7 shrink-0 rounded-md border-primary/20 bg-primary/10 px-2.5 font-mono text-xs text-primary shadow-sm"
+            className="flex size-7 shrink-0 items-center justify-center rounded-md border-primary/20 bg-primary/10 px-0 font-mono text-xs text-primary shadow-sm sm:h-7 sm:w-auto sm:px-2.5"
           >
             <span
-              className={`mr-1.5 h-1.5 w-1.5 rounded-full ${
+              className={`h-1.5 w-1.5 rounded-full sm:mr-1.5 ${
                 serviceStatus.connected ? "bg-emerald-500" : "bg-rose-500"
               }`}
             />
-            {serviceStatus.connected ? t("服务已连接") : t("服务未连接")}
+            <span className="hidden sm:inline">
+              {serviceStatus.connected ? t("服务已连接") : t("服务未连接")}
+            </span>
           </Badge>
           {serviceStatus.version ? (
             <span className="hidden font-mono text-xs text-muted-foreground 2xl:inline">v{serviceStatus.version}</span>
@@ -214,8 +216,11 @@ export function Header() {
           </div>
         </div>
 
-        <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2 justify-self-end">
-          <LanguageSwitcher compact triggerClassName="w-[112px] 2xl:w-[124px]" />
+        <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5 justify-self-end sm:gap-2">
+          <LanguageSwitcher
+            compact
+            triggerClassName="w-9 min-w-9 px-0 sm:w-[112px] sm:min-w-[116px] sm:px-3 2xl:w-[124px]"
+          />
 
           {canManageService ? (
             <div className="flex h-9 items-center gap-2 rounded-md border border-border/60 bg-background/55 px-2.5 shadow-[inset_0_1px_0_rgb(255_255_255/0.16)]">

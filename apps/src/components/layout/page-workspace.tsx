@@ -90,7 +90,7 @@ export function PageHeader({
           ) : null}
         </div>
         {description ? (
-          <p className="min-w-[220px] flex-1 truncate text-xs leading-5 text-muted-foreground">
+          <p className="line-clamp-2 min-w-0 basis-full flex-1 text-xs leading-5 text-muted-foreground sm:basis-auto sm:min-w-[220px] sm:line-clamp-1">
             {description}
           </p>
         ) : null}

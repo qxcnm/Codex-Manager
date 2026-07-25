@@ -42,11 +42,13 @@ export function LanguageSwitcher({
           className={cn("h-9 min-w-[116px] gap-2 text-xs", triggerClassName)}
           aria-label={t("选择语言")}
         >
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 items-center justify-center gap-2">
             <Globe className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <SelectValue>
-              {(value) => getLocaleLabel(normalizeLocale(value))}
-            </SelectValue>
+            <span className={compact ? "hidden min-w-0 sm:inline" : "min-w-0"}>
+              <SelectValue>
+                {(value) => getLocaleLabel(normalizeLocale(value))}
+              </SelectValue>
+            </span>
           </div>
         </SelectTrigger>
         <SelectContent>
