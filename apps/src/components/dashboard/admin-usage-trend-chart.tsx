@@ -8,6 +8,7 @@ import {
 } from "react";
 import { LoaderCircle, RotateCcw } from "lucide-react";
 import {
+  Brush,
   CartesianGrid,
   ComposedChart,
   Line,
@@ -47,6 +48,16 @@ const MODEL_SERIES_COLORS = [
   "var(--usage-series-8)",
 ] as const;
 const MAX_SELECTED_MODELS = 5;
+const MODEL_SERIES_DASHES = [
+  undefined,
+  "8 4",
+  "3 3",
+  "10 3 2 3",
+  "6 3 1 3",
+  "12 4",
+  "2 4",
+  "9 3 2 3 2 3",
+] as const;
 
 const SUPPORTED_INTL_LOCALES = ["zh-CN", "en-US", "ru-RU", "ko-KR"] as const;
 const INTL_LOCALE_BY_APP_LOCALE: Record<Exclude<AppLocale, "zh-CN">, string> = {
@@ -114,13 +125,32 @@ export function AdminUsageTrendChart({
   const [metric, setMetric] = useState<AdminUsageMetric>("tokens");
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [showTotal, setShowTotal] = useState(false);
+  const [hoveredModel, setHoveredModel] = useState<string | null>(null);
   const [zoomWindow, setZoomWindow] = useState<{
     startIndex: number;
     endIndex: number;
   } | null>(null);
 
+  const rankedModelSeries = useMemo(
+    () =>
+      [...summary.modelUsage].sort((left, right) => {
+        const valueDifference =
+          metricValue(right.usage, metric) - metricValue(left.usage, metric);
+        return valueDifference !== 0
+          ? valueDifference
+          : left.model.localeCompare(right.model);
+      }),
+    [metric, summary.modelUsage],
+  );
   const availableModelNames = useMemo(
-    () => summary.modelUsage.map((series) => series.model),
+    () => rankedModelSeries.map((series) => series.model),
+    [rankedModelSeries],
+  );
+  const stableModelIndexByName = useMemo(
+    () =>
+      new Map(
+        summary.modelUsage.map((series, index) => [series.model, index] as const),
+      ),
     [summary.modelUsage],
   );
   const activeModels = useMemo(() => {
@@ -134,14 +164,15 @@ export function AdminUsageTrendChart({
   const modelDefinitions = useMemo(
     () =>
       activeModels.map((model) => {
-        const stableIndex = Math.max(0, availableModelNames.indexOf(model));
+        const stableIndex = stableModelIndexByName.get(model) ?? 0;
         return {
           model,
           key: `model${stableIndex}`,
           color: MODEL_SERIES_COLORS[stableIndex % MODEL_SERIES_COLORS.length],
+          dash: MODEL_SERIES_DASHES[stableIndex % MODEL_SERIES_DASHES.length],
         };
       }),
-    [activeModels, availableModelNames],
+    [activeModels, stableModelIndexByName],
   );
   const chartConfig = useMemo(() => {
     const config: ChartConfig = {
@@ -205,6 +236,12 @@ export function AdminUsageTrendChart({
   const hasZoomWindow =
     chartData.length > 1 &&
     (visibleStartIndex > 0 || visibleEndIndex < chartData.length - 1);
+  const visibleRangeLabel =
+    visibleChartData.length > 0
+      ? `${String(visibleChartData[0]?.label ?? "")} – ${String(
+          visibleChartData[visibleChartData.length - 1]?.label ?? "",
+        )}`
+      : "";
 
   useEffect(() => {
     let active = true;
@@ -274,6 +311,10 @@ export function AdminUsageTrendChart({
     if (activeModels.length >= MAX_SELECTED_MODELS) return;
     setSelectedModels([...activeModels, model]);
   };
+  const totalMetricForRange = fallbackSeries(summary).reduce(
+    (total, point) => total + metricValue(point.usage, metric),
+    0,
+  );
 
   return (
     <div className="space-y-3">
@@ -283,6 +324,9 @@ export function AdminUsageTrendChart({
             className="inline-flex rounded-md border border-border/70 bg-background/40 p-0.5"
             role="group"
             aria-label={t("时间粒度")}
+            title={
+              hourlyAvailable ? undefined : t("小时曲线最多支持 31 天区间")
+            }
           >
             {(["day", "hour"] as const).map((value) => (
               <Button
@@ -341,55 +385,101 @@ export function AdminUsageTrendChart({
               {t("正在更新曲线")}
             </span>
           ) : null}
-          <span>
+          <span className="hidden sm:inline">
             {hourlyAvailable
-              ? t("滚轮缩放时间区间，点击模型切换曲线")
+              ? t("拖动底部时间滑块调整范围，滚轮可快速缩放")
               : t("小时曲线最多支持 31 天区间")}
           </span>
         </div>
       </div>
 
       {availableModelNames.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-1.5" aria-label={t("模型曲线")}>
-          <Button
-            type="button"
-            size="sm"
-            variant={showTotal ? "secondary" : "outline"}
-            className="h-7 gap-1.5 px-2 text-xs"
-            aria-pressed={showTotal}
-            onClick={() => setShowTotal((value) => !value)}
-          >
-            <span
-              className="h-0.5 w-3 shrink-0 rounded-full bg-(--usage-total-line)"
-              aria-hidden="true"
-            />
-            {t("全部模型")}
-          </Button>
-          {availableModelNames.map((model, index) => {
-            const selectedIndex = activeModels.indexOf(model);
-            const isSelected = selectedIndex >= 0;
-            const disabled = !isSelected && activeModels.length >= MAX_SELECTED_MODELS;
-            const color = MODEL_SERIES_COLORS[index % MODEL_SERIES_COLORS.length];
-            return (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-[11px] text-muted-foreground">
+              {t("模型曲线")} · {t("已选 {selected}/{max}", {
+                selected: activeModels.length,
+                max: MAX_SELECTED_MODELS,
+              })}
+            </div>
+            {selectedModels.length > 0 ? (
               <Button
-                key={model}
                 type="button"
                 size="sm"
-                variant={isSelected ? "secondary" : "outline"}
-                className="h-7 max-w-full gap-1.5 px-2 text-xs"
-                aria-pressed={isSelected}
-                disabled={disabled}
-                onClick={() => toggleModel(model)}
+                variant="ghost"
+                className="h-7 px-2 text-xs"
+                onClick={() => setSelectedModels([])}
               >
-                <span
-                  className="size-2 shrink-0 rounded-full"
-                  style={{ backgroundColor: color }}
-                  aria-hidden="true"
-                />
-                <span className="truncate">{model}</span>
+                {t("恢复默认")}
               </Button>
-            );
-          })}
+            ) : null}
+          </div>
+          <div
+            className="flex max-w-full flex-nowrap items-center gap-1.5 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible"
+            aria-label={t("模型曲线")}
+          >
+            <Button
+              type="button"
+              size="sm"
+              variant={showTotal ? "secondary" : "outline"}
+              className="h-8 shrink-0 gap-1.5 px-2 text-xs"
+              aria-pressed={showTotal}
+              onClick={() => setShowTotal((value) => !value)}
+            >
+              <span
+                className="h-0.5 w-3 shrink-0 rounded-full bg-(--usage-total-line)"
+                aria-hidden="true"
+              />
+              {t("全部模型")}
+            </Button>
+            {rankedModelSeries.map((series) => {
+              const model = series.model;
+              const isSelected = activeModelSet.has(model);
+              const disabled =
+                !isSelected && activeModels.length >= MAX_SELECTED_MODELS;
+              const stableIndex = stableModelIndexByName.get(model) ?? 0;
+              const color =
+                MODEL_SERIES_COLORS[stableIndex % MODEL_SERIES_COLORS.length];
+              const value = metricValue(series.usage, metric);
+              const share =
+                totalMetricForRange > 0 ? (value / totalMetricForRange) * 100 : 0;
+              return (
+                <Button
+                  key={model}
+                  type="button"
+                  size="sm"
+                  variant={isSelected ? "secondary" : "outline"}
+                  className="h-8 max-w-[18rem] shrink-0 gap-1.5 px-2 text-xs"
+                  aria-label={`${model}: ${formatMetric(value)}, ${share.toFixed(1)}%`}
+                  aria-pressed={isSelected}
+                  disabled={disabled}
+                  title={`${model} · ${formatMetric(value)} · ${share.toFixed(1)}%`}
+                  onClick={() => toggleModel(model)}
+                  onMouseEnter={() => isSelected && setHoveredModel(model)}
+                  onMouseLeave={() => setHoveredModel(null)}
+                  onFocus={() => isSelected && setHoveredModel(model)}
+                  onBlur={() => setHoveredModel(null)}
+                >
+                  <span
+                    className="size-2 shrink-0 rounded-full"
+                    style={{ backgroundColor: color }}
+                    aria-hidden="true"
+                  />
+                  <span className="max-w-32 truncate">{model}</span>
+                  <span className="font-mono text-[10px] text-muted-foreground">
+                    {formatMetric(value)} · {share.toFixed(0)}%
+                  </span>
+                </Button>
+              );
+            })}
+          </div>
+          {activeModels.length >= MAX_SELECTED_MODELS ? (
+            <p className="text-[11px] text-muted-foreground">
+              {t("最多同时比较 {count} 个模型", {
+                count: MAX_SELECTED_MODELS,
+              })}
+            </p>
+          ) : null}
         </div>
       ) : null}
 
@@ -404,14 +494,14 @@ export function AdminUsageTrendChart({
         ) : (
           <ChartContainer
             config={chartConfig}
-            className="h-72 w-full rounded-md bg-transparent p-3"
-            initialDimension={{ width: 720, height: 288 }}
+            className="h-80 w-full rounded-md bg-transparent p-3"
+            initialDimension={{ width: 720, height: 320 }}
             aria-label={t("模型用量趋势图")}
           >
             <ComposedChart
               accessibilityLayer
-              data={visibleChartData}
-              margin={{ top: 18, right: 14, left: 10, bottom: 4 }}
+              data={chartData}
+              margin={{ top: 18, right: 14, left: 10, bottom: 8 }}
             >
               <CartesianGrid
                 vertical={false}
@@ -434,6 +524,7 @@ export function AdminUsageTrendChart({
               />
               <ChartTooltip
                 cursor={{ stroke: "var(--border)", strokeWidth: 1 }}
+                itemSorter={(item) => -Number(item.value ?? 0)}
                 content={
                   <ChartTooltipContent
                     indicator="line"
@@ -473,15 +564,46 @@ export function AdminUsageTrendChart({
                   type="linear"
                   stroke={`var(--color-${definition.key})`}
                   strokeWidth={2}
+                  strokeDasharray={definition.dash}
+                  opacity={
+                    hoveredModel == null || hoveredModel === definition.model
+                      ? 1
+                      : 0.18
+                  }
                   dot={false}
                   activeDot={{ r: 4, strokeWidth: 2 }}
                   connectNulls
                 />
               ))}
+              <Brush
+                dataKey="label"
+                height={24}
+                travellerWidth={8}
+                startIndex={visibleStartIndex}
+                endIndex={visibleEndIndex}
+                stroke="var(--primary)"
+                fill="var(--background)"
+                onChange={(nextWindow) => {
+                  if (
+                    typeof nextWindow.startIndex === "number" &&
+                    typeof nextWindow.endIndex === "number"
+                  ) {
+                    setZoomWindow({
+                      startIndex: nextWindow.startIndex,
+                      endIndex: nextWindow.endIndex,
+                    });
+                  }
+                }}
+              />
             </ComposedChart>
           </ChartContainer>
         )}
       </div>
+      {visibleRangeLabel ? (
+        <div className="text-right text-[11px] text-muted-foreground">
+          {t("当前可视区间")}: {visibleRangeLabel}
+        </div>
+      ) : null}
     </div>
   );
 }

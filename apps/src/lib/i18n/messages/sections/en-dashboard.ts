@@ -36,6 +36,8 @@ export const EN_DASHBOARD_MESSAGES: MessageCatalog = {
   暂无模型用量数据: "No model usage data yet",
   "滚轮缩放时间区间，点击模型切换曲线":
     "Scroll to zoom the time range; select models to toggle their series",
+  "拖动底部时间滑块调整范围，滚轮可快速缩放":
+    "Drag the timeline brush to adjust the range; scroll for quick zoom",
   "小时曲线最多支持 31 天区间":
     "Hourly series are available for ranges up to 31 days",
   "已按排序权重展示前 {visible} 个，共 {total} 个模型；完整列表在模型管理页。":
@@ -43,6 +45,7 @@ export const EN_DASHBOARD_MESSAGES: MessageCatalog = {
   应用: "Apply",
   当前为账号直连模式: "Direct account mode is active",
   当前区间: "Current range",
+  当前可视区间: "Visible range",
   当前账号可用余额: "Current account available balance",
   成功: "Success",
   成功率: "Success rate",
@@ -94,6 +97,9 @@ export const EN_DASHBOARD_MESSAGES: MessageCatalog = {
   "输入 / 输出": "Input / output",
   近期请求: "Recent requests",
   重置缩放: "Reset zoom",
+  恢复默认: "Restore defaults",
+  "已选 {selected}/{max}": "Selected {selected}/{max}",
+  "最多同时比较 {count} 个模型": "Compare up to {count} models at once",
   钱包余额: "Wallet balance",
   额度分发未启用: "Quota distribution is not enabled",
 };
