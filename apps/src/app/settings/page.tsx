@@ -254,6 +254,7 @@ import {
                     "flex h-auto items-center justify-start gap-3 rounded-lg border border-border/60 bg-background/55 p-3 text-left transition-colors hover:border-primary/25 hover:bg-accent/30",
                     isActive ? "border-primary/45 bg-primary/10 ring-1 ring-primary/20" : "",
                   )}
+                  aria-pressed={isActive}
                 >
                   <ThemePreviewSwatch
                     id={item.id}
@@ -1357,20 +1358,20 @@ function AdminSettingsPage() {
         }}
         className="w-full"
       >
-        <TabsList className="glass-card mission-panel mb-6 flex h-11 w-full justify-start overflow-x-auto rounded-lg p-1 no-scrollbar lg:w-fit">
-          <TabsTrigger value="general" className="gap-2 px-5 shrink-0">
+        <TabsList className="glass-card mission-panel mb-6 grid h-auto w-full grid-cols-3 gap-1 rounded-lg p-1 lg:flex lg:h-11 lg:w-fit lg:gap-0">
+          <TabsTrigger value="general" className="min-w-0 gap-1 px-2 sm:gap-2 sm:px-4 lg:px-5">
             <SettingsIcon className="h-4 w-4" /> {t("通用")}
           </TabsTrigger>
-          <TabsTrigger value="appearance" className="gap-2 px-5 shrink-0">
+          <TabsTrigger value="appearance" className="min-w-0 gap-1 px-2 sm:gap-2 sm:px-4 lg:px-5">
             <Palette className="h-4 w-4" /> {t("外观")}
           </TabsTrigger>
-          <TabsTrigger value="gateway" className="gap-2 px-5 shrink-0">
+          <TabsTrigger value="gateway" className="min-w-0 gap-1 px-2 sm:gap-2 sm:px-4 lg:px-5">
             <Globe className="h-4 w-4" /> {t("网关")}
           </TabsTrigger>
-          <TabsTrigger value="tasks" className="gap-2 px-5 shrink-0">
+          <TabsTrigger value="tasks" className="min-w-0 gap-1 px-2 sm:gap-2 sm:px-4 lg:px-5">
             <Cpu className="h-4 w-4" /> {t("任务")}
           </TabsTrigger>
-          <TabsTrigger value="env" className="gap-2 px-5 shrink-0">
+          <TabsTrigger value="env" className="min-w-0 gap-1 px-2 sm:gap-2 sm:px-4 lg:px-5">
             <Variable className="h-4 w-4" /> {t("环境")}
           </TabsTrigger>
         </TabsList>

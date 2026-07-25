@@ -791,14 +791,14 @@ export default function PluginsPage() {
                   setMarketModeDraft(normalizeMarketMode(option.value))
                 }
                 className={cn(
-                  "h-auto justify-start rounded-xl p-4 text-left transition-all",
+                  "h-auto w-full min-w-0 justify-start whitespace-normal rounded-xl p-4 text-left transition-all",
                   marketMode === option.value
                     ? "border-primary/40 bg-primary/10 shadow-sm"
                     : "border-border/60 bg-background/40 hover:bg-background/70",
                 )}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="font-medium">{t(option.label)}</div>
+                <div className="flex min-w-0 items-center justify-between gap-2">
+                  <div className="min-w-0 font-medium">{t(option.label)}</div>
                   {marketMode === option.value ? <Badge>{t("已选")}</Badge> : null}
                 </div>
                 <div className="mt-1 text-xs leading-5 text-muted-foreground">

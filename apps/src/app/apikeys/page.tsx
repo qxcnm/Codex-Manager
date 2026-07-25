@@ -687,7 +687,7 @@ export default function ApiKeysPage() {
               ) : apiKeys.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={showMemberOwnership ? 10 : 9} className="h-48 text-center">
-                    <div className="flex flex-col items-center justify-center gap-2 text-muted-foreground">
+                    <div className="flex w-[calc(100dvw-6rem)] flex-col items-center justify-center gap-2 text-muted-foreground sm:w-auto">
                       <Plus className="h-8 w-8 opacity-20" />
                       <p>{t("创建密钥")}</p>
                     </div>

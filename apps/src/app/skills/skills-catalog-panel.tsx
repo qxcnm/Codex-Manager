@@ -604,16 +604,16 @@ export function SkillsCatalogPanel({
         onValueChange={(value) => setActiveTab((value || "repositories") as CatalogTab)}
         className="gap-4"
       >
-        <TabsList className="glass-card mission-panel h-11 w-full justify-start rounded-lg p-1 sm:w-auto">
-          <TabsTrigger value="repositories" className="gap-2 px-4">
+        <TabsList className="glass-card mission-panel grid h-auto min-h-11 w-full grid-cols-3 rounded-lg p-1 sm:flex sm:h-11 sm:w-auto">
+          <TabsTrigger value="repositories" className="min-w-0 gap-1 px-1 text-xs sm:gap-2 sm:px-4 sm:text-sm">
             <Github className="size-4" />
             {t("技能仓库")}
           </TabsTrigger>
-          <TabsTrigger value="registry" className="gap-2 px-4">
+          <TabsTrigger value="registry" className="min-w-0 gap-1 px-1 text-xs sm:gap-2 sm:px-4 sm:text-sm">
             <WandSparkles className="size-4" />
             skills.sh
           </TabsTrigger>
-          <TabsTrigger value="installed" className="gap-2 px-4">
+          <TabsTrigger value="installed" className="min-w-0 gap-1 px-1 text-xs sm:gap-2 sm:px-4 sm:text-sm">
             <PackageCheck className="size-4" />
             {t("已安装")}
           </TabsTrigger>

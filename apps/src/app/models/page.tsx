@@ -518,7 +518,7 @@ export default function ModelsPage() {
                       <TableHead>{t("价格")}</TableHead>
                       <TableHead>{t("指令")}</TableHead>
                       <TableHead>{t("路由")}</TableHead>
-                      {isAdminMode ? <TableHead className="w-24 text-right">{t("操作")}</TableHead> : null}
+                      {isAdminMode ? <TableHead className="table-sticky-action-head w-24 text-right">{t("操作")}</TableHead> : null}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -589,7 +589,7 @@ export default function ModelsPage() {
                             )}
                           </TableCell>
                           {isAdminMode ? (
-                            <TableCell>
+                            <TableCell className="table-sticky-action-cell">
                               <div className="flex justify-end gap-1">
                                 <Button type="button" variant="ghost" size="icon" disabled={isModelOperationPending} aria-label={t("编辑模型 {slug}", { slug: model.slug })} onClick={() => openEditor(model.slug)}>
                                   <PencilLine className="h-4 w-4" />

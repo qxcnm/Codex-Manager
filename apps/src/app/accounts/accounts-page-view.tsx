@@ -389,7 +389,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
       ) : null}
 
       <Card className="glass-card mission-panel shadow-sm">
-        <CardContent className="grid gap-3 pt-0 lg:grid-cols-[200px_auto_minmax(0,1fr)_auto] lg:items-center">
+        <CardContent className="grid min-w-0 gap-3 pt-0 lg:grid-cols-[200px_auto_minmax(0,1fr)_auto] lg:items-center">
           <div className="min-w-0">
             <Input
               placeholder={t("搜索账号名 / 编号...")}
@@ -399,9 +399,9 @@ export function AccountsPageView(props: AccountsPageViewProps) {
             />
           </div>
 
-          <div className="flex shrink-0 items-center gap-3">
+          <div className="grid min-w-0 grid-cols-2 gap-2 sm:flex sm:shrink-0 sm:items-center sm:gap-3">
             <Select value={planFilter} onValueChange={handlePlanFilterChange}>
-              <SelectTrigger className="h-10 w-[140px] shrink-0 rounded-xl bg-card/50">
+              <SelectTrigger className="h-10 w-full min-w-0 rounded-xl bg-card/50 sm:w-[140px] sm:shrink-0">
                 <SelectValue placeholder={t("全部类型")}>
                   {(value) => formatPlanFilterLabel(String(value || ""), t)}
                 </SelectValue>
@@ -426,7 +426,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                 handleStatusFilterChange(value as StatusFilter)
               }
             >
-              <SelectTrigger className="h-10 w-[152px] shrink-0 rounded-xl bg-card/50">
+              <SelectTrigger className="h-10 w-full min-w-0 rounded-xl bg-card/50 sm:w-[152px] sm:shrink-0">
                 <SelectValue placeholder={t("全部状态")}>
                   {(value) => formatStatusFilterLabel(String(value || ""), t)}
                 </SelectValue>
@@ -445,7 +445,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
 
           <div className="hidden min-w-0 lg:block" />
 
-          <div className="ml-auto flex shrink-0 items-center gap-2 lg:ml-0 lg:justify-self-end">
+          <div className="flex min-w-0 flex-wrap items-center gap-2 sm:ml-auto sm:shrink-0 lg:ml-0 lg:justify-self-end">
             <Tooltip>
               <TooltipTrigger render={<span />} className="inline-flex">
                 <Button
@@ -878,7 +878,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
               ) : visibleAccounts.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={7} className="h-48 text-center">
-                    <div className="flex flex-col items-center justify-center gap-2 text-muted-foreground">
+                    <div className="flex w-[calc(100dvw-6rem)] flex-col items-center justify-center gap-2 text-muted-foreground sm:w-auto">
                       <Search className="h-8 w-8 opacity-20" />
                       <p>{t("未找到符合条件的账号")}</p>
                     </div>
@@ -1134,7 +1134,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
         </CardContent>
       </Card>
 
-      <div className="flex items-center justify-between px-2">
+      <div className="flex flex-col gap-3 px-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="text-xs text-muted-foreground">
           {t("共")} {filteredAccounts.length} {t("个账号")}
           {effectiveSelectedIds.length > 0 ? (
@@ -1143,8 +1143,8 @@ export function AccountsPageView(props: AccountsPageViewProps) {
             </span>
           ) : null}
         </div>
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-2">
+        <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-center sm:gap-6">
+          <div className="flex items-center justify-between gap-2 sm:justify-start">
             <span className="whitespace-nowrap text-xs text-muted-foreground">
               {t("每页显示")}
             </span>
