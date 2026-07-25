@@ -49,6 +49,10 @@ test("模型曲线保留原日曲线回退并提供可访问交互", async () =>
   assert.match(chartSource, /borderColor: color/);
   assert.match(chartSource, /color-mix\(in srgb/);
   assert.match(chartSource, /<Brush/);
+  assert.match(chartSource, /name: label/);
+  assert.match(chartSource, /travellerWidth=\{16\}/);
+  assert.match(chartSource, /aria-describedby="usage-chart-range-help usage-chart-visible-range"/);
+  assert.match(chartSource, /aria-live="polite"/);
   assert.match(chartSource, /itemSorter=/);
   assert.match(chartSource, /hoveredModel/);
   assert.match(chartSource, /已选 \{selected\}\/\{max\}/);

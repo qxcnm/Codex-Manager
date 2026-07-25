@@ -188,9 +188,15 @@ export function AdminUsageTrendChart({
       ]),
     );
     return points.map((point) => {
+      const label = formatBucketLabel(
+        point.bucketStartTs,
+        granularity,
+        locale,
+      );
       const row: Record<string, number | string> = {
         bucketStartTs: point.bucketStartTs,
-        label: formatBucketLabel(point.bucketStartTs, granularity, locale),
+        label,
+        name: label,
         total: metricValue(point.usage, metric),
       };
       for (const definition of modelDefinitions) {
@@ -510,6 +516,9 @@ export function AdminUsageTrendChart({
         className="mission-panel overflow-hidden rounded-lg border border-primary/20 bg-gradient-to-b from-background/45 to-background/20 shadow-[inset_0_1px_0_rgb(255_255_255/0.06)]"
         onWheel={handleWheelZoom}
       >
+        <p id="usage-chart-range-help" className="sr-only">
+          {t("拖动底部时间滑块调整范围，滚轮可快速缩放")}
+        </p>
         {chartData.length === 0 ? (
           <div className="flex h-64 items-center justify-center text-sm text-muted-foreground">
             {t("暂无模型用量数据")}
@@ -520,6 +529,7 @@ export function AdminUsageTrendChart({
             className="h-80 w-full rounded-md bg-transparent p-3"
             initialDimension={{ width: 720, height: 320 }}
             aria-label={t("模型用量趋势图")}
+            aria-describedby="usage-chart-range-help usage-chart-visible-range"
           >
             <ComposedChart
               accessibilityLayer
@@ -599,8 +609,8 @@ export function AdminUsageTrendChart({
               ))}
               <Brush
                 dataKey="label"
-                height={26}
-                travellerWidth={10}
+                height={28}
+                travellerWidth={16}
                 startIndex={visibleStartIndex}
                 endIndex={visibleEndIndex}
                 stroke="rgb(var(--primary-rgb) / 0.55)"
@@ -622,7 +632,11 @@ export function AdminUsageTrendChart({
         )}
       </div>
       {visibleRangeLabel ? (
-        <div className="text-right text-[11px] text-muted-foreground">
+        <div
+          id="usage-chart-visible-range"
+          className="text-right text-[11px] text-muted-foreground"
+          aria-live="polite"
+        >
           {t("当前可视区间")}: {visibleRangeLabel}
         </div>
       ) : null}
