@@ -6,7 +6,7 @@ import {
   useState,
   type WheelEvent as ReactWheelEvent,
 } from "react";
-import { LoaderCircle, RotateCcw } from "lucide-react";
+import { Check, LoaderCircle, RotateCcw } from "lucide-react";
 import {
   Brush,
   CartesianGrid,
@@ -48,16 +48,6 @@ const MODEL_SERIES_COLORS = [
   "var(--usage-series-8)",
 ] as const;
 const MAX_SELECTED_MODELS = 5;
-const MODEL_SERIES_DASHES = [
-  undefined,
-  "8 4",
-  "3 3",
-  "10 3 2 3",
-  "6 3 1 3",
-  "12 4",
-  "2 4",
-  "9 3 2 3 2 3",
-] as const;
 
 const SUPPORTED_INTL_LOCALES = ["zh-CN", "en-US", "ru-RU", "ko-KR"] as const;
 const INTL_LOCALE_BY_APP_LOCALE: Record<Exclude<AppLocale, "zh-CN">, string> = {
@@ -169,7 +159,6 @@ export function AdminUsageTrendChart({
           model,
           key: `model${stableIndex}`,
           color: MODEL_SERIES_COLORS[stableIndex % MODEL_SERIES_COLORS.length],
-          dash: MODEL_SERIES_DASHES[stableIndex % MODEL_SERIES_DASHES.length],
         };
       }),
     [activeModels, stableModelIndexByName],
@@ -378,25 +367,18 @@ export function AdminUsageTrendChart({
             </Button>
           ) : null}
         </div>
-        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-          {isRefreshing ? (
-            <span className="inline-flex items-center gap-1.5 text-primary">
-              <LoaderCircle className="size-3 animate-spin" />
-              {t("正在更新曲线")}
-            </span>
-          ) : null}
-          <span className="hidden sm:inline">
-            {hourlyAvailable
-              ? t("拖动底部时间滑块调整范围，滚轮可快速缩放")
-              : t("小时曲线最多支持 31 天区间")}
+        {isRefreshing ? (
+          <span className="inline-flex items-center gap-1.5 text-[11px] text-primary">
+            <LoaderCircle className="size-3 animate-spin" />
+            {t("正在更新曲线")}
           </span>
-        </div>
+        ) : null}
       </div>
 
       {availableModelNames.length > 0 ? (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between gap-3">
-            <div className="text-[11px] text-muted-foreground">
+        <div className="mission-panel space-y-2.5 rounded-lg border border-primary/15 bg-background/25 p-2.5 shadow-[inset_0_1px_0_rgb(255_255_255/0.05)]">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <div className="rounded-md bg-primary/8 px-2 py-1 text-[11px] font-medium text-foreground">
               {t("模型曲线")} · {t("已选 {selected}/{max}", {
                 selected: activeModels.length,
                 max: MAX_SELECTED_MODELS,
@@ -406,30 +388,43 @@ export function AdminUsageTrendChart({
               <Button
                 type="button"
                 size="sm"
-                variant="ghost"
-                className="h-7 px-2 text-xs"
+                variant="outline"
+                className="h-7 gap-1.5 border-primary/25 bg-background/45 px-2 text-xs shadow-sm"
                 onClick={() => setSelectedModels([])}
               >
+                <RotateCcw className="size-3" />
                 {t("恢复默认")}
               </Button>
             ) : null}
+            <span className="text-[11px] text-muted-foreground">
+              {hourlyAvailable
+                ? t("拖动底部时间滑块调整范围，滚轮可快速缩放")
+                : t("小时曲线最多支持 31 天区间")}
+            </span>
           </div>
           <div
-            className="flex max-w-full flex-nowrap items-center gap-1.5 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible"
+            className="flex max-w-full flex-nowrap items-center gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible"
             aria-label={t("模型曲线")}
           >
             <Button
               type="button"
               size="sm"
-              variant={showTotal ? "secondary" : "outline"}
-              className="h-8 shrink-0 gap-1.5 px-2 text-xs"
+              variant="outline"
+              className={
+                showTotal
+                  ? "h-9 shrink-0 gap-1.5 border-primary/50 bg-primary/10 px-2.5 text-xs text-foreground shadow-sm"
+                  : "h-9 shrink-0 gap-1.5 border-border/60 bg-background/30 px-2.5 text-xs text-muted-foreground"
+              }
               aria-pressed={showTotal}
               onClick={() => setShowTotal((value) => !value)}
             >
-              <span
-                className="h-0.5 w-3 shrink-0 rounded-full bg-(--usage-total-line)"
-                aria-hidden="true"
-              />
+              <span className="flex size-4 shrink-0 items-center justify-center rounded border border-(--usage-total-line) bg-background/70">
+                {showTotal ? (
+                  <Check className="size-3 text-(--usage-total-line)" />
+                ) : (
+                  <span className="size-1.5 rounded-full bg-(--usage-total-line)" />
+                )}
+              </span>
               {t("全部模型")}
             </Button>
             {rankedModelSeries.map((series) => {
@@ -448,8 +443,21 @@ export function AdminUsageTrendChart({
                   key={model}
                   type="button"
                   size="sm"
-                  variant={isSelected ? "secondary" : "outline"}
-                  className="h-8 max-w-[18rem] shrink-0 gap-1.5 px-2 text-xs"
+                  variant="outline"
+                  className={
+                    isSelected
+                      ? "h-9 max-w-[19rem] shrink-0 gap-1.5 bg-background/70 px-2.5 text-xs text-foreground shadow-sm"
+                      : "h-9 max-w-[19rem] shrink-0 gap-1.5 border-border/60 bg-background/25 px-2.5 text-xs text-muted-foreground opacity-75 hover:opacity-100"
+                  }
+                  style={
+                    isSelected
+                      ? {
+                          borderColor: color,
+                          background: `color-mix(in srgb, ${color} 11%, var(--background))`,
+                          boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${color} 28%, transparent), 0 3px 10px rgb(15 23 42 / 0.08)`,
+                        }
+                      : undefined
+                  }
                   aria-label={`${model}: ${formatMetric(value)}, ${share.toFixed(1)}%`}
                   aria-pressed={isSelected}
                   disabled={disabled}
@@ -461,12 +469,27 @@ export function AdminUsageTrendChart({
                   onBlur={() => setHoveredModel(null)}
                 >
                   <span
-                    className="size-2 shrink-0 rounded-full"
-                    style={{ backgroundColor: color }}
+                    className="flex size-4 shrink-0 items-center justify-center rounded border bg-background/75"
+                    style={{ borderColor: color }}
                     aria-hidden="true"
-                  />
+                  >
+                    {isSelected ? (
+                      <Check className="size-3" style={{ color }} />
+                    ) : (
+                      <span
+                        className="size-1.5 rounded-full"
+                        style={{ backgroundColor: color }}
+                      />
+                    )}
+                  </span>
                   <span className="max-w-32 truncate">{model}</span>
-                  <span className="font-mono text-[10px] text-muted-foreground">
+                  <span
+                    className={
+                      isSelected
+                        ? "font-mono text-[10px] text-foreground/70"
+                        : "font-mono text-[10px] text-muted-foreground"
+                    }
+                  >
                     {formatMetric(value)} · {share.toFixed(0)}%
                   </span>
                 </Button>
@@ -484,7 +507,7 @@ export function AdminUsageTrendChart({
       ) : null}
 
       <div
-        className="mission-panel rounded-lg border border-primary/20 bg-background/30 shadow-[inset_0_1px_0_rgb(255_255_255/0.06)]"
+        className="mission-panel overflow-hidden rounded-lg border border-primary/20 bg-gradient-to-b from-background/45 to-background/20 shadow-[inset_0_1px_0_rgb(255_255_255/0.06)]"
         onWheel={handleWheelZoom}
       >
         {chartData.length === 0 ? (
@@ -548,7 +571,7 @@ export function AdminUsageTrendChart({
                 <Line
                   dataKey="total"
                   name="total"
-                  type="linear"
+                  type="monotone"
                   stroke="var(--color-total)"
                   strokeWidth={1.5}
                   strokeDasharray="7 5"
@@ -561,10 +584,9 @@ export function AdminUsageTrendChart({
                   key={definition.model}
                   dataKey={definition.key}
                   name={definition.model}
-                  type="linear"
+                  type="monotone"
                   stroke={`var(--color-${definition.key})`}
-                  strokeWidth={2}
-                  strokeDasharray={definition.dash}
+                  strokeWidth={2.25}
                   opacity={
                     hoveredModel == null || hoveredModel === definition.model
                       ? 1
@@ -577,12 +599,12 @@ export function AdminUsageTrendChart({
               ))}
               <Brush
                 dataKey="label"
-                height={24}
-                travellerWidth={8}
+                height={26}
+                travellerWidth={10}
                 startIndex={visibleStartIndex}
                 endIndex={visibleEndIndex}
-                stroke="var(--primary)"
-                fill="var(--background)"
+                stroke="rgb(var(--primary-rgb) / 0.55)"
+                fill="var(--card)"
                 onChange={(nextWindow) => {
                   if (
                     typeof nextWindow.startIndex === "number" &&

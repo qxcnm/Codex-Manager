@@ -43,8 +43,11 @@ test("模型曲线保留原日曲线回退并提供可访问交互", async () =>
   assert.match(chartSource, /aria-pressed=\{isSelected\}/);
   assert.match(chartSource, /const MAX_SELECTED_MODELS = 5/);
   assert.match(chartSource, /var\(--usage-series-1\)/);
-  assert.match(chartSource, /type="linear"/);
+  assert.match(chartSource, /type="monotone"/);
   assert.match(chartSource, /strokeDasharray="7 5"/);
+  assert.match(chartSource, /<Check/);
+  assert.match(chartSource, /borderColor: color/);
+  assert.match(chartSource, /color-mix\(in srgb/);
   assert.match(chartSource, /<Brush/);
   assert.match(chartSource, /itemSorter=/);
   assert.match(chartSource, /hoveredModel/);
