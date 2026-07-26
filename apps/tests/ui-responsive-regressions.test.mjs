@@ -62,3 +62,25 @@ test("primary and theme buttons expose clear interaction state", async () => {
   assert.match(buttonSource, /hover:bg-primary\/90/);
   assert.match(settingsSource, /aria-pressed=\{isActive\}/);
 });
+
+test("dense management tables keep readable content and reachable row actions", async () => {
+  const [accountsViewSource, accountHelpersSource, proxyCellSource, apiKeysSource, resetCreditSource, logCellsSource] =
+    await Promise.all([
+      readSource("src/app/accounts/accounts-page-view.tsx"),
+      readSource("src/app/accounts/accounts-page-helpers.tsx"),
+      readSource("src/components/accounts/account-proxy-cell.tsx"),
+      readSource("src/app/apikeys/page.tsx"),
+      readSource("src/components/account-reset-credit-control.tsx"),
+      readSource("src/app/logs/page-cells.tsx"),
+    ]);
+
+  assert.match(accountHelpersSource, /text-\[15px\][^\"]*leading-5/);
+  assert.match(accountHelpersSource, /h-5 shrink-0 px-2 text-\[10px\]/);
+  assert.match(accountHelpersSource, /mt-1\.5 text-\[11px\] leading-4/);
+  assert.match(accountsViewSource, /h-8 w-8 text-muted-foreground[\s\S]*<ArrowUp className="h-4 w-4"/);
+  assert.match(proxyCellSource, /text-\[13px\] font-medium leading-5/);
+  assert.match(apiKeysSource, /h-8 w-8 text-muted-foreground[\s\S]*<Eye className="h-4 w-4"/);
+  assert.doesNotMatch(apiKeysSource, /className="scale-75"/);
+  assert.match(resetCreditSource, /h-8 gap-1\.5 rounded-full/);
+  assert.doesNotMatch(logCellsSource, /text-\[9px\]/);
+});

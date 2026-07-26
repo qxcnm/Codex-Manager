@@ -915,7 +915,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                       </TableCell>
                       <TableCell>
                         <QuotaOverviewCell items={quotaItems} />
-                        <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
+                        <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
                           {account.quotaCapacityPrimaryWindowTokens ||
                           account.quotaCapacitySecondaryWindowTokens ? (
                             <span className="inline-flex min-h-5 max-w-full items-center rounded-full border border-border/50 bg-background/40 px-2 py-0.5 leading-none break-words [overflow-wrap:anywhere]">
@@ -951,13 +951,13 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1">
-                          <span className="rounded bg-muted/50 px-2 py-0.5 font-mono text-xs">
+                          <span className="min-w-8 rounded-md bg-muted/60 px-2 py-1 text-center font-mono text-xs font-semibold tabular-nums">
                             {account.priority}
                           </span>
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-7 w-7 text-muted-foreground transition-colors hover:text-primary"
+                            className="h-8 w-8 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary active:scale-95"
                             disabled={
                               !isServiceReady ||
                               !canMoveUp ||
@@ -967,12 +967,12 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                             onClick={() => void handleMoveAccount(account, "up")}
                             title={t("上移一位")}
                           >
-                            <ArrowUp className="h-3.5 w-3.5" />
+                            <ArrowUp className="h-4 w-4" />
                           </Button>
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-7 w-7 text-muted-foreground transition-colors hover:text-primary"
+                            className="h-8 w-8 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary active:scale-95"
                             disabled={
                               !isServiceReady ||
                               !canMoveDown ||
@@ -984,12 +984,12 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                             }
                             title={t("下移一位")}
                           >
-                            <ArrowDown className="h-3.5 w-3.5" />
+                            <ArrowDown className="h-4 w-4" />
                           </Button>
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-7 w-7 text-muted-foreground transition-colors hover:text-primary"
+                            className="h-8 w-8 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary active:scale-95"
                             disabled={
                               !isServiceReady ||
                               isReorderingAccounts ||
@@ -998,7 +998,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                             onClick={() => openAccountEditor(account)}
                             title={t("编辑账号信息")}
                           >
-                            <PencilLine className="h-3.5 w-3.5" />
+                            <PencilLine className="h-4 w-4" />
                           </Button>
                         </div>
                       </TableCell>

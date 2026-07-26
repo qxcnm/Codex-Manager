@@ -165,7 +165,7 @@ export function AccountResetCreditControl({
             variant="outline"
             size="sm"
             className={cn(
-              "h-7 gap-1.5 rounded-full px-2.5 text-[11px] font-semibold transition-all duration-200",
+              "h-8 gap-1.5 rounded-full px-3 text-xs font-semibold transition-all duration-200 active:scale-[0.98]",
               buttonCount > 0
                 ? "border-emerald-500/55 bg-gradient-to-r from-emerald-500/20 via-teal-500/15 to-cyan-500/20 text-emerald-800 shadow-[0_4px_14px_-8px_rgba(16,185,129,0.95)] hover:-translate-y-px hover:border-emerald-500/75 hover:from-emerald-500/30 hover:via-teal-500/25 hover:to-cyan-500/30 hover:text-emerald-900 hover:shadow-[0_6px_18px_-8px_rgba(16,185,129,1)] dark:text-emerald-200 dark:hover:text-emerald-100"
                 : "border-border/70 bg-background/55 text-muted-foreground shadow-sm hover:border-emerald-500/35 hover:bg-emerald-500/8",
@@ -182,18 +182,18 @@ export function AccountResetCreditControl({
           >
             <span
               className={cn(
-                "flex h-4 w-4 items-center justify-center rounded-full",
+                "flex h-5 w-5 items-center justify-center rounded-full",
                 buttonCount > 0
                   ? "bg-emerald-500/20 text-emerald-700 dark:text-emerald-200"
                   : "bg-muted text-muted-foreground",
               )}
             >
-              <RotateCcw className="h-2.5 w-2.5" />
+              <RotateCcw className="h-3 w-3" />
             </span>
             {t("重置 5h + 7d")}
             <span
               className={cn(
-                "rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums",
+                "rounded-full px-1.5 py-0.5 text-[11px] font-bold tabular-nums",
                 buttonCount > 0
                   ? "bg-emerald-600 text-white dark:bg-emerald-400 dark:text-emerald-950"
                   : "bg-muted text-muted-foreground",

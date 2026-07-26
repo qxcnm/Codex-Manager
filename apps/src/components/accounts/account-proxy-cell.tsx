@@ -37,7 +37,7 @@ export function ProxyFlag({
 				width={16}
 				height={12}
 				unoptimized
-				className={cn("h-3 w-4 shrink-0 object-cover rounded-[1px]", className)}
+				className={cn("h-3.5 w-5 shrink-0 rounded-sm object-cover shadow-sm", className)}
 				onError={() => setHasError(true)}
 			/>
 		);
@@ -113,14 +113,14 @@ export function AccountProxyCell({ account }: { account: Account }) {
 	return (
 		<Tooltip>
 			<TooltipTrigger render={<div />} className="min-w-0 cursor-help w-full">
-				<div className="flex items-start gap-1.5 w-full">
+				<div className="flex w-full items-start gap-2">
 					<ProxyFlag
 						countryCode={countryCode}
 						flagEmoji={flagEmoji}
 						flagImgUrl={flagImgUrl}
-						className="shrink-0 mt-0.5"
+						className="mt-0.5 shrink-0 text-base leading-none"
 					/>
-					<span className="min-w-0 text-xs leading-normal whitespace-normal break-words text-left" title={displayIp}>
+					<span className="min-w-0 break-words text-left text-[13px] font-medium leading-5" title={displayIp}>
 						{displayName}
 					</span>
 				</div>

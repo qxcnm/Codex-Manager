@@ -736,24 +736,28 @@ export default function ApiKeysPage() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-7 w-7 text-muted-foreground hover:text-primary"
+                            className="h-8 w-8 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary active:scale-95"
                             disabled={!isServiceReady}
                             onClick={() => void toggleSecret(key.id)}
+                            title={revealed ? t("隐藏密钥") : t("显示密钥")}
+                            aria-label={revealed ? t("隐藏密钥") : t("显示密钥")}
                           >
                             {revealed ? (
-                              <EyeOff className="h-3.5 w-3.5" />
+                              <EyeOff className="h-4 w-4" />
                             ) : (
-                              <Eye className="h-3.5 w-3.5" />
+                              <Eye className="h-4 w-4" />
                             )}
                           </Button>
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-7 w-7 text-muted-foreground hover:text-primary"
+                            className="h-8 w-8 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary active:scale-95"
                             disabled={!isServiceReady}
                             onClick={() => void copyToClipboard(key.id)}
+                            title={t("复制密钥")}
+                            aria-label={t("复制密钥")}
                           >
-                            <Copy className="h-3.5 w-3.5" />
+                            <Copy className="h-4 w-4" />
                           </Button>
                         </div>
                       </TableCell>
@@ -873,14 +877,13 @@ export default function ApiKeysPage() {
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <Switch
-                            className="scale-75"
                             checked={isEnabled}
                             disabled={!isServiceReady || isToggling}
                             onCheckedChange={(enabled) =>
                               toggleApiKeyStatus({ id: key.id, enabled })
                             }
                           />
-                          <span className="text-[10px] font-medium text-muted-foreground">
+                          <span className="text-[11px] font-medium text-muted-foreground">
                             {isEnabled ? t("启用") : t("禁用")}
                           </span>
                         </div>

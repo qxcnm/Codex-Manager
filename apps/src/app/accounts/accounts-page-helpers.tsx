@@ -171,10 +171,10 @@ function QuotaProgress({
 
   return (
     <div className="flex min-w-[180px] flex-col gap-1.5">
-      <div className="flex items-center justify-between text-[10px]">
+      <div className="flex items-center justify-between text-[11px]">
         <div className="min-w-0">
           <div className="flex items-center gap-1 text-muted-foreground">
-            <Icon className={cn("h-3 w-3", palette.icon)} />
+            <Icon className={cn("h-3.5 w-3.5", palette.icon)} />
             <span>{label}</span>
           </div>
           {caption ? (
@@ -182,7 +182,7 @@ function QuotaProgress({
               className={fitLongTextClassName(
                 caption,
                 "max-w-full break-all text-muted-foreground/80 [overflow-wrap:anywhere]",
-                "text-[9px]",
+                "text-[10px]",
               )}
               title={caption}
             >
@@ -199,7 +199,7 @@ function QuotaProgress({
         trackClassName={palette.track}
         indicatorClassName={palette.indicator}
       />
-      <div className="text-[10px] text-muted-foreground">
+      <div className="text-[11px] leading-4 text-muted-foreground">
         {t("重置")}: {formatTsFromSeconds(resetsAt, emptyResetText)}
       </div>
     </div>
@@ -213,16 +213,16 @@ export function QuotaOverviewCell({ items }: { items: QuotaSummaryItem[] }) {
   return (
     <Tooltip>
       <TooltipTrigger render={<div />} className="block min-w-0 cursor-help">
-        <div className="rounded-xl border border-primary/5 bg-accent/10 px-3 py-2">
+        <div className="rounded-xl border border-primary/5 bg-accent/10 px-3 py-2.5">
           <div className="flex items-center gap-3">
             {summaryItems.map((item) => (
               <div key={item.id} className="min-w-0 flex-1 space-y-1">
-                <div className="flex items-center justify-between text-[10px]">
+                <div className="flex items-center justify-between text-[11px] leading-4">
                   <span
                     className={fitLongTextClassName(
                       item.label,
                       "min-w-0 max-w-full break-words text-muted-foreground [overflow-wrap:anywhere]",
-                      "text-[10px]",
+                      "text-[11px]",
                     )}
                     title={item.label}
                   >
@@ -254,7 +254,7 @@ export function QuotaOverviewCell({ items }: { items: QuotaSummaryItem[] }) {
               </div>
             ))}
           </div>
-          <div className="mt-1 grid grid-cols-2 gap-3 text-[10px] text-muted-foreground">
+          <div className="mt-1.5 grid grid-cols-2 gap-3 text-[11px] text-muted-foreground">
             {summaryItems.map((item) => (
               <div
                 key={`${item.id}-reset`}
@@ -267,7 +267,7 @@ export function QuotaOverviewCell({ items }: { items: QuotaSummaryItem[] }) {
                       item.emptyResetText ?? t("未知"),
                     ),
                     "block min-w-0 break-words leading-tight [overflow-wrap:anywhere]",
-                    "text-[10px]",
+                    "text-[11px]",
                   )}
                 >
                   {formatTsFromSeconds(
@@ -299,7 +299,7 @@ export function QuotaOverviewCell({ items }: { items: QuotaSummaryItem[] }) {
             <p className="text-sm font-semibold">
               {t("额度详情（悬停查看所有额度）")}
             </p>
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-[11px] leading-4 text-muted-foreground">
               {t("标准额度与专属额度统一在这里查看。")}
             </p>
           </div>
@@ -433,13 +433,13 @@ export function AccountStatusCell({ account }: { account: Account }) {
           <div className="flex min-w-0 items-center gap-1.5">
             <div
               className={cn(
-                "h-1.5 w-1.5 shrink-0 rounded-full",
+                "h-2 w-2 shrink-0 rounded-full ring-2 ring-background",
                 account.isAvailable ? "bg-green-500" : "bg-red-500",
               )}
             />
             <span
               className={cn(
-                "text-[11px] font-medium",
+                "text-xs font-semibold leading-4",
                 account.isAvailable
                   ? "text-green-600 dark:text-green-400"
                   : "text-red-600 dark:text-red-400",
@@ -453,7 +453,7 @@ export function AccountStatusCell({ account }: { account: Account }) {
               className={fitLongTextClassName(
                 statusReasonLabel,
                 "block max-w-[180px] whitespace-normal break-words text-muted-foreground [overflow-wrap:anywhere]",
-                "text-[10px] leading-snug",
+                "text-[11px] leading-4",
               )}
               title={statusReasonLabel}
             >
@@ -713,11 +713,7 @@ export function AccountInfoCell({
         <div className="flex min-w-0 flex-col whitespace-normal">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
             <span
-              className={fitLongTextClassName(
-                account.name,
-                "inline-block min-w-0 max-w-full break-words font-semibold [overflow-wrap:anywhere]",
-                "text-sm",
-              )}
+              className="inline-block min-w-0 max-w-full break-words text-[15px] font-semibold leading-5 [overflow-wrap:anywhere]"
               title={account.name}
             >
               {account.name}
@@ -726,7 +722,7 @@ export function AccountInfoCell({
               <Badge
                 variant="secondary"
                 className={cn(
-                  "h-4 shrink-0 px-1.5 text-[9px]",
+                  "h-5 shrink-0 px-2 text-[10px] font-semibold",
                   getAccountPlanBadgeClassName(accountPlanLabel),
                 )}
               >
@@ -736,7 +732,7 @@ export function AccountInfoCell({
             {isPreferred ? (
               <Badge
                 variant="secondary"
-                className="h-4 shrink-0 bg-amber-500/15 px-1.5 text-[10px] text-amber-700 dark:text-amber-300"
+                className="h-5 shrink-0 bg-amber-500/15 px-2 text-[10px] font-semibold text-amber-700 dark:text-amber-300"
               >
                 {t("优先")}
               </Badge>
@@ -744,18 +740,18 @@ export function AccountInfoCell({
             {groupName ? (
               <Badge
                 variant="outline"
-                className="h-4 max-w-full shrink px-1.5 text-[9px] text-muted-foreground"
+                className="h-5 max-w-full shrink px-2 text-[10px] font-medium text-muted-foreground"
                 title={groupName}
               >
                 <span className="truncate">{groupName}</span>
               </Badge>
             ) : null}
           </div>
-          <span className="mt-1 text-[10px] text-muted-foreground">
+          <span className="mt-1.5 text-[11px] leading-4 text-muted-foreground">
             {t("最近刷新")}:{" "}
             {formatTsFromSeconds(account.lastRefreshAt, t("从未刷新"))}
           </span>
-          <span className="text-[10px] text-muted-foreground">
+          <span className="text-[11px] leading-4 text-muted-foreground">
             {t("订阅到期")}: {subscriptionExpiryText}
           </span>
         </div>

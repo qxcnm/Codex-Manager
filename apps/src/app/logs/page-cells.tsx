@@ -122,17 +122,17 @@ export function AccountKeyInfoCell({
                 {aggregateApiDisplayName}
               </span>
             </div>
-            <div className="truncate font-mono text-[9px] text-muted-foreground">
+            <div className="truncate font-mono text-[10px] leading-4 text-muted-foreground">
               {aggregateApiDisplayUrl}
             </div>
-            <div className="flex items-center gap-1 text-[9px] text-muted-foreground">
-              <Shield className="h-2.5 w-2.5" />
+            <div className="flex items-center gap-1 text-[10px] leading-4 text-muted-foreground">
+              <Shield className="h-3 w-3" />
               <span className={apiKeyName ? "truncate" : "font-mono"}>
                 {apiKeyDisplayName}
               </span>
             </div>
             {showAggregateAttemptHint ? (
-              <div className="text-[9px] text-amber-500">
+              <div className="text-[10px] leading-4 text-amber-500">
                 {t("先试")} {initialAggregateApiLabel}
               </div>
             ) : null}
@@ -190,14 +190,14 @@ export function AccountKeyInfoCell({
             <Zap className="h-3 w-3 text-yellow-500" />
             <span className="max-w-[140px] truncate">{displayAccount}</span>
           </div>
-          <div className="flex items-center gap-1 text-[9px] text-muted-foreground">
-            <Shield className="h-2.5 w-2.5" />
+          <div className="flex items-center gap-1 text-[10px] leading-4 text-muted-foreground">
+            <Shield className="h-3 w-3" />
             <span className={apiKeyName ? "max-w-[140px] truncate" : "font-mono"}>
               {apiKeyDisplayName}
             </span>
           </div>
           {showAttemptHint ? (
-            <div className="text-[9px] text-amber-500">
+            <div className="text-[10px] leading-4 text-amber-500">
               {t("先试")} {initialAccountLabel}
             </div>
           ) : null}
