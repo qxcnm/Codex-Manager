@@ -14,14 +14,16 @@ import {
   BarChart3,
   KeyRound,
   LineChart,
-  PieChart,
   Plus,
   Wallet,
-  Users,
   Zap,
   type LucideIcon,
 } from "lucide-react";
 import { ApiKeyModal } from "@/components/modals/api-key-modal";
+import {
+  DashboardGatewayStatus,
+  DashboardPoolRemaining,
+} from "@/components/dashboard/dashboard-gateway-status";
 import {
   AdminUsageTrendChart,
   type AdminUsageGranularity,
@@ -44,7 +46,6 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
-import { Progress } from "@/components/ui/progress";
 import {
   Select,
   SelectContent,
@@ -73,7 +74,6 @@ import { useCodexProfileModeStatus } from "@/hooks/useCodexProfileModeStatus";
 import {
   estimateChartYAxisWidth,
   formatCompactTokenAmount,
-  formatPercent,
 } from "@/lib/dashboard/format";
 import type { AppLocale } from "@/lib/i18n/config";
 import { useI18n } from "@/lib/i18n/provider";
@@ -251,14 +251,6 @@ function alertTone(alert: MemberDashboardAlert): string {
   return "border-blue-500/40 bg-blue-500/10 text-blue-700 dark:text-blue-300";
 }
 
-function quotaTrackClass(tone: "green" | "blue") {
-  return tone === "blue" ? "bg-blue-500/20" : "bg-green-500/20";
-}
-
-function quotaIndicatorClass(tone: "green" | "blue") {
-  return tone === "blue" ? "bg-blue-500" : "bg-green-500";
-}
-
 function MetricCard({
   title,
   value,
@@ -308,7 +300,7 @@ function MetricCard({
 
 function DashboardInitialSkeleton() {
   return (
-    <div className="space-y-6 animate-in fade-in duration-700">
+    <div className="space-y-8 animate-in fade-in duration-500 ease-out motion-reduce:animate-none">
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {Array.from({ length: 4 }).map((_, index) => (
           <Skeleton key={index} className="h-36 w-full rounded-xl" />
@@ -680,7 +672,10 @@ function AdminUsageAnalyticsCard({
   const rangeBadgeLabel = isTodayOnlyRange ? t("今日") : t("所选区间");
 
   return (
-    <Card className="glass-card mission-panel overflow-hidden shadow-sm">
+    <Card
+      id="admin-usage-analytics"
+      className="dashboard-analytics-card dashboard-primary-panel glass-card mission-panel scroll-mt-4 overflow-hidden shadow-sm"
+    >
       <CardHeader className="flex flex-col gap-4">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
@@ -818,15 +813,14 @@ function AdminUsageAnalyticsCard({
 }
 
 function AdminDashboard() {
-  const { t } = useI18n();
   const { stats, isLoading, isServiceReady } = useDashboardStats({
     requestLogLimit: 0,
     includeAccountHints: false,
     includeApiModels: false,
     includeApiKeys: false,
-    includeAccounts: false,
-    includeUsageSnapshots: false,
-    includeAccountRuntime: false,
+    includeAccounts: true,
+    includeUsageSnapshots: true,
+    includeAccountRuntime: true,
     includeAccountDetails: false,
   });
   const { isDirectAccountMode } = useCodexProfileModeStatus({
@@ -890,8 +884,6 @@ function AdminDashboard() {
   );
   usePageTransitionReady("/", !isServiceReady || !isLoading);
 
-  const poolPrimary = stats.poolRemain?.primary ?? 0;
-  const poolSecondary = stats.poolRemain?.secondary ?? 0;
   const isCustomAdminUsageRangeInvalid =
     adminUsageRangePreset === "custom" &&
     (() => {
@@ -901,131 +893,33 @@ function AdminDashboard() {
     })();
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-700">
-      {isDirectAccountMode ? (
-        <Alert className="border-amber-500/30 bg-amber-500/10">
-          <AlertTriangle className="size-4" />
-          <AlertTitle>{t("当前为账号直连模式")}</AlertTitle>
-          <AlertDescription className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <span>
-              {t("CodexManager 无法统计 CLI 请求日志和用量。")}
-            </span>
-            <a
-              href={buildStaticRouteUrl("/platform-mode")}
-              className="inline-flex h-7 w-fit items-center justify-center rounded-md border border-amber-500/40 bg-background/70 px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-background"
-            >
-              {t("去切换为本地网关")}
-            </a>
-          </AlertDescription>
-        </Alert>
-      ) : null}
+    <div className="space-y-5 animate-in fade-in duration-500 xl:space-y-7">
+      <DashboardGatewayStatus
+        connected={isServiceReady}
+        directMode={isDirectAccountMode}
+        stats={{
+          total: stats.total,
+          available: stats.available,
+          unavailable: stats.unavailable,
+          todayTokens: adminUsageSummary?.todayUsage.totalTokens ?? stats.todayTokens,
+          cachedTokens:
+            adminUsageSummary?.todayUsage.cachedInputTokens ?? stats.cachedTokens,
+          reasoningTokens:
+            adminUsageSummary?.todayUsage.reasoningOutputTokens ?? stats.reasoningTokens,
+          todayCost: adminUsageSummary?.todayUsage.estimatedCostUsd ?? stats.todayCost,
+        }}
+        isLoading={isLoading}
+      />
 
-      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-        {isLoading ? (
-          Array.from({ length: 5 }).map((_, index) => (
-            <Skeleton key={index} className="h-24 w-full rounded-xl" />
-          ))
-        ) : (
-          <>
-            <MetricCard
-              title={t("总账号数")}
-              value={String(stats.total)}
-              icon={Users}
-              color="text-blue-500"
-              sub={t("池中所有配置账号")}
-              badge={
-                isDirectAccountMode
-                  ? t("账号直连模式下不可用")
-                  : `${stats.available}/${stats.total} ${t("可用")}`
-              }
-            />
-            <MetricCard
-              title={t("可用账号")}
-              value={String(stats.available)}
-              icon={Activity}
-              color="text-emerald-500"
-              sub={`${stats.unavailable} ${t("不可用")}`}
-              badge={isDirectAccountMode ? t("账号直连模式下不可用") : t("可用")}
-            />
-            <MetricCard
-              title={t("今日/缓存/推理 用量")}
-              value={`${formatCompactTokenAmount(adminUsageSummary?.todayUsage.totalTokens ?? stats.todayTokens)} / ${formatCompactTokenAmount(adminUsageSummary?.todayUsage.cachedInputTokens ?? stats.cachedTokens)} / ${formatCompactTokenAmount(adminUsageSummary?.todayUsage.reasoningOutputTokens ?? stats.reasoningTokens)}`}
-              icon={Zap}
-              color="text-violet-500"
-              titleClassName="text-[11px]"
-              valueClassName="text-base"
-              sub={`${t("缓存 / 推理")}: ${formatCompactTokenAmount(adminUsageSummary?.todayUsage.cachedInputTokens ?? stats.cachedTokens)} / ${formatCompactTokenAmount(adminUsageSummary?.todayUsage.reasoningOutputTokens ?? stats.reasoningTokens)}`}
-              detail={
-                adminUsageSummary
-                  ? `${t("输入 / 输出")}: ${formatCompactTokenAmount(adminUsageSummary.todayUsage.inputTokens - adminUsageSummary.todayUsage.cachedInputTokens)} / ${formatCompactTokenAmount(adminUsageSummary.todayUsage.outputTokens)}`
-                  : undefined
-              }
-            />
-            <MetricCard
-              title={t("费用")}
-              value={formatUsd(adminUsageSummary?.todayUsage.estimatedCostUsd ?? stats.todayCost)}
-              icon={Wallet}
-              color="text-amber-500"
-              sub={
-                adminUsageSummary
-                  ? `${adminUsageSummary.todayUsage.requestCount} · ${t("成功")} ${adminUsageSummary.todayUsage.successCount}`
-                  : t("今日请求")
-              }
-            />
-
-            <Card
-              size="sm"
-              className="glass-card console-metric mission-panel col-span-full overflow-hidden py-0 shadow-sm transition-colors"
-            >
-              <CardContent className="grid min-h-[52px] items-center gap-2 px-3 py-2 xl:grid-cols-[140px_minmax(0,1fr)]">
-                <div className="flex min-w-0 items-center justify-between gap-2">
-                  <CardTitle className="flex min-w-0 items-center gap-2 text-xs font-semibold">
-                    <PieChart className="h-3.5 w-3.5 shrink-0 text-primary" />
-                    <span className="truncate">{t("账号池剩余")}</span>
-                  </CardTitle>
-                  <Badge variant="secondary" className="h-5 shrink-0 border-primary/20 bg-primary/8 px-1.5 text-[10px] text-primary">
-                    POOL
-                  </Badge>
-                </div>
-                <div className="grid gap-2 lg:grid-cols-2">
-                  <div className="min-w-0">
-                    <div className="mb-1 flex items-center justify-between gap-3 text-[11px]">
-                      <span className="font-medium text-muted-foreground">{t("5小时内")}</span>
-                      <span className="font-mono font-bold text-emerald-500">
-                        {formatPercent(stats.poolRemain?.primary)}
-                      </span>
-                    </div>
-                    <Progress
-                      value={poolPrimary}
-                      trackClassName={quotaTrackClass("green")}
-                      indicatorClassName={quotaIndicatorClass("green")}
-                    />
-                    <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
-                      {stats.poolRemain.primaryKnownCount}/{stats.poolRemain.primaryBucketCount}
-                    </div>
-                  </div>
-                  <div className="min-w-0">
-                    <div className="mb-1 flex items-center justify-between gap-3 text-[11px]">
-                      <span className="font-medium text-muted-foreground">{t("7天内")}</span>
-                      <span className="font-mono font-bold text-blue-500">
-                        {formatPercent(stats.poolRemain?.secondary)}
-                      </span>
-                    </div>
-                    <Progress
-                      value={poolSecondary}
-                      trackClassName={quotaTrackClass("blue")}
-                      indicatorClassName={quotaIndicatorClass("blue")}
-                    />
-                    <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
-                      {stats.poolRemain.secondaryKnownCount}/{stats.poolRemain.secondaryBucketCount}
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </>
-        )}
-      </div>
+      <DashboardPoolRemaining
+        primary={stats.poolRemain.primary}
+        secondary={stats.poolRemain.secondary}
+        primaryKnownCount={stats.poolRemain.primaryKnownCount}
+        primaryBucketCount={stats.poolRemain.primaryBucketCount}
+        secondaryKnownCount={stats.poolRemain.secondaryKnownCount}
+        secondaryBucketCount={stats.poolRemain.secondaryBucketCount}
+        isLoading={isLoading}
+      />
 
       <DirectModeUnavailable active={isDirectAccountMode}>
         <AdminUsageAnalyticsCard

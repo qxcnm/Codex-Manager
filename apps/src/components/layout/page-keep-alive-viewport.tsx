@@ -61,7 +61,7 @@ function PagePanelFallback({ title }: { title: string }) {
     <div
       className={cn(
         "fixed inset-y-0 right-0 z-40 overflow-hidden bg-background/70",
-        isSidebarOpen ? "left-60" : "left-16",
+        isSidebarOpen ? "left-[220px] xl:left-[280px]" : "left-[60px] xl:left-[72px]",
       )}
     >
       <div className="relative flex h-full w-full items-start justify-center px-8 pt-[31vh]">

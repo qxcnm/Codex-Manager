@@ -24,6 +24,7 @@ export interface ServiceStatus {
 }
 
 export interface ServiceInitializationResult {
+  version: string;
   userAgent: string;
   codexHome: string;
   platformFamily: string;

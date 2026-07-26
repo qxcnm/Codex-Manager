@@ -3,7 +3,7 @@
 import Image from "next/image";
 import {
   Cable,
-  LayoutDashboard,
+  House,
   Users,
   UserCog,
   Key,
@@ -28,7 +28,7 @@ import { useAppStore } from "@/lib/store/useAppStore";
 import { useI18n } from "@/lib/i18n/provider";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
 import {
-  getAllowedTopLevelRouteSections,
+  getAllowedTopLevelRoutes,
   getTopLevelRouteLabel,
   type TopLevelRoutePath,
 } from "@/lib/app-shell/top-level-routes";
@@ -42,7 +42,7 @@ import {
 } from "react";
 
 const NAV_ITEM_BY_PATH = new Map<TopLevelRoutePath, { icon: LucideIcon }>([
-  ["/", { icon: LayoutDashboard }],
+  ["/", { icon: House }],
   ["/accounts", { icon: Users }],
   ["/account-manager", { icon: UserCog }],
   ["/aggregate-api", { icon: Database }],
@@ -64,26 +64,18 @@ type SidebarNavItem = {
   icon: LucideIcon;
 };
 
-type RenderedSidebarSection = {
-  id: string;
-  label: string;
-  items: SidebarNavItem[];
-};
-
 const NavItem = memo(({
   item,
   isActive,
   isSidebarOpen,
   onNavigate,
   itemName,
-  index,
 }: {
   item: SidebarNavItem,
   isActive: boolean,
   isSidebarOpen: boolean,
   onNavigate: (href: string, event: MouseEvent<HTMLAnchorElement>) => void,
   itemName: string,
-  index: number,
 }) => (
   <a
     href={buildStaticRouteUrl(item.href)}
@@ -92,29 +84,21 @@ const NavItem = memo(({
     aria-label={itemName}
     title={itemName}
     className={cn(
-      "group/nav relative flex min-h-10 items-center gap-3 overflow-hidden rounded-md border border-transparent px-3 py-2 text-[13px] transition-colors duration-200 hover:border-primary/20 hover:bg-primary/5 hover:text-primary",
+      "group/nav relative flex min-h-11 items-center gap-3.5 overflow-hidden rounded-xl px-4 py-2 text-sm transition-[background-color,color,box-shadow] duration-300 ease-out hover:bg-primary/6 hover:text-primary xl:min-h-[58px] xl:gap-5 xl:rounded-2xl xl:px-5 xl:py-3 xl:text-base [@media(max-height:800px)]:min-h-10 [@media(max-height:800px)]:gap-3 [@media(max-height:800px)]:rounded-xl [@media(max-height:800px)]:px-4 [@media(max-height:800px)]:py-1.5 [@media(max-height:800px)]:text-sm",
       !isSidebarOpen && "justify-center px-0",
       isActive
-        ? "border-primary/25 bg-primary/10 text-primary shadow-[0_10px_22px_-20px_rgb(var(--primary-rgb)/0.34)]"
+        ? "bg-primary/10 text-primary shadow-[inset_0_1px_0_rgb(255_255_255/0.5),0_14px_28px_-24px_rgb(var(--primary-rgb)/0.55)]"
         : "text-muted-foreground",
     )}
   >
     {isActive ? (
       <>
-        <span className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary" />
-        <span className="absolute inset-x-3 top-0 h-px bg-gradient-to-r from-primary/35 via-primary/10 to-transparent" />
+        <span className="absolute inset-y-3 left-0 w-[3px] rounded-full bg-primary" />
       </>
     ) : null}
-    <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background/35">
-      <item.icon className="h-3.5 w-3.5" />
-    </div>
+    <item.icon className="h-[18px] w-[18px] shrink-0 xl:h-[22px] xl:w-[22px]" />
     {isSidebarOpen && (
-      <>
-        <span className="truncate font-medium">{itemName}</span>
-        <span className="ml-auto font-mono text-[10px] text-muted-foreground/60">
-          {String(index + 1).padStart(2, "0")}
-        </span>
-      </>
+      <span className="truncate font-medium">{itemName}</span>
     )}
   </a>
 ));
@@ -177,54 +161,31 @@ export function Sidebar() {
   );
 
   const renderedItems = useMemo(() => {
-    const sections: RenderedSidebarSection[] = getAllowedTopLevelRouteSections(
-      routeAccess,
-    ).map((section) => ({
-      id: section.id,
-      label: section.label,
-      items: section.routes.flatMap((route) => {
+    const items: SidebarNavItem[] = getAllowedTopLevelRoutes(routeAccess).flatMap(
+      (route) => {
         const item = NAV_ITEM_BY_PATH.get(route.path);
         if (!item) return [];
         return [{ href: route.path, icon: item.icon }];
-      }),
-    }));
-    const itemIndexes = new Map(
-      sections
-        .flatMap((section) => section.items)
-        .map((item, index) => [item.href, index] as const),
+      },
     );
 
-    return sections.map((section, sectionIndex) => (
-      <div
-        key={section.id}
-        className={cn(
-          "space-y-1",
-          sectionIndex > 0 && "mt-4 border-t border-border/70 pt-4",
-        )}
-      >
-        {isSidebarOpen ? (
-          <div className="animate-in px-3 pb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/70 fade-in slide-in-from-left-1 duration-200 motion-reduce:animate-none">
-            {t(section.label)}
-          </div>
-        ) : null}
-        <div className="grid gap-1">
-          {section.items.map((item) => {
-            const itemName = t(getTopLevelRouteLabel(item.href, routeAccess));
-            return (
-              <NavItem
-                key={item.href}
-                item={item}
-                itemName={itemName}
-                isActive={item.href === currentShellPath}
-                isSidebarOpen={isSidebarOpen}
-                onNavigate={handleNavigate}
-                index={itemIndexes.get(item.href) ?? 0}
-              />
-            );
-          })}
-        </div>
+    return (
+      <div className="grid gap-1.5">
+        {items.map((item) => {
+          const itemName = t(getTopLevelRouteLabel(item.href, routeAccess));
+          return (
+            <NavItem
+              key={item.href}
+              item={item}
+              itemName={itemName}
+              isActive={item.href === currentShellPath}
+              isSidebarOpen={isSidebarOpen}
+              onNavigate={handleNavigate}
+            />
+          );
+        })}
       </div>
-    ));
+    );
   }, [currentShellPath, handleNavigate, isSidebarOpen, routeAccess, t]);
 
   return (
@@ -232,23 +193,23 @@ export function Sidebar() {
       data-slot="app-sidebar"
       className={cn(
         "relative z-20 flex shrink-0 flex-col glass-sidebar",
-        isSidebarOpen ? "w-60" : "w-16"
+        isSidebarOpen ? "w-[220px] xl:w-[280px]" : "w-[60px] xl:w-[72px]"
       )}
     >
       <div
         aria-hidden="true"
         data-slot="app-sidebar-motion-edge"
         className={cn(
-          "pointer-events-none absolute inset-y-0 left-0 z-20 w-px bg-gradient-to-b from-transparent via-primary/55 to-transparent transition-transform duration-200 ease-out will-change-transform motion-reduce:transition-none",
+          "pointer-events-none absolute inset-y-0 left-0 z-20 w-px bg-border/70 transition-transform duration-300 ease-out will-change-transform motion-reduce:transition-none",
           isSidebarOpen
-            ? "translate-x-[calc(15rem-1px)]"
-            : "translate-x-[calc(4rem-1px)]",
+            ? "translate-x-[calc(220px-1px)] xl:translate-x-[calc(280px-1px)]"
+            : "translate-x-[calc(60px-1px)] xl:translate-x-[calc(72px-1px)]",
         )}
       />
       <div
         className={cn(
-          "flex h-[76px] items-center border-b border-border/70 shrink-0",
-          isSidebarOpen ? "px-3" : "px-2"
+          "flex h-[68px] items-center border-b border-border/55 shrink-0 xl:h-[96px] [@media(max-height:800px)]:h-[68px]",
+          isSidebarOpen ? "px-4 xl:px-6" : "px-2 xl:px-2.5"
         )}
       >
         <Button
@@ -258,19 +219,19 @@ export function Sidebar() {
           title={brandTitle}
           aria-label={brandTitle}
           className={cn(
-            "flex h-auto w-full items-center gap-2 overflow-hidden rounded-md border border-border/70 bg-background/65 px-2 py-2 transition-colors duration-200 hover:border-primary/25 hover:bg-accent/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
-            isSidebarOpen ? "text-left" : "justify-center"
+            "flex h-auto w-full items-center gap-2.5 overflow-hidden rounded-xl px-0 py-1.5 transition-colors duration-200 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 xl:gap-3.5 xl:py-2",
+            isSidebarOpen ? "justify-start text-left" : "justify-center"
           )}
         >
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md border border-primary/20 bg-card text-primary shadow-sm">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-[10px] border border-primary/20 bg-card text-primary shadow-[0_12px_24px_-18px_rgb(var(--primary-rgb)/0.8)] xl:h-12 xl:w-12 xl:rounded-xl [@media(max-height:800px)]:h-9 [@media(max-height:800px)]:w-9 [@media(max-height:800px)]:rounded-[10px]">
             {logoFailed ? (
               <span className="text-sm font-bold">CM</span>
             ) : (
               <Image
                 src="/logo.png"
                 alt="CodexManager"
-                width={40}
-                height={40}
+                width={48}
+                height={48}
                 className="h-full w-full object-cover"
                 onError={() => setLogoFailed(true)}
               />
@@ -278,22 +239,22 @@ export function Sidebar() {
           </div>
           {isSidebarOpen && (
             <div className="flex flex-col overflow-hidden animate-in fade-in slide-in-from-left-1 duration-200 motion-reduce:animate-none">
-              <span className="truncate text-sm font-semibold text-foreground">CodexManager</span>
-              <span className="truncate font-mono text-[10px] uppercase text-primary/70">
-                Admin Console
+              <span className="truncate text-sm font-semibold tracking-[-0.02em] text-foreground xl:text-[17px]">CodexManager</span>
+              <span className="truncate text-xs text-muted-foreground xl:mt-0.5 xl:text-sm">
+                {t("账号池 · 路由管理")}
               </span>
             </div>
           )}
         </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto py-4 no-scrollbar">
-        <nav className="px-2">
+      <div className="flex-1 overflow-y-auto py-3.5 no-scrollbar xl:py-5 [@media(max-height:800px)]:py-3">
+        <nav className="px-2.5 xl:px-3.5">
           {renderedItems}
         </nav>
       </div>
 
-      <div className="border-t border-border/70 p-2 shrink-0">
+      <div className="border-t border-border/55 p-2.5 shrink-0">
         <Button
           variant="ghost"
           size="icon"

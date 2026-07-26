@@ -99,11 +99,19 @@ test("desktop project methods use app-shell commands without service parameters"
   globalThis.__codexProjectsInvokeResult = {
     path: "/work/repo",
     action: "resume",
+    target: "cli",
     codex_home: "/home/user/.codex",
   };
-  await client.codexProjectsClient.launch({
+  const launchResult = await client.codexProjectsClient.launch({
     path: "/work/repo",
     action: "resume",
+  });
+
+  assert.deepEqual(launchResult, {
+    path: "/work/repo",
+    action: "resume",
+    target: "cli",
+    codexHome: "/home/user/.codex",
   });
 
   assert.deepEqual(globalThis.__codexProjectsInvokeCalls, [

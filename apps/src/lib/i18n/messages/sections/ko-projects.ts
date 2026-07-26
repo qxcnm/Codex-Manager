@@ -4,8 +4,8 @@ import type { MessageCatalog } from "../types";
 
 export const KO_PROJECTS_MESSAGES: MessageCatalog = {
   项目启动: "프로젝트 실행",
-  "收藏常用目录，并使用本机 CodexManager 保存的 Codex profile 启动 Codex CLI。":
-    "자주 쓰는 폴더를 저장하고 로컬 CodexManager에 저장된 Codex 프로필로 Codex CLI를 실행합니다.",
+  "收藏常用目录，在 Windows 与 macOS 上直接用 ChatGPT Codex App 打开项目。":
+    "자주 쓰는 폴더를 저장하고 Windows 및 macOS에서 ChatGPT Codex App으로 프로젝트를 바로 엽니다.",
   "{count} 个项目": "프로젝트 {count}개",
   添加目录: "폴더 추가",
   目录可用: "사용 가능",
@@ -16,6 +16,9 @@ export const KO_PROJECTS_MESSAGES: MessageCatalog = {
   会话: "세션",
   移除: "제거",
   "本机 Codex CLI": "로컬 Codex CLI",
+  "Codex App 与本机 CLI": "Codex App 및 로컬 CLI",
+  "Windows 与 macOS 的“启动”会在 ChatGPT Codex App 中打开项目；“会话”继续使用本机 Codex CLI 会话选择器。":
+    "Windows 및 macOS에서 실행은 ChatGPT Codex App에서 프로젝트를 열고, 세션은 로컬 Codex CLI 세션 선택기를 계속 사용합니다.",
   "启动时会把项目设为工作目录，并优先使用本机 CodexManager 保存的 Codex profile；未配置时沿用本机 CODEX_HOME。":
     "실행할 때 프로젝트를 작업 디렉터리로 설정하고 로컬 CodexManager에 저장된 Codex 프로필을 우선 사용합니다. 설정하지 않은 경우 로컬 CODEX_HOME을 사용합니다.",
   "远程服务上的 Codex profile 不会复制到本机，也不会作为本机启动路径使用。":
@@ -37,6 +40,7 @@ export const KO_PROJECTS_MESSAGES: MessageCatalog = {
   移除失败: "프로젝트 제거 실패",
   "已请求打开 Codex 会话选择器": "Codex 세션 선택기 열기를 요청했습니다",
   "已请求在新终端中启动 Codex": "새 터미널에서 Codex 실행을 요청했습니다",
+  "已在 ChatGPT Codex App 中打开项目": "ChatGPT Codex App에서 프로젝트를 열었습니다",
   "启动 Codex 失败": "Codex 실행 실패",
   移除项目记录: "프로젝트 항목 제거",
   "只会从 CodexManager 中移除“{name}”，不会删除项目目录或其中的文件。":

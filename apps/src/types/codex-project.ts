@@ -1,4 +1,5 @@
 export type CodexProjectLaunchAction = "start" | "resume";
+export type CodexProjectLaunchTarget = "app" | "cli";
 
 export interface CodexProjectSummary {
   path: string;
@@ -24,5 +25,6 @@ export interface CodexProjectRemoveResult {
 export interface CodexProjectLaunchResult {
   path: string;
   action: CodexProjectLaunchAction;
+  target: CodexProjectLaunchTarget;
   codexHome: string | null;
 }

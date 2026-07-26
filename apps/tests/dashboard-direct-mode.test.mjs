@@ -13,15 +13,16 @@ async function readSource(relativePath) {
   return fs.readFile(path.join(appsRoot, relativePath), "utf8");
 }
 
-test("账号直连模式下会遮罩依赖网关请求日志的仪表盘区域", async () => {
+test("账号直连模式在网关状态块内提示并遮罩用量分析", async () => {
   const source = await readDashboardSource();
+  const gatewayStatusSource = await readSource("src/components/dashboard/dashboard-gateway-status.tsx");
   assert.match(source, /useCodexProfileModeStatus/);
   assert.match(source, /function DirectModeUnavailable/);
   assert.match(source, /账号直连模式下不可用/);
   assert.match(source, /切换到本地网关后可统计请求日志、Token 和费用/);
   assert.match(source, /buildStaticRouteUrl\("\/platform-mode"\)/);
-  assert.match(source, /当前为账号直连模式/);
-  assert.match(source, /CodexManager 无法统计 CLI 请求日志和用量。/);
+  assert.match(gatewayStatusSource, /当前为账号直连模式/);
+  assert.match(gatewayStatusSource, /CodexManager 无法统计 CLI 请求日志和用量。/);
   assert.match(
     source,
     /<DirectModeUnavailable active=\{isDirectAccountMode\}>\s*<AdminUsageAnalyticsCard/s,
@@ -52,12 +53,12 @@ test("启动快照缓存键包含完整日期边界", async () => {
   );
 });
 
-test("首页仪表盘不再为已移除的活跃账号卡片预取日志样本", async () => {
+test("仪表盘只预取状态块所需的轻量数据", async () => {
   const source = await readDashboardSource();
   assert.match(source, /useDashboardStats\(\{\s*requestLogLimit: 0,\s*includeAccountHints: false,/s);
   assert.match(
     source,
-    /includeApiModels: false,\s*includeApiKeys: false,\s*includeAccounts: false,\s*includeUsageSnapshots: false,\s*includeAccountRuntime: false,\s*includeAccountDetails: false,/s,
+    /includeApiModels: false,\s*includeApiKeys: false,\s*includeAccounts: true,\s*includeUsageSnapshots: true,\s*includeAccountRuntime: true,\s*includeAccountDetails: false,/s,
   );
 });
 

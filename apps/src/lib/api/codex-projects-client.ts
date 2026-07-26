@@ -2,6 +2,7 @@ import type {
   CodexProjectAddResult,
   CodexProjectLaunchAction,
   CodexProjectLaunchResult,
+  CodexProjectLaunchTarget,
   CodexProjectListResult,
   CodexProjectRemoveResult,
   CodexProjectSummary,
@@ -72,6 +73,10 @@ function normalizeLaunchAction(value: unknown): CodexProjectLaunchAction {
   return asString(value) === "resume" ? "resume" : "start";
 }
 
+function normalizeLaunchTarget(value: unknown): CodexProjectLaunchTarget {
+  return asString(value) === "app" ? "app" : "cli";
+}
+
 export function normalizeCodexProjectLaunchResult(
   payload: unknown,
 ): CodexProjectLaunchResult {
@@ -79,6 +84,7 @@ export function normalizeCodexProjectLaunchResult(
   return {
     path: asString(source.path),
     action: normalizeLaunchAction(source.action),
+    target: normalizeLaunchTarget(source.target),
     codexHome: asString(source.codexHome ?? source.codex_home) || null,
   };
 }

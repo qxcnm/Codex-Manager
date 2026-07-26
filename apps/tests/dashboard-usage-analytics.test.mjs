@@ -28,9 +28,10 @@ test("管理员用量查询显式请求模型序列和时间粒度", async () =>
 });
 
 test("模型曲线保留原日曲线回退并提供可访问交互", async () => {
-  const [pageSource, chartSource] = await Promise.all([
+  const [pageSource, chartSource, gatewayStatusSource] = await Promise.all([
     readSource("src/app/page.tsx"),
     readSource("src/components/dashboard/admin-usage-trend-chart.tsx"),
+    readSource("src/components/dashboard/dashboard-gateway-status.tsx"),
   ]);
 
   assert.match(
@@ -58,6 +59,17 @@ test("模型曲线保留原日曲线回退并提供可访问交互", async () =>
   assert.match(chartSource, /已选 \{selected\}\/\{max\}/);
   assert.match(chartSource, /最多同时比较 \{count\} 个模型/);
   assert.match(chartSource, /accessibilityLayer/);
+  assert.match(pageSource, /id="admin-usage-analytics"/);
+  assert.match(pageSource, /<DashboardGatewayStatus/);
+  assert.match(gatewayStatusSource, /今日\/缓存\/推理 用量/);
+  assert.match(gatewayStatusSource, /formatCompactTokenAmount\(stats\.todayTokens\)/);
+  assert.match(gatewayStatusSource, /formatCompactTokenAmount\(stats\.cachedTokens\)/);
+  assert.match(gatewayStatusSource, /formatCompactTokenAmount\(stats\.reasoningTokens\)/);
+  assert.match(pageSource, /<DashboardPoolRemaining/);
+  assert.match(gatewayStatusSource, /label=\{t\("5小时内"\)\}/);
+  assert.match(gatewayStatusSource, /label=\{t\("7天内"\)\}/);
+  assert.doesNotMatch(pageSource, /最近活动/);
+  assert.doesNotMatch(pageSource, /账号池健康/);
 });
 
 test("模型图例随当前指标排序并保持稳定颜色", async () => {

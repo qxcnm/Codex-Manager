@@ -45,7 +45,7 @@ function ChartContainer({
   config,
   initialDimension = INITIAL_DIMENSION,
   ...props
-}: React.ComponentProps<"div"> & {
+}: Omit<React.ComponentProps<"div">, "ref"> & {
   config: ChartConfig
   children: React.ComponentProps<
     typeof RechartsPrimitive.ResponsiveContainer
@@ -57,6 +57,29 @@ function ChartContainer({
 }) {
   const uniqueId = React.useId()
   const chartId = `chart-${id ?? uniqueId.replace(/:/g, "")}`
+  const containerRef = React.useRef<HTMLDivElement>(null)
+  const [hasPositiveSize, setHasPositiveSize] = React.useState(false)
+
+  React.useLayoutEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const updateVisibility = ({ width, height }: Pick<DOMRectReadOnly, "width" | "height">) => {
+      const nextHasPositiveSize = width > 0 && height > 0
+      setHasPositiveSize((current) =>
+        current === nextHasPositiveSize ? current : nextHasPositiveSize,
+      )
+    }
+
+    updateVisibility(container.getBoundingClientRect())
+    if (typeof ResizeObserver === "undefined") return
+
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry) updateVisibility(entry.contentRect)
+    })
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [])
 
   return (
     <ChartContext.Provider value={{ config }}>
@@ -68,13 +91,18 @@ function ChartContainer({
           className,
         )}
         {...props}
+        ref={containerRef}
       >
-        <ChartStyle id={chartId} config={config} />
-        <RechartsPrimitive.ResponsiveContainer
-          initialDimension={initialDimension}
-        >
-          {children}
-        </RechartsPrimitive.ResponsiveContainer>
+        {hasPositiveSize ? (
+          <>
+            <ChartStyle id={chartId} config={config} />
+            <RechartsPrimitive.ResponsiveContainer
+              initialDimension={initialDimension}
+            >
+              {children}
+            </RechartsPrimitive.ResponsiveContainer>
+          </>
+        ) : null}
       </div>
     </ChartContext.Provider>
   )

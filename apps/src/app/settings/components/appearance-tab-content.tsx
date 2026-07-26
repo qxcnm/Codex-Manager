@@ -54,8 +54,8 @@ export function AppearanceTabContent({
                   className={cn(
                     "group relative h-auto justify-start rounded-lg p-4 text-left transition-all duration-200",
                     isActive
-                      ? "border-primary/45 bg-primary/10 shadow-sm ring-1 ring-primary/20"
-                      : "border-border/60 bg-background/60 hover:border-primary/25 hover:bg-accent/30",
+                      ? "border-primary/30 bg-primary/[0.055] shadow-[0_12px_28px_-24px_rgb(var(--primary-rgb)/0.28)] ring-1 ring-primary/10"
+                      : "border-border/50 bg-background/45 hover:border-primary/20 hover:bg-accent/20",
                   )}
                 >
                   <div className="flex items-start justify-between gap-3">
@@ -76,7 +76,7 @@ export function AppearanceTabContent({
                       className={cn(
                         "h-14 flex-1 rounded-lg border",
                         item.id === "modern"
-                          ? "border-primary/20 bg-accent/40"
+                          ? "border-primary/10 bg-primary/[0.035]"
                           : "border-border/70 bg-muted/60",
                       )}
                     />
@@ -85,7 +85,7 @@ export function AppearanceTabContent({
                         className={cn(
                           "h-4 rounded-lg border",
                           item.id === "modern"
-                            ? "border-primary/15 bg-card shadow-sm"
+                            ? "border-primary/10 bg-card/75 shadow-[0_8px_18px_-16px_rgb(var(--primary-rgb)/0.16)]"
                             : "border-border/70 bg-card",
                         )}
                       />
@@ -93,7 +93,7 @@ export function AppearanceTabContent({
                         className={cn(
                           "h-4 rounded-lg border",
                           item.id === "modern"
-                            ? "border-primary/15 bg-card/80 shadow-sm"
+                            ? "border-primary/10 bg-card/65 shadow-[0_8px_18px_-16px_rgb(var(--primary-rgb)/0.12)]"
                             : "border-border/70 bg-card/80",
                         )}
                       />

@@ -50,17 +50,25 @@ export function AppFrame({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="console-shell flex h-screen overflow-hidden">
+    <div
+      className="console-shell flex h-screen overflow-hidden"
+      data-command-center="true"
+    >
       <Sidebar />
       <div
         data-slot="app-main-column"
         className="flex min-w-0 flex-1 flex-col overflow-hidden"
       >
-        <Header />
-        <main className="relative min-w-0 flex-1 overflow-y-auto px-4 py-5 no-scrollbar md:px-5 xl:px-6">
-          <RouteTransitionOverlay />
-          <PageKeepAliveViewport initialChildren={children} />
-        </main>
+        <div
+          data-slot="app-main-scale"
+          className="flex h-full w-full origin-top-left flex-col xl:h-[111.111111%] xl:w-[111.111111%] xl:scale-90"
+        >
+          <Header />
+          <main className="relative min-w-0 flex-1 overflow-y-auto px-4 pb-7 pt-3 no-scrollbar lg:px-5 xl:pb-10 xl:pl-[26px] xl:pr-[45px] xl:pt-[3px]">
+            <RouteTransitionOverlay />
+            <PageKeepAliveViewport initialChildren={children} />
+          </main>
+        </div>
       </div>
     </div>
   );

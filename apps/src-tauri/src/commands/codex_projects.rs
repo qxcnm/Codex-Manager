@@ -75,11 +75,19 @@ pub enum CodexProjectLaunchAction {
     Resume,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexProjectLaunchTarget {
+    App,
+    Cli,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexProjectLaunchResult {
     path: String,
     action: CodexProjectLaunchAction,
+    target: CodexProjectLaunchTarget,
     codex_home: Option<String>,
 }
 
@@ -131,7 +139,7 @@ fn save_store(storage: &Storage, store: &CodexProjectStore) -> Result<(), String
 
 fn project_summary(project: &StoredCodexProject) -> CodexProjectSummary {
     CodexProjectSummary {
-        path: project.path.clone(),
+        path: portable_stored_path(&project.path),
         name: project.name.clone(),
         added_at: project.added_at,
         available: Path::new(&project.path).is_dir(),
@@ -171,11 +179,21 @@ fn project_name(path: &Path) -> String {
 
 #[cfg(target_os = "windows")]
 fn project_path_key(path: &str) -> String {
-    path.replace('/', "\\").to_lowercase()
+    windows_path_without_verbatim_prefix(path).to_lowercase()
 }
 
 #[cfg(not(target_os = "windows"))]
 fn project_path_key(path: &str) -> String {
+    path.to_string()
+}
+
+#[cfg(target_os = "windows")]
+fn portable_stored_path(path: &str) -> String {
+    windows_path_without_verbatim_prefix(path)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn portable_stored_path(path: &str) -> String {
     path.to_string()
 }
 
@@ -185,7 +203,7 @@ fn add_project_to_storage(
     added_at: i64,
 ) -> Result<CodexProjectAddResult, String> {
     let canonical = canonical_directory(selected_path)?;
-    let path = utf8_path(&canonical, "项目目录")?;
+    let path = portable_path_string(&canonical, "项目目录")?;
     let key = project_path_key(&path);
     let mut store = load_store(storage)?;
 
@@ -315,6 +333,13 @@ const WINDOWS_CODEX_EXTENSIONS: [&str; 4] = ["com", "exe", "bat", "cmd"];
 struct WindowsCodexCommandSpec {
     program: PathBuf,
     args: Vec<String>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WindowsTerminalCommandSpec {
+    program: PathBuf,
+    args: Vec<OsString>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -645,6 +670,168 @@ fn build_windows_codex_command_spec(
     })
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn windows_path_without_verbatim_prefix(value: &str) -> String {
+    let normalized = value.replace('/', "\\");
+    if let Some(path) = normalized.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{path}");
+    }
+    normalized
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&normalized)
+        .to_string()
+}
+
+#[cfg(target_os = "windows")]
+fn portable_path_string(path: &Path, label: &str) -> Result<String, String> {
+    utf8_path(path, label).map(|value| windows_path_without_verbatim_prefix(&value))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn portable_path_string(path: &Path, label: &str) -> Result<String, String> {
+    utf8_path(path, label)
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
+fn percent_encode_query_value(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            use std::fmt::Write;
+            let _ = write!(encoded, "%{byte:02X}");
+        }
+    }
+    encoded
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
+fn codex_app_deep_link(project_dir: &Path) -> Result<String, String> {
+    let project = portable_path_string(project_dir, "项目目录")?;
+    Ok(format!(
+        "codex://new?path={}",
+        percent_encode_query_value(&project)
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn launch_codex_app(project_dir: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "shell32")]
+    extern "system" {
+        fn ShellExecuteW(
+            hwnd: isize,
+            operation: *const u16,
+            file: *const u16,
+            parameters: *const u16,
+            directory: *const u16,
+            show_command: i32,
+        ) -> isize;
+    }
+
+    const SW_SHOWNORMAL: i32 = 1;
+    let deep_link = codex_app_deep_link(project_dir)?;
+    let operation = std::ffi::OsStr::new("open")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let target = std::ffi::OsStr::new(&deep_link)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let result = unsafe {
+        ShellExecuteW(
+            0,
+            operation.as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if result <= 32 {
+        return Err(format!(
+            "Windows 无法通过 codex:// 协议打开 ChatGPT Codex App（ShellExecuteW={result}）"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn launch_codex_app(project_dir: &Path) -> Result<(), String> {
+    let deep_link = codex_app_deep_link(project_dir)?;
+    webbrowser::open(&deep_link)
+        .map(|_| ())
+        .map_err(|err| format!("打开 ChatGPT Codex App 失败：{err}"))
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn powershell_single_quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn build_windows_terminal_command_spec(
+    powershell: &Path,
+    codex: &WindowsCodexCommandSpec,
+) -> Result<WindowsTerminalCommandSpec, String> {
+    if !powershell.is_absolute()
+        || !powershell.is_file()
+        || !powershell
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("powershell.exe"))
+    {
+        return Err(format!(
+            "PowerShell 必须是已解析的系统可执行路径：{}",
+            powershell.display()
+        ));
+    }
+
+    let codex_path = utf8_path(&codex.program, "Codex CLI 路径")?;
+    let mut command_parts = vec![powershell_single_quoted(&codex_path)];
+    command_parts.extend(
+        codex
+            .args
+            .iter()
+            .map(|value| powershell_single_quoted(value)),
+    );
+    let command_text = format!("& {}", command_parts.join(" "));
+
+    Ok(WindowsTerminalCommandSpec {
+        program: powershell.to_path_buf(),
+        args: ["-NoLogo", "-NoProfile", "-NoExit", "-Command"]
+            .into_iter()
+            .map(OsString::from)
+            .chain(std::iter::once(OsString::from(command_text)))
+            .collect(),
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_windows_powershell(project_dir: &Path) -> Result<PathBuf, String> {
+    let system_root = std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .ok_or_else(|| "无法读取 Windows SystemRoot，不能安全启动 PowerShell".to_string())?;
+    let candidate = system_root
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe");
+    let powershell = candidate
+        .canonicalize()
+        .map_err(|err| format!("无法解析系统 PowerShell（{}）：{err}", candidate.display()))?;
+    if !powershell.is_file() || path_is_same_or_descendant(&powershell, project_dir) {
+        return Err(format!(
+            "系统 PowerShell 不可用或位于项目目录中：{}",
+            powershell.display()
+        ));
+    }
+    Ok(powershell)
+}
+
 fn spawn_and_reap(mut command: Command, failure_message: &str) -> Result<(), String> {
     let mut child = command
         .spawn()
@@ -760,11 +947,13 @@ fn launch_codex_terminal(
 
     const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
     let resolved = resolve_codex_executable(action, project_dir)?;
-    let spec = build_windows_codex_command_spec(&resolved.executable, action)?;
-    let mut command = Command::new(&spec.program);
+    let codex_spec = build_windows_codex_command_spec(&resolved.executable, action)?;
+    let powershell = resolve_windows_powershell(project_dir)?;
+    let terminal_spec = build_windows_terminal_command_spec(&powershell, &codex_spec)?;
+    let mut command = Command::new(&terminal_spec.program);
     command
         .current_dir(project_dir)
-        .args(spec.args)
+        .args(terminal_spec.args)
         .env("PATH", &resolved.safe_path)
         .creation_flags(CREATE_NEW_CONSOLE);
     if let Some(codex_home) = codex_home {
@@ -980,6 +1169,23 @@ fn launch_codex_terminal(
     ))
 }
 
+fn launch_project(
+    project_dir: &Path,
+    action: CodexProjectLaunchAction,
+    codex_home: Option<&Path>,
+) -> Result<CodexProjectLaunchTarget, String> {
+    if action == CodexProjectLaunchAction::Start {
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        {
+            launch_codex_app(project_dir)?;
+            return Ok(CodexProjectLaunchTarget::App);
+        }
+    }
+
+    launch_codex_terminal(project_dir, action, codex_home)?;
+    Ok(CodexProjectLaunchTarget::Cli)
+}
+
 /// 列出保存在当前桌面客户端本地数据库中的项目目录。
 #[tauri::command]
 pub async fn app_codex_projects_list(
@@ -1039,7 +1245,7 @@ pub async fn app_codex_project_remove(
     .map_err(|err| format!("app_codex_project_remove task failed: {err}"))?
 }
 
-/// 在新的系统终端中启动 Codex，或打开 Codex 自带的 resume 会话选择器。
+/// Windows/macOS 上优先在 ChatGPT Codex App 中打开项目；会话选择器仍由本机 CLI 提供。
 #[tauri::command]
 pub async fn app_codex_project_launch(
     app: tauri::AppHandle,
@@ -1056,13 +1262,14 @@ pub async fn app_codex_project_launch(
                 resolve_codex_home(&storage)?,
             )
         };
-        launch_codex_terminal(&project_dir, action, codex_home.as_deref())?;
+        let target = launch_project(&project_dir, action, codex_home.as_deref())?;
         Ok(CodexProjectLaunchResult {
-            path: utf8_path(&project_dir, "项目目录")?,
+            path: portable_path_string(&project_dir, "项目目录")?,
             action,
+            target,
             codex_home: codex_home
                 .as_deref()
-                .map(|value| utf8_path(value, "Codex profile"))
+                .map(|value| portable_path_string(value, "Codex profile"))
                 .transpose()?,
         })
     })
@@ -1285,6 +1492,53 @@ mod tests {
             "d:\\codex.cmd",
             "c:\\",
         ));
+    }
+
+    #[test]
+    fn windows_paths_drop_verbatim_prefix_for_storage_and_ui() {
+        assert_eq!(
+            windows_path_without_verbatim_prefix(r"\\?\C:\Users\qxnm\Desktop\test"),
+            r"C:\Users\qxnm\Desktop\test"
+        );
+        assert_eq!(
+            windows_path_without_verbatim_prefix(r"\\?\UNC\server\share\project"),
+            r"\\server\share\project"
+        );
+    }
+
+    #[test]
+    fn codex_app_link_encodes_the_absolute_workspace_path() {
+        let link = codex_app_deep_link(Path::new(r"C:\Work Space\示例"))
+            .expect("build Codex App deep link");
+        assert_eq!(
+            link,
+            "codex://new?path=C%3A%5CWork%20Space%5C%E7%A4%BA%E4%BE%8B"
+        );
+    }
+
+    #[test]
+    fn windows_terminal_uses_powershell_as_the_interactive_host() {
+        let root = temp_dir("windows-powershell-host");
+        let powershell = root.join("powershell.exe");
+        std::fs::write(&powershell, b"test").expect("write PowerShell fixture");
+        let codex = WindowsCodexCommandSpec {
+            program: root.join("Codex's Folder").join("codex.cmd"),
+            args: vec!["resume".to_string(), "-C".to_string(), ".".to_string()],
+        };
+
+        let spec = build_windows_terminal_command_spec(&powershell, &codex)
+            .expect("build PowerShell terminal command");
+        assert_eq!(spec.program, powershell);
+        assert_eq!(
+            spec.args[..4],
+            ["-NoLogo", "-NoProfile", "-NoExit", "-Command"].map(OsString::from)
+        );
+        let command_text = spec.args[4].to_string_lossy();
+        assert!(command_text.starts_with("& '"));
+        assert!(command_text.contains("Codex''s Folder"));
+        assert!(command_text.ends_with("'resume' '-C' '.'"));
+
+        std::fs::remove_dir_all(root).expect("remove test directory");
     }
 
     #[test]

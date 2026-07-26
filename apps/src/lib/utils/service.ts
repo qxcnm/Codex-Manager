@@ -78,6 +78,7 @@ export function normalizeServiceAddr(raw: string): string {
  */
 export function readInitializeResult(payload: unknown): ServiceInitializationResult {
   const source = asRecord(payload);
+  const version = typeof source.version === "string" ? source.version : "";
   const userAgent =
     typeof source.userAgent === "string"
       ? source.userAgent
@@ -102,7 +103,7 @@ export function readInitializeResult(payload: unknown): ServiceInitializationRes
       : typeof source.platform_os === "string"
         ? source.platform_os
         : "";
-  return { userAgent, codexHome, platformFamily, platformOs };
+  return { version, userAgent, codexHome, platformFamily, platformOs };
 }
 
 /**

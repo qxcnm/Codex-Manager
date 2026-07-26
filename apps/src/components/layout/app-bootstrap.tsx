@@ -306,8 +306,8 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
           ? initializeService(addr, TRAY_PREVIEW_SERVICE_INITIALIZE_RETRIES)
           : startAndInitializeService(addr);
         void connectToDesktopService
-          .then(() => {
-            applyConnectedServiceState(addr, "", settings.lowTransparency);
+          .then((initializeResult) => {
+            applyConnectedServiceState(addr, initializeResult.version, settings.lowTransparency);
           })
           .catch((serviceError: unknown) => {
             setServiceStatus({ addr, connected: false, version: "" });
@@ -320,8 +320,8 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
       }
 
       try {
-        await initializeService(addr, 0);
-        await applyConnectedServiceState(addr, "", settings.lowTransparency);
+        const initializeResult = await initializeService(addr, 0);
+        applyConnectedServiceState(addr, initializeResult.version, settings.lowTransparency);
       } catch (serviceError: unknown) {
         if (!hasInitializedOnce.current) {
           setServiceStatus({ addr, connected: false, version: "" });
@@ -381,10 +381,10 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
       applyAppearancePreset(settings.appearancePreset);
       
       setAppSettings(settings);
-      await startAndInitializeService(addr);
-      await applyConnectedServiceState(
+      const initializeResult = await startAndInitializeService(addr);
+      applyConnectedServiceState(
         addr,
-        "",
+        initializeResult.version,
         settings.lowTransparency,
       );
       toast.success(t("服务已连接"));
@@ -421,10 +421,10 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
       applyAppearancePreset(settings.appearancePreset);
       setAppSettings(settings);
       setServiceStatus({ addr: nextAddr, connected: false, version: "" });
-      await startAndInitializeService(nextAddr);
-      await applyConnectedServiceState(
+      const initializeResult = await startAndInitializeService(nextAddr);
+      applyConnectedServiceState(
         nextAddr,
-        "",
+        initializeResult.version,
         settings.lowTransparency,
       );
       toast.success(t("服务已连接"));

@@ -204,7 +204,9 @@ export default function ProjectsPage() {
     mutationFn: codexProjectsClient.launch,
     onSuccess: (result) => {
       toast.success(
-        result.action === "resume"
+        result.target === "app"
+          ? t("已在 ChatGPT Codex App 中打开项目")
+          : result.action === "resume"
           ? t("已请求打开 Codex 会话选择器")
           : t("已请求在新终端中启动 Codex"),
       );
@@ -234,7 +236,7 @@ export default function ProjectsPage() {
         eyebrow="DESKTOP"
         title={t("项目启动")}
         description={t(
-          "收藏常用目录，并使用本机 CodexManager 保存的 Codex profile 启动 Codex CLI。",
+          "收藏常用目录，在 Windows 与 macOS 上直接用 ChatGPT Codex App 打开项目。",
         )}
         meta={
           <Badge variant="outline">
@@ -280,10 +282,10 @@ export default function ProjectsPage() {
         <CardContent className="flex items-start gap-3 px-4 py-4">
           <SquareTerminal className="mt-0.5 size-4 shrink-0 text-primary" />
           <div className="space-y-1 text-xs leading-5 text-muted-foreground">
-            <p className="font-medium text-foreground">{t("本机 Codex CLI")}</p>
+            <p className="font-medium text-foreground">{t("Codex App 与本机 CLI")}</p>
             <p>
               {t(
-                "启动时会把项目设为工作目录，并优先使用本机 CodexManager 保存的 Codex profile；未配置时沿用本机 CODEX_HOME。",
+                "Windows 与 macOS 的“启动”会在 ChatGPT Codex App 中打开项目；“会话”继续使用本机 Codex CLI 会话选择器。",
               )}
             </p>
             <p>

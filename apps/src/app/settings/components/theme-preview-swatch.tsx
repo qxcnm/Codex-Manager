@@ -7,9 +7,19 @@ type ThemePreviewSwatchProps = {
 };
 
 const DARK_THEME_IDS = new Set(["dark", "dark-one"]);
-const DARK_THEME_ACCENTS: Record<string, string> = {
-  dark: "#60a5fa",
-  "dark-one": "#8ab4f8",
+const THEME_PREVIEW_SURFACES: Record<string, { shell: string; panel: string }> = {
+  tech: { shell: "#f7f9fd", panel: "#eef1fc" },
+  dark: { shell: "#0b0d12", panel: "#1b1f29" },
+  "dark-one": { shell: "#171a20", panel: "#2a303a" },
+  business: { shell: "#fbfaf6", panel: "#f5ecd3" },
+  mint: { shell: "#f7fbf9", panel: "#e6f4ee" },
+  sunset: { shell: "#fcfaf7", panel: "#f5e9e1" },
+  grape: { shell: "#faf9fd", panel: "#ede8f8" },
+  ocean: { shell: "#f7fbfd", panel: "#e2f0f6" },
+  forest: { shell: "#f8faf8", panel: "#e6eee8" },
+  rose: { shell: "#fdf9fa", panel: "#f5e7ec" },
+  slate: { shell: "#f8fafc", panel: "#e9edf2" },
+  aurora: { shell: "#f7fbfb", panel: "#e2f1f0" },
 };
 
 export function ThemePreviewSwatch({
@@ -18,17 +28,10 @@ export function ThemePreviewSwatch({
   className,
 }: ThemePreviewSwatchProps) {
   const isDarkPreview = DARK_THEME_IDS.has(id);
-  const accentColor = isDarkPreview ? DARK_THEME_ACCENTS[id] : color;
-  const shellColor = isDarkPreview
-    ? id === "dark-one"
-      ? "#1f232b"
-      : "#09090b"
-    : "#ffffff";
-  const panelColor = isDarkPreview
-    ? id === "dark-one"
-      ? "#2b303a"
-      : "#18181b"
-    : "#f8fafc";
+  const surfaces = THEME_PREVIEW_SURFACES[id] ?? {
+    shell: "#f8fafc",
+    panel: "#eef2f7",
+  };
   const subtleLine = isDarkPreview
     ? "rgba(255, 255, 255, 0.18)"
     : "rgba(15, 23, 42, 0.14)";
@@ -44,13 +47,13 @@ export function ThemePreviewSwatch({
         className,
       )}
       style={{
-        background: `linear-gradient(135deg, ${shellColor}, ${panelColor})`,
+        background: `linear-gradient(135deg, ${surfaces.shell}, ${surfaces.panel})`,
       }}
       aria-hidden="true"
     >
       <span
         className="absolute inset-x-0 top-0 h-1"
-        style={{ backgroundColor: accentColor }}
+        style={{ backgroundColor: color }}
       />
       <span
         className="absolute bottom-1.5 left-1.5 top-2 w-2 rounded-sm"
@@ -62,7 +65,7 @@ export function ThemePreviewSwatch({
       />
       <span
         className="absolute left-5 right-3 top-5 h-1 rounded-full"
-        style={{ backgroundColor: accentColor, opacity: 0.82 }}
+        style={{ backgroundColor: color, opacity: 0.82 }}
       />
       <span
         className="absolute bottom-2 left-5 right-2 h-1 rounded-full"

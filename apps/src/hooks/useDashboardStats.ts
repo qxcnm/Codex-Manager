@@ -165,9 +165,10 @@ export function useDashboardStats(options: UseDashboardStatsOptions = {}) {
         secondaryBucketCount: data?.usageAggregateSummary.secondaryBucketCount ?? 0,
       },
     },
+    accounts,
     currentAccount,
     recommendations,
-    requestLogs: includeAccountHints ? data?.requestLogs || [] : [],
+    requestLogs: data?.requestLogs || [],
     isLoading:
       (!isServiceReady && !hasSnapshotData) ||
       (!isSnapshotQueryEnabled && !data) ||

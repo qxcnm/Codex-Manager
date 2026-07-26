@@ -106,7 +106,7 @@
 | Codex Projects | `app_codex_projects_list` | `direct (desktop only)` | Lists project folders saved locally by the current desktop client |
 | Codex Projects | `app_codex_project_add` | `direct (desktop only)` | Opens the system folder picker, canonicalizes, and saves the selected folder |
 | Codex Projects | `app_codex_project_remove` | `direct (desktop only)` | Param: `path`; removes only the saved entry and never project files |
-| Codex Projects | `app_codex_project_launch` | `direct (desktop only)` | Params: `path`, `action=start|resume`; opens Codex or its session picker in a new terminal |
+| Codex Projects | `app_codex_project_launch` | `direct (desktop only)` | Params: `path`, `action=start|resume`; on Windows/macOS, `start` opens the workspace in the ChatGPT Codex App and `resume` uses the local CLI session picker |
 | 系统 | `open_in_browser` | `direct` | 参数：`url`，本地打开浏览器 |
 | 系统 | `open_in_file_manager` | `direct` | 参数：`path`，本地打开目录 |
 | 系统 | `app_window_unsaved_draft_sections_set` | `direct` | 参数：`sections[]`，设置页未保存草稿标记 |
