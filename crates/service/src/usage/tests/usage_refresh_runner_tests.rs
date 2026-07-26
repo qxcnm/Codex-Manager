@@ -1,5 +1,5 @@
 use super::*;
-use chrono::{TimeZone, Timelike};
+use chrono::{Duration as ChronoDuration, TimeZone, Timelike};
 
 #[test]
 fn warmup_cron_accepts_five_field_expression() {
@@ -40,6 +40,61 @@ fn warmup_cron_uses_earliest_pipe_separated_schedule() {
 
     assert_eq!(next.hour(), 10);
     assert_eq!(next.minute(), 30);
+}
+
+#[test]
+fn warmup_cron_heartbeat_before_deadline_keeps_waiting() {
+    let now = Local
+        .with_ymd_and_hms(2026, 5, 23, 10, 15, 30)
+        .single()
+        .expect("local timestamp");
+    let next_run_at = now + ChronoDuration::seconds(10);
+
+    assert_eq!(
+        classify_warmup_cron_wait(7, 7, &now, &next_run_at, false),
+        None,
+    );
+}
+
+#[test]
+fn warmup_cron_setting_change_interrupts_current_schedule() {
+    let now = Local
+        .with_ymd_and_hms(2026, 5, 23, 10, 15, 30)
+        .single()
+        .expect("local timestamp");
+    let next_run_at = now + ChronoDuration::hours(1);
+
+    assert_eq!(
+        classify_warmup_cron_wait(7, 8, &now, &next_run_at, false),
+        Some(WarmupCronWaitOutcome::SettingsChanged),
+    );
+}
+
+#[test]
+fn warmup_cron_deadline_allows_scheduled_task_to_run() {
+    let next_run_at = Local
+        .with_ymd_and_hms(2026, 5, 23, 10, 15, 30)
+        .single()
+        .expect("local timestamp");
+
+    assert_eq!(
+        classify_warmup_cron_wait(7, 7, &next_run_at, &next_run_at, false),
+        Some(WarmupCronWaitOutcome::DeadlineReached),
+    );
+}
+
+#[test]
+fn warmup_cron_shutdown_interrupts_current_schedule() {
+    let now = Local
+        .with_ymd_and_hms(2026, 5, 23, 10, 15, 30)
+        .single()
+        .expect("local timestamp");
+    let next_run_at = now + ChronoDuration::hours(1);
+
+    assert_eq!(
+        classify_warmup_cron_wait(7, 7, &now, &next_run_at, true),
+        Some(WarmupCronWaitOutcome::ShutdownRequested),
+    );
 }
 
 #[test]

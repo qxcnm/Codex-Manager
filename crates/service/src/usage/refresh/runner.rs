@@ -118,10 +118,36 @@ pub(super) fn token_refresh_polling_loop() {
     );
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WarmupCronWaitOutcome {
+    DeadlineReached,
+    SettingsChanged,
+    ShutdownRequested,
+}
+
+fn classify_warmup_cron_wait(
+    last_seen: u64,
+    next_signal_version: u64,
+    now: &chrono::DateTime<Local>,
+    next_run_at: &chrono::DateTime<Local>,
+    shutdown_requested: bool,
+) -> Option<WarmupCronWaitOutcome> {
+    if shutdown_requested {
+        return Some(WarmupCronWaitOutcome::ShutdownRequested);
+    }
+    if next_signal_version != last_seen {
+        return Some(WarmupCronWaitOutcome::SettingsChanged);
+    }
+    if now >= next_run_at {
+        return Some(WarmupCronWaitOutcome::DeadlineReached);
+    }
+    None
+}
+
 pub(super) fn warmup_cron_loop() {
     let mut last_invalid_expression = String::new();
     let mut signal_version = warmup_cron_signal_version();
-    loop {
+    'scheduler: loop {
         if crate::shutdown_requested() {
             break;
         }
@@ -150,15 +176,27 @@ pub(super) fn warmup_cron_loop() {
             next_run_at.to_rfc3339()
         );
 
-        let delay = delay_until(next_run_at);
-        let (next_signal_version, timed_out) =
-            wait_for_warmup_cron_change(signal_version, Some(delay));
-        signal_version = next_signal_version;
-        if !timed_out {
-            continue;
-        }
-        if Local::now() < next_run_at {
-            continue;
+        loop {
+            let delay = delay_until(next_run_at);
+            let (next_signal_version, _) = wait_for_warmup_cron_change(signal_version, Some(delay));
+            match classify_warmup_cron_wait(
+                signal_version,
+                next_signal_version,
+                &Local::now(),
+                &next_run_at,
+                crate::shutdown_requested(),
+            ) {
+                None => continue,
+                Some(WarmupCronWaitOutcome::SettingsChanged) => {
+                    signal_version = next_signal_version;
+                    continue 'scheduler;
+                }
+                Some(WarmupCronWaitOutcome::ShutdownRequested) => break 'scheduler,
+                Some(WarmupCronWaitOutcome::DeadlineReached) => {
+                    signal_version = next_signal_version;
+                    break;
+                }
+            }
         }
         if !WARMUP_CRON_ENABLED.load(Ordering::Relaxed)
             || current_mutex_string(&WARMUP_CRON_EXPRESSION) != expression
