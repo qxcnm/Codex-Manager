@@ -131,9 +131,10 @@ pub(crate) fn token_refresh_client_id(token: &Token, fallback_client_id: &str) -
 
 fn token_refresh_lock_for_account(account_id: &str) -> Arc<Mutex<()>> {
     let locks = TOKEN_REFRESH_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut locks = locks
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut locks = locks.lock().unwrap_or_else(|poisoned| {
+        log::warn!("event=lock_poisoned lock=token_refresh_locks action=recover");
+        poisoned.into_inner()
+    });
     locks
         .entry(account_id.to_string())
         .or_insert_with(|| Arc::new(Mutex::new(())))

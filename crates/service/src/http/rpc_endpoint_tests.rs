@@ -41,7 +41,7 @@ fn panicking_rpc_handler_returns_structured_json_error() {
             .get("error")
             .and_then(|value| value.get("message"))
             .and_then(|value| value.as_str()),
-        Some("internal_error: usage refresh boom")
+        Some("internal_error: rpc handler panicked")
     );
     assert_eq!(
         parsed

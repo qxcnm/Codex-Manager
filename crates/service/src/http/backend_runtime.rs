@@ -158,7 +158,7 @@ fn spawn_request_workers(worker_count: usize, rx: Receiver<Request>, is_stream_q
     };
     for index in 0..worker_count {
         let worker_rx = rx.clone();
-        let _ = thread::Builder::new()
+        if let Err(err) = thread::Builder::new()
             .name(format!("{thread_prefix}-{index}"))
             .stack_size(HTTP_WORKER_STACK_BYTES)
             .spawn(move || {
@@ -166,7 +166,15 @@ fn spawn_request_workers(worker_count: usize, rx: Receiver<Request>, is_stream_q
                     crate::gateway::record_http_queue_dequeue(is_stream_queue);
                     handle_backend_request_safely(request);
                 }
-            });
+            })
+        {
+            log::error!(
+                "event=http_worker_spawn_failed worker={} stream_queue={} error={}",
+                index,
+                is_stream_queue,
+                err
+            );
+        }
     }
 }
 
@@ -183,38 +191,24 @@ fn spawn_request_workers(worker_count: usize, rx: Receiver<Request>, is_stream_q
 /// 无
 fn handle_backend_request_safely(request: Request) {
     let method = request.method().as_str().to_string();
-    let path = request.url().to_string();
-    if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
+    let path = request
+        .url()
+        .split('?')
+        .next()
+        .unwrap_or("/")
+        .replace(['\r', '\n', '\t'], " ")
+        .chars()
+        .take(256)
+        .collect::<String>();
+    if let Err(_payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
         crate::http::backend_router::handle_backend_request(request);
     })) {
         log::error!(
-            "backend request handler panicked: method={} path={} panic={}",
+            "event=backend_request_panicked method={} path={}",
             method,
-            path,
-            panic_payload_message(payload.as_ref())
+            path
         );
     }
-}
-
-/// 函数 `panic_payload_message`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - payload: 参数 payload
-///
-/// # 返回
-/// 返回函数执行结果
-fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        return (*message).to_string();
-    }
-    if let Some(message) = payload.downcast_ref::<String>() {
-        return message.clone();
-    }
-    "unknown panic payload".to_string()
 }
 
 /// 函数 `request_accept_header`
@@ -415,7 +409,9 @@ pub(crate) fn start_backend_server() -> io::Result<BackendServer> {
         .to_ip()
         .map(|address| address.to_string())
         .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "backend addr missing"))?;
-    let join = thread::spawn(move || run_backend_server(server));
+    let join = thread::Builder::new()
+        .name("http-backend".to_string())
+        .spawn(move || run_backend_server(server))?;
     Ok(BackendServer { addr, join })
 }
 

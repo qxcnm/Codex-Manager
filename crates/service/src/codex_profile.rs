@@ -304,7 +304,12 @@ pub(crate) fn apply_direct_account(
     let account_id = normalize_required(account_id, "missing accountId")?;
     let profile_dir = resolve_profile_dir(codex_home)?;
     ensure_profile_dir_valid(&profile_dir)?;
-    let _ = ensure_managed_profile_migrated(&profile_dir);
+    for warning in ensure_managed_profile_migrated(&profile_dir) {
+        log::warn!(
+            "event=codex_profile_migration_warning phase=account_switch warning={}",
+            warning.replace(['\r', '\n'], " ")
+        );
+    }
 
     let storage = open_storage()?;
     let account = storage
@@ -375,7 +380,12 @@ pub(crate) fn apply_gateway(
     let api_key_id = normalize_required(api_key_id, "missing apiKeyId")?;
     let profile_dir = resolve_profile_dir(codex_home)?;
     ensure_profile_dir_valid(&profile_dir)?;
-    let _ = ensure_managed_profile_migrated(&profile_dir);
+    for warning in ensure_managed_profile_migrated(&profile_dir) {
+        log::warn!(
+            "event=codex_profile_migration_warning phase=api_key_switch warning={}",
+            warning.replace(['\r', '\n'], " ")
+        );
+    }
     let gateway_base_url = normalize_gateway_base_url(base_url);
 
     let storage = open_storage()?;

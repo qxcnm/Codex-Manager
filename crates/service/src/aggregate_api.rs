@@ -1708,12 +1708,22 @@ pub(crate) fn create_aggregate_api(
         .insert_aggregate_api(&record)
         .map_err(|err| err.to_string())?;
     if let Err(err) = storage.upsert_aggregate_api_secret(&id, &normalized_secret) {
-        let _ = storage.delete_aggregate_api(&id);
+        if let Err(cleanup_err) = storage.delete_aggregate_api(&id) {
+            log::error!(
+                "event=aggregate_api_create_rollback_failed api_id={} error={cleanup_err}",
+                id
+            );
+        }
         return Err(format!("persist aggregate api secret failed: {err}"));
     }
     if let Some(access_token) = normalized_balance_query_access_token {
         if let Err(err) = storage.upsert_aggregate_api_balance_secret(&id, &access_token) {
-            let _ = storage.delete_aggregate_api(&id);
+            if let Err(cleanup_err) = storage.delete_aggregate_api(&id) {
+                log::error!(
+                    "event=aggregate_api_create_rollback_failed api_id={} error={cleanup_err}",
+                    id
+                );
+            }
             return Err(format!(
                 "persist aggregate api balance secret failed: {err}"
             ));
@@ -2106,7 +2116,11 @@ pub(crate) fn test_aggregate_api_connection(
     let message =
         last_error.map(|err| format!("provider={provider_type}; model={probe_model}; {err}"));
 
-    let _ = storage.update_aggregate_api_test_result(api_id, ok, status_code, message.as_deref());
+    if let Err(err) =
+        storage.update_aggregate_api_test_result(api_id, ok, status_code, message.as_deref())
+    {
+        log::warn!("event=aggregate_api_test_result_save_failed api_id={api_id} error={err}");
+    }
     Ok(AggregateApiTestResult {
         id: api_id.to_string(),
         ok,
@@ -2166,12 +2180,16 @@ pub(crate) fn refresh_aggregate_api_balance(
             };
             let balance_json = serde_json::to_string(&snapshot)
                 .map_err(|_| "serialize balance result failed".to_string())?;
-            let _ = storage.update_aggregate_api_balance_result(
+            if let Err(err) = storage.update_aggregate_api_balance_result(
                 api_id,
                 ok,
                 Some(balance_json.as_str()),
                 message.as_deref(),
-            );
+            ) {
+                log::warn!(
+                    "event=aggregate_api_balance_result_save_failed api_id={api_id} error={err}"
+                );
+            }
             Ok(AggregateApiBalanceRefreshResult {
                 id: api_id.to_string(),
                 ok,
@@ -2183,8 +2201,13 @@ pub(crate) fn refresh_aggregate_api_balance(
         }
         Err(err) => {
             let message = format!("template={template}; {err}");
-            let _ =
-                storage.update_aggregate_api_balance_result(api_id, false, None, Some(&message));
+            if let Err(save_err) =
+                storage.update_aggregate_api_balance_result(api_id, false, None, Some(&message))
+            {
+                log::warn!(
+                    "event=aggregate_api_balance_result_save_failed api_id={api_id} error={save_err}"
+                );
+            }
             Ok(AggregateApiBalanceRefreshResult {
                 id: api_id.to_string(),
                 ok: false,

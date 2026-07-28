@@ -80,6 +80,14 @@
 - `CODEXMANAGER_WEB_ROOT`：web 静态资源目录
 - `CODEXMANAGER_LOGIN_ADDR`：本地 OAuth 回调监听地址
 
+### Logging and diagnostics
+
+- `CODEXMANAGER_LOG`: log filter; defaults to `info`. Service, web, and start accept `env_logger` filter expressions such as `info,codexmanager_service=debug`. The desktop app accepts one level: `trace`, `debug`, `info`, `warn`, `error`, or `off`.
+- `CODEXMANAGER_LOG_STYLE`: log style for service, web, and start, using values supported by `env_logger`.
+- `RUST_LOG` / `RUST_LOG_STYLE`: standard aliases for non-desktop Rust processes. When present, they take precedence over the matching `CODEXMANAGER_*` variables.
+
+The desktop app writes Rust logs to the `logs` subdirectory of its application data directory and forwards global frontend errors, unhandled Promise rejections, and key mutation failures. Exception messages are length-limited and common token fields are redacted. On Windows the default path is `%APPDATA%\com.codexmanager.desktop\logs\CodexManager.log` (Roaming); `%LOCALAPPDATA%` is no longer used.
+
 ### Docker containers
 
 - `TZ`: container time zone. Docker images default to `Asia/Shanghai`; compose examples use `${TZ:-Asia/Shanghai}`, so they pass through `TZ` from the deployment environment and fall back to `Asia/Shanghai` when unset. Change it to your own IANA time zone when deploying elsewhere.

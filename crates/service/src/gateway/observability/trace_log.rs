@@ -89,9 +89,12 @@ impl TraceAsyncWriter {
             let (tx, rx) = mpsc::sync_channel::<TraceCommand>(queue_capacity);
             (TraceCommandSender::Bounded(tx), rx)
         };
-        let _ = thread::Builder::new()
+        if let Err(err) = thread::Builder::new()
             .name("gateway-trace-writer".to_string())
-            .spawn(move || trace_writer_loop(rx, TraceFileWriter::new(path)));
+            .spawn(move || trace_writer_loop(rx, TraceFileWriter::new(path)))
+        {
+            log::error!("event=gateway_trace_writer_spawn_failed error={err}");
+        }
         Self {
             tx,
             dropped: AtomicU64::new(0),
@@ -127,7 +130,11 @@ impl TraceAsyncWriter {
                 log::warn!("gateway trace enqueue failed: writer channel closed");
                 return;
             }
-            let _ = ack_rx.recv_timeout(Duration::from_millis(TRACE_FLUSH_WAIT_TIMEOUT_MS));
+            if let Err(err) =
+                ack_rx.recv_timeout(Duration::from_millis(TRACE_FLUSH_WAIT_TIMEOUT_MS))
+            {
+                log::warn!("event=gateway_trace_flush_wait_failed error={err}");
+            }
             return;
         }
 

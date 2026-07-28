@@ -215,16 +215,28 @@ fn find_env_file_in_dir(dir: &Path) -> Option<PathBuf> {
 ///
 /// # 返回
 /// 无
-fn load_env_from_exe_dir_best_effort() {
+fn load_env_from_exe_dir_best_effort() -> Vec<(log::Level, String)> {
+    let mut events = Vec::new();
     let dir = exe_dir();
     let Some(path) = find_env_file_in_dir(&dir) else {
-        return;
+        return events;
     };
 
-    let Ok(text) = fs::read_to_string(&path) else {
-        return;
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) => {
+            events.push((
+                log::Level::Warn,
+                format!(
+                    "event=env_file_read_failed path={} error={err}",
+                    path.display()
+                ),
+            ));
+            return events;
+        }
     };
 
+    let mut applied = 0_usize;
     for line in text.lines() {
         let Some((key, value)) = parse_dotenv_kv(line) else {
             continue;
@@ -233,7 +245,18 @@ fn load_env_from_exe_dir_best_effort() {
             continue;
         }
         std::env::set_var(key, value);
+        applied += 1;
     }
+    if applied > 0 {
+        events.push((
+            log::Level::Info,
+            format!(
+                "event=env_file_loaded path={} applied={applied}",
+                path.display()
+            ),
+        ));
+    }
+    events
 }
 
 /// 函数 `normalize_addr`
@@ -468,15 +491,28 @@ fn simple_get_best_effort(addr: &str, path: &str) {
         .into_iter()
         .next()
     else {
+        log::warn!(
+            "event=shutdown_request_skipped addr={addr_trimmed} path={path} reason=unresolved"
+        );
         return;
     };
-    let Ok(mut stream) = TcpStream::connect_timeout(&sock, Duration::from_millis(300)) else {
-        return;
+    let mut stream = match TcpStream::connect_timeout(&sock, Duration::from_millis(300)) {
+        Ok(stream) => stream,
+        Err(err) => {
+            log::warn!(
+                "event=shutdown_request_connect_failed addr={addr_trimmed} path={path} error={err}"
+            );
+            return;
+        }
     };
     let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
     let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
     let req = format!("GET {path} HTTP/1.1\r\nHost: {addr_trimmed}\r\nConnection: close\r\n\r\n");
-    let _ = stream.write_all(req.as_bytes());
+    if let Err(err) = stream.write_all(req.as_bytes()) {
+        log::warn!(
+            "event=shutdown_request_write_failed addr={addr_trimmed} path={path} error={err}"
+        );
+    }
 }
 
 /// 函数 `wait_for_port_closed`
@@ -580,6 +616,32 @@ fn spawn_child(bin: &Path, service_bind_addr: Option<&str>) -> std::io::Result<C
     cmd.spawn()
 }
 
+fn kill_child_best_effort(child: &mut Child, process: &'static str) {
+    match child.kill() {
+        Ok(()) => log::info!("event=child_process_killed process={process}"),
+        Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
+            log::debug!("event=child_process_kill_skipped process={process} reason=already_exited");
+        }
+        Err(err) => {
+            log::warn!("event=child_process_kill_failed process={process} error={err}");
+        }
+    }
+}
+
+fn child_has_exited(child: &mut Child, process: &'static str) -> bool {
+    match child.try_wait() {
+        Ok(Some(status)) => {
+            log::info!("event=child_process_exited process={process} status={status}");
+            true
+        }
+        Ok(None) => false,
+        Err(err) => {
+            log::warn!("event=child_process_wait_failed process={process} error={err}");
+            false
+        }
+    }
+}
+
 /// 函数 `main`
 ///
 /// 作者: gaohongshun
@@ -593,12 +655,15 @@ fn spawn_child(bin: &Path, service_bind_addr: Option<&str>) -> std::io::Result<C
 /// 无
 fn main() {
     // 让 start.exe 也支持同目录 env 文件，保持与 service/web 一致。
-    load_env_from_exe_dir_best_effort();
+    let env_log_events = load_env_from_exe_dir_best_effort();
     codexmanager_service::init_logging();
+    for (level, message) in env_log_events {
+        log::log!(level, "{message}");
+    }
     // 进一步对齐 service/web 的便携化初始化，确保 DB/RPC token 落点一致。
     codexmanager_service::portable::bootstrap_current_process();
     if let Err(err) = codexmanager_service::initialize_storage_if_needed() {
-        eprintln!("数据库迁移失败，拒绝启动：{err}");
+        log::error!("event=start_storage_initialize_failed error={err}");
         std::process::exit(1);
     }
     codexmanager_service::sync_runtime_settings_from_storage();
@@ -617,6 +682,7 @@ fn main() {
         Ok(job) => Some(job),
         Err(err) => {
             eprintln!("创建 Windows 子进程回收句柄失败，关闭窗口时可能遗留后台进程：{err}");
+            log::warn!("event=windows_child_job_create_failed error={err}");
             None
         }
     };
@@ -629,9 +695,20 @@ fn main() {
         println!("- web:     bind http://{web_addr}/, open http://{web_open_addr}/");
     }
     println!("按 Ctrl+C 退出");
+    log::info!(
+        "event=start_launcher_ready service_addr={} service_bind_addr={} web_addr={} web_open_addr={}",
+        service_addr,
+        service_bind_addr,
+        web_addr,
+        web_open_addr
+    );
 
     if !web_bin.is_file() {
         eprintln!("缺少文件：{}", web_bin.display());
+        log::error!(
+            "event=launcher_binary_missing process=web path={}",
+            web_bin.display()
+        );
         std::process::exit(1);
     }
 
@@ -639,16 +716,22 @@ fn main() {
         println!("检测到 service 已在运行，尝试重启以应用当前配置...");
         if !stop_existing_service_best_effort(&service_addr) {
             eprintln!("service 端口仍被占用，请先关闭旧实例：{service_addr}");
+            log::error!("event=service_port_still_occupied addr={service_addr}");
             std::process::exit(1);
         }
     }
     if tcp_probe(&service_addr) {
         eprintln!("service 端口仍被占用，请先关闭旧实例：{service_addr}");
+        log::error!("event=service_port_still_occupied addr={service_addr}");
         std::process::exit(1);
     }
 
     if !service_bin.is_file() {
         eprintln!("service 不可达且缺少文件：{}", service_bin.display());
+        log::error!(
+            "event=launcher_binary_missing process=service path={}",
+            service_bin.display()
+        );
         std::process::exit(1);
     }
 
@@ -657,6 +740,7 @@ fn main() {
         Ok(child) => child,
         Err(err) => {
             eprintln!("启动 service 失败：{err}");
+            log::error!("event=child_process_spawn_failed process=service error={err}");
             std::process::exit(1);
         }
     };
@@ -664,13 +748,15 @@ fn main() {
     if let Some(job) = child_job.as_ref() {
         if let Err(err) = job.assign(&service_child) {
             eprintln!("service 未能加入 Windows 回收句柄，关闭窗口时可能残留：{err}");
+            log::warn!("event=windows_child_job_assign_failed process=service error={err}");
         }
     }
 
     println!("等待 service 就绪...");
     if !wait_for_service_ready(&service_addr, 120) {
         eprintln!("service 启动后仍未通过健康检查：{service_addr}");
-        let _ = service_child.kill();
+        log::error!("event=service_readiness_failed addr={service_addr}");
+        kill_child_best_effort(&mut service_child, "service");
         std::process::exit(1);
     }
 
@@ -678,6 +764,7 @@ fn main() {
         println!("检测到 web 已在运行，尝试重启以应用当前配置...");
         if !stop_existing_web_best_effort(&web_addr, &web_open_addr) {
             eprintln!("web 端口仍被占用，请先关闭旧实例：http://{web_open_addr}/");
+            log::error!("event=web_port_still_occupied addr={web_open_addr}");
             std::process::exit(1);
         }
     }
@@ -694,6 +781,8 @@ fn main() {
         Ok(v) => v,
         Err(err) => {
             eprintln!("启动 web 失败：{err}");
+            log::error!("event=child_process_spawn_failed process=web error={err}");
+            kill_child_best_effort(&mut service_child, "service");
             std::process::exit(1);
         }
     };
@@ -701,23 +790,27 @@ fn main() {
     if let Some(job) = child_job.as_ref() {
         if let Err(err) = job.assign(&web_child) {
             eprintln!("web 未能加入 Windows 回收句柄，关闭窗口时可能残留：{err}");
+            log::warn!("event=windows_child_job_assign_failed process=web error={err}");
         }
     }
 
     println!("Waiting for web gateway readiness...");
     if !wait_for_service_ready(&web_open_addr, 120) {
         eprintln!("web gateway failed health check: http://{web_open_addr}/health");
-        let _ = web_child.kill();
-        let _ = service_child.kill();
+        log::error!("event=web_readiness_failed addr={web_open_addr}");
+        kill_child_best_effort(&mut web_child, "web");
+        kill_child_best_effort(&mut service_child, "service");
         std::process::exit(1);
     }
 
     let should_exit = Arc::new(AtomicBool::new(false));
     {
         let flag = Arc::clone(&should_exit);
-        let _ = ctrlc::set_handler(move || {
+        if let Err(err) = ctrlc::set_handler(move || {
             flag.store(true, Ordering::SeqCst);
-        });
+        }) {
+            log::error!("event=ctrlc_handler_install_failed error={err}");
+        }
     }
 
     // 监督进程：Ctrl+C 或任一子进程退出则进入关闭流程。
@@ -725,12 +818,10 @@ fn main() {
         if should_exit.load(Ordering::SeqCst) {
             break;
         }
-        if let Ok(Some(status)) = web_child.try_wait() {
-            println!("web 已退出：{status}");
+        if child_has_exited(&mut web_child, "web") {
             break;
         }
-        if let Ok(Some(status)) = service_child.try_wait() {
-            println!("service 已退出：{status}");
+        if child_has_exited(&mut service_child, "service") {
             break;
         }
         std::thread::sleep(Duration::from_millis(250));
@@ -744,9 +835,15 @@ fn main() {
 
     // 最后兜底：短等后强杀
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let mut web_done = false;
+    let mut service_done = false;
     loop {
-        let web_done = web_child.try_wait().ok().flatten().is_some();
-        let service_done = service_child.try_wait().ok().flatten().is_some();
+        if !web_done {
+            web_done = child_has_exited(&mut web_child, "web");
+        }
+        if !service_done {
+            service_done = child_has_exited(&mut service_child, "service");
+        }
         if web_done && service_done {
             break;
         }
@@ -756,8 +853,8 @@ fn main() {
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    let _ = web_child.kill();
-    let _ = service_child.kill();
+    kill_child_best_effort(&mut web_child, "web");
+    kill_child_best_effort(&mut service_child, "service");
 }
 
 #[cfg(test)]

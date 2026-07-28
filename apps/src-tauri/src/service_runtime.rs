@@ -77,11 +77,17 @@ pub(super) fn spawn_service_with_addr(
         bind_addr,
         connect_addr
     );
-    let handle = thread::spawn(move || {
-        if let Err(err) = codexmanager_service::start_server(&thread_addr) {
-            log::error!("service stopped: {}", err);
-        }
-    });
+    let handle = thread::Builder::new()
+        .name("embedded-service".to_string())
+        .spawn(move || {
+            if let Err(err) = codexmanager_service::start_server(&thread_addr) {
+                log::error!("service stopped: {}", err);
+            }
+        })
+        .map_err(|err| {
+            log::error!("event=embedded_service_spawn_failed error={err}");
+            format!("start embedded service worker failed: {err}")
+        })?;
     set_service_runtime(ServiceRuntime {
         addr: connect_addr,
         join: handle,
@@ -109,9 +115,14 @@ static SERVICE_RUNTIME: OnceLock<Mutex<Option<ServiceRuntime>>> = OnceLock::new(
 /// 无
 fn set_service_runtime(runtime: ServiceRuntime) {
     let slot = SERVICE_RUNTIME.get_or_init(|| Mutex::new(None));
-    if let Ok(mut guard) = slot.lock() {
-        *guard = Some(runtime);
-    }
+    let mut guard = match slot.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::warn!("event=lock_poisoned lock=service_runtime action=recover_set");
+            poisoned.into_inner()
+        }
+    };
+    *guard = Some(runtime);
 }
 
 /// 函数 `take_service_runtime`
@@ -127,11 +138,14 @@ fn set_service_runtime(runtime: ServiceRuntime) {
 /// 返回函数执行结果
 fn take_service_runtime() -> Option<ServiceRuntime> {
     let slot = SERVICE_RUNTIME.get_or_init(|| Mutex::new(None));
-    if let Ok(mut guard) = slot.lock() {
-        guard.take()
-    } else {
-        None
-    }
+    let mut guard = match slot.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::warn!("event=lock_poisoned lock=service_runtime action=recover_take");
+            poisoned.into_inner()
+        }
+    };
+    guard.take()
 }
 
 /// 函数 `stop_service`
@@ -149,9 +163,17 @@ pub(super) fn stop_service() {
     if let Some(runtime) = take_service_runtime() {
         log::info!("service stopping at {}", runtime.addr);
         codexmanager_service::request_shutdown(&runtime.addr);
-        thread::spawn(move || {
-            let _ = runtime.join.join();
-        });
+        if let Err(err) = thread::Builder::new()
+            .name("embedded-service-join".to_string())
+            .spawn(move || match runtime.join.join() {
+                Ok(()) => log::info!("event=embedded_service_stopped status=completed"),
+                Err(_payload) => {
+                    log::error!("event=embedded_service_join_failed status=panicked")
+                }
+            })
+        {
+            log::error!("event=embedded_service_join_worker_spawn_failed error={err}");
+        }
     }
 }
 

@@ -557,7 +557,14 @@ fn refresh_one_locked(repository_id: &str) -> Result<(), String> {
     })();
     if let Err(err) = &result {
         if let Ok(storage) = open_storage() {
-            let _ = storage.record_codex_skill_repository_error(repository_id, err);
+            if let Err(record_err) = storage.record_codex_skill_repository_error(repository_id, err)
+            {
+                log::warn!(
+                    "event=skill_repository_error_record_failed repository_id={} error={}",
+                    repository_id,
+                    record_err
+                );
+            }
         }
     }
     result.map_err(|err| {

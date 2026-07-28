@@ -263,14 +263,20 @@ pub(crate) fn handle_request(req: JsonRpcRequest) -> JsonRpcMessage {
 
 pub(crate) fn handle_request_with_actor(req: JsonRpcRequest, actor: RpcActor) -> JsonRpcMessage {
     if req.method == "initialize" {
-        let _ = storage_helpers::initialize_storage();
+        if let Err(err) = storage_helpers::initialize_storage() {
+            log::error!("event=rpc_storage_initialize_failed error={err}");
+        }
         if let Some(storage) = storage_helpers::open_storage() {
-            let _ = storage.insert_event(&Event {
-                account_id: None,
-                event_type: "initialize".to_string(),
-                message: "service initialized".to_string(),
-                created_at: now_ts(),
-            });
+            storage_helpers::insert_event_best_effort(
+                &storage,
+                &Event {
+                    account_id: None,
+                    event_type: "initialize".to_string(),
+                    message: "service initialized".to_string(),
+                    created_at: now_ts(),
+                },
+                "rpc.initialize",
+            );
         }
         let result = InitializeResult {
             version: codexmanager_core::core_version().to_string(),

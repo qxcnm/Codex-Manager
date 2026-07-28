@@ -37,7 +37,13 @@ pub(super) fn maybe_migrate_legacy_db(current_db: &Path) {
         }
 
         if let Some(parent) = current_db.parent() {
-            let _ = fs::create_dir_all(parent);
+            if let Err(err) = fs::create_dir_all(parent) {
+                log::warn!(
+                    "event=legacy_db_migration_directory_create_failed path={} error={}",
+                    parent.display(),
+                    err
+                );
+            }
         }
 
         if current_db.is_file() {
@@ -141,7 +147,13 @@ fn copy_db_snapshot(source: &Path, target: &Path) -> Result<(), String> {
 fn remove_db_sidecars(path: &Path) {
     for sidecar in db_sidecar_paths(path) {
         if sidecar.is_file() {
-            let _ = fs::remove_file(sidecar);
+            if let Err(err) = fs::remove_file(&sidecar) {
+                log::warn!(
+                    "event=legacy_db_sidecar_remove_failed path={} error={}",
+                    sidecar.display(),
+                    err
+                );
+            }
         }
     }
 }
@@ -195,9 +207,11 @@ fn db_has_user_data(path: &Path) -> bool {
             .unwrap_or(false);
         exists
             && conn
-                .query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} LIMIT 1)"), [], |row| {
-                    row.get::<_, i64>(0)
-                })
+                .query_row(
+                    &format!("SELECT EXISTS(SELECT 1 FROM {table} LIMIT 1)"),
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
                 .map(|count| count > 0)
                 .unwrap_or(false)
     })

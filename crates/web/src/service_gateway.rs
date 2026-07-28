@@ -110,10 +110,13 @@ async fn service_rpc_probe(
 /// 返回函数执行结果
 async fn shutdown_existing_service(service_addr: &str) -> bool {
     let addr = service_addr.to_string();
-    let _ = tokio::task::spawn_blocking(move || {
+    if let Err(err) = tokio::task::spawn_blocking(move || {
         codexmanager_service::request_shutdown(&addr);
     })
-    .await;
+    .await
+    {
+        log::warn!("event=web_service_shutdown_task_failed phase=existing error={err}");
+    }
 
     for _ in 0..30 {
         if !tcp_probe(service_addr).await {
@@ -642,12 +645,17 @@ fn format_upstream_error_message(service_addr: &str, err: impl std::fmt::Display
 pub(super) async fn quit(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     if *state.spawned_service.lock().await {
         let addr = state.service_addr.clone();
-        let _ = tokio::task::spawn_blocking(move || {
+        if let Err(err) = tokio::task::spawn_blocking(move || {
             codexmanager_service::request_shutdown(&addr);
         })
-        .await;
+        .await
+        {
+            log::warn!("event=web_service_shutdown_task_failed phase=quit error={err}");
+        }
     }
-    let _ = state.shutdown_tx.send(true);
+    if state.shutdown_tx.send(true).is_err() {
+        log::warn!("event=web_shutdown_signal_failed reason=no_receivers");
+    }
     Html("<html><body>OK</body></html>")
 }
 

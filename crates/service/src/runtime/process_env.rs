@@ -119,18 +119,36 @@ fn find_env_file_in_dir(dir: &Path) -> Option<PathBuf> {
 ///
 /// # 返回
 /// 无
-pub(crate) fn load_env_from_exe_dir() {
+pub(crate) fn load_env_from_exe_dir() -> Vec<(log::Level, String)> {
+    let mut events = Vec::new();
     let dir = exe_dir();
     let Some(path) = find_env_file_in_dir(&dir) else {
-        return;
+        return events;
     };
 
-    let Ok(mut f) = fs::File::open(&path) else {
-        return;
+    let mut f = match fs::File::open(&path) {
+        Ok(file) => file,
+        Err(err) => {
+            events.push((
+                log::Level::Warn,
+                format!(
+                    "event=env_file_open_failed path={} error={err}",
+                    path.display()
+                ),
+            ));
+            return events;
+        }
     };
     let mut text = String::new();
-    if f.read_to_string(&mut text).is_err() {
-        return;
+    if let Err(err) = f.read_to_string(&mut text) {
+        events.push((
+            log::Level::Warn,
+            format!(
+                "event=env_file_read_failed path={} error={err}",
+                path.display()
+            ),
+        ));
+        return events;
     }
 
     let mut applied = 0usize;
@@ -146,8 +164,15 @@ pub(crate) fn load_env_from_exe_dir() {
     }
 
     if applied > 0 {
-        log::info!("Loaded {} env vars from {}", applied, path.display());
+        events.push((
+            log::Level::Info,
+            format!(
+                "event=env_file_loaded path={} applied={applied}",
+                path.display()
+            ),
+        ));
     }
+    events
 }
 
 /// 函数 `resolve_path_with_base`

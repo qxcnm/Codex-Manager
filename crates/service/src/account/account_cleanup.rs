@@ -154,12 +154,16 @@ pub(crate) fn delete_unavailable_free_accounts() -> Result<DeleteUnavailableFree
             .delete_accounts(&pending_ids)
             .map_err(|err| err.to_string())?;
         for (account_id, event_message) in pending_deletes {
-            let _ = storage.insert_event(&Event {
-                account_id: Some(account_id.clone()),
-                event_type: "account_bulk_delete_unavailable_free".to_string(),
-                message: event_message,
-                created_at: now_ts(),
-            });
+            crate::storage_helpers::insert_event_best_effort(
+                &storage,
+                &Event {
+                    account_id: Some(account_id.clone()),
+                    event_type: "account_bulk_delete_unavailable_free".to_string(),
+                    message: event_message,
+                    created_at: now_ts(),
+                },
+                "account.cleanup_unavailable_free",
+            );
 
             result.deleted += 1;
             result.deleted_account_ids.push(account_id);
@@ -218,12 +222,16 @@ pub(crate) fn delete_banned_accounts() -> Result<DeleteBannedResult, String> {
             .delete_accounts(&pending_ids)
             .map_err(|err| err.to_string())?;
         for account_id in pending_ids {
-            let _ = storage.insert_event(&Event {
-                account_id: Some(account_id.clone()),
-                event_type: "account_bulk_delete_banned".to_string(),
-                message: "bulk delete banned account".to_string(),
-                created_at: now_ts(),
-            });
+            crate::storage_helpers::insert_event_best_effort(
+                &storage,
+                &Event {
+                    account_id: Some(account_id.clone()),
+                    event_type: "account_bulk_delete_banned".to_string(),
+                    message: "bulk delete banned account".to_string(),
+                    created_at: now_ts(),
+                },
+                "account.cleanup_banned",
+            );
 
             result.deleted += 1;
             result.deleted_account_ids.push(account_id);
@@ -284,12 +292,16 @@ pub(crate) fn delete_accounts_by_statuses(
             .delete_accounts(&pending_ids)
             .map_err(|err| err.to_string())?;
         for (account_id, event_message) in pending_deletes {
-            let _ = storage.insert_event(&Event {
-                account_id: Some(account_id.clone()),
-                event_type: "account_bulk_delete_by_status".to_string(),
-                message: event_message,
-                created_at: now_ts(),
-            });
+            crate::storage_helpers::insert_event_best_effort(
+                &storage,
+                &Event {
+                    account_id: Some(account_id.clone()),
+                    event_type: "account_bulk_delete_by_status".to_string(),
+                    message: event_message,
+                    created_at: now_ts(),
+                },
+                "account.cleanup_by_status",
+            );
 
             result.deleted += 1;
             result.deleted_account_ids.push(account_id);

@@ -175,9 +175,15 @@ fn spawn_background_command(
     let mut child = command
         .spawn()
         .map_err(|err| format!("{launch_failure_message}：{err}"))?;
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
+    if let Err(err) = std::thread::Builder::new()
+        .name("background-command-reaper".to_string())
+        .spawn(move || match child.wait() {
+            Ok(status) => log::debug!("event=background_command_exited status={status}"),
+            Err(err) => log::warn!("event=background_command_wait_failed error={err}"),
+        })
+    {
+        log::warn!("event=background_command_reaper_spawn_failed error={err}");
+    }
     Ok(())
 }
 

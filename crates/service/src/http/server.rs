@@ -16,6 +16,8 @@ pub fn start_http(addr: &str) -> std::io::Result<()> {
     let backend = start_backend_server()?;
     let result = run_front_proxy(addr, &backend.addr);
     wake_backend_shutdown(&backend.addr);
-    let _ = backend.join.join();
+    if let Err(_payload) = backend.join.join() {
+        log::error!("event=http_backend_join_failed status=panicked");
+    }
     result
 }

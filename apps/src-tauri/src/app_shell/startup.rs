@@ -42,14 +42,19 @@ pub(crate) fn schedule_startup_main_window(app: &tauri::AppHandle) {
     }
 
     let app = app.clone();
-    std::thread::spawn(move || {
-        if let Err(err) = request_show_main_window(&app) {
-            log::warn!("startup show main window request failed: {}", err);
-            return;
-        }
-        wait_for_startup_webview_content();
-        navigate_main_window_to_startup_app_when_ready(&app);
-    });
+    if let Err(err) = std::thread::Builder::new()
+        .name("startup-main-window".to_string())
+        .spawn(move || {
+            if let Err(err) = request_show_main_window(&app) {
+                log::warn!("startup show main window request failed: {}", err);
+                return;
+            }
+            wait_for_startup_webview_content();
+            navigate_main_window_to_startup_app_when_ready(&app);
+        })
+    {
+        log::error!("event=startup_window_worker_spawn_failed error={err}");
+    }
 }
 
 fn should_show_main_window_on_startup(configured: bool, tray_available: bool) -> bool {

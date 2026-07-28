@@ -11,7 +11,11 @@ pub mod portable {
     /// # 返回
     /// 无
     pub fn bootstrap_current_process() {
-        crate::process_env::load_env_from_exe_dir();
+        let env_log_events = crate::process_env::load_env_from_exe_dir();
+        crate::logging::init_logging();
+        for (level, message) in env_log_events {
+            log::log!(level, "{message}");
+        }
         crate::process_env::ensure_default_db_path();
         let _ = crate::rpc_auth_token();
     }

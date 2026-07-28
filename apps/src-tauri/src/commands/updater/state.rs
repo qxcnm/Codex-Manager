@@ -31,6 +31,13 @@ fn updater_state() -> &'static Mutex<UpdaterState> {
     UPDATER_STATE.get_or_init(|| Mutex::new(UpdaterState::default()))
 }
 
+fn lock_updater_state() -> std::sync::MutexGuard<'static, UpdaterState> {
+    updater_state().lock().unwrap_or_else(|poisoned| {
+        log::error!("event=updater_state_lock_poisoned recovery=use_inner_state");
+        poisoned.into_inner()
+    })
+}
+
 /// 函数 `set_last_check`
 ///
 /// 作者: gaohongshun
@@ -43,10 +50,9 @@ fn updater_state() -> &'static Mutex<UpdaterState> {
 /// # 返回
 /// 无
 pub(super) fn set_last_check(check: UpdateCheckResponse) {
-    if let Ok(mut guard) = updater_state().lock() {
-        guard.last_check = Some(check);
-        guard.last_error = None;
-    }
+    let mut guard = lock_updater_state();
+    guard.last_check = Some(check);
+    guard.last_error = None;
 }
 
 /// 函数 `set_last_error`
@@ -61,9 +67,7 @@ pub(super) fn set_last_check(check: UpdateCheckResponse) {
 /// # 返回
 /// 无
 pub(super) fn set_last_error(message: String) {
-    if let Ok(mut guard) = updater_state().lock() {
-        guard.last_error = Some(message);
-    }
+    lock_updater_state().last_error = Some(message);
 }
 
 /// 函数 `clear_last_error`
@@ -78,9 +82,7 @@ pub(super) fn set_last_error(message: String) {
 /// # 返回
 /// 无
 pub(super) fn clear_last_error() {
-    if let Ok(mut guard) = updater_state().lock() {
-        guard.last_error = None;
-    }
+    lock_updater_state().last_error = None;
 }
 
 /// 函数 `snapshot_last_state`
@@ -95,11 +97,8 @@ pub(super) fn clear_last_error() {
 /// # 返回
 /// 返回函数执行结果
 pub(super) fn snapshot_last_state() -> (Option<UpdateCheckResponse>, Option<String>) {
-    if let Ok(guard) = updater_state().lock() {
-        (guard.last_check.clone(), guard.last_error.clone())
-    } else {
-        (None, Some("读取更新器状态锁失败".to_string()))
-    }
+    let guard = lock_updater_state();
+    (guard.last_check.clone(), guard.last_error.clone())
 }
 
 /// 函数 `updates_root_dir`

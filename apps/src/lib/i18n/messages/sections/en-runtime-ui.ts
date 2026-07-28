@@ -1,6 +1,12 @@
 import type { MessageCatalog } from "../types";
 
 export const EN_RUNTIME_UI_MESSAGES: MessageCatalog = {
+  页面发生异常: "Page error",
+  "异常信息已写入应用日志。你可以重试当前页面。":
+    "The error was written to the application log. You can retry this page.",
+  应用发生异常: "Application error",
+  "异常信息已写入应用日志，请重试。":
+    "The error was written to the application log. Please retry.",
   "Plugin workspace": "Plugin workspace",
   打开: "Open",
   后刷新: " until refresh",

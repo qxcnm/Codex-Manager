@@ -1,4 +1,4 @@
-use codexmanager_core::storage::Storage;
+use codexmanager_core::storage::{Event, Storage};
 use rand::RngCore;
 use rusqlite::backup::Backup;
 use rusqlite::{Connection, OptionalExtension};
@@ -24,6 +24,18 @@ static INITIALIZED_STORAGE_PATHS: OnceLock<Mutex<HashMap<String, ()>>> = OnceLoc
 const MODEL_CATALOG_V2_MIGRATION: &str = "112_model_catalog_v2";
 const MODEL_BILLING_V2_HARDENING_MIGRATION: &str = "113_model_billing_v2_hardening";
 const MODEL_CATALOG_GPT56_PRICES_MIGRATION: &str = "114_model_catalog_gpt56_prices";
+
+pub(crate) fn insert_event_best_effort(storage: &Storage, event: &Event, context: &'static str) {
+    if let Err(err) = storage.insert_event(event) {
+        log::warn!(
+            "event=audit_event_insert_failed context={} event_type={} has_account_id={} error={}",
+            context,
+            event.event_type.replace(['\r', '\n'], " "),
+            event.account_id.is_some(),
+            err
+        );
+    }
+}
 
 struct ModelCatalogMigrationLock {
     path: PathBuf,

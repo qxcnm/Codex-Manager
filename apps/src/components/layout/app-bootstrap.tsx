@@ -25,6 +25,7 @@ import {
 import { useI18n } from "@/lib/i18n/provider";
 import { getCanonicalStaticRouteUrl } from "@/lib/utils/static-routes";
 import { withTimeout } from "@/lib/utils/timeout";
+import { reportClientError, reportClientWarning } from "@/lib/client-logger";
 
 const DEFAULT_SERVICE_ADDR = "localhost:48760";
 const STARTUP_STEP_TIMEOUT_MS = 15_000;
@@ -310,6 +311,7 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
             applyConnectedServiceState(addr, initializeResult.version, settings.lowTransparency);
           })
           .catch((serviceError: unknown) => {
+            reportClientError("desktop_service_connect_failed", serviceError);
             setServiceStatus({ addr, connected: false, version: "" });
             setError(formatServiceError(serviceError));
           })
@@ -323,6 +325,7 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
         const initializeResult = await initializeService(addr, 0);
         applyConnectedServiceState(addr, initializeResult.version, settings.lowTransparency);
       } catch (serviceError: unknown) {
+        reportClientError("web_service_initialize_failed", serviceError);
         if (!hasInitializedOnce.current) {
           setServiceStatus({ addr, connected: false, version: "" });
           setError(formatServiceError(serviceError));
@@ -330,6 +333,7 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
         setIsInitializing(false);
       }
     } catch (appError: unknown) {
+      reportClientError("app_bootstrap_failed", appError);
       if (!hasInitializedOnce.current) {
         setError(appError instanceof Error ? appError.message : String(appError));
       }
@@ -389,6 +393,7 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
       );
       toast.success(t("服务已连接"));
     } catch (startError: unknown) {
+      reportClientError("service_start_failed", startError);
       setServiceStatus({ connected: false, version: "" });
       setError(formatServiceError(startError));
       setIsInitializing(false);
@@ -429,6 +434,7 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
       );
       toast.success(t("服务已连接"));
     } catch (recoverError: unknown) {
+      reportClientError("service_recovery_failed", recoverError);
       setServiceStatus({ addr: nextAddr, connected: false, version: "" });
       setError(formatServiceError(recoverError));
       setIsInitializing(false);
@@ -458,6 +464,7 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
           setAppSettings(settings);
           toast.success(t("后续将不再显示这份引导"));
         } catch (guideError: unknown) {
+          reportClientWarning("guide_state_save_failed", guideError);
           const message =
             guideError instanceof Error ? guideError.message : String(guideError);
           toast.error(t("保存引导状态失败: {message}", { message }));

@@ -70,12 +70,18 @@ pub(crate) fn setup_tray(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
                 toggle_tray_preview_window(tray.app_handle(), position, rect);
             }
         });
-    if let Ok(icon) =
-        tauri::image::Image::from_bytes(include_bytes!("../../icons/tray-template.png"))
-    {
-        tray = tray.icon(icon).icon_as_template(true);
-    } else if let Some(icon) = app.default_window_icon() {
-        tray = tray.icon(icon.clone());
+    match tauri::image::Image::from_bytes(include_bytes!("../../icons/tray-template.png")) {
+        Ok(icon) => {
+            tray = tray.icon(icon).icon_as_template(true);
+        }
+        Err(err) => {
+            log::warn!("event=tray_template_icon_decode_failed error={err}");
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            } else {
+                log::warn!("event=tray_icon_fallback_unavailable");
+            }
+        }
     }
     tray.build(app)?;
     TRAY_AVAILABLE.store(true, std::sync::atomic::Ordering::Relaxed);

@@ -755,7 +755,9 @@ pub(super) async fn login_submit(
 /// 返回函数执行结果
 pub(super) async fn logout(headers: HeaderMap) -> impl IntoResponse {
     if let Some(token) = parse_cookie_value(&headers, WEB_AUTH_COOKIE_NAME) {
-        let _ = codexmanager_service::logout_app_user_session(&token);
+        if let Err(err) = codexmanager_service::logout_app_user_session(&token) {
+            log::warn!("event=web_logout_session_revoke_failed error={err}");
+        }
     }
     let mut response = Html(logout_success_html()).into_response();
     if let Some(header_value) = clear_cookie_header_value() {

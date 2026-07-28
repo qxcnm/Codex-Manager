@@ -144,7 +144,11 @@ fn exchange_and_persist_api_key_access_token(
         match auth_tokens::obtain_api_key(issuer, client_id, &subject_token) {
             Ok(exchanged) => {
                 token.api_key_access_token = Some(exchanged.clone());
-                let _ = storage.insert_token(token);
+                if let Err(err) = storage.insert_token(token) {
+                    log::error!(
+                        "event=auth_token_persist_failed phase=api_key_exchange error={err}"
+                    );
+                }
                 return Ok(exchanged);
             }
             Err(err) => errors.push(err),
@@ -302,7 +306,11 @@ pub(super) fn resolve_openai_bearer_token(
                         if let Some(id_token) = refreshed.id_token {
                             token.id_token = id_token;
                         }
-                        let _ = storage.insert_token(token);
+                        if let Err(err) = storage.insert_token(token) {
+                            log::error!(
+                                "event=auth_token_persist_failed phase=access_token_refresh error={err}"
+                            );
+                        }
 
                         if !token.id_token.trim().is_empty() {
                             let refreshed_client_id =

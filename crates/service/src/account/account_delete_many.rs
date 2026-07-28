@@ -86,12 +86,16 @@ pub(crate) fn delete_accounts(account_ids: Vec<String>) -> Result<DeleteManyResu
         result.deleted = existing_unique.len();
         for account_id in existing_unique {
             crate::gateway::invalidate_account_proxy_cache(account_id.as_str());
-            let _ = storage.insert_event(&Event {
-                account_id: Some(account_id.clone()),
-                event_type: "account_delete_many".to_string(),
-                message: "account deleted via bulk action".to_string(),
-                created_at: now_ts(),
-            });
+            crate::storage_helpers::insert_event_best_effort(
+                &storage,
+                &Event {
+                    account_id: Some(account_id.clone()),
+                    event_type: "account_delete_many".to_string(),
+                    message: "account deleted via bulk action".to_string(),
+                    created_at: now_ts(),
+                },
+                "account.delete_many",
+            );
             result.deleted_account_ids.push(account_id);
         }
     }

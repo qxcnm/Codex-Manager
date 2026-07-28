@@ -19,9 +19,10 @@ const RESET_CREDIT_LOCK_POISONED_MESSAGE: &str = "reset credit lock poisoned; re
 
 fn reset_credit_lock(account_id: &str) -> Arc<Mutex<()>> {
     let locks = RESET_CREDIT_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut locks = locks
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut locks = locks.lock().unwrap_or_else(|poisoned| {
+        log::warn!("event=lock_poisoned lock=reset_credit_locks action=recover");
+        poisoned.into_inner()
+    });
     locks
         .entry(account_id.to_string())
         .or_insert_with(|| Arc::new(Mutex::new(())))

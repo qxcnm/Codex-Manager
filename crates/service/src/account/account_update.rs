@@ -86,24 +86,32 @@ pub(crate) fn update_account(
                 .clear_preferred_account_if(normalized_account_id)
                 .map_err(|e| e.to_string())?;
         }
-        let _ = storage.insert_event(&Event {
-            account_id: Some(normalized_account_id.to_string()),
-            event_type: "account_preferred_update".to_string(),
-            message: format!("preferred={preferred}"),
-            created_at: now,
-        });
+        crate::storage_helpers::insert_event_best_effort(
+            &storage,
+            &Event {
+                account_id: Some(normalized_account_id.to_string()),
+                event_type: "account_preferred_update".to_string(),
+                message: format!("preferred={preferred}"),
+                created_at: now,
+            },
+            "account.update_preferred",
+        );
     }
 
     if let Some(sort) = sort {
         storage
             .update_account_sort(normalized_account_id, sort)
             .map_err(|e| e.to_string())?;
-        let _ = storage.insert_event(&Event {
-            account_id: Some(normalized_account_id.to_string()),
-            event_type: "account_sort_update".to_string(),
-            message: format!("sort={sort}"),
-            created_at: now,
-        });
+        crate::storage_helpers::insert_event_best_effort(
+            &storage,
+            &Event {
+                account_id: Some(normalized_account_id.to_string()),
+                event_type: "account_sort_update".to_string(),
+                message: format!("sort={sort}"),
+                created_at: now,
+            },
+            "account.update_sort",
+        );
     }
 
     if let Some(status) = normalized_status {
@@ -119,27 +127,35 @@ pub(crate) fn update_account(
         storage
             .update_account_label(normalized_account_id, label)
             .map_err(|e| e.to_string())?;
-        let _ = storage.insert_event(&Event {
-            account_id: Some(normalized_account_id.to_string()),
-            event_type: "account_profile_update".to_string(),
-            message: format!("label={label}"),
-            created_at: now,
-        });
+        crate::storage_helpers::insert_event_best_effort(
+            &storage,
+            &Event {
+                account_id: Some(normalized_account_id.to_string()),
+                event_type: "account_profile_update".to_string(),
+                message: format!("label={label}"),
+                created_at: now,
+            },
+            "account.update_label",
+        );
     }
 
     if has_group_name {
         storage
             .update_account_group_name(normalized_account_id, normalized_group_name.as_deref())
             .map_err(|e| e.to_string())?;
-        let _ = storage.insert_event(&Event {
-            account_id: Some(normalized_account_id.to_string()),
-            event_type: "account_group_update".to_string(),
-            message: format!(
-                "group_name={}",
-                normalized_group_name.as_deref().unwrap_or("-")
-            ),
-            created_at: now,
-        });
+        crate::storage_helpers::insert_event_best_effort(
+            &storage,
+            &Event {
+                account_id: Some(normalized_account_id.to_string()),
+                event_type: "account_group_update".to_string(),
+                message: format!(
+                    "group_name={}",
+                    normalized_group_name.as_deref().unwrap_or("-")
+                ),
+                created_at: now,
+            },
+            "account.update_group",
+        );
     }
 
     if metadata_requested {
@@ -153,16 +169,20 @@ pub(crate) fn update_account(
         storage
             .touch_account_updated_at(normalized_account_id)
             .map_err(|e| e.to_string())?;
-        let _ = storage.insert_event(&Event {
-            account_id: Some(normalized_account_id.to_string()),
-            event_type: "account_profile_update".to_string(),
-            message: format!(
-                "note={} tags={}",
-                normalized_note.as_deref().unwrap_or("-"),
-                normalized_tags.as_deref().unwrap_or("-"),
-            ),
-            created_at: now,
-        });
+        crate::storage_helpers::insert_event_best_effort(
+            &storage,
+            &Event {
+                account_id: Some(normalized_account_id.to_string()),
+                event_type: "account_profile_update".to_string(),
+                message: format!(
+                    "note={} tags={}",
+                    normalized_note.as_deref().unwrap_or("-"),
+                    normalized_tags.as_deref().unwrap_or("-"),
+                ),
+                created_at: now,
+            },
+            "account.update_metadata",
+        );
     }
 
     if quota_override_requested {
@@ -176,15 +196,19 @@ pub(crate) fn update_account(
         storage
             .touch_account_updated_at(normalized_account_id)
             .map_err(|e| e.to_string())?;
-        let _ = storage.insert_event(&Event {
-            account_id: Some(normalized_account_id.to_string()),
-            event_type: "account_quota_capacity_update".to_string(),
-            message: format!(
-                "primary={:?} secondary={:?}",
-                quota_capacity_primary_window_tokens, quota_capacity_secondary_window_tokens
-            ),
-            created_at: now,
-        });
+        crate::storage_helpers::insert_event_best_effort(
+            &storage,
+            &Event {
+                account_id: Some(normalized_account_id.to_string()),
+                event_type: "account_quota_capacity_update".to_string(),
+                message: format!(
+                    "primary={:?} secondary={:?}",
+                    quota_capacity_primary_window_tokens, quota_capacity_secondary_window_tokens
+                ),
+                created_at: now,
+            },
+            "account.update_quota_capacity",
+        );
     }
 
     Ok(())

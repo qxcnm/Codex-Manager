@@ -589,18 +589,20 @@ async fn async_main() {
         .merge(protected_app)
         .with_state(state);
 
-    println!("codexmanager-web listening on {web_addr} (service={service_addr})");
+    log::info!("event=web_listening addr={web_addr} service={service_addr}");
 
     let open_url = format!("http://{}", web_addr.trim());
     let open_url = browser_open_addr(&web_addr)
         .map(|addr| format!("http://{addr}"))
         .unwrap_or(open_url);
     if read_env_trim("CODEXMANAGER_WEB_NO_OPEN").is_none() {
-        let _ = webbrowser::open(&open_url);
+        if let Err(err) = webbrowser::open(&open_url) {
+            log::warn!("event=web_browser_open_failed error={err}");
+        }
     }
 
     if let Err(err) = run_web_server(&web_addr, app, shutdown_rx).await {
-        eprintln!("web stopped: {err}");
+        log::error!("event=web_server_stopped error={err}");
         std::process::exit(1);
     }
 }
@@ -620,7 +622,7 @@ fn main() {
     codexmanager_service::portable::bootstrap_current_process();
     codexmanager_service::init_logging();
     if let Err(err) = codexmanager_service::initialize_storage_if_needed() {
-        eprintln!("database migration failed; refusing to start web service: {err}");
+        log::error!("event=web_storage_initialize_failed error={err}");
         std::process::exit(1);
     }
     codexmanager_service::sync_runtime_settings_from_storage();

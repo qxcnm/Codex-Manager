@@ -148,14 +148,25 @@ fn default_app_data_db_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 /// # 返回
 /// 无
 pub(crate) fn apply_runtime_storage_env(app: &tauri::AppHandle) {
-    if let Ok(data_path) = resolve_db_path_with_legacy_migration(app) {
-        std::env::set_var(ENV_DB_PATH, &data_path);
-        let token_path = resolve_runtime_rpc_token_path(&data_path);
-        std::env::set_var(ENV_RPC_TOKEN_FILE, &token_path);
-        maybe_seed_profile_service_addr(app);
-        log::info!("db path: {}", data_path.display());
-        log::info!("rpc token path: {}", token_path.display());
-    }
+    let data_path = match resolve_db_path_with_legacy_migration(app) {
+        Ok(data_path) => data_path,
+        Err(err) => {
+            log::error!("event=runtime_storage_path_resolution_failed error={err}");
+            return;
+        }
+    };
+    std::env::set_var(ENV_DB_PATH, &data_path);
+    let token_path = resolve_runtime_rpc_token_path(&data_path);
+    std::env::set_var(ENV_RPC_TOKEN_FILE, &token_path);
+    maybe_seed_profile_service_addr(app);
+    log::info!(
+        "event=runtime_storage_configured db_path={}",
+        data_path.display()
+    );
+    log::debug!(
+        "event=runtime_rpc_token_path_configured path={}",
+        token_path.display()
+    );
 }
 
 /// 函数 `profile_default_service_addr`

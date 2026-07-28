@@ -8,6 +8,7 @@
   ],
   "permissions": [
     "core:default",
+    "log:default",
     "window-state:default"
   ]
 }

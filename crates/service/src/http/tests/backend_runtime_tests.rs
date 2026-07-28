@@ -1,7 +1,7 @@
 use super::{
     http_queue_size, http_stream_queue_size, http_stream_worker_count, http_worker_count,
-    panic_payload_message, send_with_timeout, should_bypass_queue, HTTP_QUEUE_MIN,
-    HTTP_STREAM_QUEUE_MIN, HTTP_STREAM_WORKER_MIN, HTTP_WORKER_MIN,
+    send_with_timeout, should_bypass_queue, HTTP_QUEUE_MIN, HTTP_STREAM_QUEUE_MIN,
+    HTTP_STREAM_WORKER_MIN, HTTP_WORKER_MIN,
 };
 use crossbeam_channel::bounded;
 use std::time::{Duration, Instant};
@@ -55,26 +55,6 @@ fn queue_size_has_minimum_guard() {
 fn worker_count_has_default_upper_guard() {
     assert!(http_worker_count() <= 16);
     assert!(http_stream_worker_count() <= 4);
-}
-
-/// 函数 `panic_payload_message_formats_common_payloads`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// 无
-///
-/// # 返回
-/// 无
-#[test]
-fn panic_payload_message_formats_common_payloads() {
-    let text = "boom";
-    assert_eq!(panic_payload_message(&text), "boom");
-
-    let owned = String::from("owned boom");
-    assert_eq!(panic_payload_message(&owned), "owned boom");
 }
 
 /// 函数 `full_queue_times_out_quickly`

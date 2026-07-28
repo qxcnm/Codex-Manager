@@ -96,7 +96,7 @@ test("automatic updater drops in-flight results after its UI unmounts", () => {
 test("an available update restores and focuses the main window before opening the dialog", () => {
   assert.match(
     checkerSource,
-    /if \(!summary\.hasUpdate\) \{[\s\S]*return;[\s\S]*await appClient\.showMainWindow\(\)\.catch\(\(\) => undefined\);[\s\S]*setDialogOpen\(true\)/,
+    /if \(!summary\.hasUpdate\) \{[\s\S]*return;[\s\S]*await appClient\.showMainWindow\(\)\.catch\(\(error: unknown\) => \{[\s\S]*reportClientWarning\("update_show_main_window_failed", error\);[\s\S]*\}\);[\s\S]*setDialogOpen\(true\)/,
   );
 });
 

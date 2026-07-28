@@ -16,7 +16,10 @@ use super::normalize_optional_text;
 /// 返回函数执行结果
 pub(crate) fn open_app_settings_storage() -> Option<crate::storage_helpers::StorageHandle> {
     crate::process_env::ensure_default_db_path();
-    let _ = crate::storage_helpers::initialize_storage();
+    if let Err(err) = crate::storage_helpers::initialize_storage() {
+        log::error!("event=app_settings_storage_initialize_failed error={err}");
+        return None;
+    }
     crate::storage_helpers::open_storage()
 }
 
@@ -32,11 +35,17 @@ pub(crate) fn open_app_settings_storage() -> Option<crate::storage_helpers::Stor
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn list_app_settings_map() -> HashMap<String, String> {
-    open_app_settings_storage()
-        .and_then(|storage| storage.list_app_settings().ok())
-        .unwrap_or_default()
-        .into_iter()
-        .collect()
+    let Some(storage) = open_app_settings_storage() else {
+        log::warn!("event=app_settings_list_skipped reason=storage_unavailable");
+        return HashMap::new();
+    };
+    match storage.list_app_settings() {
+        Ok(settings) => settings.into_iter().collect(),
+        Err(err) => {
+            log::error!("event=app_settings_list_failed error={err}");
+            HashMap::new()
+        }
+    }
 }
 
 /// 函数 `get_persisted_app_setting`
@@ -51,9 +60,17 @@ pub(crate) fn list_app_settings_map() -> HashMap<String, String> {
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn get_persisted_app_setting(key: &str) -> Option<String> {
-    open_app_settings_storage()
-        .and_then(|storage| storage.get_app_setting(key).ok().flatten())
-        .and_then(|value| normalize_optional_text(Some(&value)))
+    let Some(storage) = open_app_settings_storage() else {
+        log::warn!("event=app_setting_get_skipped key={key} reason=storage_unavailable");
+        return None;
+    };
+    match storage.get_app_setting(key) {
+        Ok(value) => value.and_then(|value| normalize_optional_text(Some(&value))),
+        Err(err) => {
+            log::error!("event=app_setting_get_failed key={key} error={err}");
+            None
+        }
+    }
 }
 
 /// 函数 `save_persisted_app_setting`
@@ -68,11 +85,15 @@ pub(crate) fn get_persisted_app_setting(key: &str) -> Option<String> {
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn save_persisted_app_setting(key: &str, value: Option<&str>) -> Result<(), String> {
-    let storage = open_app_settings_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let Some(storage) = open_app_settings_storage() else {
+        log::error!("event=app_setting_save_failed key={key} reason=storage_unavailable");
+        return Err("storage unavailable".to_string());
+    };
     let text = normalize_optional_text(value).unwrap_or_default();
-    storage
-        .set_app_setting(key, &text, now_ts())
-        .map_err(|err| format!("save {key} failed: {err}"))?;
+    if let Err(err) = storage.set_app_setting(key, &text, now_ts()) {
+        log::error!("event=app_setting_save_failed key={key} error={err}");
+        return Err(format!("save {key} failed: {err}"));
+    }
     Ok(())
 }
 

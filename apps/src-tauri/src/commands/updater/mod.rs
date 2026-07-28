@@ -42,15 +42,31 @@ fn append_update_runtime_log(log_path: &std::path::Path, message: &str) {
     let line = format!("[{timestamp}] {message}\n");
 
     if let Some(parent) = log_path.parent() {
-        let _ = fs::create_dir_all(parent);
+        if let Err(err) = fs::create_dir_all(parent) {
+            log::warn!(
+                "event=update_log_directory_create_failed phase=runtime path={} error={err}",
+                parent.display()
+            );
+            return;
+        }
     }
-    if let Ok(mut file) = fs::OpenOptions::new()
+    match fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(log_path)
     {
-        let _ = file.write_all(line.as_bytes());
-        let _ = file.flush();
+        Ok(mut file) => {
+            if let Err(err) = file.write_all(line.as_bytes()).and_then(|()| file.flush()) {
+                log::warn!(
+                    "event=update_log_write_failed phase=runtime path={} error={err}",
+                    log_path.display()
+                );
+            }
+        }
+        Err(err) => log::warn!(
+            "event=update_log_open_failed phase=runtime path={} error={err}",
+            log_path.display()
+        ),
     }
 }
 

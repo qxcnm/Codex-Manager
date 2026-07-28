@@ -1,11 +1,17 @@
 "use client";
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  MutationCache,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "next-themes";
 import { useState } from "react";
 import { I18nProvider } from "@/lib/i18n/provider";
+import { ClientErrorReporter } from "@/components/layout/client-error-reporter";
+import { reportClientError } from "@/lib/client-logger";
 
 /**
  * 函数 `Providers`
@@ -22,6 +28,11 @@ import { I18nProvider } from "@/lib/i18n/provider";
  */
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(() => new QueryClient({
+    mutationCache: new MutationCache({
+      onError: (error) => {
+        reportClientError("mutation_failed", error);
+      },
+    }),
     defaultOptions: {
       queries: {
         staleTime: 60_000,
@@ -44,6 +55,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       >
         <I18nProvider>
           <TooltipProvider>
+            <ClientErrorReporter />
             {children}
             <Toaster 
               position="top-right" 

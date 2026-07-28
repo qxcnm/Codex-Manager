@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::str::FromStr;
 use tauri::{Emitter, Manager};
 
 #[cfg(target_os = "linux")]
@@ -34,10 +35,21 @@ struct UsageRefreshCompletedPayload {
     completed_at: i64,
 }
 
+fn configured_desktop_log_level() -> (log::LevelFilter, Option<String>) {
+    let configured = std::env::var("CODEXMANAGER_LOG")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let level = configured
+        .as_deref()
+        .and_then(|value| log::LevelFilter::from_str(value).ok())
+        .unwrap_or(log::LevelFilter::Info);
+    (level, configured)
+}
+
 #[cfg(target_os = "linux")]
 fn is_known_ayatana_deprecation_notice(domain: Option<&str>, message: &str) -> bool {
-    domain == Some(AYATANA_APPINDICATOR_LOG_DOMAIN)
-        && message.trim() == AYATANA_DEPRECATED_MESSAGE
+    domain == Some(AYATANA_APPINDICATOR_LOG_DOMAIN) && message.trim() == AYATANA_DEPRECATED_MESSAGE
 }
 
 #[cfg(target_os = "linux")]
@@ -103,19 +115,38 @@ pub fn run() {
             }
         }))
         .setup(|app| {
-            load_env_from_exe_dir();
-            app_storage::apply_runtime_storage_env(app.handle());
+            let env_log_events = load_env_from_exe_dir();
+            let (log_level, configured_log_level) = configured_desktop_log_level();
+            let log_dir = app.path().app_data_dir()?.join("logs");
             app.handle().plugin(
                 tauri_plugin_log::Builder::default()
-                    .level(log::LevelFilter::Info)
+                    .level(log_level)
                     .targets([tauri_plugin_log::Target::new(
-                        tauri_plugin_log::TargetKind::LogDir { file_name: None },
+                        tauri_plugin_log::TargetKind::Folder {
+                            path: log_dir.clone(),
+                            file_name: None,
+                        },
                     )])
                     .build(),
             )?;
-            if let Ok(log_dir) = app.path().app_log_dir() {
-                log::info!("log dir: {}", log_dir.display());
+            codexmanager_service::install_panic_log_hook();
+            for (level, message) in env_log_events {
+                log::log!(level, "{message}");
             }
+            if let Some(configured) = configured_log_level {
+                if log::LevelFilter::from_str(&configured).is_err() {
+                    log::warn!(
+                        "event=desktop_log_filter_invalid configured={} fallback=info reason=desktop_requires_single_level",
+                        configured.replace(['\r', '\n'], " ")
+                    );
+                }
+            }
+            log::info!(
+                "event=desktop_logging_ready level={} log_dir={}",
+                log_level,
+                log_dir.display()
+            );
+            app_storage::apply_runtime_storage_env(app.handle());
             codexmanager_service::initialize_storage_if_needed().map_err(|err| {
                 std::io::Error::new(
                     std::io::ErrorKind::Other,
@@ -161,7 +192,11 @@ pub fn run() {
         })
         .invoke_handler(commands::invoke_handler!())
         .build(tauri::generate_context!())
-        .expect("error while building tauri application");
+        .unwrap_or_else(|err| {
+            log::error!("event=tauri_build_failed error={err}");
+            eprintln!("event=tauri_build_failed error={err}");
+            panic!("error while building tauri application: {err}");
+        });
 
     app.run(|app_handle, event| {
         handle_run_event(app_handle, &event);

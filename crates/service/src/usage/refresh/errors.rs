@@ -40,19 +40,27 @@ pub(super) fn record_usage_refresh_failure(storage: &Storage, account_id: &str, 
         return;
     }
 
-    let _ = storage.insert_event(&Event {
-        account_id: Some(account_id.to_string()),
-        event_type: "usage_refresh_failed".to_string(),
-        message: message.to_string(),
-        created_at,
-    });
-    if let Some(reason) = status_reason_for_refresh_failure(&error_class) {
-        let _ = storage.insert_event(&Event {
+    crate::storage_helpers::insert_event_best_effort(
+        storage,
+        &Event {
             account_id: Some(account_id.to_string()),
-            event_type: "account_status_update".to_string(),
-            message: format!("status=active reason={reason}"),
+            event_type: "usage_refresh_failed".to_string(),
+            message: message.to_string(),
             created_at,
-        });
+        },
+        "usage_refresh.failure",
+    );
+    if let Some(reason) = status_reason_for_refresh_failure(&error_class) {
+        crate::storage_helpers::insert_event_best_effort(
+            storage,
+            &Event {
+                account_id: Some(account_id.to_string()),
+                event_type: "account_status_update".to_string(),
+                message: format!("status=active reason={reason}"),
+                created_at,
+            },
+            "usage_refresh.status_update",
+        );
     }
 }
 

@@ -116,16 +116,20 @@ pub(crate) fn login_start(
                 updated_at: now_ts(),
             })
             .map_err(|err| err.to_string())?;
-        let _ = storage.insert_event(&Event {
-            account_id: None,
-            event_type: "login_start".to_string(),
-            message: serde_json::json!({
-                "login_id": &login_id,
-                "login_type": "chatgptDeviceCode"
-            })
-            .to_string(),
-            created_at: now_ts(),
-        });
+        crate::storage_helpers::insert_event_best_effort(
+            &storage,
+            &Event {
+                account_id: None,
+                event_type: "login_start".to_string(),
+                message: serde_json::json!({
+                    "login_id": &login_id,
+                    "login_type": "chatgptDeviceCode"
+                })
+                .to_string(),
+                created_at: now_ts(),
+            },
+            "auth_login.device_code_start",
+        );
         drop(storage);
         crate::auth_tokens::spawn_device_code_login_completion(
             issuer.clone(),
@@ -172,21 +176,27 @@ pub(crate) fn login_start(
     );
 
     // 写入事件日志
-    let _ = storage.insert_event(&Event {
-        account_id: None,
-        event_type: "login_start".to_string(),
-        message: serde_json::json!({
-            "login_id": &state,
-            "login_type": "chatgpt"
-        })
-        .to_string(),
-        created_at: now_ts(),
-    });
+    crate::storage_helpers::insert_event_best_effort(
+        &storage,
+        &Event {
+            account_id: None,
+            event_type: "login_start".to_string(),
+            message: serde_json::json!({
+                "login_id": &state,
+                "login_type": "chatgpt"
+            })
+            .to_string(),
+            created_at: now_ts(),
+        },
+        "auth_login.oauth_start",
+    );
     drop(storage);
 
     // 可选自动打开浏览器
     if open_browser {
-        let _ = webbrowser::open(&auth_url);
+        if let Err(err) = webbrowser::open(&auth_url) {
+            log::warn!("event=auth_browser_open_failed error={err}");
+        }
     }
 
     Ok(LoginStartResult::Chatgpt {

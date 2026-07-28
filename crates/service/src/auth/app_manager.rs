@@ -364,7 +364,9 @@ pub fn resolve_app_user_session(token: &str) -> Result<Option<AppSessionUserResu
     else {
         return Ok(None);
     };
-    let _ = storage.touch_app_user_session(&session.session_id, now);
+    if let Err(err) = storage.touch_app_user_session(&session.session_id, now) {
+        log::warn!("event=app_session_touch_failed error={err}");
+    }
     Ok(Some(AppSessionUserResult {
         session_id: session.session_id,
         expires_at: session.expires_at,

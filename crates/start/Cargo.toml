@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 ctrlc = "3"
+log = "0.4"
 webbrowser = "0.8"
 codexmanager-service = { path = "../service" }
 

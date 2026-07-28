@@ -407,6 +407,7 @@ version = "0.5.1"
 dependencies = [
  "codexmanager-service",
  "ctrlc",
+ "log",
  "webbrowser",
  "windows-sys 0.61.2",
  "winres",

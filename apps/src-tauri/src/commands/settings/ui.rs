@@ -81,8 +81,11 @@ pub(crate) fn sync_auto_start_runtime_state_from_settings(
 #[tauri::command]
 pub fn app_close_to_tray_on_close_get(app: tauri::AppHandle) -> bool {
     apply_runtime_storage_env(&app);
-    if let Ok(mut settings) = codexmanager_service::app_settings_get() {
-        sync_window_runtime_state_from_settings(&mut settings);
+    match codexmanager_service::app_settings_get() {
+        Ok(mut settings) => sync_window_runtime_state_from_settings(&mut settings),
+        Err(err) => {
+            log::warn!("event=close_to_tray_setting_get_failed error={err}");
+        }
     }
     codexmanager_service::current_close_to_tray_on_close_setting() && tray_available()
 }
@@ -105,8 +108,11 @@ pub fn app_close_to_tray_on_close_set(app: tauri::AppHandle, enabled: bool) -> b
     let payload = serde_json::json!({
         "closeToTrayOnClose": enabled
     });
-    if let Ok(mut settings) = codexmanager_service::app_settings_set(Some(&payload)) {
-        sync_window_runtime_state_from_settings(&mut settings);
+    match codexmanager_service::app_settings_set(Some(&payload)) {
+        Ok(mut settings) => sync_window_runtime_state_from_settings(&mut settings),
+        Err(err) => {
+            log::warn!("event=close_to_tray_setting_set_failed error={err}");
+        }
     }
     codexmanager_service::current_close_to_tray_on_close_setting() && tray_available()
 }

@@ -86,9 +86,19 @@ pub(crate) fn set_account_status_with_context(
     reason: &str,
     context: Option<&AccountStatusContext>,
 ) {
-    let (account_exists, changed) = storage
-        .update_account_status_if_changed_with_existence(account_id, status)
-        .unwrap_or((false, false));
+    let (account_exists, changed) =
+        match storage.update_account_status_if_changed_with_existence(account_id, status) {
+            Ok(result) => result,
+            Err(err) => {
+                log::warn!(
+                    "event=account_status_update_failed status={} reason={} error={}",
+                    status,
+                    reason,
+                    err
+                );
+                return;
+            }
+        };
     if changed {
         crate::gateway::invalidate_candidate_cache();
     }
@@ -103,12 +113,16 @@ pub(crate) fn set_account_status_with_context(
         latest_reason.as_deref() != Some(reason)
     };
     if should_insert_event {
-        let _ = storage.insert_event(&Event {
-            account_id: Some(account_id.to_string()),
-            event_type: "account_status_update".to_string(),
-            message: format!("status={status} reason={reason}"),
-            created_at: now_ts(),
-        });
+        crate::storage_helpers::insert_event_best_effort(
+            storage,
+            &Event {
+                account_id: Some(account_id.to_string()),
+                event_type: "account_status_update".to_string(),
+                message: format!("status={status} reason={reason}"),
+                created_at: now_ts(),
+            },
+            "account.status_update",
+        );
     }
 }
 

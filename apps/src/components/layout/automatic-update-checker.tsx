@@ -22,6 +22,7 @@ import type {
   UpdatePrepareResult,
 } from "@/lib/api/app-updates";
 import { getAppErrorMessage } from "@/lib/api/transport";
+import { reportClientError, reportClientWarning } from "@/lib/client-logger";
 
 export const AUTO_UPDATE_CHECK_INTERVAL_MS = 7 * 60 * 60 * 1_000;
 export const AUTO_UPDATE_INITIAL_DELAY_MS = 5_000;
@@ -103,7 +104,9 @@ export function AutomaticUpdateChecker() {
         recordAutomaticCheckCompleted(Date.now());
         return;
       }
-      await appClient.showMainWindow().catch(() => undefined);
+      await appClient.showMainWindow().catch((error: unknown) => {
+        reportClientWarning("update_show_main_window_failed", error);
+      });
       if (!activeRef.current) return;
 
       recordAutomaticCheckCompleted(Date.now());
@@ -112,8 +115,9 @@ export function AutomaticUpdateChecker() {
         current?.latestVersion === summary.latestVersion ? current : null,
       );
       setDialogOpen(true);
-    } catch {
+    } catch (error: unknown) {
       // Automatic checks are deliberately silent. The next scheduled check can retry.
+      reportClientWarning("automatic_update_check_failed", error);
     }
   }, []);
 
@@ -177,6 +181,7 @@ export function AutomaticUpdateChecker() {
           : `${t("更新包已下载完成，确认后开始替换到")} ${summary.latestVersion || t("新版本")}`,
       );
     } catch (error: unknown) {
+      reportClientError("update_prepare_failed", error);
       toast.error(`${t("下载更新失败")}: ${getAppErrorMessage(error)}`);
     } finally {
       setIsPreparing(false);
@@ -198,6 +203,7 @@ export function AutomaticUpdateChecker() {
             : t("已开始替换更新流程")),
       );
     } catch (error: unknown) {
+      reportClientError("update_apply_failed", error);
       toast.error(`${t("替换更新")}${t("失败")}: ${getAppErrorMessage(error)}`);
     } finally {
       setIsApplying(false);
@@ -210,6 +216,7 @@ export function AutomaticUpdateChecker() {
       await appClient.openInBrowser(buildReleaseUrl(updateCheck));
       setDialogOpen(false);
     } catch (error: unknown) {
+      reportClientWarning("update_release_page_open_failed", error);
       toast.error(`${t("打开发布页失败")}: ${getAppErrorMessage(error)}`);
     }
   };

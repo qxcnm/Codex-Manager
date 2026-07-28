@@ -957,7 +957,10 @@ fn lock_active_device_login_tasks(
 ) -> std::sync::MutexGuard<'static, HashMap<String, Arc<AtomicBool>>> {
     active_device_login_tasks()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(|poisoned| {
+            log::warn!("event=lock_poisoned lock=active_device_login_tasks action=recover");
+            poisoned.into_inner()
+        })
 }
 
 fn remove_active_device_login_task(login_id: &str, cancel: &Arc<AtomicBool>) {
@@ -1086,18 +1089,26 @@ pub(crate) fn spawn_device_code_login_completion(
                 match err {
                     DeviceLoginError::Cancelled => {}
                     DeviceLoginError::Expired => {
-                        let _ = storage.finish_login_session(
+                        if let Err(persist_err) = storage.finish_login_session(
                             &worker_login_id,
                             "expired",
                             Some(err.message()),
-                        );
+                        ) {
+                            log::warn!(
+                                "event=device_login_session_finish_failed status=expired error={persist_err}"
+                            );
+                        }
                     }
                     DeviceLoginError::Failed(_) => {
-                        let _ = storage.finish_login_session(
+                        if let Err(persist_err) = storage.finish_login_session(
                             &worker_login_id,
                             "failed",
                             Some(err.message()),
-                        );
+                        ) {
+                            log::warn!(
+                                "event=device_login_session_finish_failed status=failed error={persist_err}"
+                            );
+                        }
                     }
                 }
             }
@@ -1111,8 +1122,15 @@ pub(crate) fn spawn_device_code_login_completion(
             remove_active_device_login_task(&login_id, &cancel);
             let message = format!("failed to start device login worker: {err}");
             if let Some(storage) = open_storage() {
-                let _ = storage.finish_login_session(&login_id, "failed", Some(&message));
+                if let Err(persist_err) =
+                    storage.finish_login_session(&login_id, "failed", Some(&message))
+                {
+                    log::warn!(
+                        "event=device_login_session_finish_failed status=spawn_failed error={persist_err}"
+                    );
+                }
             }
+            log::error!("event=device_login_worker_spawn_failed error={err}");
             Err(message)
         }
     }

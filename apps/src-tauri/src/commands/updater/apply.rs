@@ -39,15 +39,31 @@ fn append_apply_log(log_path: &Path, message: &str) {
     let line = format!("[{timestamp}] {message}\n");
 
     if let Some(parent) = log_path.parent() {
-        let _ = fs::create_dir_all(parent);
+        if let Err(err) = fs::create_dir_all(parent) {
+            log::warn!(
+                "event=update_log_directory_create_failed phase=apply path={} error={err}",
+                parent.display()
+            );
+            return;
+        }
     }
-    if let Ok(mut file) = fs::OpenOptions::new()
+    match fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(log_path)
     {
-        let _ = file.write_all(line.as_bytes());
-        let _ = file.flush();
+        Ok(mut file) => {
+            if let Err(err) = file.write_all(line.as_bytes()).and_then(|()| file.flush()) {
+                log::warn!(
+                    "event=update_log_write_failed phase=apply path={} error={err}",
+                    log_path.display()
+                );
+            }
+        }
+        Err(err) => log::warn!(
+            "event=update_log_open_failed phase=apply path={} error={err}",
+            log_path.display()
+        ),
     }
 }
 
@@ -317,10 +333,17 @@ log "应用已重新拉起"
 /// # 返回
 /// 无
 fn schedule_app_exit(app: tauri::AppHandle) {
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(280));
+    let app_for_worker = app.clone();
+    if let Err(err) = std::thread::Builder::new()
+        .name("update-app-exit".to_string())
+        .spawn(move || {
+            std::thread::sleep(Duration::from_millis(280));
+            app_for_worker.exit(0);
+        })
+    {
+        log::error!("event=update_exit_worker_spawn_failed error={err}");
         app.exit(0);
-    });
+    }
 }
 
 /// 函数 `resolve_current_macos_app_bundle`

@@ -96,9 +96,10 @@ fn project_store_version() -> u32 {
 }
 
 fn lock_project_store() -> MutexGuard<'static, ()> {
-    PROJECT_STORE_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    PROJECT_STORE_LOCK.lock().unwrap_or_else(|poisoned| {
+        log::warn!("event=lock_poisoned lock=project_store action=recover");
+        poisoned.into_inner()
+    })
 }
 
 fn open_storage(db_path: &Path) -> Result<Storage, String> {
@@ -836,9 +837,15 @@ fn spawn_and_reap(mut command: Command, failure_message: &str) -> Result<(), Str
     let mut child = command
         .spawn()
         .map_err(|err| format!("{failure_message}：{err}"))?;
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
+    if let Err(err) = std::thread::Builder::new()
+        .name("project-command-reaper".to_string())
+        .spawn(move || match child.wait() {
+            Ok(status) => log::debug!("event=project_command_exited status={status}"),
+            Err(err) => log::warn!("event=project_command_wait_failed error={err}"),
+        })
+    {
+        log::warn!("event=project_command_reaper_spawn_failed error={err}");
+    }
     Ok(())
 }
 
@@ -1150,9 +1157,15 @@ fn launch_codex_terminal(
         }
         match command.spawn() {
             Ok(mut child) => {
-                std::thread::spawn(move || {
-                    let _ = child.wait();
-                });
+                if let Err(err) = std::thread::Builder::new()
+                    .name("terminal-command-reaper".to_string())
+                    .spawn(move || match child.wait() {
+                        Ok(status) => log::debug!("event=terminal_command_exited status={status}"),
+                        Err(err) => log::warn!("event=terminal_command_wait_failed error={err}"),
+                    })
+                {
+                    log::warn!("event=terminal_command_reaper_spawn_failed error={err}");
+                }
                 return Ok(());
             }
             Err(err) => errors.push(format!("{}: {err}", terminal_executable.display())),

@@ -11,9 +11,7 @@ use tauri::{
 #[cfg(debug_assertions)]
 use tauri::Url;
 
-use super::state::{
-    APP_EXIT_REQUESTED, KEEP_ALIVE_FOR_LIGHTWEIGHT_CLOSE, KEEP_WINDOW_UI_MOUNTED,
-};
+use super::state::{APP_EXIT_REQUESTED, KEEP_ALIVE_FOR_LIGHTWEIGHT_CLOSE, KEEP_WINDOW_UI_MOUNTED};
 
 pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
 pub(crate) const TRAY_PREVIEW_WINDOW_LABEL: &str = "tray-preview";
@@ -42,15 +40,31 @@ struct MainWindowHandle {
 /// 无
 fn show_main_window(app: &tauri::AppHandle) -> bool {
     if APP_EXIT_REQUESTED.load(Ordering::Relaxed) {
-        log::info!("show main window skipped because app exit is already requested");
+        log::info!(
+            "window event: action=show window={} status=skipped reason=app_exit_requested",
+            MAIN_WINDOW_LABEL
+        );
         return false;
     }
-    log::info!("show main window requested");
+    log::info!(
+        "window event: action=show window={} status=requested",
+        MAIN_WINDOW_LABEL
+    );
     dismiss_tray_preview_window(app);
     KEEP_ALIVE_FOR_LIGHTWEIGHT_CLOSE.store(false, Ordering::Relaxed);
     let Some(main_window) = ensure_main_window(app) else {
+        log::error!(
+            "window event: action=show window={} status=failed reason=window_unavailable",
+            MAIN_WINDOW_LABEL
+        );
         return false;
     };
+    log::debug!(
+        "window event: action=ensure window={} status=ready created={} created_after_initial={}",
+        MAIN_WINDOW_LABEL,
+        main_window.created,
+        main_window.created_after_initial
+    );
     if should_navigate_created_main_window_to_app(
         main_window.created,
         main_window.created_after_initial,
@@ -62,86 +76,207 @@ fn show_main_window(app: &tauri::AppHandle) -> bool {
 
 fn reveal_main_window(window: &tauri::WebviewWindow) -> bool {
     if let Err(err) = window.unminimize() {
-        log::debug!("unminimize main window before show skipped: {}", err);
+        log::debug!(
+            "window event: action=unminimize window={} phase=before_show status=skipped error={}",
+            window.label(),
+            err
+        );
     }
     if let Err(err) = window.show() {
-        log::warn!("show main window failed: {}", err);
+        log::error!(
+            "window event: action=show window={} status=failed error={}",
+            window.label(),
+            err
+        );
         return false;
     }
     if let Err(err) = window.unminimize() {
-        log::warn!("unminimize main window after show failed: {}", err);
+        log::warn!(
+            "window event: action=unminimize window={} phase=after_show status=failed error={}",
+            window.label(),
+            err
+        );
     }
     if let Err(err) = window.set_focus() {
-        log::warn!("focus main window failed: {}", err);
+        log::warn!(
+            "window event: action=focus window={} status=failed error={}",
+            window.label(),
+            err
+        );
     }
-    log::info!("show main window completed");
+    log::info!(
+        "window event: action=show window={} status=completed",
+        window.label()
+    );
     true
 }
 
 pub(crate) fn request_show_main_window(app: &tauri::AppHandle) -> Result<(), String> {
     if APP_EXIT_REQUESTED.load(Ordering::Relaxed) {
+        log::info!(
+            "window event: action=request_show window={} status=rejected reason=app_exit_requested",
+            MAIN_WINDOW_LABEL
+        );
         return Err("app is exiting; show main window request skipped".to_string());
     }
     if SHOW_MAIN_WINDOW_PENDING.swap(true, Ordering::AcqRel) {
-        log::debug!("show main window request coalesced because one is already pending");
+        log::debug!(
+            "window event: action=request_show window={} status=coalesced reason=request_pending",
+            MAIN_WINDOW_LABEL
+        );
         return Ok(());
     }
+    log::debug!(
+        "window event: action=request_show window={} status=queued",
+        MAIN_WINDOW_LABEL
+    );
 
     let app = app.clone();
-    std::thread::spawn(move || {
-        if APP_EXIT_REQUESTED.load(Ordering::Relaxed) {
-            SHOW_MAIN_WINDOW_PENDING.store(false, Ordering::Release);
-            return;
-        }
-        let app_for_show = app.clone();
-        if let Err(err) = app.run_on_main_thread(move || {
+    if let Err(err) = std::thread::Builder::new()
+        .name("show-main-window".to_string())
+        .spawn(move || {
             if APP_EXIT_REQUESTED.load(Ordering::Relaxed) {
-                log::info!("show main window skipped on main thread because app is exiting");
+                log::info!(
+                    "window event: action=request_show window={} status=cancelled reason=app_exit_requested",
+                    MAIN_WINDOW_LABEL
+                );
                 SHOW_MAIN_WINDOW_PENDING.store(false, Ordering::Release);
                 return;
             }
-            let shown = show_main_window(&app_for_show);
-            if !shown {
-                log::warn!("show main window request completed without showing a window");
+            let app_for_show = app.clone();
+            if let Err(err) = app.run_on_main_thread(move || {
+                if APP_EXIT_REQUESTED.load(Ordering::Relaxed) {
+                    log::info!(
+                        "window event: action=show window={} status=skipped reason=app_exit_requested",
+                        MAIN_WINDOW_LABEL
+                    );
+                    SHOW_MAIN_WINDOW_PENDING.store(false, Ordering::Release);
+                    return;
+                }
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    show_main_window(&app_for_show)
+                })) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        log::warn!(
+                            "window event: action=request_show window={} status=completed_without_show",
+                            MAIN_WINDOW_LABEL
+                        );
+                    }
+                    Err(_payload) => {
+                        log::error!(
+                            "window event: action=show window={} status=panicked recovery=pending_state_reset",
+                            MAIN_WINDOW_LABEL
+                        );
+                    }
+                }
+                SHOW_MAIN_WINDOW_PENDING.store(false, Ordering::Release);
+            }) {
+                log::error!(
+                    "window event: action=schedule_show window={} status=failed error={}",
+                    MAIN_WINDOW_LABEL,
+                    err
+                );
+                KEEP_ALIVE_FOR_LIGHTWEIGHT_CLOSE.store(false, Ordering::Relaxed);
+                SHOW_MAIN_WINDOW_PENDING.store(false, Ordering::Release);
             }
-            SHOW_MAIN_WINDOW_PENDING.store(false, Ordering::Release);
-        }) {
-            log::warn!("schedule show main window on main thread failed: {}", err);
-            KEEP_ALIVE_FOR_LIGHTWEIGHT_CLOSE.store(false, Ordering::Relaxed);
-            SHOW_MAIN_WINDOW_PENDING.store(false, Ordering::Release);
-        }
-    });
+        })
+    {
+        log::error!(
+            "window event: action=spawn_show_worker window={} status=failed error={}",
+            MAIN_WINDOW_LABEL,
+            err
+        );
+        SHOW_MAIN_WINDOW_PENDING.store(false, Ordering::Release);
+        return Err(format!("spawn show main window worker failed: {err}"));
+    }
     Ok(())
 }
 
 pub(crate) fn navigate_main_window_to_startup_app(app: &tauri::AppHandle) -> Result<(), String> {
+    log::info!(
+        "window event: action=navigate window={} destination=app status=requested",
+        MAIN_WINDOW_LABEL
+    );
     let app_handle = app.clone();
     let app_for_callback = app_handle.clone();
     let (sender, receiver) = std::sync::mpsc::channel();
     if let Err(err) = app_handle.run_on_main_thread(move || {
         let Some(window) = app_for_callback.get_webview_window(MAIN_WINDOW_LABEL) else {
-            let _ = sender.send(Err("main window is missing".to_string()));
+            log::warn!(
+                "window event: action=navigate window={} destination=app status=failed reason=window_missing",
+                MAIN_WINDOW_LABEL
+            );
+            if sender
+                .send(Err("main window is missing".to_string()))
+                .is_err()
+            {
+                log::warn!(
+                    "window event: action=report_navigation window={} status=failed reason=receiver_dropped",
+                    MAIN_WINDOW_LABEL
+                );
+            }
             return;
         };
         let result = navigate_window_to_app_url(&window).map_err(|err| err.to_string());
-        let _ = sender.send(result);
+        match &result {
+            Ok(()) => log::info!(
+                "window event: action=navigate window={} destination=app status=completed",
+                MAIN_WINDOW_LABEL
+            ),
+            Err(err) => log::error!(
+                "window event: action=navigate window={} destination=app status=failed error={}",
+                MAIN_WINDOW_LABEL,
+                err
+            ),
+        }
+        if sender.send(result).is_err() {
+            log::warn!(
+                "window event: action=report_navigation window={} status=failed reason=receiver_dropped",
+                MAIN_WINDOW_LABEL
+            );
+        }
     }) {
+        log::error!(
+            "window event: action=schedule_navigation window={} status=failed error={}",
+            MAIN_WINDOW_LABEL,
+            err
+        );
         return Err(format!("schedule startup app navigation failed: {err}"));
     }
     receiver
         .recv_timeout(std::time::Duration::from_secs(2))
-        .map_err(|err| format!("startup app navigation callback timed out: {err}"))?
+        .map_err(|err| {
+            log::error!(
+                "window event: action=await_navigation window={} status=failed error={}",
+                MAIN_WINDOW_LABEL,
+                err
+            );
+            format!("startup app navigation callback timed out: {err}")
+        })?
 }
 
 pub(crate) fn dismiss_tray_preview_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window(TRAY_PREVIEW_WINDOW_LABEL) {
-        let result = if KEEP_WINDOW_UI_MOUNTED.load(Ordering::Relaxed) {
-            window.hide()
+        let keep_mounted = KEEP_WINDOW_UI_MOUNTED.load(Ordering::Relaxed);
+        let (action, result) = if keep_mounted {
+            ("hide", window.hide())
         } else {
-            window.close()
+            ("close", window.close())
         };
         if let Err(err) = result {
-            log::warn!("dismiss tray preview window failed: {}", err);
+            log::warn!(
+                "window event: action={} window={} status=failed error={}",
+                action,
+                TRAY_PREVIEW_WINDOW_LABEL,
+                err
+            );
+        } else {
+            log::debug!(
+                "window event: action={} window={} status=completed",
+                action,
+                TRAY_PREVIEW_WINDOW_LABEL
+            );
         }
     }
 }
@@ -149,22 +284,55 @@ pub(crate) fn dismiss_tray_preview_window(app: &tauri::AppHandle) {
 pub(crate) fn release_tray_preview_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window(TRAY_PREVIEW_WINDOW_LABEL) {
         if let Err(err) = window.close() {
-            log::warn!("release tray preview window failed: {}", err);
+            log::warn!(
+                "window event: action=release window={} status=failed error={}",
+                TRAY_PREVIEW_WINDOW_LABEL,
+                err
+            );
+        } else {
+            log::debug!(
+                "window event: action=release window={} status=completed",
+                TRAY_PREVIEW_WINDOW_LABEL
+            );
         }
     }
 }
 
 pub(crate) fn sync_window_ui_mount_state(app: &tauri::AppHandle) {
+    let keep_mounted = KEEP_WINDOW_UI_MOUNTED.load(Ordering::Relaxed);
+    log::info!(
+        "window event: action=sync_mount_state window={} keep_mounted={} status=requested",
+        TRAY_PREVIEW_WINDOW_LABEL,
+        keep_mounted
+    );
     let app = app.clone();
     let app_for_callback = app.clone();
     if let Err(err) = app.run_on_main_thread(move || {
-        if KEEP_WINDOW_UI_MOUNTED.load(Ordering::Relaxed) {
-            let _ = ensure_tray_preview_window(&app_for_callback);
+        if keep_mounted {
+            if ensure_tray_preview_window(&app_for_callback).is_some() {
+                log::info!(
+                    "window event: action=sync_mount_state window={} keep_mounted=true status=completed",
+                    TRAY_PREVIEW_WINDOW_LABEL
+                );
+            } else {
+                log::error!(
+                    "window event: action=sync_mount_state window={} keep_mounted=true status=failed reason=window_unavailable",
+                    TRAY_PREVIEW_WINDOW_LABEL
+                );
+            }
         } else {
             release_tray_preview_window(&app_for_callback);
+            log::info!(
+                "window event: action=sync_mount_state window={} keep_mounted=false status=completed",
+                TRAY_PREVIEW_WINDOW_LABEL
+            );
         }
     }) {
-        log::warn!("schedule window UI mount state sync failed: {}", err);
+        log::error!(
+            "window event: action=sync_mount_state window={} status=failed error={}",
+            TRAY_PREVIEW_WINDOW_LABEL,
+            err
+        );
     }
 }
 
@@ -173,20 +341,58 @@ pub(crate) fn toggle_tray_preview_window(
     click_position: PhysicalPosition<f64>,
     tray_rect: Rect,
 ) {
+    log::debug!(
+        "window event: action=toggle window={} status=requested click_x={} click_y={}",
+        TRAY_PREVIEW_WINDOW_LABEL,
+        click_position.x,
+        click_position.y
+    );
     let Some(window) = ensure_tray_preview_window(app) else {
+        log::error!(
+            "window event: action=toggle window={} status=failed reason=window_unavailable",
+            TRAY_PREVIEW_WINDOW_LABEL
+        );
         return;
     };
-    if window.is_visible().unwrap_or(false) {
-        dismiss_tray_preview_window(app);
-        return;
+    match window.is_visible() {
+        Ok(true) => {
+            log::debug!(
+                "window event: action=toggle window={} decision=dismiss",
+                TRAY_PREVIEW_WINDOW_LABEL
+            );
+            dismiss_tray_preview_window(app);
+            return;
+        }
+        Ok(false) => {}
+        Err(err) => {
+            log::warn!(
+                "window event: action=query_visibility window={} status=failed error={}",
+                TRAY_PREVIEW_WINDOW_LABEL,
+                err
+            );
+        }
     }
 
     position_tray_preview_window(app, &window, click_position, tray_rect);
     if let Err(err) = window.show() {
-        log::warn!("show tray preview window failed: {}", err);
+        log::error!(
+            "window event: action=show window={} status=failed error={}",
+            TRAY_PREVIEW_WINDOW_LABEL,
+            err
+        );
         return;
     }
-    let _ = window.set_focus();
+    if let Err(err) = window.set_focus() {
+        log::warn!(
+            "window event: action=focus window={} status=failed error={}",
+            TRAY_PREVIEW_WINDOW_LABEL,
+            err
+        );
+    }
+    log::info!(
+        "window event: action=show window={} status=completed",
+        TRAY_PREVIEW_WINDOW_LABEL
+    );
 }
 
 /// 函数 `ensure_main_window`
@@ -203,6 +409,10 @@ pub(crate) fn toggle_tray_preview_window(
 fn ensure_main_window(app: &tauri::AppHandle) -> Option<MainWindowHandle> {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         MAIN_WINDOW_CREATED_ONCE.store(true, Ordering::Release);
+        log::debug!(
+            "window event: action=ensure window={} status=reused",
+            MAIN_WINDOW_LABEL
+        );
         return Some(MainWindowHandle {
             window,
             created: false,
@@ -210,14 +420,25 @@ fn ensure_main_window(app: &tauri::AppHandle) -> Option<MainWindowHandle> {
         });
     }
 
-    let mut config = app
+    log::info!(
+        "window event: action=create window={} status=requested",
+        MAIN_WINDOW_LABEL
+    );
+    let Some(mut config) = app
         .config()
         .app
         .windows
         .iter()
         .find(|window| window.label == MAIN_WINDOW_LABEL)
         .cloned()
-        .or_else(|| app.config().app.windows.first().cloned())?;
+        .or_else(|| app.config().app.windows.first().cloned())
+    else {
+        log::error!(
+            "window event: action=create window={} status=failed reason=window_config_missing",
+            MAIN_WINDOW_LABEL
+        );
+        return None;
+    };
     config.label = MAIN_WINDOW_LABEL.to_string();
     #[cfg(debug_assertions)]
     {
@@ -227,7 +448,11 @@ fn ensure_main_window(app: &tauri::AppHandle) -> Option<MainWindowHandle> {
     let builder = match WebviewWindowBuilder::from_config(app, &config) {
         Ok(builder) => builder,
         Err(err) => {
-            log::warn!("create main window builder failed: {}", err);
+            log::error!(
+                "window event: action=create_builder window={} status=failed error={}",
+                MAIN_WINDOW_LABEL,
+                err
+            );
             return None;
         }
     };
@@ -240,12 +465,20 @@ fn ensure_main_window(app: &tauri::AppHandle) -> Option<MainWindowHandle> {
             if window.label() != MAIN_WINDOW_LABEL {
                 return;
             }
-            log::info!("main window page loaded");
+            log::info!(
+                "window event: action=page_load window={} status=completed",
+                MAIN_WINDOW_LABEL
+            );
         })
         .build()
     {
         Ok(window) => {
             let created_after_initial = MAIN_WINDOW_CREATED_ONCE.swap(true, Ordering::AcqRel);
+            log::info!(
+                "window event: action=create window={} status=completed created_after_initial={}",
+                MAIN_WINDOW_LABEL,
+                created_after_initial
+            );
             Some(MainWindowHandle {
                 window,
                 created: true,
@@ -255,13 +488,22 @@ fn ensure_main_window(app: &tauri::AppHandle) -> Option<MainWindowHandle> {
         Err(err) => {
             if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
                 MAIN_WINDOW_CREATED_ONCE.store(true, Ordering::Release);
+                log::warn!(
+                    "window event: action=create window={} status=recovered reason=concurrent_creation error={}",
+                    MAIN_WINDOW_LABEL,
+                    err
+                );
                 return Some(MainWindowHandle {
                     window,
                     created: false,
                     created_after_initial: false,
                 });
             }
-            log::warn!("create main window failed: {}", err);
+            log::error!(
+                "window event: action=create window={} status=failed error={}",
+                MAIN_WINDOW_LABEL,
+                err
+            );
             None
         }
     }
@@ -273,8 +515,9 @@ fn should_navigate_created_main_window_to_app(created: bool, created_after_initi
 
 fn navigate_created_main_window_to_app(window: &tauri::WebviewWindow) {
     if let Err(err) = navigate_window_to_app_url(window) {
-        log::warn!(
-            "navigate recreated main window from startup page to app failed: {}",
+        log::error!(
+            "window event: action=navigate window={} destination=app status=failed error={}",
+            window.label(),
             err
         );
     }
@@ -289,21 +532,36 @@ fn startup_loading_url() -> WebviewUrl {
 fn navigate_window_to_app_url(window: &tauri::WebviewWindow) -> tauri::Result<()> {
     let url = Url::parse("http://127.0.0.1:3005/")
         .expect("hard-coded dev server startup url must be valid");
-    log::info!("navigating main window to dev app root");
+    log::info!(
+        "window event: action=navigate window={} destination=dev_app_root status=requested",
+        window.label()
+    );
     window.navigate(url)
 }
 
 #[cfg(not(debug_assertions))]
-fn navigate_window_to_app_url(_window: &tauri::WebviewWindow) -> tauri::Result<()> {
+fn navigate_window_to_app_url(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    log::debug!(
+        "window event: action=navigate window={} destination=app status=not_required",
+        window.label()
+    );
     Ok(())
 }
 
 fn ensure_tray_preview_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
     if let Some(window) = app.get_webview_window(TRAY_PREVIEW_WINDOW_LABEL) {
+        log::debug!(
+            "window event: action=ensure window={} status=reused",
+            TRAY_PREVIEW_WINDOW_LABEL
+        );
         apply_tray_preview_window_size(&window);
         return Some(window);
     }
 
+    log::info!(
+        "window event: action=create window={} status=requested",
+        TRAY_PREVIEW_WINDOW_LABEL
+    );
     let builder = WebviewWindowBuilder::new(
         app,
         TRAY_PREVIEW_WINDOW_LABEL,
@@ -338,14 +596,27 @@ fn ensure_tray_preview_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWi
     match builder.build() {
         Ok(window) => {
             apply_tray_preview_window_size(&window);
+            log::info!(
+                "window event: action=create window={} status=completed",
+                TRAY_PREVIEW_WINDOW_LABEL
+            );
             Some(window)
         }
         Err(err) => {
             if let Some(window) = app.get_webview_window(TRAY_PREVIEW_WINDOW_LABEL) {
                 apply_tray_preview_window_size(&window);
+                log::warn!(
+                    "window event: action=create window={} status=recovered reason=concurrent_creation error={}",
+                    TRAY_PREVIEW_WINDOW_LABEL,
+                    err
+                );
                 return Some(window);
             }
-            log::warn!("create tray preview window failed: {}", err);
+            log::error!(
+                "window event: action=create window={} status=failed error={}",
+                TRAY_PREVIEW_WINDOW_LABEL,
+                err
+            );
             None
         }
     }
@@ -358,19 +629,39 @@ fn tray_preview_window_size() -> Size {
 fn apply_tray_preview_window_size(window: &tauri::WebviewWindow) {
     let size = tray_preview_window_size();
     if let Err(err) = window.set_min_size(None::<Size>) {
-        log::warn!("clear tray preview min size failed: {}", err);
+        log::warn!(
+            "window event: action=clear_min_size window={} status=failed error={}",
+            window.label(),
+            err
+        );
     }
     if let Err(err) = window.set_max_size(None::<Size>) {
-        log::warn!("clear tray preview max size failed: {}", err);
+        log::warn!(
+            "window event: action=clear_max_size window={} status=failed error={}",
+            window.label(),
+            err
+        );
     }
     if let Err(err) = window.set_size(size) {
-        log::warn!("set tray preview size failed: {}", err);
+        log::warn!(
+            "window event: action=set_size window={} status=failed error={}",
+            window.label(),
+            err
+        );
     }
     if let Err(err) = window.set_min_size(Some(size)) {
-        log::warn!("set tray preview min size failed: {}", err);
+        log::warn!(
+            "window event: action=set_min_size window={} status=failed error={}",
+            window.label(),
+            err
+        );
     }
     if let Err(err) = window.set_max_size(Some(size)) {
-        log::warn!("set tray preview max size failed: {}", err);
+        log::warn!(
+            "window event: action=set_max_size window={} status=failed error={}",
+            window.label(),
+            err
+        );
     }
 }
 
@@ -380,18 +671,62 @@ fn position_tray_preview_window(
     click_position: PhysicalPosition<f64>,
     tray_rect: Rect,
 ) {
-    let monitor = app
-        .monitor_from_point(click_position.x, click_position.y)
-        .ok()
-        .flatten()
-        .or_else(|| app.primary_monitor().ok().flatten());
+    let monitor = match app.monitor_from_point(click_position.x, click_position.y) {
+        Ok(Some(monitor)) => Some(monitor),
+        Ok(None) => match app.primary_monitor() {
+            Ok(monitor) => monitor,
+            Err(err) => {
+                log::warn!(
+                    "window event: action=resolve_monitor window={} source=primary status=failed error={}",
+                    TRAY_PREVIEW_WINDOW_LABEL,
+                    err
+                );
+                None
+            }
+        },
+        Err(err) => {
+            log::warn!(
+                "window event: action=resolve_monitor window={} source=click_position status=failed error={}",
+                TRAY_PREVIEW_WINDOW_LABEL,
+                err
+            );
+            match app.primary_monitor() {
+                Ok(monitor) => monitor,
+                Err(fallback_err) => {
+                    log::warn!(
+                        "window event: action=resolve_monitor window={} source=primary status=failed error={}",
+                        TRAY_PREVIEW_WINDOW_LABEL,
+                        fallback_err
+                    );
+                    None
+                }
+            }
+        }
+    };
     let Some(monitor) = monitor else {
+        log::warn!(
+            "window event: action=position window={} status=skipped reason=monitor_unavailable",
+            TRAY_PREVIEW_WINDOW_LABEL
+        );
         return;
     };
     let position =
         resolve_tray_preview_position(tray_rect, *monitor.work_area(), monitor.scale_factor());
     if let Err(err) = window.set_position(position) {
-        log::warn!("position tray preview window failed: {}", err);
+        log::warn!(
+            "window event: action=position window={} status=failed x={} y={} error={}",
+            window.label(),
+            position.x,
+            position.y,
+            err
+        );
+    } else {
+        log::debug!(
+            "window event: action=position window={} status=completed x={} y={}",
+            window.label(),
+            position.x,
+            position.y
+        );
     }
 }
 

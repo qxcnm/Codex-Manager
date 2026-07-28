@@ -277,8 +277,14 @@ fn ensure_login_server_with_addr(addr: &str) -> Result<LoginServerInfo, String> 
         return Ok(info.clone());
     }
     let (servers, info) = bind_login_server(addr)?;
-    for server in servers {
-        let _ = std::thread::spawn(move || run_login_server(server));
+    for (index, server) in servers.into_iter().enumerate() {
+        std::thread::Builder::new()
+            .name(format!("oauth-callback-{index}"))
+            .spawn(move || run_login_server(server))
+            .map_err(|err| {
+                log::error!("event=oauth_callback_worker_spawn_failed index={index} error={err}");
+                format!("start login callback worker failed: {err}")
+            })?;
     }
     *guard = Some(info.clone());
     Ok(info)

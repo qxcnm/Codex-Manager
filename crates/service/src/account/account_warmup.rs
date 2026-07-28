@@ -262,7 +262,7 @@ fn persist_warmup_observability(
 ) {
     let created_at = now_ts();
     let trace_id = format!("warmup-{}-{created_at}", account.id);
-    let _ = storage.insert_request_log(&RequestLog {
+    if let Err(err) = storage.insert_request_log(&RequestLog {
         trace_id: Some(trace_id),
         account_id: Some(account.id.clone()),
         initial_account_id: Some(account.id.clone()),
@@ -283,18 +283,26 @@ fn persist_warmup_observability(
         error: error.map(str::to_string),
         created_at,
         ..RequestLog::default()
-    });
-    let _ = storage.insert_event(&Event {
-        account_id: Some(account.id.clone()),
-        event_type: "account_warmup".to_string(),
-        message: match error {
-            Some(err) => {
-                format!("{event_message}; model={model_slug}; status={status_code}; error={err}")
-            }
-            None => format!("{event_message}; model={model_slug}; status={status_code}"),
+    }) {
+        log::warn!("event=account_warmup_request_log_insert_failed error={err}");
+    }
+    crate::storage_helpers::insert_event_best_effort(
+        storage,
+        &Event {
+            account_id: Some(account.id.clone()),
+            event_type: "account_warmup".to_string(),
+            message: match error {
+                Some(err) => {
+                    format!(
+                        "{event_message}; model={model_slug}; status={status_code}; error={err}"
+                    )
+                }
+                None => format!("{event_message}; model={model_slug}; status={status_code}"),
+            },
+            created_at,
         },
-        created_at,
-    });
+        "account.warmup",
+    );
 }
 
 fn extract_status_code_from_message(message: &str) -> i64 {

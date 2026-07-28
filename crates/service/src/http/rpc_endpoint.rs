@@ -110,27 +110,6 @@ fn is_loopback_origin(origin: &str) -> bool {
     matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
 }
 
-/// 函数 `panic_payload_message`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - payload: 参数 payload
-///
-/// # 返回
-/// 返回函数执行结果
-fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        return (*message).to_string();
-    }
-    if let Some(message) = payload.downcast_ref::<String>() {
-        return message.clone();
-    }
-    "unknown panic payload".to_string()
-}
-
 /// 函数 `jsonrpc_message_success`
 ///
 /// 作者: gaohongshun
@@ -168,7 +147,12 @@ where
     F: FnOnce(JsonRpcRequest) -> JsonRpcMessage,
 {
     let request_id = req.id.clone();
-    let request_method = req.method.clone();
+    let request_method = req
+        .method
+        .replace(['\r', '\n', '\t'], " ")
+        .chars()
+        .take(128)
+        .collect::<String>();
     match std::panic::catch_unwind(AssertUnwindSafe(|| handler(req))) {
         Ok(message) => {
             let success = jsonrpc_message_success(&message);
@@ -178,20 +162,14 @@ where
             };
             (json, success)
         }
-        Err(payload) => {
-            let panic_message = panic_payload_message(payload.as_ref());
-            log::error!(
-                "rpc handler panicked: method={} id={} panic={}",
-                request_method,
-                request_id,
-                panic_message
-            );
+        Err(_payload) => {
+            log::error!("event=rpc_handler_panicked method={request_method}");
             let message = JsonRpcMessage::Error(JsonRpcError {
                 id: request_id,
                 error: JsonRpcErrorObject {
                     code: -32603,
                     data: None,
-                    message: format!("internal_error: {panic_message}"),
+                    message: "internal_error: rpc handler panicked".to_string(),
                 },
             });
             let json = serde_json::to_string(&message).unwrap_or_else(|_| "{}".to_string());
