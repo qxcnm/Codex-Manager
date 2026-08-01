@@ -185,11 +185,11 @@ pub(crate) fn toggle_tray_preview_window(
         return;
     }
 
-    // A request can remain pending forever when WebView2 suspends a hidden
-    // retained window. Reloading before the next show resets that stale state.
+    // Only a newly created preview needs an explicit reload. Retained previews
+    // keep their mounted UI and state when they are hidden and shown again.
     if should_reload_tray_preview_window(tray_preview.created) {
         if let Err(err) = window.reload() {
-            log::warn!("reload retained tray preview window failed: {}", err);
+            log::warn!("reload newly created tray preview window failed: {}", err);
         }
     }
     position_tray_preview_window(app, &window, click_position, tray_rect);
@@ -379,7 +379,7 @@ fn ensure_tray_preview_window(app: &tauri::AppHandle) -> Option<TrayPreviewWindo
 }
 
 fn should_reload_tray_preview_window(created: bool) -> bool {
-    !created
+    created
 }
 
 fn tray_preview_window_size() -> Size {
@@ -525,8 +525,8 @@ mod tests {
     }
 
     #[test]
-    fn retained_tray_preview_is_reloaded_before_it_is_shown_again() {
-        assert!(should_reload_tray_preview_window(false));
-        assert!(!should_reload_tray_preview_window(true));
+    fn tray_preview_is_reloaded_only_when_newly_created() {
+        assert!(!should_reload_tray_preview_window(false));
+        assert!(should_reload_tray_preview_window(true));
     }
 }
