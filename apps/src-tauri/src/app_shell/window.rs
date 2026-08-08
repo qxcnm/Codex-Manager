@@ -58,6 +58,19 @@ fn show_main_window(app: &tauri::AppHandle) -> bool {
     reveal_main_window(&main_window.window)
 }
 
+pub(crate) fn initialize_main_window(app: &tauri::AppHandle) -> bool {
+    if APP_EXIT_REQUESTED.load(Ordering::Relaxed) {
+        log::info!("initialize main window skipped because app exit is already requested");
+        return false;
+    }
+
+    let initialized = ensure_main_window(app).is_some();
+    if initialized {
+        log::info!("main window initialized in the background");
+    }
+    initialized
+}
+
 fn reveal_main_window(window: &tauri::WebviewWindow) -> bool {
     if let Err(err) = window.unminimize() {
         log::debug!("unminimize main window before show skipped: {}", err);
