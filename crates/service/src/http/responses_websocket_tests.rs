@@ -3,12 +3,15 @@ use super::{
     inspect_ws_terminal_event, is_previous_response_not_found_terminal, merge_client_metadata,
     missing_ws_tool_call_from_terminal, parse_websocket_target, parse_ws_usage,
     prepare_missing_ws_tool_call_retry, proxy_basic_auth_header,
-    rebase_ws_request_for_account_change, rewrite_client_frame, should_buffer_ws_upstream_preamble,
-    strip_previous_response_id_from_ws_text, ws_request_has_tool_call_output,
-    CompletedWsToolCallCache, WsRequestContext, WsToolCallKind, WsUpstreamAuthorization,
+    rebase_ws_request_for_account_change, rewrite_client_frame, rewrite_client_frame_with_storage,
+    should_buffer_ws_upstream_preamble, strip_previous_response_id_from_ws_text,
+    ws_request_has_tool_call_output, CompletedWsToolCallCache, WsRequestContext, WsToolCallKind,
+    WsUpstreamAuthorization,
 };
 use axum::http::{HeaderMap, HeaderValue};
-use codexmanager_core::storage::{now_ts, Account, ApiKey, Storage, Token};
+use codexmanager_core::storage::{
+    now_ts, Account, ApiKey, ManagedModelV2Upsert, ModelFastPolicyV2, Storage, Token,
+};
 use serde_json::{json, Value};
 
 fn sample_api_key() -> ApiKey {
@@ -32,6 +35,139 @@ fn sample_api_key() -> ApiKey {
         aggregate_api_url: None,
         account_plan_filter: None,
     }
+}
+
+#[test]
+fn websocket_frame_applies_model_fast_policy() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    let context = WsRequestContext {
+        api_key: sample_api_key(),
+        incoming_headers: sample_incoming_headers(None, None),
+        prompt_cache_key: None,
+        effective_upstream_base: "https://chatgpt.com/backend-api/codex".to_string(),
+        prefer_raw_errors: false,
+    };
+
+    for (policy, client_tier, expected_upstream_tier, expected_source) in [
+        (
+            ModelFastPolicyV2::Passthrough,
+            Some("fast"),
+            Some("priority"),
+            Some("client_request"),
+        ),
+        (
+            ModelFastPolicyV2::Filter,
+            Some("fast"),
+            None,
+            Some("model_policy"),
+        ),
+        (
+            ModelFastPolicyV2::Force,
+            None,
+            Some("priority"),
+            Some("model_policy"),
+        ),
+        (ModelFastPolicyV2::Block, None, None, Some("unset")),
+    ] {
+        let mut model = storage
+            .get_managed_model_v2("gpt-5.4")
+            .expect("read managed model")
+            .expect("managed model");
+        model.fast_policy = policy;
+        storage
+            .upsert_managed_model_v2(&ManagedModelV2Upsert {
+                previous_slug: Some("gpt-5.4".to_string()),
+                model,
+            })
+            .expect("update model fast policy");
+
+        let mut frame = json!({
+            "type": "response.create",
+            "model": "gpt-5.4",
+            "input": "hello"
+        });
+        if let Some(client_tier) = client_tier {
+            frame["service_tier"] = Value::String(client_tier.to_string());
+        }
+        let prepared =
+            rewrite_client_frame_with_storage(frame.to_string().as_str(), &context, &storage)
+                .expect("rewrite websocket frame");
+        let value: Value = serde_json::from_str(&prepared.text).expect("parse rewritten frame");
+
+        assert_eq!(
+            value.get("service_tier").and_then(Value::as_str),
+            expected_upstream_tier,
+            "unexpected upstream service tier for {policy:?}"
+        );
+        assert_eq!(
+            prepared.service_tier_source.as_deref(),
+            expected_source,
+            "unexpected service tier source for {policy:?}"
+        );
+    }
+
+    let mut model = storage
+        .get_managed_model_v2("gpt-5.4")
+        .expect("read managed model")
+        .expect("managed model");
+    model.fast_policy = ModelFastPolicyV2::Block;
+    storage
+        .upsert_managed_model_v2(&ManagedModelV2Upsert {
+            previous_slug: Some("gpt-5.4".to_string()),
+            model,
+        })
+        .expect("update block policy");
+    let err = match rewrite_client_frame_with_storage(
+        r#"{"type":"response.create","model":"gpt-5.4","input":"hello","service_tier":"fast"}"#,
+        &context,
+        &storage,
+    ) {
+        Ok(_) => panic!("block policy must reject explicit fast request"),
+        Err(err) => err,
+    };
+    assert_eq!(err.status, 400);
+    assert_eq!(
+        err.code,
+        crate::models_v2::fast_policy::FAST_REQUEST_BLOCKED
+    );
+
+    let mut api_key_fast_context = context.clone();
+    api_key_fast_context.api_key.service_tier = Some("fast".to_string());
+    let prepared = rewrite_client_frame_with_storage(
+        r#"{"type":"response.create","model":"gpt-5.4","input":"hello"}"#,
+        &api_key_fast_context,
+        &storage,
+    )
+    .expect("block policy must allow API key injected fast tier");
+    let value: Value = serde_json::from_str(&prepared.text).expect("parse API key fast frame");
+    assert_eq!(
+        value.get("service_tier").and_then(Value::as_str),
+        Some("priority")
+    );
+
+    let mut overridden_model = storage
+        .get_managed_model_v2("gpt-5.4-mini")
+        .expect("read overridden managed model")
+        .expect("overridden managed model");
+    overridden_model.fast_policy = ModelFastPolicyV2::Filter;
+    storage
+        .upsert_managed_model_v2(&ManagedModelV2Upsert {
+            previous_slug: Some("gpt-5.4-mini".to_string()),
+            model: overridden_model,
+        })
+        .expect("update overridden model fast policy");
+    let mut model_override_context = context;
+    model_override_context.api_key.model_slug = Some("gpt-5.4-mini".to_string());
+    let prepared = rewrite_client_frame_with_storage(
+        r#"{"type":"response.create","model":"gpt-5.4","input":"hello","service_tier":"fast"}"#,
+        &model_override_context,
+        &storage,
+    )
+    .expect("apply final model fast policy");
+    let value: Value = serde_json::from_str(&prepared.text).expect("parse overridden model frame");
+    assert_eq!(prepared.model.as_deref(), Some("gpt-5.4-mini"));
+    assert!(value.get("service_tier").is_none());
 }
 
 fn sample_account() -> Account {
