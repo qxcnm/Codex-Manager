@@ -77,5 +77,5 @@ fn fallback_non_success_helper_matches_existing_retryable_status_set() {
     assert!(should_failover_after_fallback_non_success(408));
     assert!(should_failover_after_fallback_non_success(409));
     assert!(should_failover_after_fallback_non_success(429));
-    assert!(!should_failover_after_fallback_non_success(500));
+    assert!(should_failover_after_fallback_non_success(500));
 }

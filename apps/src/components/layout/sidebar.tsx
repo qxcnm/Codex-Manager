@@ -8,10 +8,14 @@ import {
   Key,
   Boxes,
   Database,
+  Shield,
   Puzzle,
   FileText,
+  FileKey2,
+  Upload,
   Route,
   Settings,
+  Globe2,
   UserRound,
   ChevronLeft,
   ChevronRight,
@@ -24,7 +28,7 @@ import { useAppStore } from "@/lib/store/useAppStore";
 import { useI18n } from "@/lib/i18n/provider";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
 import {
-  getAllowedTopLevelRouteSections,
+  getAllowedNavigationRouteSections,
   getTopLevelRouteLabel,
   type TopLevelRoutePath,
 } from "@/lib/app-shell/top-level-routes";
@@ -33,17 +37,22 @@ import {
   memo,
   useCallback,
   useMemo,
-  useState,
   type MouseEvent,
 } from "react";
 
 const NAV_ITEM_BY_PATH = new Map<TopLevelRoutePath, { icon: LucideIcon }>([
   ["/", { icon: LayoutDashboard }],
+  ["/import", { icon: Upload }],
+  ["/adapters", { icon: Boxes }],
   ["/accounts", { icon: Users }],
+  ["/kiro", { icon: Shield }],
+  ["/grok", { icon: FileKey2 }],
   ["/account-manager", { icon: UserCog }],
   ["/aggregate-api", { icon: Database }],
   ["/apikeys", { icon: Key }],
   ["/platform-mode", { icon: Cable }],
+  ["/proxies", { icon: Globe2 }],
+  ["/routing", { icon: Route }],
   ["/models", { icon: Boxes }],
   ["/model-groups", { icon: Route }],
   ["/plugins", { icon: Puzzle }],
@@ -69,14 +78,12 @@ const NavItem = memo(({
   isSidebarOpen,
   onNavigate,
   itemName,
-  index,
 }: {
   item: SidebarNavItem,
   isActive: boolean,
   isSidebarOpen: boolean,
   onNavigate: (href: string, event: MouseEvent<HTMLAnchorElement>) => void,
   itemName: string,
-  index: number,
 }) => (
   <a
     href={buildStaticRouteUrl(item.href)}
@@ -85,28 +92,24 @@ const NavItem = memo(({
     aria-label={itemName}
     title={itemName}
     className={cn(
-      "group/nav relative flex min-h-10 items-center gap-3 overflow-hidden rounded-md border border-transparent px-3 py-2 text-[13px] transition-colors duration-200 hover:border-primary/20 hover:bg-primary/5 hover:text-primary",
+      "group/nav relative flex min-h-10 items-center gap-3 overflow-hidden rounded-md px-3 py-2 text-[13px] transition-colors duration-200 hover:bg-primary/[0.06] hover:text-foreground",
       !isSidebarOpen && "justify-center px-0",
       isActive
-        ? "border-primary/25 bg-primary/10 text-primary shadow-[inset_3px_0_0_rgb(var(--primary-rgb)/0.8),0_10px_22px_-20px_rgb(var(--primary-rgb)/0.34)]"
+        ? "bg-primary/10 text-primary shadow-[inset_2px_0_0_rgb(var(--primary-rgb)/0.8)]"
         : "text-muted-foreground",
     )}
   >
     {isActive ? (
       <>
         <span className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary" />
-        <span className="absolute inset-x-3 top-0 h-px bg-gradient-to-r from-primary/35 via-primary/10 to-transparent" />
       </>
     ) : null}
-    <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background/35">
+    <div className="flex h-6 w-6 shrink-0 items-center justify-center">
       <item.icon className="h-3.5 w-3.5" />
     </div>
     {isSidebarOpen && (
       <>
         <span className="truncate font-medium">{itemName}</span>
-        <span className="ml-auto font-mono text-[10px] text-muted-foreground/60">
-          {String(index + 1).padStart(2, "0")}
-        </span>
       </>
     )}
   </a>
@@ -129,7 +132,6 @@ NavItem.displayName = "NavItem";
  */
 export function Sidebar() {
   const { t } = useI18n();
-  const [logoFailed, setLogoFailed] = useState(false);
   const isSidebarOpen = useAppStore((state) => state.isSidebarOpen);
   const currentShellPath = useAppStore((state) => state.currentShellPath);
   const toggleSidebar = useAppStore((state) => state.toggleSidebar);
@@ -138,7 +140,7 @@ export function Sidebar() {
   const { isDesktopRuntime } = useRuntimeCapabilities();
   const { data: session, isLoading: isSessionLoading } = useAppSession();
   const role = resolveSessionRole(session, isSessionLoading, isDesktopRuntime);
-  const brandTitle = isSidebarOpen ? t("重新打开 Codex 引导") : "CodexManager";
+  const brandTitle = "OpenRuntime · Build Once. Connect Every AI.";
   const toggleTitle = isSidebarOpen ? t("收起侧边栏") : t("展开侧边栏");
   const routeAccess = useMemo(
     () => ({ role, mode: session?.mode ?? null }),
@@ -170,7 +172,7 @@ export function Sidebar() {
   );
 
   const renderedItems = useMemo(() => {
-    const sections: RenderedSidebarSection[] = getAllowedTopLevelRouteSections(
+    const sections: RenderedSidebarSection[] = getAllowedNavigationRouteSections(
       routeAccess,
     ).map((section) => ({
       id: section.id,
@@ -181,12 +183,6 @@ export function Sidebar() {
         return [{ href: route.path, icon: item.icon }];
       }),
     }));
-    const itemIndexes = new Map(
-      sections
-        .flatMap((section) => section.items)
-        .map((item, index) => [item.href, index] as const),
-    );
-
     return sections.map((section, sectionIndex) => (
       <div
         key={section.id}
@@ -211,7 +207,6 @@ export function Sidebar() {
                 isActive={item.href === currentShellPath}
                 isSidebarOpen={isSidebarOpen}
                 onNavigate={handleNavigate}
-                index={itemIndexes.get(item.href) ?? 0}
               />
             );
           })}
@@ -240,10 +235,14 @@ export function Sidebar() {
       />
       <div
         className={cn(
-          "flex h-[76px] items-center border-b border-border/70 shrink-0",
+          "relative flex h-[84px] shrink-0 items-center overflow-hidden border-b border-border/70",
           isSidebarOpen ? "px-3" : "px-2"
         )}
       >
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -left-10 top-0 h-20 w-32 rounded-full bg-primary/10 blur-2xl"
+        />
         <Button
           type="button"
           variant="ghost"
@@ -251,27 +250,29 @@ export function Sidebar() {
           title={brandTitle}
           aria-label={brandTitle}
           className={cn(
-            "flex h-auto w-full items-center gap-2 overflow-hidden rounded-md border border-border/70 bg-background/65 px-2 py-2 transition-colors duration-200 hover:border-primary/25 hover:bg-accent/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+            "group/brand relative flex h-auto w-full items-center gap-2.5 overflow-hidden rounded-lg border border-primary/20 bg-background/60 px-2 py-2 text-left shadow-[0_10px_30px_-24px_rgb(var(--primary-rgb)/0.8)] transition-colors duration-300 hover:border-primary/40 hover:bg-accent/35 hover:shadow-[0_12px_34px_-20px_rgb(var(--primary-rgb)/0.7)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
             isSidebarOpen ? "text-left" : "justify-center"
           )}
         >
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md border border-primary/20 bg-white text-primary shadow-sm">
-            {logoFailed ? (
-              <span className="text-sm font-bold">CM</span>
-            ) : (
-              <img
-                src="/logo.png"
-                alt="CodexManager"
-                className="h-full w-full object-cover"
-                onError={() => setLogoFailed(true)}
-              />
-            )}
+          <span
+            aria-hidden="true"
+            className="absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-amber-300/70 to-transparent opacity-70"
+          />
+          <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-amber-300/40 bg-[linear-gradient(145deg,rgb(var(--primary-rgb)/0.18),rgb(var(--background-rgb,255_255_255)/0.08))] text-primary shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08),0_0_22px_-10px_rgb(251_191_36/0.8)]">
+            <span className="absolute inset-1 rounded-md border border-primary/15" />
+            <Cable className="h-4 w-4 transition-transform duration-300 group-hover/brand:rotate-6" />
+            <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-amber-300 shadow-[0_0_8px_rgb(252_211_77/0.9)]" />
           </div>
           {isSidebarOpen && (
-            <div className="flex flex-col overflow-hidden animate-in fade-in slide-in-from-left-1 duration-200 motion-reduce:animate-none">
-              <span className="truncate text-sm font-semibold text-foreground">CodexManager</span>
-              <span className="truncate font-mono text-[10px] uppercase text-primary/70">
-                Admin Console
+            <div className="flex min-w-0 flex-col overflow-hidden animate-in fade-in slide-in-from-left-1 duration-200 motion-reduce:animate-none">
+              <span className="truncate text-[15px] font-semibold tracking-[-0.02em] text-foreground">
+                Open<span className="text-primary">Runtime</span>
+              </span>
+              <span className="truncate text-[9px] font-semibold uppercase tracking-[0.13em] text-primary/75">
+                One Runtime. Every AI.
+              </span>
+              <span className="mt-0.5 truncate font-mono text-[8px] tracking-[0.02em] text-muted-foreground/65">
+                Build Once. Connect Every AI.
               </span>
             </div>
           )}

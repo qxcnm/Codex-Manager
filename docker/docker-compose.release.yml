@@ -7,10 +7,11 @@ services:
       TZ: ${TZ:-Asia/Shanghai}
       CODEXMANAGER_DB_PATH: /data/codexmanager.db
       CODEXMANAGER_RPC_TOKEN_FILE: /data/codexmanager.rpc-token
+      CODEXMANAGER_VAULT_MASTER_KEY: ${CODEXMANAGER_VAULT_MASTER_KEY:?set a persistent vault key}
     volumes:
       - codexmanager-data:/data
     ports:
-      - "48760:48760"
+      - "${CODEXMANAGER_GATEWAY_PORT:-48764}:48760"
 
   codexmanager-web:
     image: ghcr.io/qxcnm/codexmanager-web:${CODEXMANAGER_RELEASE_TAG:?set CODEXMANAGER_RELEASE_TAG}
@@ -25,11 +26,12 @@ services:
       TZ: ${TZ:-Asia/Shanghai}
       CODEXMANAGER_DB_PATH: /data/codexmanager.db
       CODEXMANAGER_RPC_TOKEN_FILE: /data/codexmanager.rpc-token
+      CODEXMANAGER_VAULT_MASTER_KEY: ${CODEXMANAGER_VAULT_MASTER_KEY:?set a persistent vault key}
       CODEXMANAGER_WEB_NO_OPEN: "1"
     volumes:
       - codexmanager-data:/data
     ports:
-      - "48761:48761"
+      - "${CODEXMANAGER_WEB_PORT:-48765}:48761"
 
 volumes:
   codexmanager-data:

@@ -77,6 +77,23 @@ impl Connection {
         })
     }
 
+    pub fn open_read_only<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let rt = sqlite_runtime()?;
+        let options = SqliteConnectOptions::new().filename(&path).read_only(true);
+        let pool = block_on_runtime(&rt, async {
+            SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(options)
+                .await
+        })?;
+        Ok(Self {
+            rt,
+            pool,
+            path: Some(path),
+        })
+    }
+
     pub fn open_in_memory() -> Result<Self> {
         let rt = sqlite_runtime()?;
         let pool = block_on_runtime(&rt, async {
@@ -419,6 +436,18 @@ impl<T: FromValue> FromValue for Option<T> {
     }
 }
 
+impl FromValue for Vec<u8> {
+    fn from_value(value: &types::Value) -> Result<Self> {
+        match value {
+            types::Value::Blob(value) => Ok(value.clone()),
+            types::Value::Null => Err(Error::FromSql("cannot read NULL as BLOB".to_string())),
+            _ => Err(Error::FromSql(
+                "cannot read non-BLOB value as BLOB".to_string(),
+            )),
+        }
+    }
+}
+
 pub trait ToValue {
     fn to_value(self) -> types::Value;
 }
@@ -552,6 +581,18 @@ impl<T: ToValue + Clone> ToValue for &&Option<T> {
 impl ToValue for Vec<u8> {
     fn to_value(self) -> types::Value {
         types::Value::Blob(self)
+    }
+}
+
+impl ToValue for &Vec<u8> {
+    fn to_value(self) -> types::Value {
+        types::Value::Blob(self.clone())
+    }
+}
+
+impl ToValue for &&[u8] {
+    fn to_value(self) -> types::Value {
+        types::Value::Blob((*self).to_vec())
     }
 }
 

@@ -1,5 +1,5 @@
 use rusqlite::{Connection, Result};
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
@@ -10,18 +10,35 @@ mod account_metadata;
 mod account_subscriptions;
 mod accounts;
 mod accounts_sql;
+mod adapter_probe_states;
 mod aggregate_apis;
 mod aggregate_apis_sql;
+mod api_key_policies;
 mod api_key_quota_limits;
 mod api_keys;
+mod codex_agent_identities;
 mod conversation_bindings;
 mod events;
+mod grok_credentials;
 mod key_id_filters;
+mod kiro_credentials;
+pub use adapter_probe_states::AdapterCredentialProbeState;
+pub use codex_agent_identities::{CodexAgentIdentityRecord, CodexAgentIdentityUpsert};
+pub use grok_credentials::{GrokCredentialModelAvailability, GrokQuotaWindowRecord};
+pub use grok_credentials::{GrokCredentialRecord, GrokCredentialSecret, GrokCredentialUpsert};
+pub use kiro_credentials::{
+    KiroCredentialModelAvailability, KiroCredentialRecord, KiroCredentialSecret,
+    KiroCredentialUpsert, KiroVaultError,
+};
+pub use proxy_profiles::{
+    AccountProxyBindingRecord, ProxyProbeUpdate, ProxyProfileRecord, ProxyProfileUpsert,
+};
 mod model_groups;
 mod model_options;
 mod model_price_rules;
 mod model_sources;
 mod plugins;
+mod proxy_profiles;
 mod quota_pools;
 mod request_log_filters;
 mod request_log_query;
@@ -149,6 +166,8 @@ pub struct AccountListSummaryRow {
     pub group_name: Option<String>,
     pub sort: i64,
     pub status: String,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -833,6 +852,29 @@ pub struct ApiKey {
     pub last_used_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApiKeyPolicy {
+    pub key_id: String,
+    pub allowed_models: Vec<String>,
+    pub allowed_platforms: Vec<String>,
+    pub model_visibility: String,
+    pub expires_at: Option<i64>,
+    pub concurrency_limit: Option<i64>,
+}
+
+impl Default for ApiKeyPolicy {
+    fn default() -> Self {
+        Self {
+            key_id: String::new(),
+            allowed_models: Vec::new(),
+            allowed_platforms: Vec::new(),
+            model_visibility: "selectable".to_string(),
+            expires_at: None,
+            concurrency_limit: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ApiKeyStatus {
     pub id: String,
@@ -872,6 +914,11 @@ pub struct ApiKeyListSummary {
     pub static_headers_json: Option<String>,
     pub status: String,
     pub quota_limit_tokens: Option<i64>,
+    pub allowed_models: Vec<String>,
+    pub allowed_platforms: Vec<String>,
+    pub model_visibility: String,
+    pub expires_at: Option<i64>,
+    pub concurrency_limit: Option<i64>,
     pub created_at: i64,
     pub last_used_at: Option<i64>,
 }
@@ -1259,9 +1306,14 @@ pub struct ModelCatalogStorageSnapshot {
 pub struct Storage {
     conn: Connection,
     applied_migrations: RefCell<Option<HashSet<String>>>,
+    vault_master_key: OnceCell<[u8; 32]>,
 }
 
 impl Storage {
+    pub fn path(&self) -> Option<&Path> {
+        self.conn.path()
+    }
+
     fn configure_connection(conn: &Connection) -> Result<()> {
         // 中文注释：并发写入时给 SQLite 一点等待时间，避免瞬时 lock 导致请求直接失败。
         conn.busy_timeout(Duration::from_millis(3000))?;
@@ -1298,6 +1350,7 @@ impl Storage {
         Ok(Self {
             conn,
             applied_migrations: RefCell::new(None),
+            vault_master_key: OnceCell::new(),
         })
     }
 
@@ -1318,6 +1371,7 @@ impl Storage {
         Ok(Self {
             conn,
             applied_migrations: RefCell::new(None),
+            vault_master_key: OnceCell::new(),
         })
     }
 
@@ -1496,6 +1550,12 @@ impl Storage {
             "036_accounts_metadata_and_drop_group_name",
             include_str!("../../migrations/036_accounts_metadata_and_drop_group_name.sql"),
         )?;
+        // Current service code reads `accounts.group_name`. Migration 036
+        // historically removed it and migration 072 restored it, leaving a
+        // long schema window where a concurrent opener could observe an
+        // incompatible accounts table. Restore the current invariant
+        // immediately; migration 072 remains the recorded compatibility gate.
+        self.ensure_account_group_name_filter_index()?;
         self.apply_sql_or_compat_migration(
             "037_aggregate_api_routing",
             include_str!("../../migrations/037_aggregate_api_routing.sql"),
@@ -1846,12 +1906,72 @@ impl Storage {
             "111_model_source_platform_slug_lookup_indexes",
             include_str!("../../migrations/111_model_source_platform_slug_lookup_indexes.sql"),
         )?;
+        self.apply_sql_migration(
+            "112_kiro_credentials",
+            include_str!("../../migrations/112_kiro_credentials.sql"),
+        )?;
+        self.apply_sql_migration(
+            "113_kiro_credential_health",
+            include_str!("../../migrations/113_kiro_credential_health.sql"),
+        )?;
+        self.apply_sql_migration(
+            "114_kiro_proxy_username",
+            include_str!("../../migrations/114_kiro_proxy_username.sql"),
+        )?;
+        self.apply_sql_migration(
+            "115_api_key_policies",
+            include_str!("../../migrations/115_api_key_policies.sql"),
+        )?;
+        self.apply_compat_migration("116_encrypt_api_key_secrets", |s| {
+            s.encrypt_plaintext_api_key_secrets()
+        })?;
+        self.apply_compat_migration("117_encrypt_codex_tokens", |s| {
+            s.encrypt_plaintext_codex_tokens()
+        })?;
+        self.apply_sql_migration(
+            "118_kiro_credential_models",
+            include_str!("../../migrations/118_kiro_credential_models.sql"),
+        )?;
+        self.apply_sql_migration(
+            "119_grok_credentials",
+            include_str!("../../migrations/119_grok_credentials.sql"),
+        )?;
+        self.apply_sql_migration(
+            "120_grok_quota_models",
+            include_str!("../../migrations/120_grok_quota_models.sql"),
+        )?;
+        self.apply_sql_or_compat_migration(
+            "121_api_key_model_visibility",
+            include_str!("../../migrations/121_api_key_model_visibility.sql"),
+            |storage| {
+                if storage.has_column("api_key_policies", "model_visibility")? {
+                    Ok(())
+                } else {
+                    storage.conn.execute_batch(include_str!(
+                        "../../migrations/121_api_key_model_visibility.sql"
+                    ))
+                }
+            },
+        )?;
+        self.apply_sql_migration(
+            "122_codex_agent_identities",
+            include_str!("../../migrations/122_codex_agent_identities.sql"),
+        )?;
+        self.apply_sql_migration(
+            "123_adapter_credential_probe_states",
+            include_str!("../../migrations/123_adapter_credential_probe_states.sql"),
+        )?;
+        self.apply_sql_migration(
+            "124_proxy_profiles",
+            include_str!("../../migrations/124_proxy_profiles.sql"),
+        )?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_aggregate_apis_table()?;
         self.ensure_aggregate_api_supplier_model_tables()?;
         self.ensure_aggregate_api_secrets_table()?;
         self.ensure_aggregate_api_balance_secrets_table()?;
         self.ensure_api_key_quota_limits_table()?;
+        self.ensure_api_key_policies_table()?;
         self.ensure_model_price_rules_table()?;
         self.ensure_request_token_stats_table()?;
         self.ensure_request_log_request_type_and_service_tier_columns()?;

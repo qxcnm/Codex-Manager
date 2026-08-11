@@ -107,3 +107,18 @@ test("getAppErrorMessage 会把旧的网络抖动文案统一收敛为连接中�
     "连接中断（可能是网络波动或客户端主动取消）"
   );
 });
+
+test("getAppErrorMessage 将 Grok 探测错误转换成可操作提示", () => {
+  assert.equal(
+    transportErrors.getAppErrorMessage("grok_credential_unauthorized"),
+    "Grok 登录凭据已失效，请重新导入",
+  );
+  assert.equal(
+    transportErrors.getAppErrorMessage("grok_antibot_challenge"),
+    "Grok 风控验证未通过，请检查固定代理出口后稍后重试",
+  );
+  assert.equal(
+    transportErrors.getAppErrorMessage("grok_quota_shape_unknown"),
+    "暂时无法确认该 Grok 账号的套餐等级，未展示未经验证的模型",
+  );
+});

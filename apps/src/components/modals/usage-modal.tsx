@@ -4,6 +4,7 @@ import {
   Calendar,
   Clock,
   Database,
+  Gift,
   KeyRound,
   ShieldAlert,
   type LucideIcon,
@@ -37,6 +38,7 @@ import {
 import {
   formatTsFromSeconds,
   getExtraUsageDisplayRows,
+  getResetEntitlementDisplayRows,
   getUsageDisplayBuckets,
   isPrimaryWindowOnlyUsage,
   isSecondaryWindowOnlyUsage,
@@ -171,6 +173,10 @@ export default function UsageModal({
   const secondaryWindowOnly = isSecondaryWindowOnlyUsage(account.usage);
   const usageBuckets = getUsageDisplayBuckets(account.usage);
   const extraUsageRows = getExtraUsageDisplayRows(account.usage);
+  const resetEntitlements =
+    account.resetEntitlements?.length > 0
+      ? account.resetEntitlements
+      : getResetEntitlementDisplayRows(account.usage);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -295,6 +301,63 @@ export default function UsageModal({
               </div>
             </CardContent>
           </Card>
+
+          {resetEntitlements.length > 0 ? (
+            <Card size="sm">
+              <CardHeader>
+                <CardTitle>{t("重置权益")}</CardTitle>
+                <CardDescription>
+                  {t("这里只展示识别到的重置卡；实际调用仍按你设置的批次循环运行。")}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {resetEntitlements.map((item) => (
+                    <Card key={item.id} size="sm" className="border-amber-500/20 bg-amber-500/5">
+                      <CardContent className="grid gap-2">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <div className="rounded-lg bg-amber-500/10 p-1.5 text-amber-500">
+                              <Gift className="h-3.5 w-3.5" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="truncate font-medium">{t(item.label)}</div>
+                              <div className="text-[10px] text-muted-foreground">
+                                {item.manualActivationRequired
+                                  ? t("需要手动激活")
+                                  : t("可用权益")}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <div className="text-base font-semibold">
+                              {item.count == null ? "--" : item.count}
+                            </div>
+                            <div className="text-[10px] text-muted-foreground">{t("张")}</div>
+                          </div>
+                        </div>
+                        <div className="grid gap-1 text-[10px] text-muted-foreground">
+                          <div>
+                            {t("过期时间")}: {formatTsFromSeconds(item.expiresAt, t("未知"))}
+                          </div>
+                          {item.activatesAt ? (
+                            <div>
+                              {t("生效时间")}: {formatTsFromSeconds(item.activatesAt, t("未知"))}
+                            </div>
+                          ) : null}
+                          {item.appliesTo.length > 0 ? (
+                            <div className="break-all">
+                              {t("适用范围")}: {item.appliesTo.join(", ")}
+                            </div>
+                          ) : null}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
 
           <div className="text-center">
             <p className="text-[10px] italic text-muted-foreground">

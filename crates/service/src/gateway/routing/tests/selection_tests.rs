@@ -1,7 +1,7 @@
 use super::{
     clear_candidate_cache_for_tests, collect_gateway_candidates,
     collect_gateway_candidates_with_low_quota_mode, LowQuotaCandidateMode, CANDIDATE_CACHE_TTL_ENV,
-    LOW_QUOTA_THRESHOLD_ENV, QUOTA_GUARD_ALLOW_ALL_LOW_FALLBACK_ENV,
+    LOW_QUOTA_THRESHOLD_ENV, QUOTA_GUARD_ALLOW_ALL_LOW_FALLBACK_ENV, QUOTA_GUARD_ENABLED_ENV,
 };
 use crate::account_status::mark_account_unavailable_for_gateway_error;
 use codexmanager_core::storage::{now_ts, Account, Storage, Token, UsageSnapshotRecord};
@@ -603,12 +603,14 @@ fn low_quota_accounts_are_skipped_when_healthy_available() {
     let previous_ttl = std::env::var(CANDIDATE_CACHE_TTL_ENV).ok();
     let previous_db_path = std::env::var("CODEXMANAGER_DB_PATH").ok();
     let previous_threshold = std::env::var(LOW_QUOTA_THRESHOLD_ENV).ok();
+    let previous_enabled = std::env::var(QUOTA_GUARD_ENABLED_ENV).ok();
     std::env::set_var(CANDIDATE_CACHE_TTL_ENV, "0");
     std::env::set_var(
         "CODEXMANAGER_DB_PATH",
         isolated_test_db_path("selection-low-quota-test"),
     );
     std::env::set_var(LOW_QUOTA_THRESHOLD_ENV, "95");
+    std::env::set_var(QUOTA_GUARD_ENABLED_ENV, "1");
     super::reload_from_env();
     clear_candidate_cache_for_tests();
 
@@ -685,6 +687,11 @@ fn low_quota_accounts_are_skipped_when_healthy_available() {
     } else {
         std::env::remove_var(LOW_QUOTA_THRESHOLD_ENV);
     }
+    if let Some(value) = previous_enabled {
+        std::env::set_var(QUOTA_GUARD_ENABLED_ENV, value);
+    } else {
+        std::env::remove_var(QUOTA_GUARD_ENABLED_ENV);
+    }
     super::reload_from_env();
 }
 
@@ -694,12 +701,14 @@ fn append_low_quota_fallback_keeps_low_quota_candidates_at_tail() {
     let previous_ttl = std::env::var(CANDIDATE_CACHE_TTL_ENV).ok();
     let previous_db_path = std::env::var("CODEXMANAGER_DB_PATH").ok();
     let previous_threshold = std::env::var(LOW_QUOTA_THRESHOLD_ENV).ok();
+    let previous_enabled = std::env::var(QUOTA_GUARD_ENABLED_ENV).ok();
     std::env::set_var(CANDIDATE_CACHE_TTL_ENV, "0");
     std::env::set_var(
         "CODEXMANAGER_DB_PATH",
         isolated_test_db_path("selection-low-quota-append-fallback-test"),
     );
     std::env::set_var(LOW_QUOTA_THRESHOLD_ENV, "95");
+    std::env::set_var(QUOTA_GUARD_ENABLED_ENV, "1");
     super::reload_from_env();
     clear_candidate_cache_for_tests();
 
@@ -778,6 +787,11 @@ fn append_low_quota_fallback_keeps_low_quota_candidates_at_tail() {
     } else {
         std::env::remove_var(LOW_QUOTA_THRESHOLD_ENV);
     }
+    if let Some(value) = previous_enabled {
+        std::env::set_var(QUOTA_GUARD_ENABLED_ENV, value);
+    } else {
+        std::env::remove_var(QUOTA_GUARD_ENABLED_ENV);
+    }
     super::reload_from_env();
 }
 
@@ -788,12 +802,14 @@ fn all_low_quota_still_returns_candidates() {
     let previous_ttl = std::env::var(CANDIDATE_CACHE_TTL_ENV).ok();
     let previous_db_path = std::env::var("CODEXMANAGER_DB_PATH").ok();
     let previous_threshold = std::env::var(LOW_QUOTA_THRESHOLD_ENV).ok();
+    let previous_enabled = std::env::var(QUOTA_GUARD_ENABLED_ENV).ok();
     std::env::set_var(CANDIDATE_CACHE_TTL_ENV, "0");
     std::env::set_var(
         "CODEXMANAGER_DB_PATH",
         isolated_test_db_path("selection-all-low-quota-test"),
     );
     std::env::set_var(LOW_QUOTA_THRESHOLD_ENV, "95");
+    std::env::set_var(QUOTA_GUARD_ENABLED_ENV, "1");
     super::reload_from_env();
     clear_candidate_cache_for_tests();
 
@@ -864,6 +880,11 @@ fn all_low_quota_still_returns_candidates() {
     } else {
         std::env::remove_var(LOW_QUOTA_THRESHOLD_ENV);
     }
+    if let Some(value) = previous_enabled {
+        std::env::set_var(QUOTA_GUARD_ENABLED_ENV, value);
+    } else {
+        std::env::remove_var(QUOTA_GUARD_ENABLED_ENV);
+    }
     super::reload_from_env();
 }
 
@@ -873,6 +894,7 @@ fn all_low_quota_without_fallback_returns_no_candidates() {
     let previous_ttl = std::env::var(CANDIDATE_CACHE_TTL_ENV).ok();
     let previous_db_path = std::env::var("CODEXMANAGER_DB_PATH").ok();
     let previous_threshold = std::env::var(LOW_QUOTA_THRESHOLD_ENV).ok();
+    let previous_enabled = std::env::var(QUOTA_GUARD_ENABLED_ENV).ok();
     let previous_fallback = std::env::var(QUOTA_GUARD_ALLOW_ALL_LOW_FALLBACK_ENV).ok();
     std::env::set_var(CANDIDATE_CACHE_TTL_ENV, "0");
     std::env::set_var(
@@ -880,6 +902,7 @@ fn all_low_quota_without_fallback_returns_no_candidates() {
         isolated_test_db_path("selection-all-low-quota-no-fallback-test"),
     );
     std::env::set_var(LOW_QUOTA_THRESHOLD_ENV, "95");
+    std::env::set_var(QUOTA_GUARD_ENABLED_ENV, "1");
     std::env::set_var(QUOTA_GUARD_ALLOW_ALL_LOW_FALLBACK_ENV, "0");
     super::reload_from_env();
     clear_candidate_cache_for_tests();
@@ -946,6 +969,11 @@ fn all_low_quota_without_fallback_returns_no_candidates() {
         std::env::set_var(LOW_QUOTA_THRESHOLD_ENV, value);
     } else {
         std::env::remove_var(LOW_QUOTA_THRESHOLD_ENV);
+    }
+    if let Some(value) = previous_enabled {
+        std::env::set_var(QUOTA_GUARD_ENABLED_ENV, value);
+    } else {
+        std::env::remove_var(QUOTA_GUARD_ENABLED_ENV);
     }
     if let Some(value) = previous_fallback {
         std::env::set_var(QUOTA_GUARD_ALLOW_ALL_LOW_FALLBACK_ENV, value);

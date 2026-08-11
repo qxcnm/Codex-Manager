@@ -1,8 +1,9 @@
 use codexmanager_core::rpc::types::{JsonRpcRequest, JsonRpcResponse};
 
 use crate::{
-    account_cleanup, account_delete, account_delete_many, account_export, account_import,
-    account_list, account_update, account_warmup, auth_account, auth_login, auth_tokens,
+    account_agent_identity, account_cleanup, account_credential_repair, account_delete,
+    account_delete_many, account_export, account_import, account_list, account_update,
+    account_warmup, auth_account, auth_login, auth_tokens,
 };
 
 /// 函数 `try_handle`
@@ -19,6 +20,47 @@ use crate::{
 pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
     let result = match req.method.as_str() {
         "account/list" => super::value_or_error(account_list::read_accounts()),
+        "account/agentIdentity/list" => {
+            super::value_or_error(account_agent_identity::list_agent_identity_statuses())
+        }
+        "account/agentIdentity/generate" => {
+            let account_id = super::str_param(req, "accountId").unwrap_or("");
+            super::value_or_error(account_agent_identity::bootstrap_account_agent_identity(
+                account_id,
+            ))
+        }
+        "account/agentIdentity/generateMany" => {
+            let account_ids = req
+                .params
+                .as_ref()
+                .and_then(|params| params.get("accountIds"))
+                .and_then(|value| value.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str())
+                        .map(str::trim)
+                        .filter(|item| !item.is_empty())
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let queued = account_ids
+                .iter()
+                .filter(|account_id| {
+                    account_agent_identity::enqueue_agent_identity_bootstrap(account_id)
+                })
+                .count();
+            serde_json::json!({"ok": true, "queued": queued, "total": account_ids.len()})
+        }
+        "account/credentialRepair/report" => {
+            let account_id = super::str_param(req, "accountId").unwrap_or("");
+            let outcome = super::str_param(req, "outcome").unwrap_or("");
+            let detail = super::str_param(req, "detail");
+            super::value_or_error(account_credential_repair::report_credential_repair(
+                account_id, outcome, detail,
+            ))
+        }
         "account/delete" => {
             let account_id = super::str_param(req, "accountId").unwrap_or("");
             super::ok_or_error(account_delete::delete_account(account_id))

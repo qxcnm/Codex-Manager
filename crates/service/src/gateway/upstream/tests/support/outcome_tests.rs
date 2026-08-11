@@ -30,7 +30,32 @@ fn low_quota_usage_snapshot(account_id: &str) -> UsageSnapshotRecord {
     }
 }
 
-/// 函数 `official_status_404_with_more_candidates_keeps_upstream_response`
+#[test]
+fn successful_codex_response_records_executable_batch_evidence() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let decision = decide_upstream_outcome(
+        &storage,
+        "acc-success",
+        reqwest::StatusCode::OK,
+        None,
+        "https://chatgpt.com/backend-api/codex/responses",
+        false,
+        |_, _, _| {},
+    );
+
+    assert!(matches!(decision, UpstreamOutcomeDecision::RespondUpstream));
+    let state = storage
+        .list_adapter_credential_probe_states("codex", &["acc-success".to_string()])
+        .expect("read probe state");
+    assert_eq!(state[0].status, "available");
+    assert_eq!(
+        state[0].error_code.as_deref(),
+        Some("codex_responses_verified")
+    );
+}
+
+/// 函数 `official_status_404_with_more_candidates_triggers_failover`
 ///
 /// 作者: gaohongshun
 ///
@@ -42,7 +67,7 @@ fn low_quota_usage_snapshot(account_id: &str) -> UsageSnapshotRecord {
 /// # 返回
 /// 无
 #[test]
-fn official_status_404_with_more_candidates_keeps_upstream_response() {
+fn official_status_404_with_more_candidates_triggers_failover() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
     let decision = decide_upstream_outcome(
@@ -54,7 +79,37 @@ fn official_status_404_with_more_candidates_keeps_upstream_response() {
         true,
         |_, _, _| {},
     );
+    assert!(matches!(decision, UpstreamOutcomeDecision::Failover));
+    let state = storage
+        .list_adapter_credential_probe_states("codex", &["acc-404".to_string()])
+        .expect("read probe state");
+    assert!(
+        state.is_empty(),
+        "one request-level 404 must not evict the account"
+    );
+}
+
+#[test]
+fn official_status_404_on_last_candidate_is_not_quarantined_and_is_returned() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let decision = decide_upstream_outcome(
+        &storage,
+        "acc-last-404",
+        reqwest::StatusCode::NOT_FOUND,
+        None,
+        "https://chatgpt.com/backend-api/codex/responses",
+        false,
+        |_, _, _| {},
+    );
     assert!(matches!(decision, UpstreamOutcomeDecision::RespondUpstream));
+    let state = storage
+        .list_adapter_credential_probe_states("codex", &["acc-last-404".to_string()])
+        .expect("read probe state");
+    assert!(
+        state.is_empty(),
+        "one request-level 404 must not evict the account"
+    );
 }
 
 /// 函数 `custom_status_404_with_more_candidates_triggers_failover`
@@ -111,6 +166,48 @@ fn official_status_429_with_more_candidates_triggers_failover() {
     assert!(matches!(decision, UpstreamOutcomeDecision::Failover));
 }
 
+#[test]
+fn official_status_403_is_retryable_and_queues_recheck_without_permanent_ban() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let decision = decide_upstream_outcome(
+        &storage,
+        "acc-403",
+        reqwest::StatusCode::FORBIDDEN,
+        Some(&HeaderValue::from_static("application/json")),
+        "https://chatgpt.com/backend-api/codex/responses",
+        true,
+        |_, _, _| {},
+    );
+    assert!(matches!(decision, UpstreamOutcomeDecision::Failover));
+    let state = storage
+        .list_adapter_credential_probe_states("codex", &["acc-403".to_string()])
+        .expect("read probe state");
+    assert_eq!(state.len(), 1);
+    assert_eq!(state[0].status, "failed");
+    assert_eq!(
+        state[0].error_code.as_deref(),
+        Some("codex_forbidden_recheck")
+    );
+    assert!(state[0].retry_after.is_some_and(|until| until > now_ts()));
+}
+
+#[test]
+fn official_status_403_on_last_candidate_preserves_upstream_response() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let decision = decide_upstream_outcome(
+        &storage,
+        "acc-last-403",
+        reqwest::StatusCode::FORBIDDEN,
+        Some(&HeaderValue::from_static("application/json")),
+        "https://chatgpt.com/backend-api/codex/responses",
+        false,
+        |_, _, _| {},
+    );
+    assert!(matches!(decision, UpstreamOutcomeDecision::RespondUpstream));
+}
+
 /// 函数 `status_429_on_last_candidate_keeps_upstream_response`
 ///
 /// 作者: gaohongshun
@@ -138,7 +235,7 @@ fn status_429_on_last_candidate_keeps_upstream_response() {
     assert!(matches!(decision, UpstreamOutcomeDecision::RespondUpstream));
 }
 
-/// 函数 `official_status_401_with_more_candidates_keeps_upstream_response`
+/// 函数 `official_status_401_with_more_candidates_triggers_failover`
 ///
 /// 作者: gaohongshun
 ///
@@ -150,7 +247,7 @@ fn status_429_on_last_candidate_keeps_upstream_response() {
 /// # 返回
 /// 无
 #[test]
-fn official_status_401_with_more_candidates_keeps_upstream_response() {
+fn official_status_401_with_more_candidates_triggers_failover() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
     let decision = decide_upstream_outcome(
@@ -162,7 +259,13 @@ fn official_status_401_with_more_candidates_keeps_upstream_response() {
         true,
         |_, _, _| {},
     );
-    assert!(matches!(decision, UpstreamOutcomeDecision::RespondUpstream));
+    assert!(matches!(decision, UpstreamOutcomeDecision::Failover));
+    let state = storage
+        .list_adapter_credential_probe_states("codex", &["acc-401".to_string()])
+        .expect("read probe state");
+    assert_eq!(state[0].status, "failed");
+    assert_eq!(state[0].error_code.as_deref(), Some("codex_unauthorized"));
+    assert!(state[0].retry_after.is_some());
 }
 
 /// 函数 `challenge_with_more_candidates_triggers_failover`
@@ -233,7 +336,7 @@ fn challenge_on_last_candidate_keeps_upstream_response() {
 /// # 返回
 /// 无
 #[test]
-fn official_status_500_with_more_candidates_keeps_upstream_response() {
+fn official_status_500_with_more_candidates_triggers_failover() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
     let decision = decide_upstream_outcome(
@@ -245,7 +348,7 @@ fn official_status_500_with_more_candidates_keeps_upstream_response() {
         true,
         |_, _, _| {},
     );
-    assert!(matches!(decision, UpstreamOutcomeDecision::RespondUpstream));
+    assert!(matches!(decision, UpstreamOutcomeDecision::Failover));
 }
 
 #[test]
@@ -268,7 +371,7 @@ fn official_compact_502_with_low_quota_snapshot_triggers_failover() {
 }
 
 #[test]
-fn official_compact_502_without_low_quota_snapshot_keeps_upstream_response() {
+fn official_compact_502_without_low_quota_snapshot_still_failovers() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
     let decision = decide_upstream_outcome(
@@ -280,7 +383,7 @@ fn official_compact_502_without_low_quota_snapshot_keeps_upstream_response() {
         true,
         |_, _, _| {},
     );
-    assert!(matches!(decision, UpstreamOutcomeDecision::RespondUpstream));
+    assert!(matches!(decision, UpstreamOutcomeDecision::Failover));
 }
 
 /// 函数 `status_500_on_last_candidate_keeps_upstream_response`
@@ -340,7 +443,7 @@ fn official_usage_exhausted_with_more_candidates_triggers_failover() {
     assert!(matches!(decision, UpstreamOutcomeDecision::Failover));
 }
 
-/// 函数 `official_usage_exhausted_does_not_override_401`
+/// 函数 `official_usage_exhausted_401_still_triggers_failover`
 ///
 /// 作者: gaohongshun
 ///
@@ -352,7 +455,7 @@ fn official_usage_exhausted_with_more_candidates_triggers_failover() {
 /// # 返回
 /// 无
 #[test]
-fn official_usage_exhausted_does_not_override_401() {
+fn official_usage_exhausted_401_still_triggers_failover() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
     storage
@@ -367,5 +470,32 @@ fn official_usage_exhausted_does_not_override_401() {
         true,
         |_, _, _| {},
     );
-    assert!(matches!(decision, UpstreamOutcomeDecision::RespondUpstream));
+    assert!(matches!(decision, UpstreamOutcomeDecision::Failover));
+}
+
+#[test]
+fn official_429_uses_retry_after_header_for_account_cooldown() {
+    let _guard = crate::test_env_guard();
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let account_id = "acc-retry-after-window";
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("retry-after", "180".parse().expect("retry-after"));
+    let before = now_ts();
+
+    let decision = decide_upstream_outcome_with_headers(
+        &storage,
+        account_id,
+        reqwest::StatusCode::TOO_MANY_REQUESTS,
+        &headers,
+        "https://chatgpt.com/backend-api/codex/responses",
+        true,
+        |_, _, _| {},
+    );
+
+    assert!(matches!(decision, UpstreamOutcomeDecision::Failover));
+    let cooldown = crate::gateway::account_cooldown_info(account_id).expect("cooldown info");
+    assert!(cooldown.rate_limited);
+    assert!(cooldown.until >= before + 180);
+    assert!(cooldown.until <= now_ts() + 181);
 }

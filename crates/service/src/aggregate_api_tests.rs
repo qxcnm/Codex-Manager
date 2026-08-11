@@ -9,7 +9,8 @@ use std::time::Duration;
 use tiny_http::{Response, Server, StatusCode};
 
 use super::{
-    action_path_or_default, build_codex_models_probe_url, claude_probe_fallback_models_for_api,
+    action_path_or_default, build_codex_models_probe_url, build_codex_probe_body,
+    claude_probe_fallback_models_for_api,
     extract_custom_balance, extract_generic_balance, extract_model_ids_from_models_response,
     extract_new_api_balance, import_aggregate_api_supplier_models, list_aggregate_apis,
     normalize_action_override, normalize_custom_balance_query_config, normalize_provider_type,
@@ -18,6 +19,13 @@ use super::{
     AGGREGATE_API_PROVIDER_CLAUDE, AGGREGATE_API_PROVIDER_GEMINI, ALIBABA_CODING_PLAN_PROBE_MODEL,
     CLAUDE_DEFAULT_PROBE_MODEL,
 };
+
+#[test]
+fn codex_probe_uses_valid_responses_input_content_type() {
+    let body = build_codex_probe_body();
+    assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
+    assert_eq!(body["max_output_tokens"], 16);
+}
 
 static AGGREGATE_API_TEST_DIR_SEQ: AtomicUsize = AtomicUsize::new(0);
 
@@ -229,35 +237,23 @@ fn empty_action_uses_base_url_without_default_path() {
 }
 
 #[test]
-fn codex_models_probe_url_appends_client_version() {
-    let _guard = crate::test_env_guard();
-    crate::gateway::set_codex_user_agent_version("0.101.0")
-        .expect("set default codex user agent version");
+fn codex_models_probe_url_uses_standard_openai_path() {
     let mut api = aggregate_api_with_action(None);
     api.url = "https://api.openai.com/v1".to_string();
 
     let url = build_codex_models_probe_url(&api);
 
-    assert_eq!(
-        url,
-        "https://api.openai.com/v1/models?client_version=0.101.0"
-    );
+    assert_eq!(url, "https://api.openai.com/v1/models");
 }
 
 #[test]
-fn codex_models_probe_url_preserves_custom_action_with_client_version() {
-    let _guard = crate::test_env_guard();
-    crate::gateway::set_codex_user_agent_version("0.101.0")
-        .expect("set default codex user agent version");
+fn codex_models_probe_url_preserves_custom_action_query() {
     let mut api = aggregate_api_with_action(Some("/models?limit=20"));
     api.url = "https://api.openai.com/v1".to_string();
 
     let url = build_codex_models_probe_url(&api);
 
-    assert_eq!(
-        url,
-        "https://api.openai.com/v1/models?limit=20&client_version=0.101.0"
-    );
+    assert_eq!(url, "https://api.openai.com/v1/models?limit=20");
 }
 
 #[test]

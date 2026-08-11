@@ -49,6 +49,8 @@ export interface DashboardAdminUsageSummary {
   dailyUsage: DashboardDailyUsagePoint[];
   users: DashboardUserUsageSummary[];
   openaiAccounts: DashboardSourceUsageSummary[];
+  kiroCredentials: DashboardSourceUsageSummary[];
+  grokCredentials: DashboardSourceUsageSummary[];
   aggregateApis: DashboardSourceUsageSummary[];
 }
 

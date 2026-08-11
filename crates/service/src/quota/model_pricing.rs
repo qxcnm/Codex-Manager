@@ -548,34 +548,44 @@ fn price_from_rule(rule: &ModelPriceRule, input_tokens: i64) -> Option<ModelPric
     })
 }
 
+fn normalized_price_model_candidates(model: &str) -> Vec<String> {
+    let normalized = model.trim().to_ascii_lowercase();
+    if normalized.is_empty() || normalized == "unknown" {
+        return Vec::new();
+    }
+    let mut candidates = vec![normalized.clone()];
+    if let Some((provider, upstream)) = normalized.split_once('/') {
+        if matches!(provider, "kiro" | "grok" | "codex") && !upstream.is_empty() {
+            candidates.push(upstream.to_string());
+        }
+    }
+    candidates
+}
+
 pub(crate) fn resolve_model_price_from_rules(
     rules: &[ModelPriceRule],
     model: &str,
     input_tokens: i64,
 ) -> Option<ModelPriceMatch> {
-    let normalized = model.trim().to_ascii_lowercase();
-    if normalized.is_empty() || normalized == "unknown" {
-        return None;
-    }
-
-    let matched = rules
-        .iter()
-        .filter(|rule| rule_matches(rule, &normalized))
-        .max_by_key(|rule| (rule.priority, rule.model_pattern.len() as i64))?;
+    let candidates = normalized_price_model_candidates(model);
+    let matched = candidates.iter().find_map(|normalized| {
+        rules
+            .iter()
+            .filter(|rule| rule_matches(rule, normalized))
+            .max_by_key(|rule| (rule.priority, rule.model_pattern.len() as i64))
+    })?;
 
     price_from_rule(matched, input_tokens)
 }
 
 pub(crate) fn resolve_model_price(model: &str, input_tokens: i64) -> Option<ModelPriceMatch> {
-    let normalized = model.trim().to_ascii_lowercase();
-    if normalized.is_empty() || normalized == "unknown" {
-        return None;
-    }
-
-    let matched = PRICE_SEEDS
-        .iter()
-        .filter(|seed| normalized.starts_with(seed.model_pattern))
-        .max_by_key(|seed| seed.model_pattern.len())?;
+    let candidates = normalized_price_model_candidates(model);
+    let matched = candidates.iter().find_map(|normalized| {
+        PRICE_SEEDS
+            .iter()
+            .filter(|seed| normalized.starts_with(seed.model_pattern))
+            .max_by_key(|seed| seed.model_pattern.len())
+    })?;
 
     let mut input = matched.input_price_per_1m;
     let mut cached = matched

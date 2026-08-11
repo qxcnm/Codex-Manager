@@ -15,6 +15,7 @@ const MINUTES_PER_HOUR = 60;
 const MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR;
 const WINDOW_ROUNDING_BIAS_MINUTES = 3;
 const EXTRA_RATE_LIMITS_JSON_KEY = "_codexmanager_extra_rate_limits";
+const RESET_ENTITLEMENTS_JSON_KEY = "_codexmanager_reset_entitlements";
 
 type UsageWindowDisplayMode = "primary-only" | "secondary-only" | "dual" | "unknown";
 type TranslationValues = Record<string, string | number>;
@@ -27,6 +28,16 @@ export interface ExtraUsageDisplayRow {
   resetsAt: number | null;
   windowLabel: string;
   windowLabelValues?: TranslationValues;
+}
+
+export interface ResetEntitlementDisplayRow {
+  id: string;
+  label: string;
+  count: number | null;
+  expiresAt: number | null;
+  activatesAt: number | null;
+  manualActivationRequired: boolean;
+  appliesTo: string[];
 }
 
 /**
@@ -474,6 +485,99 @@ function extractExtraRateLimitWindows(raw: string | null | undefined): ExtraUsag
   }, []);
 }
 
+function extractStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item || "").trim())
+      .filter(Boolean)
+      .slice(0, 8);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(/[,\s]+/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 8);
+  }
+  return [];
+}
+
+function firstString(source: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return "";
+}
+
+function firstNumber(source: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = toNullableNumber(source[key]);
+    if (value != null) return value;
+  }
+  return null;
+}
+
+function firstStringArray(source: Record<string, unknown>, keys: string[]): string[] {
+  for (const key of keys) {
+    const value = extractStringArray(source[key]);
+    if (value.length > 0) return value;
+  }
+  return [];
+}
+
+function humanizeResetEntitlementLabel(raw: string): string {
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) return "重置权益";
+  if (normalized.includes("reset") && normalized.includes("card")) return "重置卡";
+  if (normalized.includes("message")) return "消息重置权益";
+  if (normalized.includes("credit")) return "额度重置权益";
+  return raw
+    .replace(/[_-]+/g, " ")
+    .split(" ")
+    .map((part) => (part ? `${part[0].toUpperCase()}${part.slice(1)}` : ""))
+    .join(" ")
+    .trim() || "重置权益";
+}
+
+function extractResetEntitlements(raw: string | null | undefined): ResetEntitlementDisplayRow[] {
+  const credits = parseCreditsJson(raw);
+  const payload = asObjectRecord(credits);
+  const items = Array.isArray(payload?.[RESET_ENTITLEMENTS_JSON_KEY])
+    ? (payload?.[RESET_ENTITLEMENTS_JSON_KEY] as unknown[])
+    : [];
+
+  return items.reduce<ResetEntitlementDisplayRow[]>((rows, item, index) => {
+    const source = asObjectRecord(item);
+    if (!source) return rows;
+    const seed =
+      firstString(source, ["label", "source_key", "type", "kind", "name"]) ||
+      `reset-${index + 1}`;
+    const appliesTo = firstStringArray(source, [
+      "models",
+      "model_slugs",
+      "eligible_models",
+      "features",
+      "applies_to",
+    ]);
+
+    rows.push({
+      id: `${seed}-${index}`,
+      label: humanizeResetEntitlementLabel(seed),
+      count: firstNumber(source, ["count", "remaining_count", "available_count", "quantity"]),
+      expiresAt: firstNumber(source, ["expires_at", "expire_at", "expiration", "valid_until"]),
+      activatesAt: firstNumber(source, ["activates_at", "active_at", "starts_at"]),
+      manualActivationRequired: Boolean(
+        source.manual_activation_required ?? source.requires_activation ?? source.manual
+      ),
+      appliesTo,
+    });
+    return rows;
+  }, []);
+}
+
 /**
  * 函数 `extractPlanTypeRecursive`
  *
@@ -622,6 +726,12 @@ export function getExtraUsageDisplayRows(
   usage?: Partial<AccountUsage> | null
 ): ExtraUsageDisplayRow[] {
   return extractExtraRateLimitWindows(usage?.creditsJson);
+}
+
+export function getResetEntitlementDisplayRows(
+  usage?: Partial<AccountUsage> | null
+): ResetEntitlementDisplayRow[] {
+  return extractResetEntitlements(usage?.creditsJson);
 }
 
 /**

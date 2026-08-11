@@ -203,3 +203,61 @@ fn rate_limited_offense_resets_after_quiet_period() {
     let state = lock.lock().expect("cooldown state lock");
     assert_eq!(state.offense_counts.get("acc"), Some(&1));
 }
+
+#[test]
+fn retry_after_and_rate_limit_reset_headers_use_real_window() {
+    let now = 1_800_000_000_i64;
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("retry-after", "30".parse().expect("retry-after"));
+    headers.insert(
+        "x-ratelimit-reset-requests",
+        "1m15s".parse().expect("request reset"),
+    );
+    headers.insert(
+        "x-ratelimit-reset-tokens",
+        "45.5s".parse().expect("token reset"),
+    );
+
+    assert_eq!(
+        rate_limit_reset_at_from_headers(&headers, now),
+        Some(now + 75)
+    );
+}
+
+#[test]
+fn retry_after_supports_http_date_and_reset_epoch() {
+    let now = 1_445_412_000_i64;
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        "retry-after",
+        "Wed, 21 Oct 2015 07:28:00 GMT".parse().expect("http date"),
+    );
+    headers.insert(
+        "x-ratelimit-reset",
+        "1445412605".parse().expect("reset epoch"),
+    );
+
+    assert_eq!(
+        rate_limit_reset_at_from_headers(&headers, now),
+        Some(1_445_412_605)
+    );
+}
+
+#[test]
+fn explicit_rate_limit_window_is_not_replaced_by_default_ladder() {
+    let _guard = crate::test_env_guard();
+    clear_account_cooldown_for_tests();
+    let now = now_ts();
+    mark_account_rate_limited_until("explicit-window", now + 5 * 60 * 60);
+
+    let info = account_cooldown_info("explicit-window").expect("cooldown info");
+    assert!(info.rate_limited);
+    assert!(info.until >= now + 5 * 60 * 60);
+    assert!(!ACCOUNT_COOLDOWN_UNTIL
+        .get()
+        .expect("cooldown state")
+        .lock()
+        .expect("cooldown lock")
+        .offense_counts
+        .contains_key("explicit-window"));
+}

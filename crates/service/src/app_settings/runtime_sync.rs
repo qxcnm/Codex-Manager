@@ -6,8 +6,8 @@ use super::{
     apply_env_overrides_to_process, list_app_settings_map, normalize_optional_text,
     persisted_env_overrides_missing_process_env, reload_runtime_after_env_override_apply,
     save_persisted_app_setting, set_service_bind_mode, BackgroundTasksInput, QuotaGuardInput,
-    APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY, APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY,
-    APP_SETTING_GATEWAY_COMPACT_MODEL_FORWARD_RULES_KEY,
+    APP_SETTING_GATEWAY_ACCOUNT_BATCH_ROTATION_KEY, APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY,
+    APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY, APP_SETTING_GATEWAY_COMPACT_MODEL_FORWARD_RULES_KEY,
     APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY, APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY,
     APP_SETTING_GATEWAY_ORIGINATOR_KEY, APP_SETTING_GATEWAY_QUOTA_GUARD_KEY,
     APP_SETTING_GATEWAY_RESIDENCY_REQUIREMENT_KEY, APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY,
@@ -173,6 +173,32 @@ pub fn sync_runtime_settings_from_storage() {
                 gateway::set_account_max_inflight_limit(limit);
             } else {
                 log::warn!("parse persisted account max inflight failed: {raw}");
+            }
+        }
+    }
+    match settings.get(APP_SETTING_GATEWAY_ACCOUNT_BATCH_ROTATION_KEY) {
+        Some(raw) => match serde_json::from_str::<gateway::AccountBatchRotationConfig>(raw) {
+            Ok(config) => {
+                gateway::set_account_batch_rotation_config(config);
+            }
+            Err(err) => log::warn!("parse persisted account batch rotation failed: {err}"),
+        },
+        None => {
+            // Persist the installation default exactly once. From this point on
+            // the database value edited by the UI is the runtime source of
+            // truth; startup must not silently re-apply a hard-coded batch size.
+            let config = gateway::AccountBatchRotationConfig::default();
+            gateway::set_account_batch_rotation_config(config);
+            match serde_json::to_string(&config) {
+                Ok(raw) => {
+                    if let Err(err) = save_persisted_app_setting(
+                        APP_SETTING_GATEWAY_ACCOUNT_BATCH_ROTATION_KEY,
+                        Some(&raw),
+                    ) {
+                        log::warn!("persist initial account batch rotation failed: {err}");
+                    }
+                }
+                Err(err) => log::warn!("serialize initial account batch rotation failed: {err}"),
             }
         }
     }

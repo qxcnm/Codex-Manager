@@ -17,9 +17,9 @@ use reqwest::header::HeaderValue;
 /// # 返回
 /// 无
 #[test]
-fn fallback_non_success_5xx_does_not_failover_even_with_more_candidates() {
-    assert!(!should_failover_after_fallback_non_success(500, true));
-    assert!(!should_failover_after_fallback_non_success(503, true));
+fn fallback_non_success_5xx_failovers_when_more_candidates_remain() {
+    assert!(should_failover_after_fallback_non_success(500, true));
+    assert!(should_failover_after_fallback_non_success(503, true));
 }
 
 /// 函数 `fallback_non_success_auth_and_rate_limit_can_failover_when_candidates_remain`

@@ -2,9 +2,13 @@
   <img src="assets/logo/logo.png" alt="CodexManager Logo" width="220" />
 </p>
 
-<h1 align="center">CodexManager</h1>
+<h1 align="center">CodexManager Unified</h1>
 
-<p align="center">本地桌面端 + 服务进程的 Codex 账号管理器+网关转发</p>
+<p align="center">Codex + Kiro 统一 OpenAI 网关</p>
+
+<p align="center"><a href="docs/zh-CN/kiro-unified-openai-gateway.md">Codex + Kiro 统一 OpenAI 网关开发说明</a></p>
+
+<p align="center">独立应用身份、独立 AppData 数据库、独立 48764 端口，可与原版 CodexManager 并行安装。</p>
 
 <p align="center">
   <a href="docs/en/README.md">English</a>

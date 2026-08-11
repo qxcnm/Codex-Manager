@@ -1,7 +1,7 @@
 [package]
-name = "CodexManager"
+name = "CodexManager-Unified"
 version = "0.4.0"
-description = "A Tauri App"
+description = "Unified OpenAI gateway for Codex and Kiro"
 authors = ["you"]
 license = ""
 repository = ""

@@ -704,6 +704,27 @@ fn responses_request_rewrites_to_anthropic_messages_for_claude_upstream() {
 }
 
 #[test]
+fn responses_web_search_tool_maps_to_kiro_anthropic_shape() {
+    let body = json!({
+        "model": "kiro/claude-sonnet-4.5",
+        "input": "latest Rust release",
+        "tools": [{ "type": "web_search", "max_uses": 3 }],
+        "stream": true
+    });
+
+    let adapted = adapt_openai_responses_to_anthropic_messages(
+        serde_json::to_vec(&body).expect("body").as_slice(),
+        Some("claude-sonnet-4.5"),
+    )
+    .expect("adapt responses request");
+    let payload: Value = serde_json::from_slice(&adapted).expect("parse adapted body");
+
+    assert_eq!(payload["tools"][0]["type"], "web_search_20250305");
+    assert_eq!(payload["tools"][0]["name"], "web_search");
+    assert_eq!(payload["tools"][0]["max_uses"], 3);
+}
+
+#[test]
 fn responses_anthropic_bridge_preserves_tool_choice_parallel_policy() {
     let body = json!({
         "model": "gpt-5.3",
@@ -787,6 +808,34 @@ fn responses_request_drops_images_for_deepseek_anthropic_bridge() {
         1
     );
     assert_eq!(payload["messages"][0]["content"][0]["type"], "text");
+}
+
+#[test]
+fn responses_request_preserves_base64_images_for_claude_upstream() {
+    let body = json!({
+        "model": "kiro/claude-sonnet-4.6",
+        "input": [{
+            "type": "message",
+            "role": "user",
+            "content": [
+                { "type": "input_text", "text": "describe this" },
+                { "type": "input_image", "image_url": "data:image/png;base64,aGVsbG8=" }
+            ]
+        }]
+    });
+
+    let adapted = adapt_openai_responses_to_anthropic_messages(
+        serde_json::to_vec(&body).expect("body").as_slice(),
+        Some("claude-sonnet-4.6"),
+    )
+    .expect("adapt responses request");
+    let payload: Value = serde_json::from_slice(&adapted).expect("parse adapted body");
+    let image = &payload["messages"][0]["content"][1];
+
+    assert_eq!(image["type"], "image");
+    assert_eq!(image["source"]["type"], "base64");
+    assert_eq!(image["source"]["media_type"], "image/png");
+    assert_eq!(image["source"]["data"], "aGVsbG8=");
 }
 
 #[test]

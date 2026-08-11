@@ -30,13 +30,14 @@ use crate::storage_helpers::{hash_platform_key, open_storage};
 const RESPONSES_WS_ERROR_CODE: &str = "responses_websocket_error";
 const RESPONSES_WEBSOCKETS_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 
-#[derive(Clone)]
 struct WsRequestContext {
     api_key: codexmanager_core::storage::ApiKey,
     incoming_headers: crate::gateway::IncomingHeaderSnapshot,
     prompt_cache_key: Option<String>,
     effective_upstream_base: String,
     prefer_raw_errors: bool,
+    key_policy: codexmanager_core::storage::ApiKeyPolicy,
+    _api_key_inflight_guard: crate::gateway::ApiKeyInFlightGuard,
 }
 
 #[derive(Clone)]
@@ -151,6 +152,17 @@ impl WsSessionError {
 
     fn bad_gateway(message: impl Into<String>) -> Self {
         Self::new(502, RESPONSES_WS_ERROR_CODE, message)
+    }
+
+    fn forbidden_bilingual(
+        chinese_description: impl AsRef<str>,
+        english_raw_message: impl AsRef<str>,
+    ) -> Self {
+        Self::new(
+            403,
+            "permission_denied",
+            crate::gateway::bilingual_error(chinese_description, english_raw_message),
+        )
     }
 
     fn service_unavailable(message: impl Into<String>) -> Self {
@@ -550,6 +562,108 @@ fn authorize_websocket_request(headers: &HeaderMap) -> Result<WsRequestContext, 
             )
         })?;
 
+    if api_key.status != "active" {
+        return Err(text_error_response(
+            StatusCode::FORBIDDEN,
+            crate::gateway::error_message_for_client(
+                prefer_raw_errors,
+                crate::gateway::bilingual_error("API Key 已禁用", "api key disabled"),
+            ),
+        ));
+    }
+    if let Some(limit) = storage
+        .find_api_key_quota_limit(&api_key.id)
+        .map_err(|err| {
+            text_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("read api key quota failed: {err}"),
+            )
+        })?
+    {
+        let used = storage
+            .api_key_total_token_usage(&api_key.id)
+            .map_err(|err| {
+                text_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("read api key usage failed: {err}"),
+                )
+            })?;
+        if limit > 0 && used >= limit {
+            return Err(text_error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                crate::gateway::error_message_for_client(
+                    prefer_raw_errors,
+                    crate::gateway::bilingual_error(
+                        "API Key 额度已用尽",
+                        format!("api key quota exhausted: used {used}, limit {limit}"),
+                    ),
+                ),
+            ));
+        }
+    }
+    let key_policy = storage
+        .find_api_key_policy(&api_key.id)
+        .map_err(|err| {
+            text_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("read api key policy failed: {err}"),
+            )
+        })?
+        .unwrap_or_default();
+    if key_policy
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= codexmanager_core::storage::now_ts())
+    {
+        return Err(text_error_response(
+            StatusCode::FORBIDDEN,
+            crate::gateway::error_message_for_client(
+                prefer_raw_errors,
+                crate::gateway::bilingual_error("API Key 已过期", "api key expired"),
+            ),
+        ));
+    }
+    if !key_policy.allowed_platforms.is_empty()
+        && !key_policy
+            .allowed_platforms
+            .iter()
+            .any(|value| value.eq_ignore_ascii_case("codex"))
+    {
+        return Err(text_error_response(
+            StatusCode::FORBIDDEN,
+            crate::gateway::error_message_for_client(
+                prefer_raw_errors,
+                crate::gateway::bilingual_error(
+                    "此 API Key 不允许访问 Codex",
+                    "platform_not_allowed_by_key: codex",
+                ),
+            ),
+        ));
+    }
+    let api_key_inflight_guard =
+        crate::gateway::try_acquire_api_key_inflight(&api_key.id, key_policy.concurrency_limit)
+            .map_err(|current| {
+                text_error_response(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    crate::gateway::error_message_for_client(
+                        prefer_raw_errors,
+                        crate::gateway::bilingual_error(
+                            "API Key 并发请求已达到上限",
+                            format!("api key concurrency limit exceeded: active {current}"),
+                        ),
+                    ),
+                )
+            })?;
+    crate::wallet_precheck_for_api_key(&storage, &api_key.id).map_err(|err| {
+        text_error_response(
+            if err.contains("余额不足") {
+                StatusCode::PAYMENT_REQUIRED
+            } else {
+                StatusCode::FORBIDDEN
+            },
+            err,
+        )
+    })?;
+
     if !crate::gateway::gateway_supports_official_responses_websocket(&api_key) {
         return Err(upgrade_required_response(
             crate::gateway::error_message_for_client(
@@ -580,6 +694,8 @@ fn authorize_websocket_request(headers: &HeaderMap) -> Result<WsRequestContext, 
         incoming_headers,
         prompt_cache_key,
         prefer_raw_errors,
+        key_policy,
+        _api_key_inflight_guard: api_key_inflight_guard,
     })
 }
 
@@ -704,6 +820,18 @@ fn rewrite_client_frame(
                 format!("invalid official codex websocket request shape: {err}"),
             )
         })?;
+    if !context.key_policy.allowed_models.is_empty()
+        && !context
+            .key_policy
+            .allowed_models
+            .iter()
+            .any(|allowed| allowed == "*" || allowed.eq_ignore_ascii_case(request.model.as_str()))
+    {
+        return Err(WsSessionError::forbidden_bilingual(
+            "模型不在此 API Key 的白名单中",
+            format!("model_not_allowed_by_key: {}", request.model),
+        ));
+    }
     let effective_service_tier = request
         .service_tier
         .as_deref()
@@ -881,7 +1009,13 @@ async fn connect_upstream_websocket(
     let mut last_error = None;
     ensure_rustls_crypto_provider();
     for (account, mut token) in routed.candidates {
-        let bearer = match resolve_bearer_token_for_websocket(account.clone(), token).await {
+        let bearer = match resolve_bearer_token_for_websocket(
+            account.clone(),
+            token,
+            !crate::gateway::gateway_is_openai_api_base(context.effective_upstream_base.as_str()),
+        )
+        .await
+        {
             Ok((bearer, resolved_token)) => {
                 token = resolved_token;
                 bearer
@@ -915,7 +1049,15 @@ async fn connect_upstream_websocket(
             }
             Err(err) => {
                 if err.is_unauthorized() {
-                    match try_refresh_websocket_bearer(&storage, context, &account, &mut token) {
+                    let refreshed = if bearer.starts_with("AgentAssertion ") {
+                        crate::account_agent_identity::recover_agent_identity_authorization(
+                            &storage,
+                            &account.id,
+                        )
+                    } else {
+                        try_refresh_websocket_bearer(&storage, context, &account, &mut token)
+                    };
+                    match refreshed {
                         Ok(Some(refreshed_bearer)) => {
                             log::warn!(
                                 "event=responses_ws_unauthorized_refresh_retry account_id={}",
@@ -985,13 +1127,21 @@ async fn connect_upstream_websocket(
 async fn resolve_bearer_token_for_websocket(
     account: codexmanager_core::storage::Account,
     token: codexmanager_core::storage::Token,
+    use_agent_identity: bool,
 ) -> Result<(String, codexmanager_core::storage::Token), String> {
     let join_result = tokio::task::spawn_blocking(move || {
         let storage = open_storage()
             .ok_or_else(|| crate::gateway::bilingual_error("存储不可用", "storage unavailable"))?;
         let mut token = token;
-        let bearer =
-            crate::gateway::gateway_resolve_openai_bearer_token(&storage, &account, &mut token)?;
+        let bearer = if use_agent_identity {
+            crate::account_agent_identity::build_agent_identity_authorization(
+                &storage,
+                &account.id,
+            )?
+            .unwrap_or_else(|| token.access_token.clone())
+        } else {
+            crate::gateway::gateway_resolve_openai_bearer_token(&storage, &account, &mut token)?
+        };
         Ok((bearer, token))
     })
     .await;
@@ -1388,7 +1538,12 @@ fn build_upstream_websocket_request(
         )
     })?;
     let headers = request.headers_mut();
-    insert_header(headers, "Authorization", &format!("Bearer {bearer_token}"))?;
+    let authorization = if bearer_token.trim().starts_with("AgentAssertion ") {
+        bearer_token.trim().to_string()
+    } else {
+        format!("Bearer {}", bearer_token.trim())
+    };
+    insert_header(headers, "Authorization", &authorization)?;
     if let Some(account_id) = account
         .chatgpt_account_id
         .as_deref()
@@ -1712,7 +1867,7 @@ async fn try_rotate_ws_upstream_after_terminal(
         return false;
     };
 
-    let bearer = match resolve_bearer_token_for_websocket(account.clone(), token).await {
+    let bearer = match resolve_bearer_token_for_websocket(account.clone(), token, true).await {
         Ok((bearer, _token)) => bearer,
         Err(err) => {
             log::warn!(

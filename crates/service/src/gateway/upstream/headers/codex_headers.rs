@@ -5,6 +5,7 @@ const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER_NAME: &str =
     "x-responsesapi-include-timing-metrics";
 const X_CODEX_INFERENCE_CALL_ID_HEADER_NAME: &str = "x-codex-inference-call-id";
 const X_OAI_ATTESTATION_HEADER_NAME: &str = "x-oai-attestation";
+const CODEX_UPSTREAM_MIN_VERSION: &str = "0.144.0";
 
 fn anchor_fingerprint_or_dash(value: Option<&str>) -> String {
     value
@@ -18,28 +19,104 @@ fn normalize_non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
-fn looks_like_codex_identity(value: &str) -> bool {
-    value.to_ascii_lowercase().contains("codex")
+fn authorization_header_value(auth_token: &str) -> String {
+    let value = auth_token.trim();
+    if value.starts_with("AgentAssertion ") || value.starts_with("Bearer ") {
+        value.to_string()
+    } else {
+        format!("Bearer {value}")
+    }
 }
 
-fn resolve_originator_header(
+fn identity_product(value: &str) -> Option<&str> {
+    let value = value.trim();
+    let end = value
+        .find(|ch: char| matches!(ch, '/' | ' ' | '('))
+        .unwrap_or(value.len());
+    let product = value[..end].trim();
+    (!product.is_empty()).then_some(product)
+}
+
+fn identity_version(user_agent: &str) -> Option<&str> {
+    let token = user_agent.trim().split_whitespace().next()?;
+    token
+        .split_once('/')
+        .map(|(_, version)| version.trim())
+        .filter(|version| !version.is_empty())
+}
+
+fn numeric_version_triplet(value: &str) -> Option<[u64; 3]> {
+    let core = value.trim().split(['-', '+']).next()?;
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().unwrap_or("0").parse().ok()?;
+    let patch = parts.next().unwrap_or("0").parse().ok()?;
+    Some([major, minor, patch])
+}
+
+fn enforce_minimum_codex_version(version: Option<&str>) -> String {
+    let configured = crate::gateway::current_codex_user_agent_version();
+    let Some(version) = version.map(str::trim).filter(|value| !value.is_empty()) else {
+        return configured;
+    };
+    let Some(candidate) = numeric_version_triplet(version) else {
+        return configured;
+    };
+    let minimum = numeric_version_triplet(CODEX_UPSTREAM_MIN_VERSION)
+        .expect("hard-coded Codex minimum version must be valid");
+    if candidate < minimum {
+        configured
+    } else {
+        version.to_string()
+    }
+}
+
+fn looks_like_codex_identity(value: &str) -> bool {
+    identity_product(value).is_some_and(|product| product.to_ascii_lowercase().contains("codex"))
+}
+
+fn identities_match(user_agent: &str, originator: &str) -> bool {
+    let Some(ua_product) = identity_product(user_agent) else {
+        return false;
+    };
+    let Some(originator_product) = identity_product(originator) else {
+        return false;
+    };
+    let canonical = |value: &str| {
+        value
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric())
+            .map(|ch| ch.to_ascii_lowercase())
+            .collect::<String>()
+    };
+    canonical(ua_product) == canonical(originator_product)
+}
+
+fn resolve_codex_identity(
+    incoming_user_agent: Option<&str>,
     incoming_originator: Option<&str>,
     preserve_client_identity: bool,
-) -> String {
-    normalize_non_empty(incoming_originator)
-        .filter(|value| preserve_client_identity || looks_like_codex_identity(value))
-        .map(str::to_string)
-        .unwrap_or_else(crate::gateway::current_wire_originator)
-}
-
-fn resolve_user_agent_header(
-    incoming_user_agent: Option<&str>,
-    preserve_client_identity: bool,
-) -> String {
-    normalize_non_empty(incoming_user_agent)
-        .filter(|value| preserve_client_identity || looks_like_codex_identity(value))
-        .map(str::to_string)
-        .unwrap_or_else(crate::gateway::current_codex_user_agent)
+) -> (String, String, String) {
+    let incoming_user_agent = normalize_non_empty(incoming_user_agent);
+    let incoming_originator = normalize_non_empty(incoming_originator);
+    if let (Some(user_agent), Some(originator)) = (incoming_user_agent, incoming_originator) {
+        let allowed = preserve_client_identity
+            || (looks_like_codex_identity(user_agent) && looks_like_codex_identity(originator));
+        if allowed && identities_match(user_agent, originator) {
+            let version = enforce_minimum_codex_version(identity_version(user_agent));
+            return (user_agent.to_string(), originator.to_string(), version);
+        }
+        log::info!(
+            "event=gateway_codex_identity_rebuilt reason=unpaired_identity incoming_ua_product={} incoming_originator_product={}",
+            identity_product(user_agent).unwrap_or("-"),
+            identity_product(originator).unwrap_or("-"),
+        );
+    }
+    (
+        crate::gateway::current_codex_user_agent(),
+        crate::gateway::current_wire_originator(),
+        crate::gateway::current_codex_user_agent_version(),
+    )
 }
 
 pub(crate) struct CodexUpstreamHeaderInput<'a> {
@@ -113,14 +190,15 @@ pub(crate) fn resolve_codex_installation_id(
 pub(crate) fn build_codex_upstream_headers(
     input: CodexUpstreamHeaderInput<'_>,
 ) -> Vec<(String, String)> {
-    let user_agent =
-        resolve_user_agent_header(input.incoming_user_agent, input.preserve_client_identity);
-    let originator =
-        resolve_originator_header(input.incoming_originator, input.preserve_client_identity);
+    let (user_agent, originator, version) = resolve_codex_identity(
+        input.incoming_user_agent,
+        input.incoming_originator,
+        input.preserve_client_identity,
+    );
     let mut headers = Vec::with_capacity(16);
     headers.push((
         "Authorization".to_string(),
-        format!("Bearer {}", input.auth_token),
+        authorization_header_value(input.auth_token),
     ));
     if let Some(account_id) = input
         .chatgpt_account_id
@@ -135,6 +213,11 @@ pub(crate) fn build_codex_upstream_headers(
     headers.push(("Accept".to_string(), "text/event-stream".to_string()));
     headers.push(("User-Agent".to_string(), user_agent));
     headers.push(("originator".to_string(), originator));
+    headers.push(("version".to_string(), version));
+    headers.push((
+        "OpenAI-Beta".to_string(),
+        "responses=experimental".to_string(),
+    ));
     if let Some(residency_requirement) = crate::gateway::current_residency_requirement() {
         headers.push((
             crate::gateway::runtime_config::RESIDENCY_HEADER_NAME.to_string(),
@@ -257,14 +340,15 @@ pub(crate) fn build_codex_upstream_headers(
 pub(crate) fn build_codex_compact_upstream_headers(
     input: CodexCompactUpstreamHeaderInput<'_>,
 ) -> Vec<(String, String)> {
-    let user_agent =
-        resolve_user_agent_header(input.incoming_user_agent, input.preserve_client_identity);
-    let originator =
-        resolve_originator_header(input.incoming_originator, input.preserve_client_identity);
+    let (user_agent, originator, version) = resolve_codex_identity(
+        input.incoming_user_agent,
+        input.incoming_originator,
+        input.preserve_client_identity,
+    );
     let mut headers = Vec::with_capacity(13);
     headers.push((
         "Authorization".to_string(),
-        format!("Bearer {}", input.auth_token),
+        authorization_header_value(input.auth_token),
     ));
     if let Some(account_id) = input
         .chatgpt_account_id
@@ -289,6 +373,11 @@ pub(crate) fn build_codex_compact_upstream_headers(
     headers.push(("Accept".to_string(), "application/json".to_string()));
     headers.push(("User-Agent".to_string(), user_agent));
     headers.push(("originator".to_string(), originator));
+    headers.push(("version".to_string(), version));
+    headers.push((
+        "OpenAI-Beta".to_string(),
+        "responses=experimental".to_string(),
+    ));
     if let Some(residency_requirement) = crate::gateway::current_residency_requirement() {
         headers.push((
             crate::gateway::runtime_config::RESIDENCY_HEADER_NAME.to_string(),

@@ -39,6 +39,11 @@ pub(crate) fn read_api_keys_for_ids_with_storage(
 fn map_api_key_list_summary(key: ApiKeyListSummary) -> ApiKeySummary {
     ApiKeySummary {
         quota_limit_tokens: key.quota_limit_tokens,
+        allowed_models: key.allowed_models,
+        allowed_platforms: key.allowed_platforms,
+        model_visibility: key.model_visibility,
+        expires_at: key.expires_at,
+        concurrency_limit: key.concurrency_limit,
         id: key.id,
         name: key.name,
         model_slug: key.model_slug,
@@ -50,6 +55,7 @@ fn map_api_key_list_summary(key: ApiKeyListSummary) -> ApiKeySummary {
         aggregate_api_url: key.aggregate_api_url,
         client_type: key.client_type,
         protocol_type: key.protocol_type,
+        protocol_profile: "openai".to_string(),
         auth_scheme: key.auth_scheme,
         upstream_base_url: key.upstream_base_url,
         static_headers_json: key.static_headers_json,

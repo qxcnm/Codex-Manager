@@ -1,9 +1,31 @@
 use super::{
-    apply_gemini_codex_compat_header_profile, encode_request_body, resolve_request_compression,
+    apply_gemini_codex_compat_header_profile, encode_request_body, has_explicit_idempotency_key,
+    method_is_inherently_idempotent, resolve_request_compression,
     resolve_request_compression_with_flag, send_async_stream_request,
-    should_retry_transport_without_compression, should_wrap_upstream_as_stream_response,
-    strip_compact_service_tier_for_transport, RequestCompression, CPA_GEMINI_CODEX_USER_AGENT,
+    should_isolate_codex_stream_transport, should_retry_transport_without_compression,
+    should_wrap_upstream_as_stream_response, strip_compact_service_tier_for_transport,
+    RequestCompression, CPA_GEMINI_CODEX_USER_AGENT,
 };
+
+#[test]
+fn native_codex_responses_use_request_scoped_stream_transport() {
+    assert!(should_isolate_codex_stream_transport(
+        "/v1/responses",
+        "https://chatgpt.com/backend-api/codex/responses"
+    ));
+    assert!(should_isolate_codex_stream_transport(
+        "/v1/responses?stream=true",
+        "https://chatgpt.com/backend-api/codex/responses"
+    ));
+    assert!(!should_isolate_codex_stream_transport(
+        "/v1/chat/completions",
+        "https://chatgpt.com/backend-api/codex/responses"
+    ));
+    assert!(!should_isolate_codex_stream_transport(
+        "/v1/responses",
+        "https://aggregate.example/v1/responses"
+    ));
+}
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use std::io::{Read, Write};
@@ -455,6 +477,35 @@ fn transport_retry_without_compression_only_targets_streaming_chatgpt_responses(
         true,
         RequestCompression::None
     ));
+}
+
+#[test]
+fn ambiguous_post_retry_requires_explicit_idempotency_key() {
+    assert!(!method_is_inherently_idempotent(&reqwest::Method::POST));
+    assert!(!has_explicit_idempotency_key(&[]));
+    assert!(!has_explicit_idempotency_key(&[(
+        "idempotency-key".to_string(),
+        "   ".to_string(),
+    )]));
+    assert!(has_explicit_idempotency_key(&[(
+        "Idempotency-Key".to_string(),
+        "request-123".to_string(),
+    )]));
+}
+
+#[test]
+fn safe_http_methods_remain_retryable_without_idempotency_key() {
+    for method in [
+        reqwest::Method::GET,
+        reqwest::Method::HEAD,
+        reqwest::Method::PUT,
+        reqwest::Method::DELETE,
+        reqwest::Method::OPTIONS,
+        reqwest::Method::TRACE,
+    ] {
+        assert!(method_is_inherently_idempotent(&method), "{method}");
+    }
+    assert!(!method_is_inherently_idempotent(&reqwest::Method::PATCH));
 }
 
 #[test]

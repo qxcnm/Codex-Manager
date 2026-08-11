@@ -9,6 +9,8 @@ const ENV_RPC_TOKEN_FILE: &str = "CODEXMANAGER_RPC_TOKEN_FILE";
 const ENV_SERVICE_ADDR: &str = "CODEXMANAGER_SERVICE_ADDR";
 const QA_APP_IDENTIFIER: &str = "com.codexmanager.desktop.qa";
 const QA_DEFAULT_SERVICE_ADDR: &str = "localhost:48762";
+const UNIFIED_APP_IDENTIFIER: &str = "com.codexmanager.unified";
+const UNIFIED_DEFAULT_SERVICE_ADDR: &str = "localhost:48764";
 
 /// 函数 `resolve_rpc_token_path_for_db`
 ///
@@ -173,6 +175,7 @@ fn profile_default_service_addr(identifier: &str) -> Option<&'static str> {
     let normalized = identifier.trim().to_ascii_lowercase();
     match normalized.as_str() {
         QA_APP_IDENTIFIER => Some(QA_DEFAULT_SERVICE_ADDR),
+        UNIFIED_APP_IDENTIFIER => Some(UNIFIED_DEFAULT_SERVICE_ADDR),
         _ => None,
     }
 }
@@ -272,6 +275,7 @@ mod tests {
     use super::{
         profile_default_service_addr, resolve_path_with_base, resolve_runtime_rpc_token_path,
         should_seed_profile_service_addr, ENV_RPC_TOKEN_FILE, QA_DEFAULT_SERVICE_ADDR,
+        UNIFIED_DEFAULT_SERVICE_ADDR,
     };
     use std::path::{Path, PathBuf};
 
@@ -336,7 +340,7 @@ mod tests {
     /// # 返回
     /// 无
     #[test]
-    fn profile_default_service_addr_is_only_defined_for_qa_profile() {
+    fn profile_default_service_addr_is_defined_for_isolated_profiles() {
         assert_eq!(
             profile_default_service_addr("com.codexmanager.desktop.qa"),
             Some(QA_DEFAULT_SERVICE_ADDR)
@@ -344,6 +348,10 @@ mod tests {
         assert_eq!(
             profile_default_service_addr(" COM.CODEXMANAGER.DESKTOP.QA "),
             Some(QA_DEFAULT_SERVICE_ADDR)
+        );
+        assert_eq!(
+            profile_default_service_addr("com.codexmanager.unified"),
+            Some(UNIFIED_DEFAULT_SERVICE_ADDR)
         );
         assert_eq!(
             profile_default_service_addr("com.codexmanager.desktop"),
@@ -364,6 +372,13 @@ mod tests {
     /// 无
     #[test]
     fn profile_service_addr_migration_only_applies_to_legacy_default_port() {
+        assert_eq!(
+            should_seed_profile_service_addr(
+                "com.codexmanager.unified",
+                codexmanager_service::DEFAULT_ADDR
+            ),
+            Some(UNIFIED_DEFAULT_SERVICE_ADDR)
+        );
         assert_eq!(
             should_seed_profile_service_addr(
                 "com.codexmanager.desktop.qa",

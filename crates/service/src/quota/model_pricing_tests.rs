@@ -136,6 +136,15 @@ fn prefers_more_specific_prefix_for_latest_claude_opus() {
 }
 
 #[test]
+fn runtime_provider_namespaces_reuse_official_upstream_prices() {
+    let direct = resolve_model_price("claude-sonnet-4.5", 0).expect("direct Claude price");
+    let kiro = resolve_model_price("kiro/claude-sonnet-4.5", 0).expect("Kiro Claude price");
+    assert_eq!(kiro.provider, direct.provider);
+    assert_close(kiro.input_price_per_1m, direct.input_price_per_1m);
+    assert_close(kiro.output_price_per_1m, direct.output_price_per_1m);
+}
+
+#[test]
 fn returns_missing_for_unknown_models() {
     assert!(resolve_model_price("unknown-provider-model", 0).is_none());
     let cost = estimate_cost(Some("unknown-provider-model"), 100, 0, 100);

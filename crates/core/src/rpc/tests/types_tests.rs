@@ -27,6 +27,16 @@ fn account_summary_serialization_matches_compact_contract() {
         status: "active".to_string(),
         status_reason: Some("account_deactivated".to_string()),
         has_token: true,
+        auth_mode: "oauth".to_string(),
+        agent_identity_status: None,
+        has_agent_identity_task: false,
+        credential_state: "account_deactivated".to_string(),
+        credential_action: "stop".to_string(),
+        access_token_expires_at: Some(1_746_000_000),
+        gateway_probe_status: Some("available".to_string()),
+        gateway_probe_reason: Some("codex_responses_verified".to_string()),
+        gateway_probe_checked_at: Some(1_745_000_000),
+        gateway_probe_retry_after: None,
         plan_type: Some("team".to_string()),
         plan_type_raw: None,
         has_subscription: Some(true),
@@ -38,6 +48,8 @@ fn account_summary_serialization_matches_compact_contract() {
         model_slugs: vec!["gpt-5.4".to_string()],
         quota_capacity_primary_window_tokens: Some(100_000),
         quota_capacity_secondary_window_tokens: Some(1_000_000),
+        created_at: 1_744_000_000,
+        updated_at: 1_745_000_000,
     };
 
     let value = serde_json::to_value(summary).expect("serialize account summary");
@@ -52,13 +64,18 @@ fn account_summary_serialization_matches_compact_contract() {
         "status",
         "statusReason",
         "hasToken",
+        "credentialState",
+        "credentialAction",
+        "accessTokenExpiresAt",
         "note",
         "tags",
+        "createdAt",
+        "updatedAt",
     ] {
         assert!(obj.contains_key(key), "missing key: {key}");
     }
 
-    for key in ["workspaceId", "workspaceName", "updatedAt"] {
+    for key in ["workspaceId", "workspaceName"] {
         assert!(!obj.contains_key(key), "unexpected key: {key}");
     }
 }
@@ -86,6 +103,16 @@ fn account_list_result_serialization_includes_pagination_fields() {
             status: "active".to_string(),
             status_reason: Some("account_deactivated".to_string()),
             has_token: true,
+            auth_mode: "oauth".to_string(),
+            agent_identity_status: None,
+            has_agent_identity_task: false,
+            credential_state: "account_deactivated".to_string(),
+            credential_action: "stop".to_string(),
+            access_token_expires_at: Some(1_746_000_000),
+            gateway_probe_status: Some("available".to_string()),
+            gateway_probe_reason: Some("codex_responses_verified".to_string()),
+            gateway_probe_checked_at: Some(1_745_000_000),
+            gateway_probe_retry_after: None,
             plan_type: Some("team".to_string()),
             plan_type_raw: None,
             has_subscription: Some(true),
@@ -97,6 +124,8 @@ fn account_list_result_serialization_includes_pagination_fields() {
             model_slugs: vec!["gpt-5.4".to_string()],
             quota_capacity_primary_window_tokens: Some(100_000),
             quota_capacity_secondary_window_tokens: Some(1_000_000),
+            created_at: 1_744_000_000,
+            updated_at: 1_745_000_000,
         }],
         total: 9,
         page: 2,
@@ -397,6 +426,8 @@ fn dashboard_admin_usage_summary_serialization_uses_camel_case() {
             today_usage: usage.clone(),
             range_usage: usage.clone(),
         }],
+        kiro_credentials: Vec::new(),
+        grok_credentials: Vec::new(),
         aggregate_apis: vec![DashboardSourceUsageSummary {
             source_kind: "aggregate_api".to_string(),
             source_id: "agg-1".to_string(),
@@ -418,6 +449,8 @@ fn dashboard_admin_usage_summary_serialization_uses_camel_case() {
         "todayUsage",
         "dailyUsage",
         "openaiAccounts",
+        "kiroCredentials",
+        "grokCredentials",
         "aggregateApis",
     ] {
         assert!(obj.contains_key(key), "missing key: {key}");

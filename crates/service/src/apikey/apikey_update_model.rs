@@ -32,6 +32,12 @@ pub(crate) fn update_api_key_model(
     account_plan_filter: Option<String>,
     has_quota_limit_tokens: bool,
     quota_limit_tokens: Option<i64>,
+    has_policy: bool,
+    allowed_models: Vec<String>,
+    allowed_platforms: Vec<String>,
+    model_visibility: Option<String>,
+    expires_at: Option<i64>,
+    concurrency_limit: Option<i64>,
 ) -> Result<(), String> {
     if key_id.is_empty() {
         return Err("key id required".to_string());
@@ -93,6 +99,17 @@ pub(crate) fn update_api_key_model(
             .upsert_api_key_quota_limit(key_id, quota_limit_tokens)
             .map_err(|e| e.to_string())?;
     }
+    if has_policy {
+        let policy = crate::apikey::policy::normalize_policy(
+            key_id,
+            allowed_models,
+            allowed_platforms,
+            model_visibility,
+            expires_at,
+            concurrency_limit,
+        )?;
+        crate::apikey::policy::save_api_key_policy_with_storage(&storage, &policy)?;
+    }
 
     let has_upstream_base_url = upstream_base_url.is_some();
     let has_static_headers_json = static_headers_json.is_some();
@@ -106,6 +123,12 @@ pub(crate) fn update_api_key_model(
             .ok_or_else(|| "api key not found".to_string())?;
         let protocol = protocol_type.unwrap_or_else(|| current.protocol_type.clone());
         let normalized_protocol = normalize_protocol_type(Some(protocol))?;
+        if normalized_protocol != crate::apikey_profile::PROTOCOL_OPENAI_COMPAT {
+            return Err(
+                "首版仅支持 OpenAI 格式平台 Key(protocol profile is not available in this release)"
+                    .to_string(),
+            );
+        }
         let (next_client, next_protocol, next_auth) = profile_from_protocol(&normalized_protocol)?;
         let next_upstream_base_url = if has_upstream_base_url {
             normalized_upstream_base_url.as_deref()

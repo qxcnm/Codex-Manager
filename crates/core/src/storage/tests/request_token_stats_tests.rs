@@ -700,6 +700,21 @@ fn daily_range_query_matches_created_at_index() {
 }
 
 #[test]
+fn runtime_provider_source_expressions_attribute_selected_credentials() {
+    let kiro_raw = super::source_id_expr("kiro").expect("kiro raw source expr");
+    let kiro_hourly = super::hourly_source_id_expr("kiro").expect("kiro hourly source expr");
+    let grok_raw = super::source_id_expr("grok").expect("grok raw source expr");
+    let grok_hourly = super::hourly_source_id_expr("grok").expect("grok hourly source expr");
+
+    assert!(kiro_raw.contains("actual_source_kind = 'kiro'"));
+    assert!(kiro_raw.contains("actual_source_id"));
+    assert!(kiro_hourly.contains("actual_source_kind = 'kiro'"));
+    assert!(grok_raw.contains("actual_source_kind = 'grok'"));
+    assert!(grok_raw.contains("actual_source_id"));
+    assert!(grok_hourly.contains("actual_source_kind = 'grok'"));
+}
+
+#[test]
 fn source_rollup_query_includes_raw_and_hourly_sources() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");

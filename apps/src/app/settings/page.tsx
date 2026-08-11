@@ -67,6 +67,7 @@ import { useI18n } from "@/lib/i18n/provider";
 import { AppearanceTabContent } from "@/app/settings/components/appearance-tab-content";
 import { EnvTabContent } from "@/app/settings/components/env-tab-content";
 import { GatewayTabContent } from "@/app/settings/components/gateway-tab-content";
+import { AccountStabilityCard } from "@/app/settings/components/account-stability-card";
 import { ThemePreviewSwatch } from "@/app/settings/components/theme-preview-swatch";
 import {
   AccessControlCard,
@@ -1445,6 +1446,11 @@ function AdminSettingsPage() {
         </TabsContent>
 
         <TabsContent value="gateway" className="space-y-4">
+          <AccountStabilityCard
+            t={t}
+            snapshot={snapshot}
+            updateSettings={updateSettings}
+          />
           <GatewayTabContent
             t={t}
             snapshot={snapshot}

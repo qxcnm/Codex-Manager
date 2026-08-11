@@ -2,6 +2,153 @@ use super::*;
 use codexmanager_core::rpc::types::{ModelInfo, ModelServiceTier, ModelsResponse};
 use serde_json::Value;
 
+#[cfg(windows)]
+#[test]
+fn kiro_only_catalog_is_available_without_codex_models() {
+    use codexmanager_core::storage::{KiroCredentialSecret, KiroCredentialUpsert, Storage};
+
+    let storage = Storage::open_in_memory().unwrap();
+    storage.init().unwrap();
+    storage
+        .upsert_kiro_credential(&KiroCredentialUpsert {
+            id: "kiro-model-catalog".into(),
+            auth_method: "social".into(),
+            identity_hint: "catalog@example.test".into(),
+            email: Some("catalog@example.test".into()),
+            auth_region: Some("us-east-1".into()),
+            api_region: Some("us-east-1".into()),
+            subscription: None,
+            status: "active".into(),
+            priority: 0,
+            weight: 1.0,
+            proxy_url: None,
+            proxy_username: None,
+            metadata_json: "{}".into(),
+            credit_limit: None,
+            credit_used: None,
+            expires_at: None,
+            secret: KiroCredentialSecret {
+                refresh_token: "test-refresh".into(),
+                access_token: None,
+                client_id: None,
+                client_secret: None,
+                proxy_password: None,
+            },
+        })
+        .unwrap();
+    storage
+        .upsert_kiro_credential_model_availability(
+            "kiro-model-catalog",
+            "kiro/claude-sonnet-4.6",
+            "available",
+            None,
+            Some(1),
+        )
+        .unwrap();
+    let mut models = ModelsResponse::default();
+
+    append_kiro_models(&storage, &mut models);
+    append_smart_aliases(&mut models);
+
+    assert!(models
+        .models
+        .iter()
+        .any(|model| model.slug == "kiro/claude-sonnet-4.6"));
+    assert!(models.models.iter().any(|model| model.slug == "smart"));
+}
+
+#[test]
+fn key_policy_filters_models_and_platforms_from_catalog() {
+    let policy = codexmanager_core::storage::ApiKeyPolicy {
+        key_id: "key".into(),
+        allowed_models: vec!["smart".into(), "kiro/claude-sonnet-4.5".into()],
+        allowed_platforms: vec!["kiro".into()],
+        model_visibility: "selectable".into(),
+        expires_at: None,
+        concurrency_limit: None,
+    };
+    let models = ModelsResponse {
+        models: vec![
+            ModelInfo {
+                slug: "smart".into(),
+                supported_in_api: true,
+                ..Default::default()
+            },
+            ModelInfo {
+                slug: "kiro/claude-sonnet-4.5".into(),
+                supported_in_api: true,
+                ..Default::default()
+            },
+            ModelInfo {
+                slug: "codex/gpt-5.3-codex".into(),
+                supported_in_api: true,
+                ..Default::default()
+            },
+            ModelInfo {
+                slug: "grok/grok-chat-fast".into(),
+                supported_in_api: true,
+                ..Default::default()
+            },
+            ModelInfo {
+                slug: "kiro/claude-opus-4.8".into(),
+                supported_in_api: true,
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let filtered = filter_models_for_policy(models, &policy);
+    assert_eq!(
+        filtered
+            .models
+            .into_iter()
+            .map(|item| item.slug)
+            .collect::<Vec<_>>(),
+        vec!["smart", "kiro/claude-sonnet-4.5"]
+    );
+}
+
+#[test]
+fn grok_platform_policy_only_lists_grok_models() {
+    let policy = codexmanager_core::storage::ApiKeyPolicy {
+        key_id: "key".into(),
+        allowed_models: vec![],
+        allowed_platforms: vec!["grok".into()],
+        model_visibility: "selectable".into(),
+        expires_at: None,
+        concurrency_limit: None,
+    };
+    let models = ModelsResponse {
+        models: vec![
+            ModelInfo {
+                slug: "grok/grok-chat-fast".into(),
+                supported_in_api: true,
+                ..Default::default()
+            },
+            ModelInfo {
+                slug: "kiro/claude-sonnet-4.5".into(),
+                supported_in_api: true,
+                ..Default::default()
+            },
+            ModelInfo {
+                slug: "codex/gpt-5.3-codex".into(),
+                supported_in_api: true,
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let filtered = filter_models_for_policy(models, &policy);
+    assert_eq!(
+        filtered
+            .models
+            .into_iter()
+            .map(|item| item.slug)
+            .collect::<Vec<_>>(),
+        vec!["grok/grok-chat-fast"]
+    );
+}
+
 /// 函数 `serialize_models_response_outputs_codex_and_api_shapes`
 ///
 /// 作者: gaohongshun
@@ -29,6 +176,13 @@ fn serialize_models_response_outputs_codex_and_api_shapes() {
                 display_name: "GPT-4o".to_string(),
                 supported_in_api: true,
                 visibility: Some("list".to_string()),
+                ..Default::default()
+            },
+            ModelInfo {
+                slug: "codex-auto-review".to_string(),
+                display_name: "Codex Auto Review".to_string(),
+                supported_in_api: true,
+                visibility: Some("hide".to_string()),
                 ..Default::default()
             },
         ],

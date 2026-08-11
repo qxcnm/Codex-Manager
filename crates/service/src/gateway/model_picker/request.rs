@@ -22,6 +22,7 @@ static MODEL_PICKER_CLIENT_BUILD_COUNT: AtomicUsize = AtomicUsize::new(0);
 const MODEL_PICKER_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const MODEL_PICKER_TOTAL_TIMEOUT: Duration = Duration::from_secs(120);
 const MODEL_PICKER_RESPONSE_READ_TIMEOUT: Duration = Duration::from_secs(30);
+const ACCOUNT_MODELS_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ModelPickerClientConfig {
@@ -82,7 +83,14 @@ fn build_models_request_headers(
             residency_requirement.to_string(),
         ));
     }
-    headers.push(("Authorization".to_string(), format!("Bearer {}", bearer)));
+    headers.push((
+        "Authorization".to_string(),
+        if bearer.trim().starts_with("AgentAssertion ") {
+            bearer.trim().to_string()
+        } else {
+            format!("Bearer {}", bearer.trim())
+        },
+    ));
     if include_account_header {
         if let Some(account_id) = account_header_value
             .map(str::trim)
@@ -395,6 +403,26 @@ pub(super) fn send_models_request(
         path,
         account,
         token,
+        None,
+    ))
+}
+
+pub(super) fn send_models_probe_request(
+    storage: &Storage,
+    method: &Method,
+    upstream_base: &str,
+    path: &str,
+    account: &Account,
+    token: &mut Token,
+) -> Result<Vec<u8>, String> {
+    run_model_picker_future(send_models_request_async(
+        storage,
+        method,
+        upstream_base,
+        path,
+        account,
+        token,
+        Some(ACCOUNT_MODELS_PROBE_TIMEOUT),
     ))
 }
 
@@ -421,12 +449,17 @@ async fn send_models_request_async(
     path: &str,
     account: &Account,
     token: &mut Token,
+    request_timeout: Option<Duration>,
 ) -> Result<Vec<u8>, String> {
     let url = build_models_request_url(upstream_base, path);
     // 中文注释：OpenAI 基线要求 api_key_access_token，
     // 不这样区分会导致模型列表请求在 OpenAI 上游稳定 401。
     let bearer = if super::super::is_openai_api_base(upstream_base) {
         super::super::resolve_openai_bearer_token(storage, account, token)?
+    } else if let Some(assertion) =
+        crate::account_agent_identity::build_agent_identity_authorization(storage, &account.id)?
+    {
+        assertion
     } else {
         token.access_token.clone()
     };
@@ -448,6 +481,9 @@ async fn send_models_request_async(
             account_header_value.as_deref(),
         ) {
             builder = builder.header(name, value);
+        }
+        if let Some(timeout) = request_timeout {
+            builder = builder.timeout(timeout);
         }
         builder
     };

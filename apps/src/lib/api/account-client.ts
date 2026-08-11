@@ -58,6 +58,7 @@ import {
   ChatgptAuthTokensRefreshAllResult,
   ChatgptAuthTokensRefreshResult,
   CurrentAccessTokenAccountReadResult,
+  CredentialRepairReportResult,
   LoginStatusResult,
   LoginStartResult,
   ManagedModelCatalog,
@@ -87,6 +88,15 @@ export interface AccountDeleteByStatusesPayload {
 export interface AccountSortUpdatePayload {
   accountId: string;
   sort: number;
+}
+
+export interface AgentIdentityOperationResult {
+  accountId: string;
+  authMode: "agentIdentity";
+  status: string;
+  agentRuntimeId: string | null;
+  hasTask: boolean;
+  message: string | null;
 }
 
 interface LoginStartPayload {
@@ -130,6 +140,11 @@ interface ApiKeyPayload {
   aggregateApiId?: string | null;
   accountPlanFilter?: string | null;
   quotaLimitTokens?: number | null;
+  allowedModels?: string[];
+  allowedPlatforms?: Array<"codex" | "kiro" | "grok">;
+  modelVisibility?: "selectable" | "managed";
+  expiresAt?: number | null;
+  concurrencyLimit?: number | null;
   customKey?: string | null;
 }
 
@@ -396,6 +411,39 @@ export const accountClient = {
     const result = await invoke<unknown>("service_account_list", withAddr());
     return normalizeAccountList(result);
   },
+  listAgentIdentities: () =>
+    invoke<AgentIdentityOperationResult[]>(
+      "service_account_agent_identity_list",
+      withAddr(),
+    ),
+  generateAgentIdentity: (accountId: string) =>
+    invoke<AgentIdentityOperationResult>(
+      "service_account_agent_identity_generate",
+      withAddr({ accountId }),
+    ),
+  generateAgentIdentities: (accountIds: string[]) =>
+    invoke<{ ok: boolean; queued: number; total: number }>(
+      "service_account_agent_identity_generate_many",
+      withAddr({ accountIds }),
+    ),
+  reportCredentialRepair: (
+    accountId: string,
+    outcome:
+      | "repaired"
+      | "reauth_in_progress"
+      | "reauth_required"
+      | "refresh_token_expired"
+      | "refresh_token_revoked"
+      | "network_unknown"
+      | "cloudflare_challenge"
+      | "account_deactivated"
+      | "workspace_deactivated",
+    detail?: string,
+  ): Promise<CredentialRepairReportResult> =>
+    invoke<CredentialRepairReportResult>(
+      "service_account_credential_repair_report",
+      withAddr({ accountId, outcome, detail: detail || null }),
+    ),
   delete: (accountId: string) =>
     invoke("service_account_delete", withAddr({ accountId })),
   deleteMany: (accountIds: string[]) =>
@@ -809,6 +857,11 @@ export const accountClient = {
         aggregateApiId: params.aggregateApiId || null,
         accountPlanFilter: params.accountPlanFilter || null,
         quotaLimitTokens: params.quotaLimitTokens ?? null,
+        allowedModels: params.allowedModels ?? [],
+        allowedPlatforms: params.allowedPlatforms ?? [],
+        modelVisibility: params.modelVisibility || "selectable",
+        expiresAt: params.expiresAt ?? null,
+        concurrencyLimit: params.concurrencyLimit ?? null,
         customKey: params.customKey || null,
       })
     );
@@ -833,6 +886,11 @@ export const accountClient = {
       rotationStrategy: params.rotationStrategy || null,
       aggregateApiId: params.aggregateApiId || null,
       accountPlanFilter: params.accountPlanFilter || null,
+      allowedModels: params.allowedModels ?? [],
+      allowedPlatforms: params.allowedPlatforms ?? [],
+      modelVisibility: params.modelVisibility || "selectable",
+      expiresAt: params.expiresAt ?? null,
+      concurrencyLimit: params.concurrencyLimit ?? null,
     };
     if ("quotaLimitTokens" in params) {
       payload.quotaLimitTokens = params.quotaLimitTokens ?? null;

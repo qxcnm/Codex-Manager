@@ -389,8 +389,8 @@ where
             }
             let fallback_status = resp.status().as_u16();
             super::super::super::mark_account_cooldown_for_status(&account.id, fallback_status);
-            // 中文注释：仅对“可能账号相关/可恢复”的状态继续 failover；
-            // 例如 5xx 这类上游服务端错误直接回传，避免单次请求在大量候选账号上长时间轮询。
+            // 候选已经被批次轮询限制在小集合内；5xx 在本批内切换下一个账号，
+            // 避免一个抖动账号直接把整次请求拖成 502。
             if should_failover_after_fallback_non_success(fallback_status, has_more_candidates) {
                 let headers = resp.headers().clone();
                 let body = resp.bytes().unwrap_or_default();

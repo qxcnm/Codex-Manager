@@ -1,14 +1,16 @@
 use codexmanager_core::{
+    auth::extract_token_exp,
     rpc::types::{AccountListResult, AccountSummary},
     storage::{
         Account, AccountListSummaryRow, AccountMetadata, AccountQuotaCapacityOverride,
         AccountSubscription, AccountSummaryStorageSnapshot, AccountSummaryStorageSnapshotOptions,
-        AccountTokenPlan, UsageSnapshotRecord,
+        AccountTokenPlan, AdapterCredentialProbeState, UsageSnapshotRecord,
     },
 };
 use std::collections::HashMap;
 
 use crate::account_plan::resolve_effective_account_plan;
+use crate::account_status::derive_credential_state;
 use crate::storage_helpers::open_storage;
 
 const DEFAULT_ACCOUNT_PAGE_SIZE: i64 = 5;
@@ -26,6 +28,8 @@ struct AccountSummaryParts {
     group_name: Option<String>,
     sort: i64,
     status: String,
+    created_at: i64,
+    updated_at: i64,
 }
 
 impl From<Account> for AccountSummaryParts {
@@ -36,6 +40,8 @@ impl From<Account> for AccountSummaryParts {
             group_name: account.group_name,
             sort: account.sort,
             status: account.status,
+            created_at: account.created_at,
+            updated_at: account.updated_at,
         }
     }
 }
@@ -48,6 +54,8 @@ impl From<AccountListSummaryRow> for AccountSummaryParts {
             group_name: account.group_name,
             sort: account.sort,
             status: account.status,
+            created_at: account.created_at,
+            updated_at: account.updated_at,
         }
     }
 }
@@ -62,6 +70,8 @@ struct AccountSummarySetup {
     subscriptions: HashMap<String, AccountSubscription>,
     model_slugs_by_account: HashMap<String, Vec<String>>,
     quota_overrides: HashMap<String, AccountQuotaCapacityOverride>,
+    agent_identities: HashMap<String, codexmanager_core::storage::CodexAgentIdentityRecord>,
+    gateway_probe_states: HashMap<String, AdapterCredentialProbeState>,
 }
 
 impl From<&Account> for AccountSummaryParts {
@@ -72,6 +82,8 @@ impl From<&Account> for AccountSummaryParts {
             group_name: account.group_name.clone(),
             sort: account.sort,
             status: account.status.clone(),
+            created_at: account.created_at,
+            updated_at: account.updated_at,
         }
     }
 }
@@ -138,6 +150,13 @@ fn to_account_summary_with_reason(
     preferred: bool,
     status_reason: Option<String>,
     has_token: bool,
+    auth_mode: String,
+    agent_identity_status: Option<String>,
+    has_agent_identity_task: bool,
+    credential_state: String,
+    credential_action: String,
+    access_token_expires_at: Option<i64>,
+    gateway_probe_state: Option<&AdapterCredentialProbeState>,
     plan_type: Option<String>,
     plan_type_raw: Option<String>,
     has_subscription: Option<bool>,
@@ -159,6 +178,16 @@ fn to_account_summary_with_reason(
         status: parts.status,
         status_reason,
         has_token,
+        auth_mode,
+        agent_identity_status,
+        has_agent_identity_task,
+        credential_state,
+        credential_action,
+        access_token_expires_at,
+        gateway_probe_status: gateway_probe_state.map(|state| state.status.clone()),
+        gateway_probe_reason: gateway_probe_state.and_then(|state| state.error_code.clone()),
+        gateway_probe_checked_at: gateway_probe_state.map(|state| state.checked_at),
+        gateway_probe_retry_after: gateway_probe_state.and_then(|state| state.retry_after),
         plan_type,
         plan_type_raw,
         has_subscription,
@@ -170,6 +199,8 @@ fn to_account_summary_with_reason(
         model_slugs,
         quota_capacity_primary_window_tokens,
         quota_capacity_secondary_window_tokens,
+        created_at: parts.created_at,
+        updated_at: parts.updated_at,
     }
 }
 
@@ -254,7 +285,21 @@ fn load_account_summary_setup(
     let snapshot = storage
         .load_account_summary_storage_snapshot_with_options(account_ids, options)
         .map_err(|err| format!("load account summary snapshot failed: {err}"))?;
-    Ok(account_summary_setup_from_snapshot(snapshot))
+    let mut setup = account_summary_setup_from_snapshot(snapshot);
+    setup.agent_identities = storage
+        .list_codex_agent_identities()
+        .map_err(|error| format!("load agent identities failed: {error}"))?
+        .into_iter()
+        .filter(|item| account_ids.iter().any(|id| id == &item.account_id))
+        .map(|item| (item.account_id.clone(), item))
+        .collect();
+    setup.gateway_probe_states = storage
+        .list_adapter_credential_probe_states("codex", account_ids)
+        .map_err(|error| format!("load gateway probe states failed: {error}"))?
+        .into_iter()
+        .map(|state| (state.credential_id.clone(), state))
+        .collect();
+    Ok(setup)
 }
 
 fn account_summary_setup_from_snapshot(
@@ -296,6 +341,8 @@ fn account_summary_setup_from_snapshot(
         subscriptions,
         model_slugs_by_account,
         quota_overrides,
+        agent_identities: HashMap::new(),
+        gateway_probe_states: HashMap::new(),
     }
 }
 
@@ -325,6 +372,8 @@ where
                 &setup.subscriptions,
                 &setup.model_slugs_by_account,
                 &setup.quota_overrides,
+                &setup.agent_identities,
+                &setup.gateway_probe_states,
             )
         })
         .collect()
@@ -355,6 +404,8 @@ fn map_account_summary<A>(
     subscriptions: &HashMap<String, AccountSubscription>,
     model_slugs_by_account: &HashMap<String, Vec<String>>,
     quota_overrides: &HashMap<String, AccountQuotaCapacityOverride>,
+    agent_identities: &HashMap<String, codexmanager_core::storage::CodexAgentIdentityRecord>,
+    gateway_probe_states: &HashMap<String, AdapterCredentialProbeState>,
 ) -> AccountSummary
 where
     A: Into<AccountSummaryParts>,
@@ -366,6 +417,8 @@ where
         group_name,
         sort,
         status,
+        created_at,
+        updated_at,
     } = account;
     let status_reason = status_reasons.get(&account_id).cloned();
     let preferred = preferred_account_id.is_some_and(|id| id == account_id);
@@ -376,6 +429,16 @@ where
         subscription,
     );
     let has_token = tokens.contains_key(&account_id);
+    let access_token_expires_at = tokens
+        .get(&account_id)
+        .and_then(|token| extract_token_exp(&token.access_token));
+    let credential = derive_credential_state(
+        &status,
+        status_reason.as_deref(),
+        has_token,
+        access_token_expires_at,
+        codexmanager_core::storage::now_ts(),
+    );
     let account_metadata = metadata.get(&account_id);
     let model_slugs = model_slugs_by_account
         .get(&account_id)
@@ -388,6 +451,8 @@ where
     };
     let subscription_plan = subscription.and_then(|value| value.plan_type.clone());
     let plan_type = fallback_plan_type;
+    let agent_identity = agent_identities.get(&account_id);
+    let gateway_probe_state = gateway_probe_states.get(&account_id);
     to_account_summary_with_reason(
         AccountSummaryParts {
             id: account_id,
@@ -395,10 +460,25 @@ where
             group_name,
             sort,
             status,
+            created_at,
+            updated_at,
         },
         preferred,
         status_reason,
         has_token,
+        if agent_identity.is_some() {
+            "agentIdentity".to_string()
+        } else {
+            "oauth".to_string()
+        },
+        agent_identity.map(|identity| identity.status.clone()),
+        agent_identity
+            .and_then(|identity| identity.task_id.as_deref())
+            .is_some_and(|task| !task.trim().is_empty()),
+        credential.state.to_string(),
+        credential.action.to_string(),
+        access_token_expires_at,
+        gateway_probe_state,
         plan_type,
         plan_type_raw,
         subscription.map(|value| value.has_subscription),
@@ -411,4 +491,66 @@ where
         quota_override.and_then(|value| value.primary_window_tokens),
         quota_override.and_then(|value| value.secondary_window_tokens),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_account_summary_context_for_items;
+    use codexmanager_core::storage::AccountSummaryStorageSnapshotOptions;
+    use codexmanager_core::storage::{Account, AdapterCredentialProbeState, Storage, Token};
+
+    #[test]
+    fn account_summary_exposes_gateway_admission_evidence() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let account = Account {
+            id: "account-1".to_string(),
+            label: "account-1@example.com".to_string(),
+            issuer: "openai".to_string(),
+            chatgpt_account_id: None,
+            workspace_id: None,
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: 100,
+            updated_at: 100,
+        };
+        storage.insert_account(&account).expect("insert account");
+        storage
+            .insert_token(&Token {
+                account_id: account.id.clone(),
+                id_token: String::new(),
+                access_token: "access".to_string(),
+                refresh_token: "refresh".to_string(),
+                api_key_access_token: None,
+                last_refresh: 100,
+            })
+            .expect("insert token");
+        storage
+            .upsert_adapter_credential_probe_state(&AdapterCredentialProbeState {
+                pool_id: "codex".to_string(),
+                credential_id: account.id.clone(),
+                status: "available".to_string(),
+                error_code: Some("codex_responses_verified".to_string()),
+                checked_at: 120,
+                retry_after: None,
+            })
+            .expect("insert probe state");
+
+        let context = build_account_summary_context_for_items(
+            &storage,
+            vec![account],
+            AccountSummaryStorageSnapshotOptions::default(),
+        )
+        .expect("build summaries");
+        assert_eq!(
+            context.items[0].gateway_probe_status.as_deref(),
+            Some("available")
+        );
+        assert_eq!(
+            context.items[0].gateway_probe_reason.as_deref(),
+            Some("codex_responses_verified")
+        );
+        assert_eq!(context.items[0].gateway_probe_checked_at, Some(120));
+    }
 }

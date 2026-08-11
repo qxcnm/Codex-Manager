@@ -252,12 +252,48 @@ pub(in super::super) fn execute_candidate_sequence(
     let mut last_attempt_url = None;
     let mut last_attempt_error = None;
     let mut force_strip_session_affinity_after_challenge = false;
+    let max_attempts = super::super::super::account_batch_rotation_config()
+        .max_attempts_per_request
+        .max(1);
+    let mut attempts_used = 0usize;
     let usage_snapshots = usage_snapshots_for_candidate_plans(storage, &candidates);
     let ordered_account_ids = candidates
         .iter()
         .map(|(account, _)| account.id.clone())
         .collect::<Vec<_>>();
-    for (idx, (account, mut token)) in candidates.into_iter().enumerate() {
+    let queue_candidate_ids = candidates
+        .iter()
+        .enumerate()
+        .filter(|(idx, (account, _))| {
+            !super::super::super::is_account_in_cooldown(&account.id)
+                || *idx + 1 == setup.candidate_count
+        })
+        .map(|(_, (account, _))| account.id.clone())
+        .collect::<Vec<_>>();
+    // 有并发上限时先原子预留一个账号槽位。全部账号繁忙则留在网关内等待，
+    // 而不是立即向 Codex 客户端返回 no available account/503。
+    let mut queued_inflight = if setup.account_max_inflight > 0 {
+        super::super::super::wait_acquire_candidate_account_inflight(
+            queue_candidate_ids.as_slice(),
+            setup.account_max_inflight,
+            deadline::remaining(request_deadline),
+        )
+    } else {
+        None
+    };
+    'candidates: for (idx, (account, mut token)) in candidates.into_iter().enumerate() {
+        if attempts_used >= max_attempts {
+            last_attempt_error = Some(format!(
+                "gateway request attempt budget exhausted ({attempts_used}/{max_attempts})"
+            ));
+            log::warn!(
+                "event=gateway_attempt_budget_exhausted trace_id={} attempts_used={} max_attempts={}",
+                trace_id,
+                attempts_used,
+                max_attempts
+            );
+            break 'candidates;
+        }
         if deadline::is_expired(request_deadline) {
             let request = request
                 .take()
@@ -271,6 +307,24 @@ pub(in super::super) fn execute_candidate_sequence(
                 Some(attempted_account_ids.as_slice()),
             )?;
             return Ok(CandidateExecutionResult::Handled);
+        }
+
+        if super::super::super::proxy_stream_circuit::is_account_proxy_stream_circuit_open(
+            &account.id,
+        ) {
+            if queued_inflight
+                .as_ref()
+                .is_some_and(|(account_id, _)| account_id == &account.id)
+            {
+                queued_inflight.take();
+            }
+            skipped_cooldown += 1;
+            log::warn!(
+                "event=gateway_candidate_skipped_proxy_stream_circuit trace_id={} account_id={}",
+                trace_id,
+                account.id
+            );
+            continue;
         }
 
         let strip_session_affinity = force_strip_session_affinity_after_challenge
@@ -312,18 +366,55 @@ pub(in super::super) fn execute_candidate_sequence(
             attempt_prompt_cache_key,
         );
         context.log_candidate_start(&account.id, idx, strip_session_affinity);
+        let has_queued_slot = queued_inflight
+            .as_ref()
+            .is_some_and(|(account_id, _)| account_id == &account.id);
         if let Some(skip_reason) = context.should_skip_candidate(&account.id, idx) {
-            context.log_candidate_skip(&account.id, idx, skip_reason);
-            match skip_reason {
-                super::super::support::candidates::CandidateSkipReason::Cooldown => {
-                    skipped_cooldown += 1;
+            if has_queued_slot
+                && matches!(
+                    skip_reason,
+                    super::super::support::candidates::CandidateSkipReason::Inflight
+                )
+            {
+                // 预留动作本身会让计数达到上限，这不是需要跳过的外部占用。
+            } else {
+                if has_queued_slot {
+                    queued_inflight.take();
                 }
-                super::super::support::candidates::CandidateSkipReason::Inflight => {
-                    skipped_inflight += 1;
+                context.log_candidate_skip(&account.id, idx, skip_reason);
+                match skip_reason {
+                    super::super::support::candidates::CandidateSkipReason::Cooldown => {
+                        skipped_cooldown += 1;
+                    }
+                    super::super::support::candidates::CandidateSkipReason::Inflight => {
+                        skipped_inflight += 1;
+                    }
                 }
+                continue;
             }
-            continue;
         }
+        let inflight_guard = if has_queued_slot {
+            queued_inflight.take().map(|(_, guard)| guard)
+        } else {
+            super::super::super::try_acquire_account_inflight(
+                &account.id,
+                setup.account_max_inflight,
+            )
+        };
+        let Some(inflight_guard) = inflight_guard else {
+            // 中文注释：预检只用于快速分流；这里的原子占位才是严格上限，
+            // 防止多个平台 Key 同时命中同一 Codex 账号造成异常突发。
+            context.log_candidate_skip(
+                &account.id,
+                idx,
+                super::super::support::candidates::CandidateSkipReason::Inflight,
+            );
+            super::super::super::record_gateway_candidate_skip(
+                super::super::super::GatewayCandidateSkipReason::Inflight,
+            );
+            skipped_inflight += 1;
+            continue;
+        };
         prepare_next_account_candidate_client(ordered_account_ids.as_slice(), idx, trace_id);
         attempted_account_ids.push(account.id.clone());
 
@@ -356,8 +447,8 @@ pub(in super::super) fn execute_candidate_sequence(
             },
         );
 
-        let mut inflight_guard = Some(super::super::super::acquire_account_inflight(&account.id));
         let mut attempt_trace = CandidateAttemptTrace::default();
+        attempts_used = attempts_used.saturating_add(1);
         let decision = run_candidate_attempt(CandidateAttemptParams {
             storage,
             method,
@@ -441,6 +532,7 @@ pub(in super::super) fn execute_candidate_sequence(
                 if resp.status().as_u16() == 400
                     && !strip_session_affinity
                     && (incoming_turn_state.is_some() || setup.has_body_encrypted_content)
+                    && attempts_used < max_attempts
                 {
                     let retry_body = state.retry_body(
                         path,
@@ -449,6 +541,7 @@ pub(in super::super) fn execute_candidate_sequence(
                         attempt_model_override,
                         attempt_prompt_cache_key,
                     );
+                    attempts_used = attempts_used.saturating_add(1);
                     let retry_decision = run_candidate_attempt(CandidateAttemptParams {
                         storage,
                         method,
@@ -505,12 +598,122 @@ pub(in super::super) fn execute_candidate_sequence(
                         }
                     }
                 }
+
+                if client_is_stream
+                    && upstream_is_stream
+                    && path.starts_with("/v1/responses")
+                    && matches!(
+                        response_adapter,
+                        super::super::super::ResponseAdapter::Passthrough
+                    )
+                {
+                    loop {
+                        match resp.preflight_openai_responses_stream() {
+                            super::super::OpenAiResponsesPreflight::Ready(preflighted) => {
+                                super::super::super::proxy_stream_circuit::record_account_proxy_stream_success(
+                                    &account.id,
+                                );
+                                resp = preflighted;
+                                break;
+                            }
+                            super::super::OpenAiResponsesPreflight::RetryableTerminal {
+                                response,
+                                failure,
+                            } => {
+                                let (cooldown_reason, quality_status) = match failure.class {
+                                    super::super::OpenAiResponsesTerminalFailureClass::UpstreamTransient => (
+                                        super::super::super::CooldownReason::Upstream5xx,
+                                        502,
+                                    ),
+                                    super::super::OpenAiResponsesTerminalFailureClass::RateLimited => (
+                                        super::super::super::CooldownReason::RateLimited,
+                                        429,
+                                    ),
+                                    super::super::OpenAiResponsesTerminalFailureClass::AccountUnavailable => (
+                                        super::super::super::CooldownReason::Default,
+                                        401,
+                                    ),
+                                };
+                                log::warn!(
+                                    "event=gateway_upstream_stream_preflight_terminal trace_id={} account_id={} class={:?} err={}",
+                                    trace_id,
+                                    account.id,
+                                    failure.class,
+                                    failure.message
+                                );
+                                super::super::super::mark_account_cooldown(
+                                    &account.id,
+                                    cooldown_reason,
+                                );
+                                super::super::super::record_route_quality(
+                                    &account.id,
+                                    quality_status,
+                                );
+                                attempt_trace.last_attempt_error = Some(failure.message.clone());
+                                if context.has_more_candidates(idx) {
+                                    drop(inflight_guard);
+                                    record_failover_attempt(
+                                        &mut attempt_trace,
+                                        &mut last_attempt_url,
+                                        &mut last_attempt_error,
+                                    );
+                                    continue 'candidates;
+                                }
+
+                                // Preserve the provider's original terminal frame for the
+                                // last candidate instead of masking it with a synthetic 502.
+                                resp = response;
+                                break;
+                            }
+                            super::super::OpenAiResponsesPreflight::TransportFailure(error) => {
+                                log::warn!(
+                                "event=gateway_upstream_stream_preflight_failed trace_id={} account_id={} err={}",
+                                trace_id,
+                                account.id,
+                                error
+                            );
+                                super::super::super::mark_account_cooldown(
+                                    &account.id,
+                                    super::super::super::CooldownReason::Network,
+                                );
+                                super::super::super::proxy_stream_circuit::record_account_proxy_stream_failure(
+                                    &account.id,
+                                );
+                                super::super::super::record_route_quality(&account.id, 502);
+                                attempt_trace.last_attempt_error = Some(error.clone());
+                                if context.has_more_candidates(idx) {
+                                    drop(inflight_guard);
+                                    record_failover_attempt(
+                                        &mut attempt_trace,
+                                        &mut last_attempt_url,
+                                        &mut last_attempt_error,
+                                    );
+                                    continue 'candidates;
+                                }
+                                let request = request.take().ok_or_else(|| {
+                                "request already consumed before stream preflight failure response"
+                                    .to_string()
+                            })?;
+                                return respond_terminal_attempt(
+                                    request,
+                                    context,
+                                    &account.id,
+                                    attempt_trace.last_attempt_url.as_deref(),
+                                    502,
+                                    error,
+                                    trace_id,
+                                    started_at,
+                                    attempt_model_for_log,
+                                    Some(attempted_account_ids.as_slice()),
+                                );
+                            }
+                        }
+                    }
+                }
                 let request = request.take().ok_or_else(|| {
                     "request already consumed before upstream response".to_string()
                 })?;
-                let guard = inflight_guard.take().ok_or_else(|| {
-                    "inflight guard already consumed before upstream response".to_string()
-                })?;
+                let guard = inflight_guard;
                 let response_status = resp.status().as_u16();
                 match finalize_upstream_response(
                     request,

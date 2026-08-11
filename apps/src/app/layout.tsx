@@ -9,8 +9,9 @@ import {
 } from "@/lib/appearance";
 
 export const metadata: Metadata = {
-  title: "CodexManager",
-  description: "Account pool and usage management for Codex",
+  title: "OpenRuntime · One Runtime. Every AI.",
+  description:
+    "Build Once. Connect Every AI. An extensible AI Runtime and protocol adapter layer.",
 };
 
 const trayPreviewModeInitScript = `

@@ -96,3 +96,21 @@ Tauri rules.
   release/build commands.
 - Root governance docs describe repository-level boundaries. App-specific
   frontend rules belong in `apps/AGENTS.md`.
+
+## 9. Live Runtime Protection
+- Treat the running OpenRuntime service and Web UI as user-critical. Development,
+  tests, frontend export, Rust compilation, and packaging must not stop, replace,
+  or lock the live processes on ports `48764` and `48763`.
+- Build candidate service/Web executables into a separate hot-update target
+  directory while the current version remains online. Never compile directly
+  over a running Windows executable.
+- Do not restart for intermediate changes. Only perform one short cutover after
+  all requested changes, migrations, tests, frontend assets, and candidate
+  binaries are complete.
+- Before cutover, preserve the currently running binaries and database, prepare
+  an automatic rollback path, and verify that ports `48760` and other legacy CPA
+  services are outside the operation scope.
+- During cutover, start and health-check the new service and Web UI immediately.
+  If either health check fails, restore the previous binaries and restart the
+  previous version automatically. The goal is to keep the user's active Codex
+  sessions and this task reachable throughout development.

@@ -1,6 +1,19 @@
 import type { MessageCatalog } from "../types";
 
 export const EN_API_KEYS_MESSAGES: MessageCatalog = {
+  平台限制: "Platform restriction",
+  "Codex + Kiro": "Codex + Kiro",
+  "智能别名也只会在允许的平台中选择上游。":
+    "Smart aliases only select upstreams from the allowed platforms.",
+  "并发限制 (可选)": "Concurrency limit (optional)",
+  "达到上限时新请求返回 429，流式请求完成后自动释放。":
+    "New requests return 429 at the limit; streaming slots are released when complete.",
+  "模型白名单 (可选)": "Model allowlist (optional)",
+  "每行或逗号分隔；留空允许该平台范围内的全部模型。":
+    "Separate with lines or commas; leave blank to allow every model in the platform scope.",
+  "过期时间 (可选)": "Expiration time (optional)",
+  "到期后网关立即拒绝该 Key 的新请求。":
+    "The gateway rejects new requests for this key immediately after expiration.",
   "Gateway access": "Gateway access",
   项目: "Project",
   "Token / 金额": "Token / Amount",

@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 const EXTRA_RATE_LIMITS_JSON_KEY: &str = "_codexmanager_extra_rate_limits";
+const RESET_ENTITLEMENTS_JSON_KEY: &str = "_codexmanager_reset_entitlements";
 
 #[derive(Debug, Clone)]
 pub struct UsageSnapshot {
@@ -112,8 +113,9 @@ fn collect_extra_rate_limits(value: &Value) -> Vec<Value> {
 fn serialize_credits_payload(
     credits: Option<&Value>,
     extra_rate_limits: &[Value],
+    reset_entitlements: &[Value],
 ) -> Option<String> {
-    if extra_rate_limits.is_empty() {
+    if extra_rate_limits.is_empty() && reset_entitlements.is_empty() {
         return credits.and_then(|value| (!value.is_null()).then(|| value.to_string()));
     }
 
@@ -126,11 +128,195 @@ fn serialize_credits_payload(
         }
         _ => serde_json::Map::new(),
     };
-    payload.insert(
-        EXTRA_RATE_LIMITS_JSON_KEY.to_string(),
-        Value::Array(extra_rate_limits.to_vec()),
-    );
+    if !extra_rate_limits.is_empty() {
+        payload.insert(
+            EXTRA_RATE_LIMITS_JSON_KEY.to_string(),
+            Value::Array(extra_rate_limits.to_vec()),
+        );
+    }
+    if !reset_entitlements.is_empty() {
+        payload.insert(
+            RESET_ENTITLEMENTS_JSON_KEY.to_string(),
+            Value::Array(reset_entitlements.to_vec()),
+        );
+    }
     Some(Value::Object(payload).to_string())
+}
+
+fn value_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn find_first_text(obj: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<Value> {
+    for key in keys {
+        if let Some(value) = obj.get(*key).and_then(value_text) {
+            return Some(Value::String(value));
+        }
+    }
+    None
+}
+
+fn find_first_number(obj: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<Value> {
+    for key in keys {
+        let Some(value) = obj.get(*key) else {
+            continue;
+        };
+        if let Some(number) = value.as_i64() {
+            return Some(Value::Number(number.into()));
+        }
+        if let Some(text) = value
+            .as_str()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        {
+            if let Ok(number) = text.parse::<i64>() {
+                return Some(Value::Number(number.into()));
+            }
+        }
+    }
+    None
+}
+
+fn normalize_reset_entitlement(source_key: Option<&str>, value: &Value) -> Option<Value> {
+    let obj = value.as_object()?;
+    let mut haystack = source_key.unwrap_or_default().to_ascii_lowercase();
+    for key in [
+        "type",
+        "kind",
+        "name",
+        "title",
+        "label",
+        "entitlement_type",
+        "benefit_type",
+        "credit_type",
+    ] {
+        if let Some(text) = obj.get(key).and_then(Value::as_str) {
+            haystack.push(' ');
+            haystack.push_str(&text.to_ascii_lowercase());
+        }
+    }
+
+    let looks_like_reset = haystack.contains("reset")
+        && (haystack.contains("card")
+            || haystack.contains("credit")
+            || haystack.contains("grant")
+            || haystack.contains("entitlement")
+            || haystack.contains("voucher")
+            || haystack.contains("pass")
+            || haystack.contains("token"));
+    if !looks_like_reset {
+        return None;
+    }
+
+    let mut normalized = serde_json::Map::new();
+    if let Some(source_key) = source_key.map(str::trim).filter(|value| !value.is_empty()) {
+        normalized.insert(
+            "source_key".to_string(),
+            Value::String(source_key.to_string()),
+        );
+    }
+    if let Some(label) = find_first_text(
+        obj,
+        &["name", "title", "label", "display_name", "type", "kind"],
+    ) {
+        normalized.insert("label".to_string(), label);
+    }
+    if let Some(count) = find_first_number(
+        obj,
+        &[
+            "remaining_count",
+            "available_count",
+            "unused_count",
+            "count",
+            "quantity",
+            "balance",
+            "remaining",
+        ],
+    ) {
+        normalized.insert("count".to_string(), count);
+    }
+    if let Some(expires_at) = find_first_number(
+        obj,
+        &[
+            "expires_at",
+            "expire_at",
+            "expiration",
+            "expires",
+            "valid_until",
+            "expired_at",
+        ],
+    ) {
+        normalized.insert("expires_at".to_string(), expires_at);
+    }
+    if let Some(activates_at) = find_first_number(obj, &["activates_at", "active_at", "starts_at"])
+    {
+        normalized.insert("activates_at".to_string(), activates_at);
+    }
+    if let Some(Value::Bool(manual)) = obj
+        .get("manual_activation_required")
+        .or_else(|| obj.get("requires_activation"))
+        .or_else(|| obj.get("manual"))
+    {
+        normalized.insert(
+            "manual_activation_required".to_string(),
+            Value::Bool(*manual),
+        );
+    }
+    for key in [
+        "models",
+        "model_slugs",
+        "eligible_models",
+        "features",
+        "applies_to",
+    ] {
+        if let Some(value) = obj.get(key) {
+            normalized.insert(key.to_string(), value.clone());
+            break;
+        }
+    }
+
+    (!normalized.is_empty()).then(|| Value::Object(normalized))
+}
+
+fn collect_reset_entitlements_inner(
+    value: &Value,
+    source_key: Option<&str>,
+    depth: usize,
+    out: &mut Vec<Value>,
+) {
+    if depth > 6 || out.len() >= 64 {
+        return;
+    }
+    match value {
+        Value::Object(obj) => {
+            if let Some(normalized) = normalize_reset_entitlement(source_key, value) {
+                out.push(normalized);
+            }
+            for (key, nested) in obj {
+                collect_reset_entitlements_inner(nested, Some(key.as_str()), depth + 1, out);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_reset_entitlements_inner(item, source_key, depth + 1, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_reset_entitlements(value: &Value) -> Vec<Value> {
+    let mut out = Vec::new();
+    collect_reset_entitlements_inner(value, None, 0, &mut out);
+    out
 }
 
 /// 函数 `normalize_base_url`
@@ -234,7 +420,12 @@ pub fn parse_usage_snapshot(value: &Value) -> UsageSnapshot {
         .pointer("/rate_limit/secondary_window/reset_at")
         .and_then(Value::as_i64);
     let extra_rate_limits = collect_extra_rate_limits(value);
-    let credits_json = serialize_credits_payload(value.get("credits"), &extra_rate_limits);
+    let reset_entitlements = collect_reset_entitlements(value);
+    let credits_json = serialize_credits_payload(
+        value.get("credits"),
+        &extra_rate_limits,
+        &reset_entitlements,
+    );
 
     UsageSnapshot {
         used_percent,

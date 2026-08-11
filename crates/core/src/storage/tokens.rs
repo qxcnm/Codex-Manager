@@ -21,6 +21,7 @@ impl Storage {
     /// # 返回
     /// 返回函数执行结果
     pub fn insert_token(&self, token: &Token) -> Result<()> {
+        let encrypted = self.encrypt_token(token)?;
         self.conn.execute(
             "INSERT INTO tokens (account_id, id_token, access_token, refresh_token, api_key_access_token, last_refresh)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -31,12 +32,12 @@ impl Storage {
                 api_key_access_token = excluded.api_key_access_token,
                 last_refresh = excluded.last_refresh",
             (
-                &token.account_id,
-                &token.id_token,
-                &token.access_token,
-                &token.refresh_token,
-                &token.api_key_access_token,
-                token.last_refresh,
+                &encrypted.account_id,
+                &encrypted.id_token,
+                &encrypted.access_token,
+                &encrypted.refresh_token,
+                &encrypted.api_key_access_token,
+                encrypted.last_refresh,
             ),
         )?;
         Ok(())
@@ -71,7 +72,7 @@ impl Storage {
         let mut rows = stmt.query((refresh_due_cutoff_ts, access_exp_cutoff_ts, limit as i64))?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
-            out.push(map_token_row(row)?);
+            out.push(self.map_token_row(row)?);
         }
         Ok(out)
     }
@@ -165,7 +166,7 @@ impl Storage {
         let mut rows = stmt.query([])?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
-            out.push(map_token_row(row)?);
+            out.push(self.map_token_row(row)?);
         }
         Ok(out)
     }
@@ -233,11 +234,20 @@ impl Storage {
         let mut rows = stmt.query([])?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
+            let account_id: String = row.get(0)?;
             out.push(AccountImportTokenSubject {
-                account_id: row.get(0)?,
-                id_token: row.get(1)?,
-                access_token: row.get(2)?,
-                refresh_token: row.get(3)?,
+                id_token: self.decrypt_token_field(&account_id, "id", &row.get::<_, String>(1)?)?,
+                access_token: self.decrypt_token_field(
+                    &account_id,
+                    "access",
+                    &row.get::<_, String>(2)?,
+                )?,
+                refresh_token: self.decrypt_token_field(
+                    &account_id,
+                    "refresh",
+                    &row.get::<_, String>(3)?,
+                )?,
+                account_id,
             });
         }
         Ok(out)
@@ -290,7 +300,7 @@ impl Storage {
         let mut stmt = self.conn.prepare(token_by_account_sql())?;
         let mut rows = stmt.query([account_id])?;
         if let Some(row) = rows.next()? {
-            Ok(Some(map_token_row(row)?))
+            Ok(Some(self.map_token_row(row)?))
         } else {
             Ok(None)
         }
@@ -342,6 +352,106 @@ impl Storage {
              ON tokens(COALESCE(next_refresh_at, 0) ASC, account_id ASC)",
             [],
         )?;
+        Ok(())
+    }
+
+    pub(super) fn encrypt_token(&self, token: &Token) -> Result<Token> {
+        Ok(Token {
+            account_id: token.account_id.clone(),
+            id_token: self.encrypt_token_field(&token.account_id, "id", &token.id_token)?,
+            access_token: self.encrypt_token_field(
+                &token.account_id,
+                "access",
+                &token.access_token,
+            )?,
+            refresh_token: self.encrypt_token_field(
+                &token.account_id,
+                "refresh",
+                &token.refresh_token,
+            )?,
+            api_key_access_token: token
+                .api_key_access_token
+                .as_deref()
+                .map(|value| self.encrypt_token_field(&token.account_id, "api-key-access", value))
+                .transpose()?,
+            last_refresh: token.last_refresh,
+        })
+    }
+
+    fn encrypt_token_field(&self, account_id: &str, kind: &str, value: &str) -> Result<String> {
+        if value.trim().is_empty() {
+            // Preserve blank/whitespace-only sentinels so existing SQL health
+            // predicates can continue to identify unusable credentials.
+            return Ok(value.to_string());
+        }
+        self.encrypt_vault_text(&format!("codex-token:{account_id}:{kind}"), value)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+    }
+
+    pub(super) fn decrypt_token_field(
+        &self,
+        account_id: &str,
+        kind: &str,
+        value: &str,
+    ) -> Result<String> {
+        self.decrypt_vault_text(&format!("codex-token:{account_id}:{kind}"), value)
+            .map_err(|error| rusqlite::Error::FromSql(error.to_string()))
+    }
+
+    fn map_token_row(&self, row: &Row<'_>) -> Result<Token> {
+        let account_id: String = row.get(0)?;
+        Ok(Token {
+            id_token: self.decrypt_token_field(&account_id, "id", &row.get::<_, String>(1)?)?,
+            access_token: self.decrypt_token_field(
+                &account_id,
+                "access",
+                &row.get::<_, String>(2)?,
+            )?,
+            refresh_token: self.decrypt_token_field(
+                &account_id,
+                "refresh",
+                &row.get::<_, String>(3)?,
+            )?,
+            api_key_access_token: row
+                .get::<_, Option<String>>(4)?
+                .map(|value| self.decrypt_token_field(&account_id, "api-key-access", &value))
+                .transpose()?,
+            account_id,
+            last_refresh: row.get(5)?,
+        })
+    }
+
+    #[cfg(windows)]
+    pub(super) fn encrypt_plaintext_codex_tokens(&self) -> Result<()> {
+        let tokens = {
+            let mut stmt = self.conn.prepare(token_list_sql())?;
+            let mut rows = stmt.query([])?;
+            let mut tokens = Vec::new();
+            while let Some(row) = rows.next()? {
+                let raw_fields = [
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ];
+                let raw_api_key = row.get::<_, Option<String>>(4)?;
+                let needs_upgrade = raw_fields
+                    .iter()
+                    .chain(raw_api_key.iter())
+                    .any(|value| !value.is_empty() && !value.starts_with("vault:v1:"));
+                if needs_upgrade {
+                    tokens.push(self.map_token_row(row)?);
+                }
+            }
+            tokens
+        };
+        for token in tokens {
+            self.insert_token(&token)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    pub(super) fn encrypt_plaintext_codex_tokens(&self) -> Result<()> {
         Ok(())
     }
 }
@@ -453,25 +563,6 @@ fn tokens_due_for_refresh_sql() -> &'static str {
 ///
 /// # 返回
 /// 返回函数执行结果
-fn map_token_row(row: &Row<'_>) -> Result<Token> {
-    Ok(Token {
-        account_id: row.get(0)?,
-        id_token: row.get(1)?,
-        access_token: row.get(2)?,
-        refresh_token: row.get(3)?,
-        api_key_access_token: row.get(4)?,
-        last_refresh: row.get(5)?,
-    })
-}
-
-fn map_account_token_plan_row(row: &Row<'_>) -> Result<AccountTokenPlan> {
-    Ok(AccountTokenPlan {
-        account_id: row.get(0)?,
-        id_token: row.get(1)?,
-        access_token: row.get(2)?,
-    })
-}
-
 fn map_account_token_candidate_row(row: &Row<'_>) -> Result<AccountTokenCandidate> {
     Ok(AccountTokenCandidate {
         account_id: row.get(0)?,
@@ -490,7 +581,7 @@ fn list_tokens_for_accounts_chunk(storage: &Storage, account_ids: &[String]) -> 
     let mut rows = stmt.query(params_from_iter(params))?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
-        out.push(map_token_row(row)?);
+        out.push(storage.map_token_row(row)?);
     }
     Ok(out)
 }
@@ -575,7 +666,16 @@ fn list_account_token_plans_for_accounts_chunk(
     let mut rows = stmt.query(params_from_iter(params))?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
-        out.push(map_account_token_plan_row(row)?);
+        let account_id: String = row.get(0)?;
+        out.push(AccountTokenPlan {
+            id_token: storage.decrypt_token_field(&account_id, "id", &row.get::<_, String>(1)?)?,
+            access_token: storage.decrypt_token_field(
+                &account_id,
+                "access",
+                &row.get::<_, String>(2)?,
+            )?,
+            account_id,
+        });
     }
     Ok(out)
 }

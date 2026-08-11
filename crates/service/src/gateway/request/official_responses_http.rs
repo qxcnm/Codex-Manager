@@ -528,6 +528,55 @@ fn normalize_dynamic_tools_to_tools(path: &str, obj: &mut Map<String, Value>) ->
     true
 }
 
+/// Repairs synthetic output item IDs emitted by an interrupted Codex stream
+/// before forwarding conversation history back to the official Responses
+/// endpoint. The desktop client can persist an incomplete item with an
+/// `item_` prefix, while the official endpoint validates a type-specific prefix
+/// (`msg_` for messages, `rs_` for reasoning, `fc_` for function calls, and
+/// `ctc_` for custom tool calls).
+///
+/// Keep this deliberately narrow: other input item types have their own ID
+/// namespaces, and an arbitrary malformed reasoning ID cannot be made valid by
+/// merely adding a prefix.
+pub(super) fn normalize_interrupted_input_item_ids(
+    path: &str,
+    obj: &mut Map<String, Value>,
+) -> bool {
+    if !is_responses_path(path) {
+        return false;
+    }
+    let Some(input) = obj.get_mut("input").and_then(Value::as_array_mut) else {
+        return false;
+    };
+
+    let mut changed = false;
+    for item in input {
+        let Some(item) = item.as_object_mut() else {
+            continue;
+        };
+        let expected_prefix = match item.get("type").and_then(Value::as_str) {
+            Some("message") => "msg_",
+            Some("reasoning") => "rs_",
+            Some("function_call") => "fc_",
+            Some("custom_tool_call") => "ctc_",
+            _ => continue,
+        };
+        let Some(id) = item.get_mut("id") else {
+            continue;
+        };
+        let Some(suffix) = id.as_str().and_then(|value| value.strip_prefix("item_")) else {
+            continue;
+        };
+        if suffix.is_empty() {
+            continue;
+        }
+
+        *id = Value::String(format!("{expected_prefix}{suffix}"));
+        changed = true;
+    }
+    changed
+}
+
 pub(crate) fn apply_reasoning_override(
     path: &str,
     obj: &mut Map<String, Value>,
@@ -677,6 +726,9 @@ pub(crate) fn apply_codex_http_request_rules(
         result.changed = true;
     }
     if normalize_compact_instructions(path, obj) {
+        result.changed = true;
+    }
+    if normalize_interrupted_input_item_ids(path, obj) {
         result.changed = true;
     }
     if ensure_client_metadata_installation_id(path, obj, installation_id) {

@@ -12,6 +12,7 @@ pub(crate) struct IncomingHeaderSnapshot {
     session_id: Option<String>,
     session_affinity: Option<String>,
     client_request_id: Option<String>,
+    idempotency_key: Option<String>,
     subagent: Option<String>,
     beta_features: Option<String>,
     window_id: Option<String>,
@@ -62,6 +63,12 @@ impl IncomingHeaderSnapshot {
                 snapshot.x_api_key_present = true;
                 if snapshot.x_api_key.is_none() && !value.is_empty() {
                     snapshot.x_api_key = Some(value.to_string());
+                }
+                continue;
+            }
+            if snapshot.idempotency_key.is_none() && name.eq_ignore_ascii_case("idempotency-key") {
+                if !value.is_empty() {
+                    snapshot.idempotency_key = Some(value.to_string());
                 }
                 continue;
             }
@@ -219,6 +226,13 @@ impl IncomingHeaderSnapshot {
                     if !value.is_empty() {
                         snapshot.x_api_key = Some(value.to_string());
                     }
+                }
+                continue;
+            }
+            if snapshot.idempotency_key.is_none() && header.field.equiv("idempotency-key") {
+                let value = header.value.as_str().trim();
+                if !value.is_empty() {
+                    snapshot.idempotency_key = Some(value.to_string());
                 }
                 continue;
             }
@@ -633,6 +647,10 @@ impl IncomingHeaderSnapshot {
 
     pub(crate) fn oai_attestation(&self) -> Option<&str> {
         self.oai_attestation.as_deref()
+    }
+
+    pub(crate) fn idempotency_key(&self) -> Option<&str> {
+        self.idempotency_key.as_deref()
     }
 
     /// 函数 `passthrough_codex_headers`

@@ -6,7 +6,8 @@ use codexmanager_core::rpc::types::{
     AggregateApiTestResult, ManagedModelSourceModelEntry,
 };
 use codexmanager_core::storage::{
-    now_ts, AggregateApi, AggregateApiSupplierIdentity, AggregateApiSupplierModel, ModelSourceModel,
+    now_ts, AggregateApi, AggregateApiSupplierIdentity, AggregateApiSupplierModel,
+    ModelSourceModel, Storage,
 };
 use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
@@ -1305,15 +1306,16 @@ fn build_claude_probe_body(model: &str) -> serde_json::Value {
 /// 返回函数执行结果
 fn build_codex_probe_body() -> serde_json::Value {
     json!({
-        "model": "gpt-5.1-codex",
+        "model": "gpt-5.6-sol",
         "input": [{
             "role": "user",
             "content": [{
-                "type": "text",
+                "type": "input_text",
                 "text": "Who are you?"
             }]
         }],
-        "stream": true
+        "stream": false,
+        "max_output_tokens": 16
     })
 }
 
@@ -1345,17 +1347,6 @@ fn build_gemini_probe_body() -> serde_json::Value {
             "maxOutputTokens": 1
         }
     })
-}
-
-fn append_client_version_query(url: &str) -> String {
-    if url.contains("client_version=") {
-        return url.to_string();
-    }
-    let separator = if url.contains('?') { '&' } else { '?' };
-    format!(
-        "{url}{separator}client_version={}",
-        gateway::current_codex_user_agent_version()
-    )
 }
 
 /// 函数 `probe_codex_only_for_provider`
@@ -1541,48 +1532,12 @@ fn add_codex_probe_headers(
 
 fn build_codex_models_probe_url(api: &AggregateApi) -> String {
     let probe_path = action_path_or_default(api, "/models");
-    let url = normalize_probe_url(api.url.as_str(), probe_path.as_str());
-    append_client_version_query(url.as_str())
-}
-
-/// 函数 `probe_codex_models_endpoint`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - client: 参数 client
-/// - base_url: 参数 base_url
-/// - secret: 参数 secret
-///
-/// # 返回
-/// 返回函数执行结果
-fn probe_codex_models_endpoint(
-    client: &reqwest::blocking::Client,
-    api: &AggregateApi,
-    secret: &str,
-) -> Result<i64, String> {
-    let url = build_codex_models_probe_url(api);
-    let builder = client.get(url.as_str());
-    let (builder, updated_url) = apply_probe_auth(builder, url.clone(), api, secret)?;
-    let builder = if updated_url != url {
-        let rebuilt = client.get(updated_url.as_str());
-        let (rebuilt, _) = apply_probe_auth(rebuilt, updated_url, api, secret)?;
-        rebuilt
-    } else {
-        builder
-    };
-    let response = add_codex_probe_headers(builder)?
-        .send()
-        .map_err(|err| err.to_string())?;
-
-    let status_code = response.status().as_u16() as i64;
-    if !response.status().is_success() {
-        return Err(format!("codex models probe http_status={status_code}"));
-    }
-    read_first_chunk(response)?;
-    Ok(status_code)
+    // Generic OpenAI-compatible relays do not consistently accept Codex's
+    // private `client_version` query parameter. Some otherwise healthy relays
+    // return a Cloudflare/origin 502 only when that parameter is present.
+    // Model discovery is a standard OpenAI endpoint, so keep the first probe
+    // standards-compliant and query `/v1/models` without Codex-only extras.
+    normalize_probe_url(api.url.as_str(), probe_path.as_str())
 }
 
 fn discover_codex_models_endpoint(
@@ -1632,6 +1587,7 @@ fn probe_codex_responses_endpoint(
     client: &reqwest::blocking::Client,
     api: &AggregateApi,
     secret: &str,
+    probe_model: Option<&str>,
 ) -> Result<i64, String> {
     let action_hint = api
         .action
@@ -1655,23 +1611,26 @@ fn probe_codex_responses_endpoint(
     } else {
         builder
     };
+    let selected_model = probe_model
+        .or(api.model_override.as_deref())
+        .unwrap_or("gpt-5.6-sol");
     let request_body = if probe_path.to_ascii_lowercase().contains("chat/completions") {
         json!({
-            "model": api.model_override.as_deref().unwrap_or("gpt-4o-mini"),
+            "model": selected_model,
             "messages": [{"role":"user","content":"hi"}],
             "stream": false
         })
-    } else if let Some(model_override) = api.model_override.as_deref() {
+    } else if probe_model.is_some() || api.model_override.is_some() {
         if is_minimax_aggregate_api(api) {
             json!({
-                "model": model_override,
+                "model": selected_model,
                 "input": "Who are you?",
                 "stream": false
             })
         } else {
             let mut body = build_codex_probe_body();
             if let Some(obj) = body.as_object_mut() {
-                obj.insert("model".to_string(), json!(model_override));
+                obj.insert("model".to_string(), json!(selected_model));
             }
             body
         }
@@ -1706,35 +1665,105 @@ fn probe_codex_responses_endpoint(
 ///
 /// # 返回
 /// 返回函数执行结果
+#[cfg(test)]
 fn probe_codex_endpoint(
     client: &reqwest::blocking::Client,
     api: &AggregateApi,
     secret: &str,
 ) -> Result<i64, String> {
+    probe_codex_endpoint_with_discovery(client, api, secret).map(|outcome| outcome.status_code)
+}
+
+fn codex_probe_model_candidates(discovered: &[String]) -> Vec<String> {
+    const PREFERRED: &[&str] = &["gpt-5.6-sol", "gpt-5.5", "gpt-5.4", "gpt-4o-mini"];
+    let mut candidates = Vec::new();
+    for preferred in PREFERRED {
+        if let Some(model) = discovered
+            .iter()
+            .find(|model| model.eq_ignore_ascii_case(preferred))
+        {
+            push_unique_model(&mut candidates, model);
+        }
+    }
+    for model in discovered {
+        let normalized = model.to_ascii_lowercase();
+        if normalized.contains("image")
+            || normalized.contains("audio")
+            || normalized.contains("embed")
+            || normalized.contains("review")
+            || normalized.contains("moderation")
+            || normalized.contains("tts")
+            || normalized.contains("whisper")
+        {
+            continue;
+        }
+        push_unique_model(&mut candidates, model);
+        if candidates.len() >= 4 {
+            break;
+        }
+    }
+    candidates
+}
+
+struct CodexProbeOutcome {
+    status_code: i64,
+    models: Vec<String>,
+}
+
+fn probe_codex_endpoint_with_discovery(
+    client: &reqwest::blocking::Client,
+    api: &AggregateApi,
+    secret: &str,
+) -> Result<CodexProbeOutcome, String> {
     let has_model_override = api
         .model_override
         .as_deref()
         .map(str::trim)
         .is_some_and(|value| !value.is_empty());
     if has_model_override {
-        return probe_codex_responses_endpoint(client, api, secret);
+        return probe_codex_responses_endpoint(client, api, secret, api.model_override.as_deref())
+            .map(|status_code| CodexProbeOutcome {
+                status_code,
+                models: api.model_override.clone().into_iter().collect(),
+            });
     }
 
-    let models_result = probe_codex_models_endpoint(client, api, secret);
-    if let Ok(code) = models_result {
-        return Ok(code);
+    let models_result = discover_codex_models_endpoint(client, api, secret);
+    if let Ok(models) = models_result.as_ref() {
+        let mut probe_errors = Vec::new();
+        for model in codex_probe_model_candidates(models) {
+            match probe_codex_responses_endpoint(client, api, secret, Some(model.as_str())) {
+                Ok(status_code) => {
+                    return Ok(CodexProbeOutcome {
+                        status_code,
+                        models: models.clone(),
+                    });
+                }
+                Err(error) => probe_errors.push(format!("model={model}: {error}")),
+            }
+        }
+        return Err(format!(
+            "codex models discovery succeeded but real inference failed: {}",
+            probe_errors.join("; ")
+        ));
     }
     let models_err = models_result
         .err()
         .unwrap_or_else(|| "codex models probe failed".to_string());
-    let responses_result = probe_codex_responses_endpoint(client, api, secret);
-    if let Ok(code) = responses_result {
-        return Ok(code);
+    let mut response_errors = Vec::new();
+    for model in ["gpt-5.6-sol", "gpt-5.5", "gpt-5.4", "gpt-4o-mini"] {
+        match probe_codex_responses_endpoint(client, api, secret, Some(model)) {
+            Ok(code) => {
+                return Ok(CodexProbeOutcome {
+                    status_code: code,
+                    models: vec![model.to_string()],
+                });
+            }
+            Err(error) => response_errors.push(format!("model={model}: {error}")),
+        }
     }
 
-    let responses_err = responses_result
-        .err()
-        .unwrap_or_else(|| "codex responses probe failed".to_string());
+    let responses_err = response_errors.join("; ");
     Err(format!("{models_err}; {responses_err}"))
 }
 
@@ -2062,6 +2091,39 @@ fn source_model_entry(model: ModelSourceModel) -> ManagedModelSourceModelEntry {
     }
 }
 
+fn find_duplicate_aggregate_api_id(
+    storage: &Storage,
+    provider_type: &str,
+    url: &str,
+    auth_type: &str,
+    secret: &str,
+) -> Result<Option<String>, String> {
+    let normalized_url = url.trim().trim_end_matches('/');
+    let candidates = storage
+        .list_aggregate_apis()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|item| {
+            normalize_provider_type_value(item.provider_type.as_str()) == provider_type
+                && item.auth_type == auth_type
+                && item.url.trim().trim_end_matches('/') == normalized_url
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    let ids = candidates
+        .iter()
+        .map(|item| item.id.clone())
+        .collect::<Vec<_>>();
+    let secrets = storage
+        .list_aggregate_api_secrets_for_ids(&ids)
+        .map_err(|error| error.to_string())?;
+    Ok(secrets
+        .into_iter()
+        .find_map(|(id, existing)| (existing.trim() == secret.trim()).then_some(id)))
+}
+
 /// 函数 `create_aggregate_api`
 ///
 /// 作者: gaohongshun
@@ -2141,6 +2203,33 @@ pub(crate) fn create_aggregate_api(
             .ok_or_else(|| "password is required".to_string())?;
         serialize_userpass_secret(username, password)?
     };
+    if let Some(existing_id) = find_duplicate_aggregate_api_id(
+        &storage,
+        normalized_provider_type.as_str(),
+        normalized_url.as_str(),
+        normalized_auth_type.as_str(),
+        normalized_secret.as_str(),
+    )? {
+        if let Some(model_slugs) = model_slugs.as_ref() {
+            storage
+                .set_quota_source_model_assignments(
+                    "aggregate_api",
+                    existing_id.as_str(),
+                    model_slugs.as_slice(),
+                )
+                .map_err(|error| {
+                    format!("persist aggregate api model assignments failed: {error}")
+                })?;
+        }
+        return Ok(AggregateApiCreateResult {
+            id: existing_id,
+            key: if normalized_auth_type == AGGREGATE_API_AUTH_APIKEY {
+                normalized_secret
+            } else {
+                String::new()
+            },
+        });
+    }
     let id = generate_aggregate_api_id();
     let created_at = now_ts();
     let record = AggregateApi {
@@ -2537,13 +2626,20 @@ pub(crate) fn test_aggregate_api_connection(
     let client = gateway::upstream_client_for_aggregate_url(api.url.as_str());
     let started_at = Instant::now();
     let provider_type = normalize_provider_type_value(api.provider_type.as_str());
+    let mut discovered_models = Vec::new();
     let result = match provider_type.as_str() {
         AGGREGATE_API_PROVIDER_CLAUDE => probe_claude_endpoint(&client, &api, &secret),
         AGGREGATE_API_PROVIDER_GEMINI => probe_gemini_endpoint(&client, &api, &secret),
         _ if probe_codex_only_for_provider(provider_type.as_str()) => {
-            probe_codex_endpoint(&client, &api, &secret)
+            probe_codex_endpoint_with_discovery(&client, &api, &secret).map(|outcome| {
+                discovered_models = outcome.models;
+                outcome.status_code
+            })
         }
-        _ => probe_codex_endpoint(&client, &api, &secret),
+        _ => probe_codex_endpoint_with_discovery(&client, &api, &secret).map(|outcome| {
+            discovered_models = outcome.models;
+            outcome.status_code
+        }),
     };
     let (ok, status_code, last_error) = match result {
         Ok(code) => (true, Some(code), None),
@@ -2552,6 +2648,19 @@ pub(crate) fn test_aggregate_api_connection(
     let message = last_error.map(|err| format!("provider={provider_type}; {err}"));
 
     let _ = storage.update_aggregate_api_test_result(api_id, ok, status_code, message.as_deref());
+    if ok && !discovered_models.is_empty() {
+        if let Err(err) = crate::apikey_models::sync_discovered_aggregate_api_models(
+            &storage,
+            api_id,
+            discovered_models,
+        ) {
+            log::warn!(
+                "event=aggregate_api_probe_model_sync_failed api_id={} err={}",
+                api_id,
+                err
+            );
+        }
+    }
     Ok(AggregateApiTestResult {
         id: api_id.to_string(),
         ok,

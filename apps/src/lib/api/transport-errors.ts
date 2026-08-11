@@ -37,6 +37,21 @@ function normalizeKnownAppErrorMessage(message: string): string {
   }
 
   const normalized = trimmed.toLowerCase();
+  if (normalized.includes("grok_credential_unauthorized")) {
+    return "Grok 登录凭据已失效，请重新导入";
+  }
+  if (normalized.includes("grok_antibot_challenge")) {
+    return "Grok 风控验证未通过，请检查固定代理出口后稍后重试";
+  }
+  if (normalized.includes("grok_quota_rate_limited")) {
+    return "Grok 模型探测过于频繁，请稍后重试";
+  }
+  if (normalized.includes("grok_quota_shape_unknown")) {
+    return "暂时无法确认该 Grok 账号的套餐等级，未展示未经验证的模型";
+  }
+  if (normalized.includes("grok_statsig_signer")) {
+    return "Grok 模型探测签名服务暂时不可用";
+  }
   if (
     normalized === "request or response body error" ||
     normalized === "stream read failed" ||

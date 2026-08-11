@@ -19,7 +19,7 @@ const MEMBER_RECENT_LOG_LIMIT: i64 = 8;
 const LOW_WALLET_CREDIT_MICROS: i64 = 1_000_000;
 const ADMIN_USAGE_RANGE_DAYS: i64 = 7;
 const ADMIN_TOP_USER_LIMIT: usize = 12;
-const ADMIN_TOP_SOURCE_LIMIT: usize = 12;
+const ADMIN_TOP_SOURCE_LIMIT: usize = 1_000;
 
 pub(crate) fn read_admin_usage_summary(
     actor: &RpcActor,
@@ -60,67 +60,96 @@ pub(crate) fn read_admin_usage_summary(
         time_bounds::DAY_SECONDS,
         raw_daily_usage,
     );
-    let (users, openai_accounts, aggregate_apis) = if include_breakdowns {
-        let users = build_dashboard_user_summaries(
-            &storage,
-            storage
-                .summarize_request_token_stats_by_user_between_limited(
+    let (users, openai_accounts, kiro_credentials, grok_credentials, aggregate_apis) =
+        if include_breakdowns {
+            let users = build_dashboard_user_summaries(
+                &storage,
+                storage
+                    .summarize_request_token_stats_by_user_between_limited(
+                        today_start,
+                        today_end,
+                        Some(ADMIN_TOP_USER_LIMIT),
+                    )
+                    .map_err(|err| format!("summarize today user usage failed: {err}"))?,
+                storage
+                    .summarize_request_token_stats_by_user_between_limited(
+                        range_start,
+                        range_end,
+                        Some(ADMIN_TOP_USER_LIMIT),
+                    )
+                    .map_err(|err| format!("summarize range user usage failed: {err}"))?,
+            )?;
+            let today_source_usage = storage
+                .summarize_request_token_stats_by_sources_between_limited(
+                    &["openai_account", "kiro", "grok", "aggregate_api"],
                     today_start,
                     today_end,
-                    Some(ADMIN_TOP_USER_LIMIT),
+                    Some(ADMIN_TOP_SOURCE_LIMIT),
                 )
-                .map_err(|err| format!("summarize today user usage failed: {err}"))?,
-            storage
-                .summarize_request_token_stats_by_user_between_limited(
+                .map_err(|err| format!("summarize today source usage failed: {err}"))?;
+            let range_source_usage = storage
+                .summarize_request_token_stats_by_sources_between_limited(
+                    &["openai_account", "kiro", "grok", "aggregate_api"],
                     range_start,
                     range_end,
-                    Some(ADMIN_TOP_USER_LIMIT),
+                    Some(ADMIN_TOP_SOURCE_LIMIT),
                 )
-                .map_err(|err| format!("summarize range user usage failed: {err}"))?,
-        )?;
-        let today_source_usage = storage
-            .summarize_request_token_stats_by_sources_between_limited(
-                &["openai_account", "aggregate_api"],
-                today_start,
-                today_end,
-                Some(ADMIN_TOP_SOURCE_LIMIT),
-            )
-            .map_err(|err| format!("summarize today source usage failed: {err}"))?;
-        let range_source_usage = storage
-            .summarize_request_token_stats_by_sources_between_limited(
-                &["openai_account", "aggregate_api"],
-                range_start,
-                range_end,
-                Some(ADMIN_TOP_SOURCE_LIMIT),
-            )
-            .map_err(|err| format!("summarize range source usage failed: {err}"))?;
-        let today_account_usage = filter_source_usage(&today_source_usage, "openai_account");
-        let range_account_usage = filter_source_usage(&range_source_usage, "openai_account");
-        let openai_accounts = build_dashboard_source_summaries(
-            "openai_account",
-            account_source_metadata(
-                &storage,
-                &dashboard_source_ids(&today_account_usage, &range_account_usage),
-            )?,
-            today_account_usage,
-            range_account_usage,
-        );
-        let today_aggregate_usage = filter_source_usage(&today_source_usage, "aggregate_api");
-        let range_aggregate_usage = filter_source_usage(&range_source_usage, "aggregate_api");
-        let aggregate_apis = build_dashboard_source_summaries(
-            "aggregate_api",
-            aggregate_source_metadata(
-                &storage,
-                &dashboard_source_ids(&today_aggregate_usage, &range_aggregate_usage),
-            )?,
-            today_aggregate_usage,
-            range_aggregate_usage,
-        );
+                .map_err(|err| format!("summarize range source usage failed: {err}"))?;
+            let today_account_usage = filter_source_usage(&today_source_usage, "openai_account");
+            let range_account_usage = filter_source_usage(&range_source_usage, "openai_account");
+            let openai_accounts = build_dashboard_source_summaries(
+                "openai_account",
+                account_source_metadata(
+                    &storage,
+                    &dashboard_source_ids(&today_account_usage, &range_account_usage),
+                )?,
+                today_account_usage,
+                range_account_usage,
+            );
+            let today_kiro_usage = filter_source_usage(&today_source_usage, "kiro");
+            let range_kiro_usage = filter_source_usage(&range_source_usage, "kiro");
+            let kiro_credentials = build_dashboard_source_summaries(
+                "kiro",
+                kiro_source_metadata(
+                    &storage,
+                    &dashboard_source_ids(&today_kiro_usage, &range_kiro_usage),
+                )?,
+                today_kiro_usage,
+                range_kiro_usage,
+            );
+            let today_grok_usage = filter_source_usage(&today_source_usage, "grok");
+            let range_grok_usage = filter_source_usage(&range_source_usage, "grok");
+            let grok_credentials = build_dashboard_source_summaries(
+                "grok",
+                grok_source_metadata(
+                    &storage,
+                    &dashboard_source_ids(&today_grok_usage, &range_grok_usage),
+                )?,
+                today_grok_usage,
+                range_grok_usage,
+            );
+            let today_aggregate_usage = filter_source_usage(&today_source_usage, "aggregate_api");
+            let range_aggregate_usage = filter_source_usage(&range_source_usage, "aggregate_api");
+            let aggregate_apis = build_dashboard_source_summaries(
+                "aggregate_api",
+                aggregate_source_metadata(
+                    &storage,
+                    &dashboard_source_ids(&today_aggregate_usage, &range_aggregate_usage),
+                )?,
+                today_aggregate_usage,
+                range_aggregate_usage,
+            );
 
-        (users, openai_accounts, aggregate_apis)
-    } else {
-        (Vec::new(), Vec::new(), Vec::new())
-    };
+            (
+                users,
+                openai_accounts,
+                kiro_credentials,
+                grok_credentials,
+                aggregate_apis,
+            )
+        } else {
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
+        };
 
     Ok(DashboardAdminUsageSummaryResult {
         range_start_ts: range_start,
@@ -131,6 +160,8 @@ pub(crate) fn read_admin_usage_summary(
         daily_usage,
         users,
         openai_accounts,
+        kiro_credentials,
+        grok_credentials,
         aggregate_apis,
     })
 }
@@ -281,6 +312,52 @@ fn account_source_metadata(
                     name: Some(account.label),
                     status: Some(account.status),
                     provider: Some("openai".to_string()),
+                },
+            )
+        })
+        .collect())
+}
+
+fn kiro_source_metadata(
+    storage: &codexmanager_core::storage::Storage,
+    source_ids: &[String],
+) -> Result<HashMap<String, SourceMetadata>, String> {
+    let wanted = source_ids.iter().collect::<HashSet<_>>();
+    Ok(storage
+        .list_kiro_credentials()
+        .map_err(|err| format!("list Kiro dashboard metadata failed: {err}"))?
+        .into_iter()
+        .filter(|item| wanted.contains(&item.id))
+        .map(|item| {
+            (
+                item.id,
+                SourceMetadata {
+                    name: item.email,
+                    status: Some(item.status),
+                    provider: Some("kiro".to_string()),
+                },
+            )
+        })
+        .collect())
+}
+
+fn grok_source_metadata(
+    storage: &codexmanager_core::storage::Storage,
+    source_ids: &[String],
+) -> Result<HashMap<String, SourceMetadata>, String> {
+    let wanted = source_ids.iter().collect::<HashSet<_>>();
+    Ok(storage
+        .list_grok_credentials()
+        .map_err(|err| format!("list Grok dashboard metadata failed: {err}"))?
+        .into_iter()
+        .filter(|item| wanted.contains(&item.id))
+        .map(|item| {
+            (
+                item.id,
+                SourceMetadata {
+                    name: Some(item.account_masked),
+                    status: Some(item.status),
+                    provider: Some("grok".to_string()),
                 },
             )
         })

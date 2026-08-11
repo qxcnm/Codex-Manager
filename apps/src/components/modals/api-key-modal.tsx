@@ -46,9 +46,9 @@ import { Key, Clipboard, ShieldCheck, Info } from "lucide-react";
 import type { ApiKey, ApiKeyOwner, AppUser } from "@/types";
 
 const PROTOCOL_LABELS: Record<string, string> = {
-  openai_compat: "通配兼容 (Codex / Claude Code / Gemini CLI)",
-  anthropic_native: "通配兼容 (Codex / Claude Code / Gemini CLI)",
-  gemini_native: "通配兼容 (Codex / Claude Code / Gemini CLI)",
+  openai_compat: "OpenAI 格式（首版）",
+  anthropic_native: "OpenAI 格式（首版）",
+  gemini_native: "OpenAI 格式（首版）",
 };
 
 const REASONING_LABELS: Record<string, string> = {
@@ -62,6 +62,11 @@ const REASONING_LABELS: Record<string, string> = {
 const SERVICE_TIER_LABELS: Record<string, string> = {
   auto: "跟随请求",
   fast: "Fast",
+};
+
+const MODEL_VISIBILITY_LABELS: Record<string, string> = {
+  selectable: "前台可选择跨平台模型",
+  managed: "后台托管选择模型",
 };
 
 function normalizeEditableServiceTier(value?: string | null): string {
@@ -109,6 +114,24 @@ function appUserLabel(user: AppUser | null | undefined): string {
   return user.displayName ? `${user.displayName} (${user.username})` : user.username;
 }
 
+function formatLocalDateTimeInput(timestamp: number | null | undefined): string {
+  if (!timestamp) return "";
+  const date = new Date(timestamp * 1000);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function parsePolicyList(value: string): string[] {
+  return Array.from(
+    new Set(
+      value
+        .split(/[\n,;]+/)
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
 /**
  * 函数 `ApiKeyModal`
  *
@@ -145,6 +168,11 @@ export function ApiKeyModal({
   const [accountPlanFilter, setAccountPlanFilter] = useState("all");
   const [quotaLimitValue, setQuotaLimitValue] = useState("");
   const [quotaLimitUnit, setQuotaLimitUnit] = useState<QuotaLimitUnit>("k");
+  const [allowedModelsText, setAllowedModelsText] = useState("");
+  const [platformScope, setPlatformScope] = useState("all");
+  const [modelVisibility, setModelVisibility] = useState<"selectable" | "managed">("selectable");
+  const [expiresAtValue, setExpiresAtValue] = useState("");
+  const [concurrencyLimitValue, setConcurrencyLimitValue] = useState("");
   const [upstreamBaseUrl, setUpstreamBaseUrl] = useState("");
   const [customKey, setCustomKey] = useState("");
   const [ownerUserId, setOwnerUserId] = useState("");
@@ -235,6 +263,11 @@ export function ApiKeyModal({
       setAccountPlanFilter("all");
       setQuotaLimitValue("");
       setQuotaLimitUnit("k");
+      setAllowedModelsText("");
+      setPlatformScope("all");
+      setModelVisibility("selectable");
+      setExpiresAtValue("");
+      setConcurrencyLimitValue("");
       setUpstreamBaseUrl("");
       setCustomKey("");
       setOwnerUserId(
@@ -255,6 +288,15 @@ export function ApiKeyModal({
     setQuotaLimitUnit(resolvedQuotaUnit);
     setQuotaLimitValue(
       formatQuotaLimitValue(apiKey.quotaLimitTokens, resolvedQuotaUnit),
+    );
+    setAllowedModelsText(apiKey.allowedModels.join("\n"));
+    setPlatformScope(
+      apiKey.allowedPlatforms.length === 1 ? apiKey.allowedPlatforms[0] : "all",
+    );
+    setModelVisibility(apiKey.modelVisibility || "selectable");
+    setExpiresAtValue(formatLocalDateTimeInput(apiKey.expiresAt));
+    setConcurrencyLimitValue(
+      apiKey.concurrencyLimit ? String(apiKey.concurrencyLimit) : "",
     );
     setGeneratedKey("");
     setCustomKey("");
@@ -330,6 +372,18 @@ export function ApiKeyModal({
             ? accountPlanFilter
             : null,
         quotaLimitTokens: quotaLimitTokenPreview,
+        allowedModels: parsePolicyList(allowedModelsText),
+        allowedPlatforms:
+          platformScope === "codex" || platformScope === "kiro" || platformScope === "grok"
+            ? [platformScope as "codex" | "kiro" | "grok"]
+            : [],
+        modelVisibility,
+        expiresAt: expiresAtValue
+          ? Math.floor(new Date(expiresAtValue).getTime() / 1000)
+          : null,
+        concurrencyLimit: concurrencyLimitValue
+          ? Number.parseInt(concurrencyLimitValue, 10)
+          : null,
         customKey: !apiKey?.id && customKey.trim() ? customKey.trim() : null,
       };
 
@@ -629,7 +683,7 @@ export function ApiKeyModal({
                     {(value) =>
                       t(
                         PROTOCOL_LABELS[String(value || "")] ||
-                          "通配兼容 (Codex / Claude Code / Gemini CLI)",
+                          "OpenAI 格式（首版）",
                       )
                     }
                   </SelectValue>
@@ -637,13 +691,13 @@ export function ApiKeyModal({
                 <SelectContent align="start">
                     <SelectGroup>
                   <SelectItem value="openai_compat">
-                    {t("通配兼容 (Codex / Claude Code / Gemini CLI)")}
+                    {t("OpenAI 格式（首版）")}
                   </SelectItem>
                   </SelectGroup>
                 </SelectContent>
               </Select>
               <p className="min-h-[32px] text-[11px] text-muted-foreground">
-                {t("默认按路径通配：")}<code>/v1/messages*</code> {t("走 Claude 语义，")}<code>/v1beta/models/*:generateContent</code> {t("这类路径走 Gemini 语义，其它标准路径走 Codex / OpenAI 语义。")}
+                {t("固定使用 OpenAI Chat Completions / Responses；同一把 Key 可调用 Codex、Kiro 和智能别名。")}
               </p>
             </div>
             <div className="grid gap-2 content-start">
@@ -679,6 +733,108 @@ export function ApiKeyModal({
               </Select>
               <p className="text-[11px] text-muted-foreground">
                 {t("选择“跟随请求”时，会使用请求体里的实际模型；请求日志展示的是最终生效模型。")}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="grid gap-2 content-start">
+              <Label>{t("平台限制")}</Label>
+              <Select
+                value={platformScope}
+                onValueChange={(value) => value && setPlatformScope(String(value))}
+                disabled={!isServiceReady}
+              >
+                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent align="start">
+                  <SelectGroup>
+                    <SelectItem value="all">{t("Codex + Kiro + Grok")}</SelectItem>
+                    <SelectItem value="codex">Codex</SelectItem>
+                    <SelectItem value="kiro">Kiro</SelectItem>
+                    <SelectItem value="grok">Grok</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">
+                {t("智能别名也只会在允许的平台中选择上游。")}
+              </p>
+            </div>
+            <div className="grid gap-2 content-start">
+              <Label>{t("模型展示方式")}</Label>
+              <Select
+                value={modelVisibility}
+                onValueChange={(value) =>
+                  setModelVisibility(value === "managed" ? "managed" : "selectable")
+                }
+                disabled={!isServiceReady}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue>
+                    {(value) =>
+                      t(MODEL_VISIBILITY_LABELS[String(value || "")] || "前台可选择跨平台模型")
+                    }
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent align="start">
+                  <SelectGroup>
+                    <SelectItem value="selectable">{t("前台可选择跨平台模型")}</SelectItem>
+                    <SelectItem value="managed">{t("后台托管选择模型")}</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">
+                {modelVisibility === "managed"
+                  ? t("前台只看到统一别名或套餐模型；真实 Codex/Kiro/Grok 模型由后台调度。")
+                  : t("前台可以看到允许范围内的跨平台模型，并自行选择。")}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="grid gap-2 content-start">
+              <Label htmlFor="concurrencyLimit">{t("并发限制 (可选)")}</Label>
+              <Input
+                id="concurrencyLimit"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                value={concurrencyLimitValue}
+                placeholder={t("不填表示不限制")}
+                disabled={!isServiceReady}
+                onChange={(event) => setConcurrencyLimitValue(event.target.value)}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                {t("达到上限时新请求返回 429，流式请求完成后自动释放。")}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="grid gap-2 content-start">
+              <Label htmlFor="allowedModels">{t("模型白名单 (可选)")}</Label>
+              <textarea
+                id="allowedModels"
+                className="border-input bg-background min-h-24 w-full rounded-md border px-3 py-2 font-mono text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                value={allowedModelsText}
+                placeholder={"smart\nkiro/claude-sonnet-4.5"}
+                disabled={!isServiceReady}
+                onChange={(event) => setAllowedModelsText(event.target.value)}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                {t("每行或逗号分隔；留空允许该平台范围内的全部模型。")}
+              </p>
+            </div>
+            <div className="grid gap-2 content-start">
+              <Label htmlFor="expiresAt">{t("过期时间 (可选)")}</Label>
+              <Input
+                id="expiresAt"
+                type="datetime-local"
+                value={expiresAtValue}
+                disabled={!isServiceReady}
+                onChange={(event) => setExpiresAtValue(event.target.value)}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                {t("到期后网关立即拒绝该 Key 的新请求。")}
               </p>
             </div>
           </div>

@@ -161,12 +161,13 @@ fn dashboard_source_summaries_are_limited_to_top_sources() {
     let summaries =
         build_dashboard_source_summaries("openai_account", HashMap::new(), today, Vec::new());
 
-    assert_eq!(summaries.len(), super::ADMIN_TOP_SOURCE_LIMIT);
+    // The limit is an upper bound. With fewer source rows, every row remains.
+    assert_eq!(summaries.len(), 20);
     assert_eq!(summaries[0].source_id, "acc-19");
     assert_eq!(summaries[0].today_usage.total_tokens, 19);
     assert_eq!(
         summaries.last().map(|item| item.source_id.as_str()),
-        Some("acc-08")
+        Some("acc-00")
     );
 }
 

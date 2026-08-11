@@ -36,6 +36,20 @@ fn open_in_memory_configures_temp_store_for_query_workloads() {
 }
 
 #[test]
+fn init_accepts_model_visibility_column_created_by_api_key_policies_migration() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+
+    storage.init().expect("initialize schema");
+
+    assert!(storage
+        .has_column("api_key_policies", "model_visibility")
+        .expect("inspect api key policy columns"));
+    assert!(storage
+        .has_migration("121_api_key_model_visibility")
+        .expect("inspect migration state"));
+}
+
+#[test]
 fn open_file_configures_wal_and_temp_store() {
     let path = temp_db_path("connection-config");
     let storage = Storage::open(&path).expect("open file storage");
@@ -407,6 +421,18 @@ fn init_tracks_schema_migrations_and_is_idempotent() {
         "106_account_manager_created_by_lookup_indexes",
         "107_plugin_tasks_list_order_indexes",
         "108_accounts_cleanup_status_lookup_index",
+        "109_model_source_platform_kind_order_index",
+        "110_accounts_preferred_lookup_index",
+        "111_model_source_platform_slug_lookup_indexes",
+        "112_kiro_credentials",
+        "113_kiro_credential_health",
+        "114_kiro_proxy_username",
+        "115_api_key_policies",
+        "116_encrypt_api_key_secrets",
+        "117_encrypt_codex_tokens",
+        "118_kiro_credential_models",
+        "119_grok_credentials",
+        "120_grok_quota_models",
     ] {
         let applied: i64 = storage
             .conn

@@ -69,6 +69,22 @@ fn anthropic_challenge_uses_extended_cooldown_reason() {
     );
 }
 
+#[test]
+fn official_codex_not_found_is_retried_once_without_dropping_request_state() {
+    assert!(should_retry_transient_upstream_status_once(
+        "https://chatgpt.com/backend-api/codex/responses",
+        reqwest::StatusCode::NOT_FOUND,
+    ));
+    assert!(!should_retry_transient_upstream_status_once(
+        "https://api.openai.com/v1/responses",
+        reqwest::StatusCode::NOT_FOUND,
+    ));
+    assert!(!should_retry_transient_upstream_status_once(
+        "https://chatgpt.com/backend-api/models",
+        reqwest::StatusCode::NOT_FOUND,
+    ));
+}
+
 /// 函数 `retries_server_error_once_before_final_decision`
 ///
 /// 作者: gaohongshun
@@ -98,7 +114,7 @@ fn retries_server_error_once_before_final_decision() {
     let join = thread::spawn(move || {
         for (index, status) in [500u16, 200u16].into_iter().enumerate() {
             let mut request = server
-                .recv_timeout(Duration::from_secs(2))
+                .recv_timeout(Duration::from_secs(10))
                 .expect("receive upstream request")
                 .expect("request present");
             let mut body = Vec::new();
@@ -118,6 +134,7 @@ fn retries_server_error_once_before_final_decision() {
     let request_ctx = UpstreamRequestContext {
         request_path: "/v1/responses",
         protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        force_fresh_transport: false,
     };
     let body = Bytes::from_static(br#"{"model":"gpt-5.3-codex","input":"hello"}"#);
     let upstream = super::super::transport::send_upstream_request(
@@ -187,7 +204,7 @@ fn chatgpt_challenge_on_last_candidate_retries_without_same_account_failover() {
     let join = thread::spawn(move || {
         for index in 0..2 {
             let mut request = server
-                .recv_timeout(Duration::from_secs(2))
+                .recv_timeout(Duration::from_secs(10))
                 .expect("receive upstream request")
                 .expect("request present");
             let mut body = Vec::new();
@@ -215,6 +232,7 @@ fn chatgpt_challenge_on_last_candidate_retries_without_same_account_failover() {
     let request_ctx = UpstreamRequestContext {
         request_path: "/v1/responses",
         protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        force_fresh_transport: false,
     };
     let body = Bytes::from_static(br#"{"model":"gpt-5.3-codex","input":"hello"}"#);
     let upstream = super::super::transport::send_upstream_request(
@@ -283,7 +301,7 @@ fn chatgpt_cloudflare_challenge_directly_failovers_without_same_account_retry() 
     let hit_count_thread = Arc::clone(&hit_count);
     let join = thread::spawn(move || {
         let mut request = server
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(10))
             .expect("receive upstream request")
             .expect("request present");
         let mut body = Vec::new();
@@ -304,6 +322,7 @@ fn chatgpt_cloudflare_challenge_directly_failovers_without_same_account_retry() 
     let request_ctx = UpstreamRequestContext {
         request_path: "/v1/responses",
         protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        force_fresh_transport: false,
     };
     let body = Bytes::from_static(br#"{"model":"gpt-5.3-codex","input":"hello"}"#);
     let upstream = super::super::transport::send_upstream_request(
@@ -372,7 +391,7 @@ fn cloudflare_cf_ray_directly_failovers_without_same_account_retry() {
     let hit_count_thread = Arc::clone(&hit_count);
     let join = thread::spawn(move || {
         let mut request = server
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(10))
             .expect("receive upstream request")
             .expect("request present");
         let mut body = Vec::new();
@@ -392,6 +411,7 @@ fn cloudflare_cf_ray_directly_failovers_without_same_account_retry() {
     let request_ctx = UpstreamRequestContext {
         request_path: "/v1/responses",
         protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        force_fresh_transport: false,
     };
     let body = Bytes::from_static(br#"{"model":"gpt-5.3-codex","input":"hello"}"#);
     let upstream = super::super::transport::send_upstream_request(

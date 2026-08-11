@@ -127,6 +127,12 @@ function readAdminUsageSummary(value: unknown): DashboardAdminUsageSummary {
     openaiAccounts: asArray(source.openaiAccounts ?? source.openai_accounts)
       .map(readSourceUsageSummary)
       .filter((item): item is DashboardSourceUsageSummary => Boolean(item)),
+    kiroCredentials: asArray(source.kiroCredentials ?? source.kiro_credentials)
+      .map(readSourceUsageSummary)
+      .filter((item): item is DashboardSourceUsageSummary => Boolean(item)),
+    grokCredentials: asArray(source.grokCredentials ?? source.grok_credentials)
+      .map(readSourceUsageSummary)
+      .filter((item): item is DashboardSourceUsageSummary => Boolean(item)),
     aggregateApis: asArray(source.aggregateApis ?? source.aggregate_apis)
       .map(readSourceUsageSummary)
       .filter((item): item is DashboardSourceUsageSummary => Boolean(item)),

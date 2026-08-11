@@ -59,7 +59,7 @@ test("平台模式页面采用当前模式优先的切换结构", async () => {
   assert.match(source, /备份保存在 CodexManager 数据目录/);
   assert.match(source, /清理历史备份/);
   assert.match(source, /pruneHistoryBackups/);
-  assert.match(source, /href=\{buildStaticRouteUrl\(href\)\}/);
+  assert.match(source, /<ShellLink\s+href=\{href\}/);
 });
 
 test("平台密钥变更会刷新 Codex profile 候选密钥", async () => {

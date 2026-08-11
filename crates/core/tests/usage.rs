@@ -51,7 +51,18 @@ fn usage_snapshot_parsed() {
                 }
             }
         ],
-        "credits": { "balance": 12.5 }
+        "credits": {
+            "balance": 12.5,
+            "benefits": [
+                {
+                    "type": "message_reset_card",
+                    "remaining_count": 2,
+                    "expires_at": 1732000000,
+                    "manual_activation_required": true,
+                    "eligible_models": ["gpt-5"]
+                }
+            ]
+        }
     });
 
     let snap = parse_usage_snapshot(&payload);
@@ -76,6 +87,15 @@ fn usage_snapshot_parsed() {
     assert_eq!(extras[1]["allowed"], true);
     assert_eq!(extras[1]["limit_reached"], false);
     assert_eq!(extras[1]["primary_window"]["used_percent"], 40.0);
+    let reset_entitlements = credits["_codexmanager_reset_entitlements"]
+        .as_array()
+        .expect("reset entitlements array");
+    assert_eq!(reset_entitlements.len(), 1);
+    assert_eq!(reset_entitlements[0]["source_key"], "benefits");
+    assert_eq!(reset_entitlements[0]["label"], "message_reset_card");
+    assert_eq!(reset_entitlements[0]["count"], 2);
+    assert_eq!(reset_entitlements[0]["expires_at"], 1732000000);
+    assert_eq!(reset_entitlements[0]["manual_activation_required"], true);
 
     let url = usage_endpoint("https://chatgpt.com");
     assert_eq!(url, "https://chatgpt.com/backend-api/wham/usage");

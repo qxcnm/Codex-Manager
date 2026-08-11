@@ -968,6 +968,11 @@ pub(crate) fn resolve_aggregate_api_rotation_candidates(
         .list_active_aggregate_apis_by_provider_type(provider_type)
         .map_err(|err| err.to_string())?
         .into_iter()
+        // A channel that has already failed its explicit connection test must
+        // not be placed back on the customer request path merely because its
+        // enable switch is still on. It can re-enter after a successful manual
+        // or scheduled test updates last_test_status.
+        .filter(aggregate_api_is_routable)
         .collect::<Vec<_>>();
     candidates = normalize_candidate_order(candidates);
 
@@ -985,6 +990,14 @@ pub(crate) fn resolve_aggregate_api_rotation_candidates(
     } else {
         Ok(candidates)
     }
+}
+
+pub(crate) fn aggregate_api_is_routable(api: &AggregateApi) -> bool {
+    api.status.trim().eq_ignore_ascii_case("active")
+        && !api
+            .last_test_status
+            .as_deref()
+            .is_some_and(|status| status.trim().eq_ignore_ascii_case("failed"))
 }
 
 /// 函数 `proxy_aggregate_request`

@@ -1,14 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Activity, Cpu, Gauge, LogOut, RadioTower } from "lucide-react";
+import { Cable, Gauge, LogOut } from "lucide-react";
 import { toast } from "sonner";
 import { useAppStore } from "@/lib/store/useAppStore";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { DisclaimerTicker } from "@/components/layout/disclaimer-ticker";
 import { LanguageSwitcher } from "@/components/layout/language-switcher";
 import { serviceClient } from "@/lib/api/service-client";
 import { appClient } from "@/lib/api/app-client";
@@ -169,18 +168,14 @@ export function Header() {
 
   return (
     <>
-      <header className="sticky top-0 z-30 grid min-h-[72px] grid-cols-[minmax(0,1fr)_auto] items-center gap-3 glass-header px-4 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:px-5">
+      <header className="sticky top-0 z-30 flex min-h-16 items-center gap-4 glass-header px-4 xl:px-5">
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
         <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
-          <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background/80 text-primary shadow-sm">
-            <span className="absolute inset-x-2 top-1 h-px bg-primary/25" />
-            <span className="absolute inset-x-2 bottom-1 h-px bg-primary/10" />
-            <span className="font-mono text-xs font-semibold">CM</span>
-          </div>
+          <span className="h-8 w-px shrink-0 bg-gradient-to-b from-cyan-400/20 via-primary/70 to-violet-500/20" />
           <div className="min-w-0">
-            <p className="hidden items-center gap-1.5 font-mono text-[10px] font-semibold uppercase text-primary/70 sm:flex">
-              <Cpu className="h-3 w-3" />
-              CodexManager Admin Console
+            <p className="hidden items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-primary/75 sm:flex">
+              <Cable className="h-3 w-3" />
+              OpenRuntime · Control Plane
             </p>
             <h1 className="truncate text-lg font-semibold text-foreground">{getPageTitle()}</h1>
           </div>
@@ -193,25 +188,11 @@ export function Header() {
                 serviceStatus.connected ? "bg-emerald-500" : "bg-rose-500"
               }`}
             />
-            {serviceStatus.connected ? t("服务已连接") : t("服务未连接")}
+            {serviceStatus.connected ? "Runtime Online" : "Runtime Offline"}
           </Badge>
           {serviceStatus.version ? (
             <span className="hidden font-mono text-xs text-muted-foreground 2xl:inline">v{serviceStatus.version}</span>
           ) : null}
-        </div>
-
-        <div className="hidden w-[min(36vw,420px)] min-w-[260px] items-center justify-center xl:flex">
-          <div className="grid h-9 w-full grid-cols-[minmax(0,1fr)] items-center gap-2 rounded-md border border-border/60 bg-background/55 px-1.5 shadow-[inset_0_1px_0_rgb(255_255_255/0.16)] 2xl:grid-cols-[auto_minmax(0,1fr)_auto] 2xl:px-2.5">
-            <div className="hidden items-center gap-1.5 font-mono text-[10px] uppercase text-muted-foreground 2xl:flex">
-              <RadioTower className="h-3.5 w-3.5 text-primary" />
-              System notice
-            </div>
-            <DisclaimerTicker />
-            <div className="hidden items-center gap-1.5 font-mono text-[10px] uppercase text-muted-foreground 2xl:flex">
-              <Activity className="h-3.5 w-3.5 text-emerald-400" />
-              Live
-            </div>
-          </div>
         </div>
 
         <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2 justify-self-end">

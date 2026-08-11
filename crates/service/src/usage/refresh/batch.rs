@@ -443,8 +443,18 @@ fn format_all_usage_refresh_failed(total: usize, first_error: Option<String>) ->
 /// 无
 fn run_usage_refresh_task(storage: &Storage, task: UsageRefreshBatchTask) -> Result<(), String> {
     let started_at = Instant::now();
-    match refresh_usage_for_token(storage, &task.token, task.workspace_id.as_deref(), None) {
-        Ok(_) => {
+    // Background polling only needs the quota endpoint. accounts/check is a
+    // browser-facing metadata endpoint and polling it for every account at
+    // once is both unnecessary and much more likely to trigger Cloudflare.
+    match refresh_usage_for_token(
+        storage,
+        &task.token,
+        task.workspace_id.as_deref(),
+        None,
+        false,
+    ) {
+        Ok(result) => {
+            super::record_codex_probe_outcome(storage, &task.account_id, result.status);
             record_usage_refresh_metrics(true, started_at);
             Ok(())
         }

@@ -67,6 +67,55 @@ fn is_removed_openai_compat_request_path(normalized_path: &str) -> bool {
     normalized_path.starts_with("/v1/completions")
 }
 
+fn ensure_api_key_policy_allows_model(
+    policy: &codexmanager_core::storage::ApiKeyPolicy,
+    model: Option<&str>,
+) -> Result<(), LocalValidationError> {
+    let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(());
+    };
+    if !policy.allowed_models.is_empty()
+        && !policy
+            .allowed_models
+            .iter()
+            .any(|allowed| allowed == "*" || allowed.eq_ignore_ascii_case(model))
+    {
+        return Err(LocalValidationError::new(
+            403,
+            crate::gateway::bilingual_error(
+                "模型不在此 API Key 的白名单中",
+                format!("model_not_allowed_by_key: {model}"),
+            ),
+        ));
+    }
+    let platform = if model.starts_with("kiro/") {
+        Some("kiro")
+    } else if model.starts_with("grok/") {
+        Some("grok")
+    } else if model.starts_with("codex/") || model.starts_with("gpt-") {
+        Some("codex")
+    } else {
+        None
+    };
+    if let Some(platform) = platform {
+        if !policy.allowed_platforms.is_empty()
+            && !policy
+                .allowed_platforms
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(platform))
+        {
+            return Err(LocalValidationError::new(
+                403,
+                crate::gateway::bilingual_error(
+                    "此 API Key 不允许访问该平台",
+                    format!("platform_not_allowed_by_key: {platform}"),
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn configured_gateway_blocked_path_patterns() -> Vec<String> {
     let mut patterns: Vec<String> = DEFAULT_GATEWAY_BLOCKED_PATHS
         .iter()
@@ -654,7 +703,7 @@ fn adapt_openai_chat_completions_body_to_responses(body: Vec<u8>) -> Result<Vec<
         .map_err(|err| format!("serialize responses compatibility request failed: {err}"))
 }
 
-fn default_omitted_responses_stream_to_true_snapshot(body: Vec<u8>) -> ParsedRequestBodySnapshot {
+fn default_omitted_responses_stream_to_false_snapshot(body: Vec<u8>) -> ParsedRequestBodySnapshot {
     let Some(mut payload) = super::super::parse_request_json_value(&body) else {
         return ParsedRequestBodySnapshot {
             body,
@@ -672,7 +721,7 @@ fn default_omitted_responses_stream_to_true_snapshot(body: Vec<u8>) -> ParsedReq
     };
     let mut rewritten_body = body;
     if !obj.contains_key("stream") {
-        obj.insert("stream".to_string(), serde_json::Value::Bool(true));
+        obj.insert("stream".to_string(), serde_json::Value::Bool(false));
         if let Ok(serialized) = serde_json::to_vec(&payload) {
             rewritten_body = serialized;
         }
@@ -685,8 +734,8 @@ fn default_omitted_responses_stream_to_true_snapshot(body: Vec<u8>) -> ParsedReq
     }
 }
 
-fn default_omitted_responses_stream_to_true(body: Vec<u8>) -> Vec<u8> {
-    default_omitted_responses_stream_to_true_snapshot(body).body
+fn default_omitted_responses_stream_to_false(body: Vec<u8>) -> Vec<u8> {
+    default_omitted_responses_stream_to_false_snapshot(body).body
 }
 
 const DEFAULT_IMAGES_TOOL_MODEL: &str = "gpt-image-2";
@@ -1583,15 +1632,10 @@ fn resolve_client_is_stream(
     protocol_type: &str,
     normalized_path: &str,
     client_is_stream: bool,
-    client_stream_specified: bool,
-    native_codex_client: bool,
+    _client_stream_specified: bool,
+    _native_codex_client: bool,
 ) -> bool {
     client_is_stream
-        || (is_non_native_openai_responses_api_request(
-            protocol_type,
-            normalized_path,
-            native_codex_client,
-        ) && !client_stream_specified)
         || (protocol_type == PROTOCOL_GEMINI_NATIVE
             && normalized_path.contains(":streamGenerateContent"))
 }
@@ -1776,6 +1820,22 @@ pub(super) fn build_local_validation_result(
         .as_ref()
         .map(super::super::parse_request_metadata_from_value)
         .unwrap_or_default();
+    let api_key_policy = storage
+        .find_api_key_policy(&api_key.id)
+        .map_err(|err| {
+            LocalValidationError::new(500, format!("read api key policy failed: {err}"))
+        })?
+        .unwrap_or_else(|| codexmanager_core::storage::ApiKeyPolicy {
+            key_id: api_key.id.clone(),
+            ..Default::default()
+        });
+    ensure_api_key_policy_allows_model(
+        &api_key_policy,
+        api_key
+            .model_slug
+            .as_deref()
+            .or(initial_request_meta.model.as_deref()),
+    )?;
     let native_codex_client = is_native_codex_client_request(&incoming_headers);
     let compact_gateway_mode =
         is_compact_subagent_request(normalized_path.as_str(), &incoming_headers)
@@ -1854,7 +1914,7 @@ pub(super) fn build_local_validation_result(
             logical_path.as_str(),
             native_codex_client,
         ) {
-            let snapshot = default_omitted_responses_stream_to_true_snapshot(rewritten_body);
+            let snapshot = default_omitted_responses_stream_to_false_snapshot(rewritten_body);
             rewritten_body = snapshot.body;
             rewritten_body_value_for_validation = snapshot.value;
         }
@@ -1874,6 +1934,7 @@ pub(super) fn build_local_validation_result(
             initial_request_meta.stream_specified,
             native_codex_client,
         );
+        ensure_api_key_policy_allows_model(&api_key_policy, model_for_log.as_deref())?;
         return Ok(LocalValidationResult {
             trace_id,
             incoming_headers,
@@ -1890,6 +1951,8 @@ pub(super) fn build_local_validation_result(
             rotation_strategy: ROTATION_AGGREGATE_API.to_string(),
             aggregate_api_id: api_key.aggregate_api_id,
             account_plan_filter: api_key.account_plan_filter,
+            allowed_platforms: api_key_policy.allowed_platforms,
+            concurrency_limit: api_key_policy.concurrency_limit,
             response_adapter: maybe_wrap_compact_response_adapter(
                 logical_path.as_str(),
                 super::super::ResponseAdapter::Passthrough,
@@ -1932,7 +1995,7 @@ pub(super) fn build_local_validation_result(
         logical_path.as_str(),
         native_codex_client,
     ) {
-        let snapshot = default_omitted_responses_stream_to_true_snapshot(passthrough_body);
+        let snapshot = default_omitted_responses_stream_to_false_snapshot(passthrough_body);
         passthrough_body = snapshot.body;
         passthrough_body_value_for_validation = snapshot.value;
     }
@@ -2040,7 +2103,7 @@ pub(super) fn build_local_validation_result(
         logical_path.as_str(),
         native_codex_client,
     ) {
-        body = default_omitted_responses_stream_to_true(body);
+        body = default_omitted_responses_stream_to_false(body);
     }
     if effective_protocol_type != PROTOCOL_ANTHROPIC_NATIVE
         && !normalized_path.starts_with("/v1/responses")
@@ -2211,6 +2274,7 @@ pub(super) fn build_local_validation_result(
     let request_shape = client_request_meta.request_shape;
 
     ensure_anthropic_model_is_listed(&storage, effective_protocol_type, model_for_log.as_deref())?;
+    ensure_api_key_policy_allows_model(&api_key_policy, model_for_log.as_deref())?;
 
     Ok(LocalValidationResult {
         trace_id,
@@ -2238,6 +2302,8 @@ pub(super) fn build_local_validation_result(
         rotation_strategy: api_key.rotation_strategy,
         aggregate_api_id: api_key.aggregate_api_id,
         account_plan_filter: api_key.account_plan_filter,
+        allowed_platforms: api_key_policy.allowed_platforms,
+        concurrency_limit: api_key_policy.concurrency_limit,
         client_model_for_log,
         model_for_log,
         model_source_for_log,

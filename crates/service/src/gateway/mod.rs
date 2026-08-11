@@ -62,7 +62,10 @@ pub(crate) fn error_message_for_client(
     message
 }
 
+#[path = "routing/account_batch_rotation.rs"]
+mod account_batch_rotation;
 mod anchor_fingerprint;
+pub(crate) mod canonical;
 mod concurrency;
 #[path = "routing/conversation_binding.rs"]
 mod conversation_binding;
@@ -75,6 +78,7 @@ mod failover;
 mod http_bridge;
 #[path = "request/incoming_headers.rs"]
 mod incoming_headers;
+mod key_concurrency;
 #[path = "request/local_count_tokens.rs"]
 mod local_count_tokens;
 #[path = "request/local_models.rs"]
@@ -89,11 +93,14 @@ mod model_picker;
 mod official_responses_http;
 #[path = "auth/openai_fallback.rs"]
 mod openai_fallback;
-mod protocol_adapter;
+pub(crate) mod protocol_adapter;
+mod provider_runtime;
 #[path = "request/request_entry.rs"]
 mod request_entry;
 #[path = "routing/request_gate.rs"]
 mod request_gate;
+#[path = "routing/proxy_stream_circuit.rs"]
+mod proxy_stream_circuit;
 #[path = "request/request_helpers.rs"]
 mod request_helpers;
 #[path = "observability/request_log.rs"]
@@ -116,13 +123,19 @@ mod thread_anchor;
 mod token_exchange;
 #[path = "observability/trace_log.rs"]
 mod trace_log;
-mod upstream;
+pub(crate) mod upstream;
 
+pub(crate) use account_batch_rotation::{
+    account_batch_rotation_config, account_batch_rotation_status,
+    set_account_batch_rotation_config, AccountBatchRotationConfig,
+};
 pub(crate) use concurrency::current_gateway_concurrency_recommendation;
+pub(crate) use key_concurrency::{try_acquire_api_key_inflight, ApiKeyInFlightGuard};
 use metrics::{
     account_inflight_count, acquire_account_inflight, begin_gateway_request,
     record_gateway_candidate_skip, record_gateway_cooldown_mark, record_gateway_failover_attempt,
-    record_gateway_request_outcome, AccountInFlightGuard,
+    record_gateway_request_outcome, try_acquire_account_inflight,
+    wait_acquire_candidate_account_inflight, AccountInFlightGuard,
 };
 pub(crate) use metrics::{
     begin_rpc_request, duration_to_millis, gateway_metrics_prometheus,
@@ -217,17 +230,20 @@ pub(crate) fn record_http_queue_dequeue(is_stream_queue: bool) {
 pub(crate) fn record_http_queue_enqueue_failure() {
     metrics::record_http_queue_enqueue_failure();
 }
+pub(crate) use cooldown::account_cooldown_info;
 #[cfg(test)]
 use cooldown::cooldown_reason_for_status;
+pub(crate) use cooldown::is_account_in_cooldown;
 use cooldown::{
-    clear_account_cooldown, is_account_in_cooldown, mark_account_cooldown,
-    mark_account_cooldown_for_status, CooldownReason,
+    clear_account_cooldown, mark_account_cooldown, mark_account_cooldown_for_status,
+    mark_account_rate_limited_until, rate_limit_reset_at_from_headers, CooldownReason,
 };
 #[cfg(test)]
 pub(super) use failover::should_failover_after_refresh;
 use failover::{
     should_failover_from_cached_snapshot_value, should_failover_from_low_quota_snapshot_value,
 };
+pub(crate) use http_bridge::adapt_anthropic_gateway_stream_to_responses;
 use http_bridge::respond_with_upstream;
 pub(crate) use http_bridge::summarize_upstream_error_hint_from_body;
 pub(crate) use http_bridge::PassthroughSseProtocol;
@@ -380,7 +396,7 @@ fn decode_base64_header_value(input: &[u8]) -> Option<Vec<u8>> {
 pub(super) use incoming_headers::IncomingHeaderSnapshot;
 use local_count_tokens::maybe_respond_local_count_tokens;
 use local_models::maybe_respond_local_models;
-pub(crate) use model_picker::fetch_models_for_picker;
+pub(crate) use model_picker::{fetch_models_for_picker, probe_models_for_account};
 use openai_fallback::try_openai_fallback;
 pub(crate) use request_entry::handle_gateway_request;
 use request_gate::{request_gate_lock, RequestGateAcquireError};
@@ -392,7 +408,8 @@ pub(crate) use runtime_config::upstream_client;
 pub(crate) use runtime_config::{account_max_inflight_limit, set_account_max_inflight_limit};
 use runtime_config::{
     async_upstream_client_for_account, fresh_async_upstream_client_for_account,
-    fresh_upstream_client_for_account, prepare_upstream_client_for_account,
+    fresh_upstream_client_for_account, one_shot_async_upstream_client_for_account,
+    one_shot_upstream_client_for_account, prepare_upstream_client_for_account,
     prepare_upstream_client_for_aggregate_api_candidate, request_gate_wait_timeout,
     trace_body_preview_max_bytes, upstream_client_for_account,
     upstream_client_for_aggregate_api_candidate, upstream_stream_timeout, upstream_total_timeout,
@@ -826,6 +843,22 @@ pub(crate) fn current_upstream_proxy_url_for_account(account_id: &str) -> Option
     runtime_config::upstream_proxy_url_for_account(account_id)
 }
 
+pub(crate) fn account_upstream_http_client(account_id: &str) -> reqwest::Client {
+    // Usage/token refresh runs inside Tokio. Building the paired blocking+
+    // async candidate cache there can drop a reqwest blocking runtime from an
+    // async context during cache eviction. A request-scoped async client keeps
+    // the account's proxy binding without touching the blocking client cache.
+    runtime_config::one_shot_async_upstream_client_for_account(account_id)
+}
+
+pub(crate) fn invalidate_account_proxy_clients() {
+    runtime_config::invalidate_account_proxy_clients();
+}
+
+pub(crate) fn isolated_stream_upstream_client_for_account(account_id: &str) -> reqwest::Client {
+    runtime_config::isolated_stream_upstream_client_for_account(account_id)
+}
+
 /// 函数 `set_upstream_proxy_url`
 ///
 /// 作者: gaohongshun
@@ -841,6 +874,7 @@ pub(crate) fn set_upstream_proxy_url(proxy_url: Option<&str>) -> Result<Option<S
     let applied = runtime_config::set_upstream_proxy_url(proxy_url)?;
     // 中文注释：用量轮询和 token 刷新复用独立 HTTP client，代理变更后同步重建，避免继续走旧网络路径。
     crate::usage_http::reload_usage_http_client_from_env();
+    crate::account_warmup::reload_warmup_client();
     Ok(applied)
 }
 

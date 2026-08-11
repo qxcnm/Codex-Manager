@@ -128,7 +128,10 @@ pub async fn app_settings_set(
     patch: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     apply_runtime_storage_env(&app);
-    if let Some(enabled) = patch.get("autoStartEnabled").and_then(serde_json::Value::as_bool) {
+    if let Some(enabled) = patch
+        .get("autoStartEnabled")
+        .and_then(serde_json::Value::as_bool)
+    {
         set_auto_start_enabled(&app, enabled)?;
     }
     let mut settings = tauri::async_runtime::spawn_blocking(move || {

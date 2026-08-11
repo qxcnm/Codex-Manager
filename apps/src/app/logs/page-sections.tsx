@@ -13,6 +13,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useState } from "react";
+import { ShellLink } from "@/components/layout/shell-link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -33,7 +34,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { buildStaticRouteUrl } from "@/lib/utils/static-routes";
 import { formatTsFromSeconds } from "@/lib/utils/usage";
 import { cn } from "@/lib/utils";
 import {
@@ -142,12 +142,12 @@ export function RequestLogsTabContent({
               </div>
             </div>
           </div>
-          <a
-            href={buildStaticRouteUrl("/platform-mode")}
+          <ShellLink
+            href="/platform-mode"
             className="inline-flex h-8 w-fit items-center justify-center rounded-lg border border-amber-500/40 bg-background/70 px-3 text-xs font-medium text-foreground transition-colors hover:bg-background"
           >
             {t("去切换为本地网关")}
-          </a>
+          </ShellLink>
         </div>
       ) : null}
 

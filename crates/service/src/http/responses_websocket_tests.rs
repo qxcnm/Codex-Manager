@@ -200,6 +200,12 @@ fn websocket_frame_preserves_prompt_cache_key_when_native_conversation_anchor_ex
         prompt_cache_key: Some("sticky-thread".to_string()),
         effective_upstream_base: "https://chatgpt.com/backend-api/codex".to_string(),
         prefer_raw_errors: false,
+        key_policy: Default::default(),
+        _api_key_inflight_guard: crate::gateway::try_acquire_api_key_inflight(
+            "ws-test-preserve",
+            None,
+        )
+        .expect("guard"),
     };
     let prepared = rewrite_client_frame(
             r#"{"type":"response.create","model":"gpt-5.4","input":"hello","prompt_cache_key":"client-thread"}"#,
@@ -218,6 +224,40 @@ fn websocket_frame_preserves_prompt_cache_key_when_native_conversation_anchor_ex
 }
 
 #[test]
+fn websocket_frame_enforces_api_key_model_allowlist() {
+    let _guard = crate::test_env_guard();
+    let context = WsRequestContext {
+        api_key: sample_api_key(),
+        incoming_headers: sample_incoming_headers(None, None),
+        prompt_cache_key: None,
+        effective_upstream_base: "https://chatgpt.com/backend-api/codex".to_string(),
+        prefer_raw_errors: false,
+        key_policy: codexmanager_core::storage::ApiKeyPolicy {
+            key_id: "ws-policy".into(),
+            allowed_models: vec!["gpt-5.4".into()],
+            allowed_platforms: vec!["codex".into()],
+            model_visibility: "selectable".into(),
+            expires_at: None,
+            concurrency_limit: Some(1),
+        },
+        _api_key_inflight_guard: crate::gateway::try_acquire_api_key_inflight(
+            "ws-test-allowlist",
+            Some(1),
+        )
+        .expect("guard"),
+    };
+    let error = match rewrite_client_frame(
+        r#"{"type":"response.create","model":"gpt-5.3-codex","input":"hello"}"#,
+        &context,
+    ) {
+        Ok(_) => panic!("disallowed websocket model must fail"),
+        Err(error) => error,
+    };
+    assert_eq!(error.status, 403);
+    assert!(error.message.contains("model_not_allowed_by_key"));
+}
+
+#[test]
 fn upstream_websocket_request_forwards_oai_attestation_header() {
     let mut headers = HeaderMap::new();
     headers.insert("x-oai-attestation", HeaderValue::from_static("attest-ws"));
@@ -227,6 +267,12 @@ fn upstream_websocket_request_forwards_oai_attestation_header() {
         prompt_cache_key: None,
         effective_upstream_base: "https://chatgpt.com/backend-api/codex".to_string(),
         prefer_raw_errors: false,
+        key_policy: Default::default(),
+        _api_key_inflight_guard: crate::gateway::try_acquire_api_key_inflight(
+            "ws-test-headers",
+            None,
+        )
+        .expect("guard"),
     };
     let account = sample_account();
 
@@ -296,6 +342,12 @@ fn websocket_frame_merges_header_metadata_into_client_metadata() {
         prompt_cache_key: None,
         effective_upstream_base: "https://chatgpt.com/backend-api/codex".to_string(),
         prefer_raw_errors: false,
+        key_policy: Default::default(),
+        _api_key_inflight_guard: crate::gateway::try_acquire_api_key_inflight(
+            "ws-test-metadata",
+            None,
+        )
+        .expect("guard"),
     };
     let prepared = rewrite_client_frame(
             r#"{"type":"response.create","model":"gpt-5.4","input":"hello","client_metadata":{"source":"client"}}"#,
@@ -327,6 +379,12 @@ fn websocket_response_create_keeps_codex_field_snapshot() {
         prompt_cache_key: None,
         effective_upstream_base: "https://chatgpt.com/backend-api/codex".to_string(),
         prefer_raw_errors: false,
+        key_policy: Default::default(),
+        _api_key_inflight_guard: crate::gateway::try_acquire_api_key_inflight(
+            "ws-test-snapshot",
+            None,
+        )
+        .expect("guard"),
     };
     let prepared = rewrite_client_frame(
             json!({

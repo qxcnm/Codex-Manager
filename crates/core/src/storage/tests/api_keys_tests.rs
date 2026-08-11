@@ -727,6 +727,16 @@ fn api_key_gateway_auth_reads_status_and_secret_in_one_query() {
     storage
         .upsert_api_key_secret("key-0044", "sk-live-test")
         .expect("insert active api key secret");
+    let stored: String = storage
+        .conn
+        .query_row(
+            "SELECT key_value FROM api_key_secrets WHERE key_id = ?1",
+            ["key-0044"],
+            |row| row.get(0),
+        )
+        .expect("read encrypted api key secret");
+    assert!(stored.starts_with("vault:v1:"));
+    assert!(!stored.contains("sk-live-test"));
 
     let mut disabled_key = make_test_api_key(45);
     disabled_key.status = "disabled".to_string();
@@ -754,6 +764,50 @@ fn api_key_gateway_auth_reads_status_and_secret_in_one_query() {
         .find_api_key_gateway_auth_by_id("key-missing")
         .expect("find missing gateway auth")
         .is_none());
+}
+
+#[cfg(windows)]
+#[test]
+fn api_key_secret_migration_encrypts_existing_plaintext_values() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let key = make_test_api_key(46);
+    storage.insert_api_key(&key).expect("insert api key");
+    storage
+        .conn
+        .execute(
+            "INSERT INTO api_key_secrets (key_id, key_value, created_at, updated_at)
+             VALUES (?1, ?2, 1, 1)",
+            ("key-0046", "sk-legacy-plaintext"),
+        )
+        .expect("insert legacy plaintext secret");
+    storage
+        .conn
+        .execute(
+            "DELETE FROM schema_migrations WHERE version = '116_encrypt_api_key_secrets'",
+            [],
+        )
+        .expect("reset encryption migration");
+
+    storage.init().expect("rerun encryption migration");
+
+    let stored: String = storage
+        .conn
+        .query_row(
+            "SELECT key_value FROM api_key_secrets WHERE key_id = ?1",
+            ["key-0046"],
+            |row| row.get(0),
+        )
+        .expect("read migrated secret");
+    assert!(stored.starts_with("vault:v1:"));
+    assert!(!stored.contains("sk-legacy-plaintext"));
+    assert_eq!(
+        storage
+            .find_api_key_secret_by_id("key-0046")
+            .expect("decrypt migrated secret")
+            .as_deref(),
+        Some("sk-legacy-plaintext")
+    );
 }
 
 #[test]

@@ -535,6 +535,14 @@ fn apply_request_overrides_with_prompt_cache_key_mode(
             let mut changed = false;
             let mut dropped_keys = Vec::new();
 
+            // Interrupted Responses streams can leave synthetic `item_` IDs in
+            // persisted conversation history. Repair those IDs before route-
+            // specific compatibility checks: an account route may resolve the
+            // final Codex backend only after this common rewrite stage.
+            if responses::normalize_interrupted_input_item_ids(path, obj) {
+                changed = true;
+            }
+
             let effective_model = compact_model_override
                 .as_deref()
                 .or(normalized_model.as_deref());

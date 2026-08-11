@@ -1,6 +1,7 @@
 use super::{
-    analyze_gateway_error, classify_account_availability_signal,
-    mark_account_unavailable_for_gateway_error, AccountAvailabilitySignal, GatewayErrorKind,
+    analyze_gateway_error, classify_account_availability_signal, derive_credential_state,
+    mark_account_unavailable_for_gateway_error, AccountAvailabilitySignal, CredentialStateSnapshot,
+    GatewayErrorKind,
 };
 use codexmanager_core::storage::{now_ts, Account, Storage, UsageSnapshotRecord};
 
@@ -33,6 +34,12 @@ fn classify_account_availability_signal_separates_usage_refresh_and_deactivation
         classify_account_availability_signal("subscription endpoint status 403 Forbidden"),
         Some(AccountAvailabilitySignal::UsageHttp(403))
     ));
+    assert_eq!(
+        classify_account_availability_signal(
+            "subscription endpoint failed: status=403 Forbidden body=Cloudflare 安全验证页（ray=test, zone=chatgpt.com） [kind=cloudflare_challenge]"
+        ),
+        None
+    );
     assert!(matches!(
         classify_account_availability_signal(
             "subscription endpoint failed: status=401 Unauthorized body=token expired"
@@ -86,6 +93,64 @@ fn classify_account_availability_signal_separates_usage_refresh_and_deactivation
     assert!(ws_usage_limit.should_failover);
     assert!(ws_usage_limit.should_mark_account_unavailable);
     assert!(ws_usage_limit.should_mark_default_cooldown);
+}
+
+#[test]
+fn credential_state_keeps_repairable_tokens_separate_from_deactivation() {
+    let snapshot = |status, reason, has_token, expires_at| {
+        derive_credential_state(status, reason, has_token, expires_at, 1_000)
+    };
+
+    assert_eq!(
+        snapshot(
+            "unavailable",
+            Some("refresh_token_invalid:refresh_token_expired"),
+            true,
+            Some(900),
+        ),
+        CredentialStateSnapshot {
+            state: "refresh_token_expired",
+            action: "reauthenticate",
+        }
+    );
+    assert_eq!(
+        snapshot(
+            "unavailable",
+            Some("refresh_token_invalid:refresh_token_invalidated"),
+            true,
+            Some(2_000),
+        ),
+        CredentialStateSnapshot {
+            state: "refresh_token_revoked",
+            action: "reauthenticate",
+        }
+    );
+    assert_eq!(
+        snapshot("active", None, true, Some(900)),
+        CredentialStateSnapshot {
+            state: "access_token_expired",
+            action: "refresh",
+        }
+    );
+    assert_eq!(
+        snapshot("banned", Some("account_deactivated"), true, Some(2_000)),
+        CredentialStateSnapshot {
+            state: "account_deactivated",
+            action: "stop",
+        }
+    );
+    assert_eq!(
+        snapshot(
+            "unavailable",
+            Some("usage_cloudflare_challenge"),
+            true,
+            Some(2_000),
+        ),
+        CredentialStateSnapshot {
+            state: "network_unknown",
+            action: "retry_network",
+        }
+    );
 }
 
 /// 函数 `gateway_usage_limit_error_marks_account_limited_immediately`

@@ -69,7 +69,7 @@ pub(in super::super) fn classify_custom_upstream_status(
 /// # 返回
 /// 返回函数执行结果
 pub(in super::super) fn should_failover_after_fallback_non_success(status_code: u16) -> bool {
-    matches!(status_code, 401 | 403 | 404 | 408 | 409 | 429)
+    matches!(status_code, 401 | 403 | 404 | 408 | 409 | 429 | 500..=599)
 }
 
 #[cfg(test)]

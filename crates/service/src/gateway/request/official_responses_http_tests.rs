@@ -109,3 +109,86 @@ fn codex_http_rules_promote_and_fill_standard_responses_defaults() {
         Some("install-1")
     );
 }
+
+#[test]
+fn codex_http_rules_repair_only_synthetic_reasoning_item_ids() {
+    let mut obj = json!({
+        "model": "gpt-5.4",
+        "input": [
+            {
+                "type": "reasoning",
+                "id": "item_a10c42b35178f112a4ee3a1f",
+                "encrypted_content": "encrypted"
+            },
+            {
+                "type": "reasoning",
+                "id": "rs_already_valid",
+                "encrypted_content": "encrypted"
+            },
+            {
+                "type": "function_call",
+                "id": "item_32f745f4a36ae17b8a063bf0",
+                "call_id": "call_1",
+                "name": "lookup",
+                "arguments": "{}"
+            },
+            {
+                "type": "message",
+                "id": "item_c044be127474392ddeeb230b",
+                "role": "assistant",
+                "content": []
+            },
+            {
+                "type": "reasoning",
+                "encrypted_content": "no id to synthesize"
+            },
+            {
+                "type": "reasoning",
+                "id": "unknown_prefix",
+                "encrypted_content": "do not guess"
+            },
+            {
+                "type": "custom_tool_call",
+                "id": "item_9de417a1597e50f2bd14f73b",
+                "call_id": "call_2",
+                "name": "apply_patch",
+                "input": "*** Begin Patch"
+            }
+        ]
+    })
+    .as_object()
+    .cloned()
+    .expect("object");
+
+    let result =
+        apply_codex_http_request_rules("/v1/responses", &mut obj, false, None, false, None);
+
+    assert!(result.changed);
+    let input = obj
+        .get("input")
+        .and_then(Value::as_array)
+        .expect("input array");
+    assert_eq!(input[0]["id"], "rs_a10c42b35178f112a4ee3a1f");
+    assert_eq!(input[1]["id"], "rs_already_valid");
+    assert_eq!(input[2]["id"], "fc_32f745f4a36ae17b8a063bf0");
+    assert_eq!(input[3]["id"], "msg_c044be127474392ddeeb230b");
+    assert!(input[4].get("id").is_none());
+    assert_eq!(input[5]["id"], "unknown_prefix");
+    assert_eq!(input[6]["id"], "ctc_9de417a1597e50f2bd14f73b");
+}
+
+#[test]
+fn codex_http_rules_do_not_repair_reasoning_ids_outside_responses_paths() {
+    let mut obj = json!({
+        "input": [{"type": "reasoning", "id": "item_legacy"}]
+    })
+    .as_object()
+    .cloned()
+    .expect("object");
+
+    let result =
+        apply_codex_http_request_rules("/v1/chat/completions", &mut obj, false, None, false, None);
+
+    assert!(!result.changed);
+    assert_eq!(obj["input"][0]["id"], "item_legacy");
+}

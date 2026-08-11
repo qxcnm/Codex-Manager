@@ -184,6 +184,29 @@ pub struct AccountSummary {
     pub status_reason: Option<String>,
     #[serde(default)]
     pub has_token: bool,
+    #[serde(default)]
+    pub auth_mode: String,
+    #[serde(default)]
+    pub agent_identity_status: Option<String>,
+    #[serde(default)]
+    pub has_agent_identity_task: bool,
+    /// 当前凭据所处的精确阶段。它与账号业务状态分离，避免把 Token
+    /// 失效误报成账号停用。
+    pub credential_state: String,
+    /// 客户端或自动修复器下一步应执行的动作。
+    pub credential_action: String,
+    /// Access Token JWT 的过期时间（Unix 秒）；非 JWT 时为空。
+    pub access_token_expires_at: Option<i64>,
+    /// 网关批次准入状态。它与导入/用量状态分离，前端据此说明账号
+    /// 是否会进入真实客户请求，以及应该刷新、等待还是清理。
+    #[serde(default)]
+    pub gateway_probe_status: Option<String>,
+    #[serde(default)]
+    pub gateway_probe_reason: Option<String>,
+    #[serde(default)]
+    pub gateway_probe_checked_at: Option<i64>,
+    #[serde(default)]
+    pub gateway_probe_retry_after: Option<i64>,
     pub plan_type: Option<String>,
     pub plan_type_raw: Option<String>,
     pub has_subscription: Option<bool>,
@@ -196,6 +219,8 @@ pub struct AccountSummary {
     pub model_slugs: Vec<String>,
     pub quota_capacity_primary_window_tokens: Option<i64>,
     pub quota_capacity_secondary_window_tokens: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -311,8 +336,15 @@ pub struct ApiKeySummary {
     pub account_plan_filter: Option<String>,
     pub aggregate_api_url: Option<String>,
     pub quota_limit_tokens: Option<i64>,
+    pub allowed_models: Vec<String>,
+    pub allowed_platforms: Vec<String>,
+    pub model_visibility: String,
+    pub expires_at: Option<i64>,
+    pub concurrency_limit: Option<i64>,
     pub client_type: String,
     pub protocol_type: String,
+    /// Stable external key protocol. First release exposes only `openai`.
+    pub protocol_profile: String,
     pub auth_scheme: String,
     pub upstream_base_url: Option<String>,
     pub static_headers_json: Option<String>,
@@ -1472,6 +1504,10 @@ pub struct DashboardAdminUsageSummaryResult {
     pub users: Vec<DashboardUserUsageSummary>,
     #[serde(default)]
     pub openai_accounts: Vec<DashboardSourceUsageSummary>,
+    #[serde(default)]
+    pub kiro_credentials: Vec<DashboardSourceUsageSummary>,
+    #[serde(default)]
+    pub grok_credentials: Vec<DashboardSourceUsageSummary>,
     #[serde(default)]
     pub aggregate_apis: Vec<DashboardSourceUsageSummary>,
 }

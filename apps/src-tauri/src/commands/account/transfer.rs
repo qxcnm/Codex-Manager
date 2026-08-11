@@ -83,7 +83,10 @@ fn merge_import_result(
             .cloned()
             .unwrap_or_default();
         for account_id in source_imported_ids {
-            let Some(account_id) = account_id.as_str().map(str::trim).filter(|id| !id.is_empty())
+            let Some(account_id) = account_id
+                .as_str()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
             else {
                 continue;
             };

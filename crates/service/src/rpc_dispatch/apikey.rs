@@ -5,6 +5,21 @@ use codexmanager_core::rpc::types::{
     ManagedModelSourceSyncParams, ModelsResponse,
 };
 
+fn string_array_param(req: &JsonRpcRequest, key: &str) -> Vec<String> {
+    req.params
+        .as_ref()
+        .and_then(|value| value.get(key))
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 use crate::RpcActor;
 use crate::{
     apikey_create, apikey_delete, apikey_disable, apikey_enable, apikey_list, apikey_models,
@@ -127,6 +142,11 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                 None
             };
             let quota_limit_tokens = super::i64_param(req, "quotaLimitTokens");
+            let allowed_models = string_array_param(req, "allowedModels");
+            let allowed_platforms = string_array_param(req, "allowedPlatforms");
+            let model_visibility = super::string_param(req, "modelVisibility");
+            let expires_at = super::i64_param(req, "expiresAt");
+            let concurrency_limit = super::i64_param(req, "concurrencyLimit");
             let custom_key = super::string_param(req, "customKey");
             let created = apikey_create::create_api_key(
                 name,
@@ -140,6 +160,11 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                 aggregate_api_id,
                 account_plan_filter,
                 quota_limit_tokens,
+                allowed_models,
+                allowed_platforms,
+                model_visibility,
+                expires_at,
+                concurrency_limit,
                 custom_key,
             )
             .and_then(|result| {
@@ -284,6 +309,22 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                 .map(|params| params.contains_key("quotaLimitTokens"))
                 .unwrap_or(false);
             let quota_limit_tokens = super::i64_param(req, "quotaLimitTokens");
+            let has_policy = req
+                .params
+                .as_ref()
+                .and_then(|value| value.as_object())
+                .is_some_and(|params| {
+                    params.contains_key("allowedModels")
+                        || params.contains_key("allowedPlatforms")
+                        || params.contains_key("modelVisibility")
+                        || params.contains_key("expiresAt")
+                        || params.contains_key("concurrencyLimit")
+                });
+            let allowed_models = string_array_param(req, "allowedModels");
+            let allowed_platforms = string_array_param(req, "allowedPlatforms");
+            let model_visibility = super::string_param(req, "modelVisibility");
+            let expires_at = super::i64_param(req, "expiresAt");
+            let concurrency_limit = super::i64_param(req, "concurrencyLimit");
             super::ok_or_error(ensure_api_key_access(actor, key_id).and_then(|_| {
                 apikey_update_model::update_api_key_model(
                     key_id,
@@ -320,6 +361,12 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                     },
                     has_quota_limit_tokens,
                     quota_limit_tokens,
+                    has_policy,
+                    allowed_models,
+                    allowed_platforms,
+                    model_visibility,
+                    expires_at,
+                    concurrency_limit,
                 )
             }))
         }

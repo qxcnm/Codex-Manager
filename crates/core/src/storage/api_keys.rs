@@ -47,14 +47,20 @@ const API_KEY_SUMMARY_SELECT_SQL: &str = "SELECT
     p.static_headers_json,
     k.status,
     q.quota_limit_tokens,
+    policy.allowed_models_json,
+    policy.allowed_platforms_json,
+    COALESCE(policy.model_visibility, 'selectable') AS model_visibility,
+    policy.expires_at,
+    policy.concurrency_limit,
     k.created_at,
     k.last_used_at
  FROM api_keys k
  LEFT JOIN api_key_profiles p ON p.key_id = k.id
  LEFT JOIN aggregate_apis a ON a.id = k.aggregate_api_id
- LEFT JOIN api_key_quota_limits q
+  LEFT JOIN api_key_quota_limits q
    ON q.key_id = k.id
-  AND q.quota_limit_tokens > 0";
+  AND q.quota_limit_tokens > 0
+ LEFT JOIN api_key_policies policy ON policy.key_id = k.id";
 
 const API_KEY_QUOTA_SUMMARY_SELECT_SQL: &str = "SELECT
     k.id,
@@ -307,10 +313,14 @@ impl Storage {
         let mut stmt = self.conn.prepare(api_key_gateway_auth_by_id_sql())?;
         let mut rows = stmt.query([key_id])?;
         if let Some(row) = rows.next()? {
+            let secret = row
+                .get::<_, Option<String>>(2)?
+                .map(|value| self.decrypt_api_key_secret(key_id, &value))
+                .transpose()?;
             Ok(Some(ApiKeyGatewayAuth {
                 id: row.get(0)?,
                 status: row.get(1)?,
-                secret: row.get(2)?,
+                secret,
             }))
         } else {
             Ok(None)
@@ -640,13 +650,16 @@ impl Storage {
     /// 返回函数执行结果
     pub fn upsert_api_key_secret(&self, key_id: &str, key_value: &str) -> Result<()> {
         let now = now_ts();
+        let encrypted = self
+            .encrypt_vault_text(&format!("api-key:{key_id}"), key_value)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         self.conn.execute(
             "INSERT INTO api_key_secrets (key_id, key_value, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?3)
              ON CONFLICT(key_id) DO UPDATE SET
                key_value = excluded.key_value,
                updated_at = excluded.updated_at",
-            (key_id, key_value, now),
+            (key_id, encrypted, now),
         )?;
         Ok(())
     }
@@ -667,10 +680,39 @@ impl Storage {
         let mut stmt = self.conn.prepare(api_key_secret_by_id_sql())?;
         let mut rows = stmt.query([key_id])?;
         if let Some(row) = rows.next()? {
-            Ok(Some(row.get(0)?))
+            let stored = row.get::<_, String>(0)?;
+            Ok(Some(self.decrypt_api_key_secret(key_id, &stored)?))
         } else {
             Ok(None)
         }
+    }
+
+    fn decrypt_api_key_secret(&self, key_id: &str, stored: &str) -> Result<String> {
+        self.decrypt_vault_text(&format!("api-key:{key_id}"), stored)
+            .map_err(|error| rusqlite::Error::FromSql(error.to_string()))
+    }
+
+    #[cfg(windows)]
+    pub(super) fn encrypt_plaintext_api_key_secrets(&self) -> Result<()> {
+        let rows = {
+            let mut stmt = self.conn.prepare(
+                "SELECT key_id, key_value FROM api_key_secrets
+                 WHERE key_value NOT LIKE 'vault:v1:%'",
+            )?;
+            stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>>>()?
+        };
+        for (key_id, plaintext) in rows {
+            self.upsert_api_key_secret(&key_id, &plaintext)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    pub(super) fn encrypt_plaintext_api_key_secrets(&self) -> Result<()> {
+        Ok(())
     }
 
     /// 函数 `ensure_api_key_model_column`
@@ -1057,6 +1099,8 @@ fn map_api_key_row(row: &Row<'_>) -> Result<ApiKey> {
 }
 
 fn map_api_key_summary_row(row: &Row<'_>) -> Result<ApiKeyListSummary> {
+    let allowed_models_json: Option<String> = row.get(16)?;
+    let allowed_platforms_json: Option<String> = row.get(17)?;
     Ok(ApiKeyListSummary {
         id: row.get(0)?,
         name: row.get(1)?,
@@ -1074,8 +1118,19 @@ fn map_api_key_summary_row(row: &Row<'_>) -> Result<ApiKeyListSummary> {
         static_headers_json: row.get(13)?,
         status: row.get(14)?,
         quota_limit_tokens: row.get(15)?,
-        created_at: row.get(16)?,
-        last_used_at: row.get(17)?,
+        allowed_models: allowed_models_json
+            .as_deref()
+            .and_then(|value| serde_json::from_str(value).ok())
+            .unwrap_or_default(),
+        allowed_platforms: allowed_platforms_json
+            .as_deref()
+            .and_then(|value| serde_json::from_str(value).ok())
+            .unwrap_or_default(),
+        model_visibility: row.get(18)?,
+        expires_at: row.get(19)?,
+        concurrency_limit: row.get(20)?,
+        created_at: row.get(21)?,
+        last_used_at: row.get(22)?,
     })
 }
 

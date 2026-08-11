@@ -2,6 +2,7 @@ use bytes::Bytes;
 use codexmanager_core::storage::Account;
 use futures_util::StreamExt;
 use rand::Rng;
+use std::error::Error as StdError;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -24,6 +25,7 @@ enum RequestCompression {
 pub(in super::super) struct UpstreamRequestContext<'a> {
     pub(in super::super) request_path: &'a str,
     pub(in super::super) protocol_type: &'a str,
+    pub(in super::super) force_fresh_transport: bool,
 }
 
 impl<'a> UpstreamRequestContext<'a> {
@@ -42,7 +44,13 @@ impl<'a> UpstreamRequestContext<'a> {
         Self {
             request_path: request.url(),
             protocol_type,
+            force_fresh_transport: false,
         }
+    }
+
+    pub(in super::super) fn with_fresh_transport(mut self) -> Self {
+        self.force_fresh_transport = true;
+        self
     }
 }
 
@@ -346,8 +354,40 @@ fn should_retry_transport_without_compression(
         && super::super::config::is_chatgpt_backend_base(target_url)
 }
 
+fn has_explicit_idempotency_key(headers: &[(String, String)]) -> bool {
+    headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("idempotency-key") && !value.trim().is_empty()
+    })
+}
+
+fn method_is_inherently_idempotent(method: &reqwest::Method) -> bool {
+    method == reqwest::Method::GET
+        || method == reqwest::Method::HEAD
+        || method == reqwest::Method::PUT
+        || method == reqwest::Method::DELETE
+        || method == reqwest::Method::OPTIONS
+        || method == reqwest::Method::TRACE
+}
+
+fn should_retry_transport_send_error(
+    method: &reqwest::Method,
+    headers: &[(String, String)],
+    error: &reqwest::Error,
+) -> bool {
+    // A connect error happens before request bytes are sent. Other POST errors
+    // are ambiguous and may mean the provider already started the operation;
+    // replay only when the caller supplied a stable idempotency key.
+    error.is_connect()
+        || method_is_inherently_idempotent(method)
+        || has_explicit_idempotency_key(headers)
+}
+
 fn should_wrap_upstream_as_stream_response(request_path: &str, is_stream: bool) -> bool {
     is_stream && request_path.starts_with("/v1/responses") && !is_compact_request_path(request_path)
+}
+
+fn should_isolate_codex_stream_transport(request_path: &str, target_url: &str) -> bool {
+    request_path.starts_with("/v1/responses") && is_chatgpt_target_url(target_url)
 }
 
 const STREAM_ERROR_PREVIEW_MAX_BYTES: usize = 64 * 1024;
@@ -536,9 +576,18 @@ fn send_async_stream_request(
                                 }
                             }
                             Err(err) => {
-                                let _ = body_tx.send(super::super::GatewayByteStreamItem::Error(
-                                    err.to_string(),
-                                ));
+                                let mut detail = err.to_string();
+                                let mut source = err.source();
+                                while let Some(cause) = source {
+                                    let cause_text = cause.to_string();
+                                    if !cause_text.is_empty() && !detail.contains(&cause_text) {
+                                        detail.push_str(": ");
+                                        detail.push_str(&cause_text);
+                                    }
+                                    source = cause.source();
+                                }
+                                let _ = body_tx
+                                    .send(super::super::GatewayByteStreamItem::Error(detail));
                                 return;
                             }
                         }
@@ -879,6 +928,9 @@ fn send_upstream_request_with_compression_override(
             incoming_headers.originator(),
         );
     }
+    if let Some(idempotency_key) = incoming_headers.idempotency_key() {
+        upstream_headers.push(("idempotency-key".to_string(), idempotency_key.to_string()));
+    }
     if should_force_connection_close(target_url) {
         // 中文注释：本地 loopback mock/代理更容易复用到脏 keep-alive 连接；
         // 对 localhost/127.0.0.1 强制 close，避免请求落到已失效连接。
@@ -963,8 +1015,15 @@ fn send_upstream_request_with_compression_override(
     let result = if let Some(r) = ws_early_result {
         Ok(r)
     } else if use_async_stream_transport {
-        let async_client =
-            super::super::super::async_upstream_client_for_account(account.id.as_str());
+        let isolate_codex_stream =
+            should_isolate_codex_stream_transport(request_ctx.request_path, target_url);
+        let async_client = if isolate_codex_stream {
+            super::super::super::isolated_stream_upstream_client_for_account(account.id.as_str())
+        } else if request_ctx.force_fresh_transport {
+            super::super::super::one_shot_async_upstream_client_for_account(account.id.as_str())
+        } else {
+            super::super::super::async_upstream_client_for_account(account.id.as_str())
+        };
         match send_async_stream_request(
             &async_client,
             method,
@@ -976,6 +1035,23 @@ fn send_upstream_request_with_compression_override(
             is_stream,
         ) {
             Ok(resp) => Ok(GatewayUpstreamResponse::Stream(resp)),
+            Err(first_err) if request_ctx.force_fresh_transport => Err(first_err),
+            Err(first_err)
+                if !should_retry_transport_send_error(
+                    method,
+                    upstream_headers.as_slice(),
+                    &first_err,
+                ) =>
+            {
+                log::warn!(
+                    "event=gateway_transport_retry_suppressed_ambiguous_post path={} account_id={} target_url={} err={}",
+                    request_ctx.request_path,
+                    account.id,
+                    target_url,
+                    first_err
+                );
+                Err(first_err)
+            }
             Err(first_err) => {
                 let fresh_async = super::super::super::fresh_async_upstream_client_for_account(
                     account.id.as_str(),
@@ -1060,8 +1136,35 @@ fn send_upstream_request_with_compression_override(
             }
         }
     } else {
-        match build_request(client, upstream_headers.as_slice(), &body_for_request).send() {
+        let one_shot_client = request_ctx.force_fresh_transport.then(|| {
+            super::super::super::one_shot_upstream_client_for_account(account.id.as_str())
+        });
+        let primary_client = one_shot_client.as_ref().unwrap_or(client);
+        match build_request(
+            primary_client,
+            upstream_headers.as_slice(),
+            &body_for_request,
+        )
+        .send()
+        {
             Ok(resp) => Ok(resp.into()),
+            Err(first_err) if request_ctx.force_fresh_transport => Err(first_err),
+            Err(first_err)
+                if !should_retry_transport_send_error(
+                    method,
+                    upstream_headers.as_slice(),
+                    &first_err,
+                ) =>
+            {
+                log::warn!(
+                    "event=gateway_transport_retry_suppressed_ambiguous_post path={} account_id={} target_url={} err={}",
+                    request_ctx.request_path,
+                    account.id,
+                    target_url,
+                    first_err
+                );
+                Err(first_err)
+            }
             Err(first_err) => {
                 let fresh =
                     super::super::super::fresh_upstream_client_for_account(account.id.as_str());

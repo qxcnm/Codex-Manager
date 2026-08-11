@@ -314,6 +314,34 @@ fn explicit_aggregate_api_id_promotes_matching_active_provider_candidate_only() 
     assert_eq!(candidate_ids, vec!["agg-first", "agg-preferred"]);
 }
 
+#[test]
+fn failed_connection_test_excludes_aggregate_candidate_until_retested() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    let now = now_ts();
+    let mut failed = aggregate_api_with_action(None);
+    failed.id = "agg-failed".to_string();
+    failed.provider_type = AGGREGATE_API_PROVIDER_CODEX.to_string();
+    failed.last_test_at = Some(now);
+    failed.last_test_status = Some("failed".to_string());
+    failed.last_test_error = Some("upstream status 403".to_string());
+    storage
+        .insert_aggregate_api(&failed)
+        .expect("insert failed aggregate api");
+
+    let error = resolve_aggregate_api_rotation_candidates(&storage, "openai", None)
+        .expect_err("failed aggregate api must not be routed");
+    assert!(error.contains("aggregate api not found"));
+
+    storage
+        .update_aggregate_api_test_result("agg-failed", true, Some(200), None)
+        .expect("mark aggregate api healthy");
+    let candidates = resolve_aggregate_api_rotation_candidates(&storage, "openai", None)
+        .expect("healthy aggregate api returns to routing");
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].id, "agg-failed");
+}
+
 /// 函数 `final_error_promotes_success_status_to_bad_gateway`
 ///
 /// 作者: gaohongshun

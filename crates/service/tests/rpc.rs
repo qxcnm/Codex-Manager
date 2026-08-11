@@ -36,6 +36,66 @@ fn new_test_dir(prefix: &str) -> PathBuf {
     dir
 }
 
+#[cfg(windows)]
+#[test]
+fn rpc_kiro_manual_mapping_previews_and_imports_custom_json_without_secret_echo() {
+    let ctx = RpcTestContext::new("rpc-kiro-manual-mapping");
+    let json = r#"{"record":{"refresh":"rpc-secret-refresh"},"oauth":{"id":"rpc-client","secret":"rpc-client-secret"},"profile":{"mail":"rpc@example.test"}}"#;
+    let mapping = serde_json::json!({
+        "refreshToken": "record.refresh",
+        "clientId": "oauth.id",
+        "clientSecret": "oauth.secret",
+        "email": "profile.mail"
+    });
+
+    let preview_server = codexmanager_service::start_one_shot_server().expect("start preview");
+    let preview_request = JsonRpcRequest {
+        id: 301.into(),
+        method: "kiro/import/preview".into(),
+        params: Some(serde_json::json!({ "json": json, "mapping": mapping })),
+        trace: None,
+    };
+    let preview = post_rpc(
+        &preview_server.addr,
+        &serde_json::to_string(&preview_request).expect("serialize preview"),
+    );
+    let preview_text = serde_json::to_string(&preview).expect("serialize response");
+    assert!(!preview_text.contains("rpc-secret-refresh"));
+    assert!(!preview_text.contains("rpc-client-secret"));
+    assert_eq!(preview["result"]["items"][0]["email"], "rpc@example.test");
+    assert_eq!(preview["result"]["items"][0]["isUpdate"], false);
+
+    let commit_server = codexmanager_service::start_one_shot_server().expect("start commit");
+    let commit_request = JsonRpcRequest {
+        id: 302.into(),
+        method: "kiro/import/commit".into(),
+        params: Some(serde_json::json!({ "json": json, "mapping": mapping })),
+        trace: None,
+    };
+    let committed = post_rpc(
+        &commit_server.addr,
+        &serde_json::to_string(&commit_request).expect("serialize commit"),
+    );
+    assert_eq!(committed["result"]["imported"], 1);
+
+    let update_preview_server =
+        codexmanager_service::start_one_shot_server().expect("start update preview");
+    let update_preview = post_rpc(
+        &update_preview_server.addr,
+        &serde_json::to_string(&preview_request).expect("serialize update preview"),
+    );
+    assert_eq!(update_preview["result"]["items"][0]["isUpdate"], true);
+
+    let storage = Storage::open(ctx.db_path()).expect("open storage");
+    storage.init().expect("init storage");
+    let record = storage
+        .list_kiro_credentials()
+        .expect("list credentials")
+        .remove(0);
+    assert_eq!(record.auth_method, "idc");
+    assert_eq!(record.email.as_deref(), Some("rpc@example.test"));
+}
+
 struct RpcTestContext {
     _env_lock: MutexGuard<'static, ()>,
     _db_path_guard: EnvGuard,

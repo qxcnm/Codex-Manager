@@ -39,8 +39,12 @@ pub(super) static TEST_PORT_SEQ: AtomicUsize = AtomicUsize::new(41000);
 pub(super) fn new_test_dir(prefix: &str) -> PathBuf {
     // 中文注释：Windows 进程 ID 可能被复用；增加递增序号避免复用旧目录/旧 db 文件导致用例不稳定。
     let seq = TEST_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
     let mut dir = std::env::temp_dir();
-    dir.push(format!("{prefix}-{}-{seq}", std::process::id()));
+    dir.push(format!("{prefix}-{}-{seq}-{nanos}", std::process::id()));
     let _ = fs::create_dir_all(&dir);
     dir
 }
@@ -627,7 +631,11 @@ pub(super) fn start_mock_upstream_once_with_content_type(
     let (tx, rx) = mpsc::channel();
 
     let join = thread::spawn(move || {
-        let (mut stream, captured) = accept_http_request(&listener, Duration::from_secs(3))
+        // A cold Windows test build can briefly starve the one-shot gateway
+        // thread while antivirus/linker activity is still settling. Keep this
+        // above the client read timeout/retry window so the mock does not turn
+        // scheduler jitter into an unrelated protocol failure.
+        let (mut stream, captured) = accept_http_request(&listener, Duration::from_secs(10))
             .expect("accept upstream http request");
         let _ = tx.send(captured);
 

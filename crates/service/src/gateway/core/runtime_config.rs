@@ -14,10 +14,12 @@ static ASYNC_RETRY_UPSTREAM_CLIENT: OnceLock<RwLock<reqwest::Client>> = OnceLock
 static DIRECT_UPSTREAM_CLIENT: OnceLock<RwLock<Client>> = OnceLock::new();
 static UPSTREAM_CLIENT_POOL: OnceLock<RwLock<UpstreamClientPool>> = OnceLock::new();
 static ACCOUNT_CANDIDATE_CLIENTS: OnceLock<
-    RwLock<HashMap<AccountCandidateClientKey, AccountCandidateClients>>,
+    RwLock<HashMap<AccountCandidateClientKey, CachedAccountCandidateClients>>,
 > = OnceLock::new();
-static AGGREGATE_CANDIDATE_CLIENTS: OnceLock<RwLock<HashMap<AggregateCandidateClientKey, Client>>> =
-    OnceLock::new();
+static AGGREGATE_CANDIDATE_CLIENTS: OnceLock<
+    RwLock<HashMap<AggregateCandidateClientKey, CachedAggregateCandidateClient>>,
+> = OnceLock::new();
+static CANDIDATE_CLIENT_CACHE_CLOCK: AtomicU64 = AtomicU64::new(1);
 #[cfg(test)]
 static UPSTREAM_CLIENT_BUILD_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
@@ -63,9 +65,15 @@ static TOKEN_EXCHANGE_ISSUER: OnceLock<RwLock<String>> = OnceLock::new();
 
 pub(crate) const DEFAULT_GATEWAY_DEBUG: bool = false;
 const DEFAULT_UPSTREAM_CONNECT_TIMEOUT_SECS: u64 = 15;
+// 借鉴成熟 OpenAI 反代的 H2 PING 健康探测：代理/NAT 可能静默回收池化连接，
+// 单靠 TCP keepalive 往往要到请求落上死连接后才暴露。
+const UPSTREAM_HTTP2_KEEPALIVE_INTERVAL_SECS: u64 = 15;
+const UPSTREAM_HTTP2_KEEPALIVE_TIMEOUT_SECS: u64 = 15;
 const DEFAULT_UPSTREAM_TOTAL_TIMEOUT_MS: u64 = 0;
 const DEFAULT_UPSTREAM_STREAM_TIMEOUT_MS: u64 = 300_000;
-const DEFAULT_ACCOUNT_MAX_INFLIGHT: usize = 0;
+// One long-lived Codex stream per account is the conservative default. Users
+// can explicitly raise this for throughput, or set it to 0 to opt out.
+const DEFAULT_ACCOUNT_MAX_INFLIGHT: usize = 1;
 const DEFAULT_THREAD_AWARE_ACCOUNT_DISTRIBUTION: bool = true;
 const DEFAULT_STRICT_REQUEST_PARAM_ALLOWLIST: bool = false;
 const DEFAULT_ENABLE_REQUEST_COMPRESSION: bool = true;
@@ -82,7 +90,10 @@ const DEFAULT_MODEL_FORWARD_RULES: &str = "";
 const DEFAULT_COMPACT_MODEL_FORWARD_RULES: &str = "";
 const DEFAULT_CODEX_IMAGE_MAIN_MODEL: &str = "gpt-5.4-mini";
 const DEFAULT_CODEX_IMAGE_TOOL_MODEL: &str = "gpt-image-2";
-const DEFAULT_CODEX_USER_AGENT_VERSION: &str = "0.130.0";
+// Keep the fallback wire identity above the minimum accepted by the current
+// ChatGPT Codex endpoint. Real Codex clients are still preferred when their
+// User-Agent and originator form a coherent pair.
+const DEFAULT_CODEX_USER_AGENT_VERSION: &str = "0.146.0";
 const MAX_UPSTREAM_PROXY_POOL_SIZE: usize = 5;
 const MAX_CANDIDATE_CLIENT_CACHE_ENTRIES: usize = 512;
 
@@ -105,6 +116,7 @@ const ENV_TOKEN_EXCHANGE_CLIENT_ID: &str = "CODEXMANAGER_CLIENT_ID";
 const ENV_TOKEN_EXCHANGE_ISSUER: &str = "CODEXMANAGER_ISSUER";
 const ENV_PROXY_LIST: &str = "CODEXMANAGER_PROXY_LIST";
 const ENV_UPSTREAM_PROXY_URL: &str = "CODEXMANAGER_UPSTREAM_PROXY_URL";
+const FAIL_CLOSED_PROXY_URL: &str = "http://127.0.0.1:9";
 const ENV_UPSTREAM_PROXY_BYPASS_HOSTS: &str = "CODEXMANAGER_UPSTREAM_PROXY_BYPASS_HOSTS";
 const ENV_FREE_ACCOUNT_MAX_MODEL: &str = "CODEXMANAGER_FREE_ACCOUNT_MAX_MODEL";
 const ENV_COMPACT_MODEL: &str = "CODEXMANAGER_COMPACT_MODEL";
@@ -141,6 +153,31 @@ impl AccountCandidateClientKey {
 struct AccountCandidateClients {
     blocking: Client,
     async_client: reqwest::Client,
+}
+
+struct CachedAccountCandidateClients {
+    clients: AccountCandidateClients,
+    last_used: AtomicU64,
+}
+
+struct CachedAggregateCandidateClient {
+    client: Client,
+    last_used: AtomicU64,
+}
+
+fn next_candidate_client_cache_tick() -> u64 {
+    CANDIDATE_CLIENT_CACHE_CLOCK.fetch_add(1, Ordering::Relaxed)
+}
+
+fn least_recently_used_key<K, V, F>(cache: &HashMap<K, V>, last_used: F) -> Option<K>
+where
+    K: Clone + Eq + std::hash::Hash,
+    F: Fn(&V) -> u64,
+{
+    cache
+        .iter()
+        .min_by_key(|(_, entry)| last_used(entry))
+        .map(|(key, _)| key.clone())
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -274,6 +311,18 @@ pub(crate) fn prepare_upstream_client_for_account(account_id: &str) -> Result<()
 /// 返回函数执行结果
 pub(crate) fn fresh_upstream_client_for_account(account_id: &str) -> Client {
     ensure_runtime_config_loaded();
+    match crate::proxy_profiles::resolve_for_account(account_id) {
+        crate::proxy_profiles::AccountProxyResolution::Proxy(url) => {
+            return build_upstream_client_with_proxy(Some(&url));
+        }
+        crate::proxy_profiles::AccountProxyResolution::Direct => {
+            return build_upstream_client_with_proxy(None);
+        }
+        crate::proxy_profiles::AccountProxyResolution::Blocked => {
+            return build_upstream_client_with_proxy(Some(FAIL_CLOSED_PROXY_URL));
+        }
+        crate::proxy_profiles::AccountProxyResolution::Inherit => {}
+    }
     let cached =
         crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool")
             .retry_client_for_account(account_id)
@@ -296,6 +345,18 @@ fn async_upstream_client() -> reqwest::Client {
 
 pub(crate) fn fresh_async_upstream_client_for_account(account_id: &str) -> reqwest::Client {
     ensure_runtime_config_loaded();
+    match crate::proxy_profiles::resolve_for_account(account_id) {
+        crate::proxy_profiles::AccountProxyResolution::Proxy(url) => {
+            return build_async_upstream_client_with_proxy(Some(&url));
+        }
+        crate::proxy_profiles::AccountProxyResolution::Direct => {
+            return build_async_upstream_client_with_proxy(None);
+        }
+        crate::proxy_profiles::AccountProxyResolution::Blocked => {
+            return build_async_upstream_client_with_proxy(Some(FAIL_CLOSED_PROXY_URL));
+        }
+        crate::proxy_profiles::AccountProxyResolution::Inherit => {}
+    }
     let cached =
         crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool")
             .async_retry_client_for_account(account_id)
@@ -303,8 +364,61 @@ pub(crate) fn fresh_async_upstream_client_for_account(account_id: &str) -> reqwe
     cached.unwrap_or_else(async_retry_upstream_client)
 }
 
+/// Builds an uncached client for a single safe retry. Unlike the historical
+/// `fresh_*` retry pool, this cannot reuse a dead HTTP/2 connection retained by
+/// an earlier request.
+pub(crate) fn one_shot_upstream_client_for_account(account_id: &str) -> Client {
+    let proxy_url = upstream_proxy_url_for_account(account_id);
+    build_upstream_client_with_proxy(proxy_url.as_deref())
+}
+
+pub(crate) fn one_shot_async_upstream_client_for_account(account_id: &str) -> reqwest::Client {
+    let proxy_url = upstream_proxy_url_for_account(account_id);
+    build_async_upstream_client_with_proxy(proxy_url.as_deref())
+}
+
+/// Builds a request-scoped HTTP/1.1 client for long-lived Responses streams.
+///
+/// A shared HTTP/2 connection couples otherwise independent Codex streams: a
+/// proxy-side H2 failure can terminate every in-flight response multiplexed on
+/// that socket. Request-scoped HTTP/1.1 keeps unlimited application concurrency
+/// while isolating each stream onto its own transport connection.
+pub(crate) fn isolated_stream_upstream_client_for_account(account_id: &str) -> reqwest::Client {
+    let proxy_url = upstream_proxy_url_for_account(account_id);
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(upstream_connect_timeout_cached())
+        .pool_max_idle_per_host(0)
+        .tcp_keepalive(Some(Duration::from_secs(30)))
+        .http1_only();
+    if let Some(proxy_url) = proxy_url.as_deref() {
+        match Proxy::all(proxy_url) {
+            Ok(proxy) => builder = builder.proxy(proxy),
+            Err(err) => log::warn!(
+                "event=gateway_isolated_stream_client_invalid_proxy proxy={} err={}",
+                proxy_url,
+                err
+            ),
+        }
+    }
+    builder.build().unwrap_or_else(|err| {
+        log::warn!(
+            "event=gateway_isolated_stream_client_build_failed err={}",
+            err
+        );
+        reqwest::Client::new()
+    })
+}
+
 pub(crate) fn upstream_proxy_url_for_account(account_id: &str) -> Option<String> {
     ensure_runtime_config_loaded();
+    match crate::proxy_profiles::resolve_for_account(account_id) {
+        crate::proxy_profiles::AccountProxyResolution::Proxy(url) => return Some(url),
+        crate::proxy_profiles::AccountProxyResolution::Direct => return None,
+        crate::proxy_profiles::AccountProxyResolution::Blocked => {
+            return Some(FAIL_CLOSED_PROXY_URL.to_string());
+        }
+        crate::proxy_profiles::AccountProxyResolution::Inherit => {}
+    }
     let pool = crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool");
     if let Some(proxy_url) = pool.proxy_for_account(account_id) {
         return Some(proxy_url.to_string());
@@ -341,30 +455,57 @@ fn account_candidate_clients_for_account(account_id: &str) -> AccountCandidateCl
         "account_candidate_clients",
     )
     .get(&key)
-    .cloned()
-    {
+    .map(|entry| {
+        entry
+            .last_used
+            .store(next_candidate_client_cache_tick(), Ordering::Relaxed);
+        entry.clients.clone()
+    }) {
         return clients;
     }
 
-    let clients = AccountCandidateClients {
-        blocking: build_upstream_client_with_proxy(key.proxy_profile.as_deref()),
-        async_client: build_async_upstream_client_with_proxy(key.proxy_profile.as_deref()),
-    };
     let mut cache = crate::lock_utils::write_recover(
         account_candidate_clients_lock(),
         "account_candidate_clients",
     );
-    if let Some(existing) = cache.get(&key).cloned() {
-        return existing;
+    if let Some(existing) = cache.get(&key) {
+        existing
+            .last_used
+            .store(next_candidate_client_cache_tick(), Ordering::Relaxed);
+        return existing.clients.clone();
     }
     if cache.len() >= MAX_CANDIDATE_CLIENT_CACHE_ENTRIES {
-        cache.clear();
+        if let Some(lru_key) =
+            least_recently_used_key(&cache, |entry| entry.last_used.load(Ordering::Relaxed))
+        {
+            cache.remove(&lru_key);
+        }
     }
-    cache.insert(key, clients.clone());
+    // Build while holding the miss lock so concurrent first requests for the
+    // same account do not each create their own HTTP connection pool.
+    let clients = AccountCandidateClients {
+        blocking: build_upstream_client_with_proxy(key.proxy_profile.as_deref()),
+        async_client: build_async_upstream_client_with_proxy(key.proxy_profile.as_deref()),
+    };
+    cache.insert(
+        key,
+        CachedAccountCandidateClients {
+            clients: clients.clone(),
+            last_used: AtomicU64::new(next_candidate_client_cache_tick()),
+        },
+    );
     clients
 }
 
 fn account_candidate_proxy_profile(account_id: &str) -> Option<String> {
+    match crate::proxy_profiles::resolve_for_account(account_id) {
+        crate::proxy_profiles::AccountProxyResolution::Proxy(url) => return Some(url),
+        crate::proxy_profiles::AccountProxyResolution::Direct => return None,
+        crate::proxy_profiles::AccountProxyResolution::Blocked => {
+            return Some(FAIL_CLOSED_PROXY_URL.to_string());
+        }
+        crate::proxy_profiles::AccountProxyResolution::Inherit => {}
+    }
     let pool = crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool");
     if let Some(proxy_url) = pool.proxy_for_account(account_id) {
         return Some(proxy_url.to_string());
@@ -391,23 +532,40 @@ fn aggregate_candidate_client_for_key(key: AggregateCandidateClientKey) -> Clien
         "aggregate_candidate_clients",
     )
     .get(&key)
-    .cloned()
-    {
+    .map(|entry| {
+        entry
+            .last_used
+            .store(next_candidate_client_cache_tick(), Ordering::Relaxed);
+        entry.client.clone()
+    }) {
         return client;
     }
 
-    let client = build_upstream_client_with_proxy(key.proxy_profile.as_deref());
     let mut cache = crate::lock_utils::write_recover(
         aggregate_candidate_clients_lock(),
         "aggregate_candidate_clients",
     );
-    if let Some(existing) = cache.get(&key).cloned() {
-        return existing;
+    if let Some(existing) = cache.get(&key) {
+        existing
+            .last_used
+            .store(next_candidate_client_cache_tick(), Ordering::Relaxed);
+        return existing.client.clone();
     }
     if cache.len() >= MAX_CANDIDATE_CLIENT_CACHE_ENTRIES {
-        cache.clear();
+        if let Some(lru_key) =
+            least_recently_used_key(&cache, |entry| entry.last_used.load(Ordering::Relaxed))
+        {
+            cache.remove(&lru_key);
+        }
     }
-    cache.insert(key, client.clone());
+    let client = build_upstream_client_with_proxy(key.proxy_profile.as_deref());
+    cache.insert(
+        key,
+        CachedAggregateCandidateClient {
+            client: client.clone(),
+            last_used: AtomicU64::new(next_candidate_client_cache_tick()),
+        },
+    );
     client
 }
 
@@ -556,7 +714,12 @@ fn build_async_upstream_client_with_proxy(proxy_url: Option<&str>) -> reqwest::C
         .connect_timeout(upstream_connect_timeout_cached())
         .pool_max_idle_per_host(32)
         .pool_idle_timeout(Some(Duration::from_secs(90)))
-        .tcp_keepalive(Some(Duration::from_secs(30)));
+        .tcp_keepalive(Some(Duration::from_secs(30)))
+        .http2_keep_alive_interval(Some(Duration::from_secs(
+            UPSTREAM_HTTP2_KEEPALIVE_INTERVAL_SECS,
+        )))
+        .http2_keep_alive_timeout(Duration::from_secs(UPSTREAM_HTTP2_KEEPALIVE_TIMEOUT_SECS))
+        .http2_keep_alive_while_idle(true);
     if let Some(proxy_url) = proxy_url {
         let proxy = match Proxy::all(proxy_url) {
             Ok(proxy) => proxy,
@@ -1081,16 +1244,12 @@ pub(crate) fn current_codex_user_agent() -> String {
     ensure_runtime_config_loaded();
     let originator = current_wire_originator();
     let version = current_codex_user_agent_version();
-    let os_info = os_info::get();
-    format!(
-        "{}/{} ({} {}; {}) {}",
-        originator,
-        version,
-        os_info.os_type(),
-        os_info.version(),
-        os_info.architecture().unwrap_or("unknown"),
-        current_codex_terminal_user_agent_token()
-    )
+    // Synthetic probes and OpenAI-compatible clients do not have a native
+    // Codex identity to preserve. Use one stable, official CLI-shaped fallback
+    // instead of leaking the gateway host OS/terminal into every request. Real
+    // Codex clients still keep their coherent incoming UA + originator pair in
+    // `resolve_codex_identity`.
+    format!("{originator}/{version} (Ubuntu 22.4.0; x86_64) xterm-256color")
 }
 
 /// 函数 `current_residency_requirement`
@@ -1647,12 +1806,12 @@ fn upstream_client_pool_lock() -> &'static RwLock<UpstreamClientPool> {
 }
 
 fn account_candidate_clients_lock(
-) -> &'static RwLock<HashMap<AccountCandidateClientKey, AccountCandidateClients>> {
+) -> &'static RwLock<HashMap<AccountCandidateClientKey, CachedAccountCandidateClients>> {
     ACCOUNT_CANDIDATE_CLIENTS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 fn aggregate_candidate_clients_lock(
-) -> &'static RwLock<HashMap<AggregateCandidateClientKey, Client>> {
+) -> &'static RwLock<HashMap<AggregateCandidateClientKey, CachedAggregateCandidateClient>> {
     AGGREGATE_CANDIDATE_CLIENTS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
@@ -1720,6 +1879,10 @@ fn clear_candidate_client_caches() {
         "aggregate_candidate_clients",
     )
     .clear();
+}
+
+pub(crate) fn invalidate_account_proxy_clients() {
+    clear_candidate_client_caches();
 }
 
 /// 函数 `build_upstream_client_pool`
@@ -2375,110 +2538,6 @@ fn normalize_codex_user_agent_version(raw: &str) -> Result<String, String> {
     Ok(normalized.to_string())
 }
 
-/// 函数 `current_codex_terminal_user_agent_token`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// 无
-///
-/// # 返回
-/// 返回函数执行结果
-fn current_codex_terminal_user_agent_token() -> String {
-    if let Some(program) = env_non_empty("TERM_PROGRAM") {
-        let version = env_non_empty("TERM_PROGRAM_VERSION");
-        return sanitize_header_value(format_terminal_user_agent(program, version));
-    }
-    if std::env::var_os("WEZTERM_VERSION").is_some() {
-        return sanitize_header_value(format_terminal_user_agent(
-            "WezTerm".to_string(),
-            env_non_empty("WEZTERM_VERSION"),
-        ));
-    }
-    if std::env::var_os("ITERM_SESSION_ID").is_some()
-        || std::env::var_os("ITERM_PROFILE").is_some()
-        || std::env::var_os("ITERM_PROFILE_NAME").is_some()
-    {
-        return sanitize_header_value("iTerm.app".to_string());
-    }
-    if std::env::var_os("TERM_SESSION_ID").is_some() {
-        return sanitize_header_value("Apple_Terminal".to_string());
-    }
-    if std::env::var_os("KITTY_WINDOW_ID").is_some()
-        || std::env::var("TERM")
-            .map(|term| term.contains("kitty"))
-            .unwrap_or(false)
-    {
-        return sanitize_header_value("kitty".to_string());
-    }
-    if std::env::var_os("ALACRITTY_SOCKET").is_some()
-        || std::env::var("TERM")
-            .map(|term| term == "alacritty")
-            .unwrap_or(false)
-    {
-        return sanitize_header_value("Alacritty".to_string());
-    }
-    if std::env::var_os("KONSOLE_VERSION").is_some() {
-        return sanitize_header_value(format_terminal_user_agent(
-            "Konsole".to_string(),
-            env_non_empty("KONSOLE_VERSION"),
-        ));
-    }
-    if std::env::var_os("GNOME_TERMINAL_SCREEN").is_some() {
-        return sanitize_header_value("gnome-terminal".to_string());
-    }
-    if std::env::var_os("VTE_VERSION").is_some() {
-        return sanitize_header_value(format_terminal_user_agent(
-            "VTE".to_string(),
-            env_non_empty("VTE_VERSION"),
-        ));
-    }
-    if std::env::var_os("WT_SESSION").is_some() {
-        return "WindowsTerminal".to_string();
-    }
-    if let Some(term) = env_non_empty("TERM") {
-        return sanitize_header_value(term);
-    }
-    "unknown".to_string()
-}
-
-fn format_terminal_user_agent(name: String, version: Option<String>) -> String {
-    match version.as_ref().filter(|value| !value.is_empty()) {
-        Some(version) => format!("{name}/{version}"),
-        None => name,
-    }
-}
-
-/// 函数 `sanitize_header_value`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - raw: 参数 raw
-///
-/// # 返回
-/// 返回函数执行结果
-fn sanitize_header_value(raw: String) -> String {
-    let sanitized: String = raw
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if sanitized.trim().is_empty() {
-        return "unknown".to_string();
-    }
-    sanitized
-}
-
 /// 函数 `normalize_residency_requirement`
 ///
 /// 作者: gaohongshun
@@ -2633,12 +2692,19 @@ fn parse_proxy_list_env() -> Vec<String> {
     let Some(raw) = env_non_empty(ENV_PROXY_LIST) else {
         return Vec::new();
     };
-    raw.split(|ch| ch == ',' || ch == ';' || ch == '\n' || ch == '\r')
+    let mut proxies = raw
+        .split(|ch| ch == ',' || ch == ';' || ch == '\n' || ch == '\r')
         .map(str::trim)
         .filter(|part| !part.is_empty())
-        .take(MAX_UPSTREAM_PROXY_POOL_SIZE)
         .map(rewrite_socks_proxy_url)
-        .collect()
+        .collect::<Vec<_>>();
+    // Stable ordering prevents a harmless UI reorder from moving every account
+    // to another egress address. Adding/removing an endpoint may still remap a
+    // subset; persistent per-account profiles can be layered on later.
+    proxies.sort();
+    proxies.dedup();
+    proxies.truncate(MAX_UPSTREAM_PROXY_POOL_SIZE);
+    proxies
 }
 
 pub(crate) fn aggregate_api_should_bypass_upstream_proxy(url: &str) -> bool {

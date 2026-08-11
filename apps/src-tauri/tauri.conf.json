@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "CodexManager",
+  "productName": "OpenRuntime",
   "version": "0.4.0",
-  "identifier": "com.codexmanager.desktop",
+  "identifier": "com.codexmanager.unified",
   "build": {
     "beforeDevCommand": "node ./src-tauri/scripts/before-build.mjs dev:desktop",
     "beforeBuildCommand": "node ./src-tauri/scripts/before-build.mjs build:desktop",
@@ -14,7 +14,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "CodexManager",
+        "title": "OpenRuntime",
         "width": 1100,
         "height": 720,
         "resizable": true,

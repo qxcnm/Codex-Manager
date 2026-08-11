@@ -1,7 +1,7 @@
 use super::{
     classify_upstream_stream_read_error, mark_first_response_ms, stream_idle_timed_out,
     stream_idle_timeout_message, stream_reader_disconnected_message, stream_wait_timeout,
-    upstream_hint_or_stream_incomplete_message, Arc, Cursor, Mutex, OpenAIResponsesEvent,
+    upstream_hint_or_stream_incomplete_message, Arc, CanonicalEvent, Cursor, Mutex,
     OpenAIResponsesOutputTextState, PassthroughSseCollector, Read, SseKeepAliveFrame, SseTerminal,
 };
 use crate::gateway::upstream::{GatewayByteStream, GatewayByteStreamItem, GatewayStreamResponse};
@@ -20,7 +20,7 @@ const OPENAI_RESPONSES_SIDECAR_DRAIN_TIMEOUT: Duration = Duration::from_millis(5
 
 #[derive(Debug)]
 enum OpenAIResponsesSidecarItem {
-    Event(OpenAIResponsesEvent),
+    Event(CanonicalEvent),
     Eof,
     Error(String),
 }
@@ -53,7 +53,7 @@ impl OpenAIResponsesSidecarObserver {
                 match stream.as_mut().poll_next(&mut cx) {
                     Poll::Ready(Some(Ok(event))) => {
                         let lines = event_to_sse_lines(&event);
-                        if let Some(parsed) = OpenAIResponsesEvent::parse(&lines) {
+                        if let Some(parsed) = CanonicalEvent::parse(&lines) {
                             if tx.send(OpenAIResponsesSidecarItem::Event(parsed)).is_err() {
                                 return;
                             }
@@ -151,7 +151,7 @@ impl OpenAIResponsesPassthroughSseReader {
         }
     }
 
-    fn update_usage_from_event(&mut self, event: OpenAIResponsesEvent) {
+    fn update_usage_from_event(&mut self, event: CanonicalEvent) {
         if let Ok(mut collector) = self.usage_collector.lock() {
             if let Some(event_type) = event.event_type.as_ref() {
                 collector.last_event_type = Some(event_type.clone());

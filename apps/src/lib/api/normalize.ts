@@ -16,6 +16,8 @@ import {
   ApiKeyCreateResult,
   ApiKeyUsageStat,
   AppSettings,
+  AccountBatchRotationSettings,
+  AccountBatchRotationStatus,
   BackgroundTaskSettings,
   QuotaGuardSettings,
   RuntimeTimeZone,
@@ -55,11 +57,15 @@ import {
   normalizeSponsorLinkItems,
 } from "@/lib/sponsor-links";
 import {
-  calcAvailability,
+  getResetEntitlementDisplayRows,
   getUsageDisplayBuckets,
   isLowQuotaUsage,
   toNullableNumber,
 } from "@/lib/utils/usage";
+import {
+  accountCallabilityText,
+  resolveAccountCallability,
+} from "@/lib/account-callability";
 import { readBillingModeLock } from "./billing-mode-lock";
 
 const DEFAULT_BACKGROUND_TASKS: BackgroundTaskSettings = {
@@ -79,10 +85,17 @@ const DEFAULT_BACKGROUND_TASKS: BackgroundTaskSettings = {
 };
 
 const DEFAULT_QUOTA_GUARD: QuotaGuardSettings = {
-  enabled: true,
+  enabled: false,
   primaryMinRemainingPercent: 5,
   secondaryMinRemainingPercent: 10,
   allowAllLowQuotaFallback: true,
+};
+
+const DEFAULT_ACCOUNT_BATCH_ROTATION: AccountBatchRotationSettings = {
+  enabled: false,
+  batchSize: 5,
+  fallbackWindowMinutes: 300,
+  maxAttemptsPerRequest: 4,
 };
 
 const DEFAULT_RUNTIME_TIME_ZONE: RuntimeTimeZone = {
@@ -427,8 +440,28 @@ export function normalizeAccount(item: unknown, usage?: AccountUsage | null): Ac
   const statusReason = asString(source.statusReason ?? source.status_reason);
   const rawHasToken = source.hasToken ?? source.has_token;
   const hasToken = typeof rawHasToken === "boolean" ? Boolean(rawHasToken) : true;
-  const availability = calcAvailability(usage, { status, statusReason, hasToken });
+  const credentialState = asString(
+    source.credentialState ?? source.credential_state,
+    hasToken ? "healthy" : "reauth_required"
+  ) as Account["credentialState"];
+  const credentialAction = asString(
+    source.credentialAction ?? source.credential_action,
+    hasToken ? "none" : "reauthenticate"
+  ) as Account["credentialAction"];
+  const gatewayProbeStatus =
+    asString(source.gatewayProbeStatus ?? source.gateway_probe_status) || null;
+  const gatewayProbeReason =
+    asString(source.gatewayProbeReason ?? source.gateway_probe_reason) || null;
+  const callability = resolveAccountCallability({
+    status,
+    statusReason,
+    credentialState,
+    credentialAction,
+    gatewayProbeStatus,
+    gatewayProbeReason,
+  });
   const usageBuckets = getUsageDisplayBuckets(usage);
+  const resetEntitlements = getResetEntitlementDisplayRows(usage);
 
   return {
     id,
@@ -442,6 +475,28 @@ export function normalizeAccount(item: unknown, usage?: AccountUsage | null): Ac
     status,
     statusReason,
     hasToken,
+    authMode:
+      asString(source.authMode ?? source.auth_mode) === "agentIdentity"
+        ? "agentIdentity"
+        : "oauth",
+    agentIdentityStatus:
+      asString(source.agentIdentityStatus ?? source.agent_identity_status) || null,
+    hasAgentIdentityTask: Boolean(
+      source.hasAgentIdentityTask ?? source.has_agent_identity_task,
+    ),
+    credentialState,
+    credentialAction,
+    accessTokenExpiresAt: toNullableNumber(
+      source.accessTokenExpiresAt ?? source.access_token_expires_at
+    ),
+    gatewayProbeStatus,
+    gatewayProbeReason,
+    gatewayProbeCheckedAt: toNullableNumber(
+      source.gatewayProbeCheckedAt ?? source.gateway_probe_checked_at
+    ),
+    gatewayProbeRetryAfter: toNullableNumber(
+      source.gatewayProbeRetryAfter ?? source.gateway_probe_retry_after
+    ),
     planType:
       asString(source.planType ?? source.plan_type ?? source.subscriptionPlan ?? source.subscription_plan) ||
       null,
@@ -469,13 +524,21 @@ export function normalizeAccount(item: unknown, usage?: AccountUsage | null): Ac
       source.quotaCapacitySecondaryWindowTokens ??
         source.quota_capacity_secondary_window_tokens
     ),
-    isAvailable: availability.level === "ok",
+    isAvailable: callability === "callable",
     isLowQuota: isLowQuotaUsage(usage),
     lastRefreshAt: usage?.capturedAt ?? null,
-    availabilityText: availability.text,
-    availabilityLevel: availability.level,
+    createdAt: asInteger(source.createdAt ?? source.created_at, 0, 0),
+    updatedAt: asInteger(source.updatedAt ?? source.updated_at, 0, 0),
+    availabilityText: accountCallabilityText(callability),
+    availabilityLevel:
+      callability === "callable"
+        ? "ok"
+        : callability === "unprobed" || callability === "network_unknown"
+          ? "unknown"
+          : "bad",
     primaryRemainPercent: usageBuckets.primaryRemainPercent,
     secondaryRemainPercent: usageBuckets.secondaryRemainPercent,
+    resetEntitlements,
     usage: usage ?? null,
   };
 }
@@ -813,7 +876,23 @@ export function normalizeApiKey(item: unknown): ApiKey | null {
     accountPlanFilter: asString(source.accountPlanFilter ?? source.account_plan_filter) || null,
     aggregateApiUrl: asString(source.aggregateApiUrl ?? source.aggregate_api_url) || null,
     quotaLimitTokens: toNullableNumber(source.quotaLimitTokens ?? source.quota_limit_tokens),
+    allowedModels: asStringArray(source.allowedModels ?? source.allowed_models),
+    allowedPlatforms: asStringArray(
+      source.allowedPlatforms ?? source.allowed_platforms,
+    ).filter((value): value is "codex" | "kiro" | "grok" =>
+      value === "codex" || value === "kiro" || value === "grok"
+    ),
+    modelVisibility:
+      asString(source.modelVisibility ?? source.model_visibility) === "managed"
+        ? "managed"
+        : "selectable",
+    expiresAt: toNullableNumber(source.expiresAt ?? source.expires_at),
+    concurrencyLimit: toNullableNumber(
+      source.concurrencyLimit ?? source.concurrency_limit,
+    ),
     protocol: asString(source.protocolType ?? source.protocol_type) || "openai_compat",
+    protocolProfile:
+      asString(source.protocolProfile ?? source.protocol_profile) === "claude" ? "claude" : "openai",
     clientType: asString(source.clientType ?? source.client_type),
     authScheme: asString(source.authScheme ?? source.auth_scheme),
     upstreamBaseUrl: asString(source.upstreamBaseUrl ?? source.upstream_base_url),
@@ -1775,6 +1854,49 @@ export function normalizeQuotaGuard(payload: unknown): QuotaGuardSettings {
   };
 }
 
+function normalizeAccountBatchRotation(payload: unknown): AccountBatchRotationSettings {
+  const source = asObject(payload);
+  return {
+    enabled: asBoolean(source.enabled, false),
+    batchSize: asInteger(source.batchSize ?? source.batch_size, 5, 1),
+    fallbackWindowMinutes: asInteger(
+      source.fallbackWindowMinutes ?? source.fallback_window_minutes,
+      300,
+      1
+    ),
+    maxAttemptsPerRequest: asInteger(
+      source.maxAttemptsPerRequest ?? source.max_attempts_per_request,
+      4,
+      1
+    ),
+  };
+}
+
+function normalizeAccountBatchRotationStatus(payload: unknown): AccountBatchRotationStatus {
+  const source = asObject(payload);
+  const config = normalizeAccountBatchRotation(source);
+  return {
+    ...config,
+    scope: asString(source.scope) || null,
+    currentBatch: asInteger(source.currentBatch ?? source.current_batch, 0, 0),
+    totalBatches: asInteger(source.totalBatches ?? source.total_batches, 0, 0),
+    cycle: asInteger(source.cycle, 0, 0),
+    currentBatchAccounts: asInteger(
+      source.currentBatchAccounts ?? source.current_batch_accounts,
+      0,
+      0
+    ),
+    currentBatchAvailable: asInteger(
+      source.currentBatchAvailable ?? source.current_batch_available,
+      0,
+      0
+    ),
+    earliestResetAt: toNullableNumber(
+      source.earliestResetAt ?? source.earliest_reset_at
+    ),
+  };
+}
+
 export function normalizeRuntimeTimeZone(payload: unknown): RuntimeTimeZone {
   const source = asObject(payload);
   return {
@@ -1864,6 +1986,13 @@ export function normalizeAppSettings(payload: unknown): AppSettings {
       source.compactModelForwardRules ?? source.compact_model_forward_rules
     ),
     accountMaxInflight: asInteger(source.accountMaxInflight, 1, 0),
+    accountBatchRotation: normalizeAccountBatchRotation(
+      source.accountBatchRotation ?? source.account_batch_rotation ??
+        DEFAULT_ACCOUNT_BATCH_ROTATION
+    ),
+    accountBatchRotationStatus: normalizeAccountBatchRotationStatus(
+      source.accountBatchRotationStatus ?? source.account_batch_rotation_status
+    ),
     threadAwareAccountDistributionEnabled: asBoolean(
       source.threadAwareAccountDistributionEnabled,
       true

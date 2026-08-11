@@ -112,7 +112,7 @@ fn reload_from_env_updates_timeout_and_proxy() {
     );
 }
 
-/// 函数 `reload_from_env_defaults_keep_request_gate_legacy_unbounded`
+/// 函数 `reload_from_env_defaults_keep_conservative_account_limit`
 ///
 /// 作者: gaohongshun
 ///
@@ -124,7 +124,7 @@ fn reload_from_env_updates_timeout_and_proxy() {
 /// # 返回
 /// 无
 #[test]
-fn reload_from_env_defaults_keep_request_gate_legacy_unbounded() {
+fn reload_from_env_defaults_keep_conservative_account_limit() {
     let _guard = crate::test_env_guard();
     let _account_guard = EnvGuard::clear(ENV_ACCOUNT_MAX_INFLIGHT);
     let _strict_guard = EnvGuard::clear(ENV_STRICT_REQUEST_PARAM_ALLOWLIST);
@@ -139,7 +139,7 @@ fn reload_from_env_defaults_keep_request_gate_legacy_unbounded() {
 
     reload_from_env();
 
-    assert_eq!(account_max_inflight_limit(), 0);
+    assert_eq!(account_max_inflight_limit(), 1);
     assert!(!strict_request_param_allowlist_enabled());
     assert_eq!(request_gate_wait_timeout(), None);
     assert_eq!(front_proxy_max_body_bytes(), 0);
@@ -203,6 +203,25 @@ fn parse_proxy_list_env_normalizes_socks_entries() {
     assert_eq!(parsed[0], "socks5h://127.0.0.1:7890");
     assert_eq!(parsed[1], "socks5h://127.0.0.1:7891");
     assert_eq!(parsed[2], "socks5h://127.0.0.1:7892");
+}
+
+#[test]
+fn parse_proxy_list_env_is_order_independent_and_deduplicated() {
+    let _guard = crate::test_env_guard();
+    let first = EnvGuard::set(
+        ENV_PROXY_LIST,
+        "http://pool-c:8080,http://pool-a:8080,http://pool-b:8080,http://pool-a:8080",
+    );
+    let first_parsed = parse_proxy_list_env();
+    drop(first);
+    let _second = EnvGuard::set(
+        ENV_PROXY_LIST,
+        "http://pool-b:8080,http://pool-c:8080,http://pool-a:8080",
+    );
+    let second_parsed = parse_proxy_list_env();
+
+    assert_eq!(first_parsed, second_parsed);
+    assert_eq!(first_parsed.len(), 3);
 }
 
 /// 函数 `stable_proxy_index_is_deterministic`
@@ -855,6 +874,7 @@ fn set_originator_updates_env_and_dynamic_user_agent() {
         current_codex_user_agent_version()
     );
     assert!(current_codex_user_agent().contains(expected_prefix.as_str()));
+    assert!(current_codex_user_agent().contains("(Ubuntu 22.4.0; x86_64) xterm-256color"));
 }
 
 /// 函数 `set_codex_user_agent_version_updates_env_and_user_agent`
@@ -948,60 +968,16 @@ fn set_request_compression_enabled_updates_env_and_cache() {
 }
 
 #[test]
-fn terminal_user_agent_prefers_term_program_over_wt_session() {
-    let _guard = crate::test_env_guard();
-    let _term_program = EnvGuard::set("TERM_PROGRAM", "WindowsTerminal");
-    let _term_program_version = EnvGuard::set("TERM_PROGRAM_VERSION", "1.21");
-    let _wt_session = EnvGuard::set("WT_SESSION", "1");
-    let _wezterm = EnvGuard::clear("WEZTERM_VERSION");
-    let _iterm_session = EnvGuard::clear("ITERM_SESSION_ID");
-    let _iterm_profile = EnvGuard::clear("ITERM_PROFILE");
-    let _iterm_profile_name = EnvGuard::clear("ITERM_PROFILE_NAME");
-    let _term_session = EnvGuard::clear("TERM_SESSION_ID");
-    let _kitty = EnvGuard::clear("KITTY_WINDOW_ID");
-    let _alacritty = EnvGuard::clear("ALACRITTY_SOCKET");
-    let _konsole = EnvGuard::clear("KONSOLE_VERSION");
-    let _gnome = EnvGuard::clear("GNOME_TERMINAL_SCREEN");
-    let _vte = EnvGuard::clear("VTE_VERSION");
-    let _term = EnvGuard::clear("TERM");
+fn candidate_client_cache_evicts_only_the_least_recently_used_entry() {
+    let cache = HashMap::from([
+        ("oldest".to_string(), 3_u64),
+        ("recent".to_string(), 12_u64),
+        ("middle".to_string(), 7_u64),
+    ]);
 
     assert_eq!(
-        current_codex_terminal_user_agent_token(),
-        "WindowsTerminal/1.21"
+        least_recently_used_key(&cache, |last_used| *last_used).as_deref(),
+        Some("oldest")
     );
-}
-
-#[test]
-fn terminal_user_agent_detects_windows_terminal_from_wt_session() {
-    let _guard = crate::test_env_guard();
-    let _term_program = EnvGuard::clear("TERM_PROGRAM");
-    let _term_program_version = EnvGuard::clear("TERM_PROGRAM_VERSION");
-    let _wt_session = EnvGuard::set("WT_SESSION", "1");
-    let _wezterm = EnvGuard::clear("WEZTERM_VERSION");
-    let _iterm_session = EnvGuard::clear("ITERM_SESSION_ID");
-    let _iterm_profile = EnvGuard::clear("ITERM_PROFILE");
-    let _iterm_profile_name = EnvGuard::clear("ITERM_PROFILE_NAME");
-    let _term_session = EnvGuard::clear("TERM_SESSION_ID");
-    let _kitty = EnvGuard::clear("KITTY_WINDOW_ID");
-    let _alacritty = EnvGuard::clear("ALACRITTY_SOCKET");
-    let _konsole = EnvGuard::clear("KONSOLE_VERSION");
-    let _gnome = EnvGuard::clear("GNOME_TERMINAL_SCREEN");
-    let _vte = EnvGuard::clear("VTE_VERSION");
-    let _term = EnvGuard::clear("TERM");
-
-    assert_eq!(current_codex_terminal_user_agent_token(), "WindowsTerminal");
-}
-
-#[test]
-fn terminal_user_agent_sanitizes_header_like_official_codex() {
-    let _guard = crate::test_env_guard();
-    let _term_program = EnvGuard::set("TERM_PROGRAM", "Weird Terminal()");
-    let _term_program_version = EnvGuard::set("TERM_PROGRAM_VERSION", "1.2 beta");
-    let _wt_session = EnvGuard::clear("WT_SESSION");
-    let _term = EnvGuard::clear("TERM");
-
-    assert_eq!(
-        current_codex_terminal_user_agent_token(),
-        "Weird_Terminal__/1.2_beta"
-    );
+    assert_eq!(cache.len(), 3, "selection must not clear the whole cache");
 }

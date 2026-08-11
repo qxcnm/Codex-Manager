@@ -80,6 +80,42 @@ fn sample_api_key(
     }
 }
 
+#[test]
+fn api_key_model_policy_enforces_whitelist_and_platform_scope() {
+    let kiro_only = codexmanager_core::storage::ApiKeyPolicy {
+        key_id: "key".into(),
+        allowed_models: vec!["smart".into(), "kiro/claude-sonnet-4.5".into()],
+        allowed_platforms: vec!["kiro".into()],
+        model_visibility: "selectable".into(),
+        expires_at: None,
+        concurrency_limit: Some(2),
+    };
+    assert!(ensure_api_key_policy_allows_model(&kiro_only, Some("smart")).is_ok());
+    assert!(ensure_api_key_policy_allows_model(&kiro_only, Some("kiro/claude-sonnet-4.5")).is_ok());
+    let codex = ensure_api_key_policy_allows_model(&kiro_only, Some("codex/gpt-5.3-codex"))
+        .expect_err("codex must be rejected");
+    assert_eq!(codex.status_code, 403);
+    let grok = ensure_api_key_policy_allows_model(&kiro_only, Some("grok/grok-chat-fast"))
+        .expect_err("grok must be rejected");
+    assert_eq!(grok.status_code, 403);
+    let other = ensure_api_key_policy_allows_model(&kiro_only, Some("kiro/claude-opus-4.8"))
+        .expect_err("model must be rejected");
+    assert_eq!(other.status_code, 403);
+}
+
+#[test]
+fn api_key_model_policy_accepts_grok_when_platform_is_enabled() {
+    let grok_only = codexmanager_core::storage::ApiKeyPolicy {
+        key_id: "key".into(),
+        allowed_models: vec!["grok/grok-chat-fast".into()],
+        allowed_platforms: vec!["grok".into()],
+        model_visibility: "selectable".into(),
+        expires_at: None,
+        concurrency_limit: None,
+    };
+    assert!(ensure_api_key_policy_allows_model(&grok_only, Some("grok/grok-chat-fast")).is_ok());
+}
+
 /// 函数 `anthropic_key_keeps_empty_overrides`
 ///
 /// 作者: gaohongshun
@@ -786,7 +822,7 @@ fn aggregate_passthrough_applies_model_reasoning_and_service_tier_overrides_with
 }
 
 #[test]
-fn aggregate_passthrough_openai_responses_defaults_omitted_stream_to_sse() {
+fn aggregate_passthrough_openai_responses_defaults_omitted_stream_to_json() {
     let api_key = sample_api_key(
         crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
         None,
@@ -797,7 +833,7 @@ fn aggregate_passthrough_openai_responses_defaults_omitted_stream_to_sse() {
 
     let (rewritten_body, ..) =
         apply_passthrough_request_overrides("/v1/responses", body, &api_key, None, None);
-    let defaulted_body = default_omitted_responses_stream_to_true(rewritten_body);
+    let defaulted_body = default_omitted_responses_stream_to_false(rewritten_body);
     let payload: Value = serde_json::from_slice(&defaulted_body).expect("json body");
     let is_stream = resolve_client_is_stream(
         crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
@@ -807,8 +843,10 @@ fn aggregate_passthrough_openai_responses_defaults_omitted_stream_to_sse() {
         false,
     );
 
+    // The upstream transport may still be forced to SSE for canonical
+    // aggregation, while the omitted client flag must produce JSON downstream.
     assert_eq!(payload.get("stream").and_then(Value::as_bool), Some(true));
-    assert!(is_stream);
+    assert!(!is_stream);
 }
 
 #[test]
@@ -823,7 +861,7 @@ fn hybrid_passthrough_fallback_body_uses_aggregate_override_shape() {
 
     let mut passthrough_body =
         apply_passthrough_request_overrides("/v1/responses", body, &api_key, None, None).0;
-    passthrough_body = default_omitted_responses_stream_to_true(passthrough_body);
+    passthrough_body = default_omitted_responses_stream_to_false(passthrough_body);
     let payload: Value = serde_json::from_slice(&passthrough_body).expect("json body");
 
     assert_eq!(
@@ -1357,8 +1395,8 @@ fn gemini_stream_generate_content_path_forces_stream_mode_without_body_flag() {
 }
 
 #[test]
-fn openai_responses_api_defaults_to_stream_when_stream_is_omitted() {
-    assert!(resolve_client_is_stream(
+fn openai_responses_api_defaults_to_json_when_stream_is_omitted() {
+    assert!(!resolve_client_is_stream(
         crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
         "/v1/responses",
         false,
@@ -1389,18 +1427,18 @@ fn openai_responses_api_defaults_to_stream_when_stream_is_omitted() {
 }
 
 #[test]
-fn openai_responses_api_body_defaults_omitted_stream_to_true_before_rewrite() {
+fn openai_responses_api_body_defaults_omitted_stream_to_false_before_rewrite() {
     let body = br#"{"model":"gpt-5.4","input":"hi"}"#.to_vec();
-    let rewritten = default_omitted_responses_stream_to_true(body);
+    let rewritten = default_omitted_responses_stream_to_false(body);
     let payload: Value = serde_json::from_slice(&rewritten).expect("json body");
 
-    assert_eq!(payload.get("stream").and_then(Value::as_bool), Some(true));
+    assert_eq!(payload.get("stream").and_then(Value::as_bool), Some(false));
 }
 
 #[test]
 fn openai_responses_api_body_preserves_explicit_stream_false() {
     let body = br#"{"model":"gpt-5.4","input":"hi","stream":false}"#.to_vec();
-    let rewritten = default_omitted_responses_stream_to_true(body);
+    let rewritten = default_omitted_responses_stream_to_false(body);
     let payload: Value = serde_json::from_slice(&rewritten).expect("json body");
 
     assert_eq!(payload.get("stream").and_then(Value::as_bool), Some(false));

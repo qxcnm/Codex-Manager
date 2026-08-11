@@ -462,6 +462,58 @@ fn apply_candidate_rotation_prefers_less_bound_account_for_new_thread() {
 }
 
 #[test]
+fn apply_candidate_rotation_prefers_idle_account_over_unbound_busy_account() {
+    let busy_account_id = "thread-distribution-busy-account";
+    let idle_account_id = "thread-distribution-idle-account";
+    let routing = prepare_conversation_routing(
+        "key-hash-thread-distribution-inflight",
+        Some("conv-thread-distribution-inflight"),
+        None,
+        &mut vec![
+            (
+                sample_account(busy_account_id, 0),
+                sample_token(busy_account_id),
+            ),
+            (
+                sample_account(idle_account_id, 1),
+                sample_token(idle_account_id),
+            ),
+        ],
+    )
+    .expect("routing context");
+    let mut candidates = vec![
+        (
+            sample_account(busy_account_id, 0),
+            sample_token(busy_account_id),
+        ),
+        (
+            sample_account(idle_account_id, 1),
+            sample_token(idle_account_id),
+        ),
+    ];
+    let account_binding_counts = HashMap::from([
+        (busy_account_id.to_string(), 0),
+        (idle_account_id.to_string(), 1),
+    ]);
+    let _busy_guard = crate::gateway::acquire_account_inflight(busy_account_id);
+
+    let plan = apply_candidate_rotation(
+        &mut candidates,
+        Some(&routing),
+        "key-hash-thread-distribution-inflight",
+        Some("gpt-5.4"),
+        Some(&account_binding_counts),
+    );
+
+    assert_eq!(
+        plan.source,
+        CandidateRotationSource::ThreadAwareDistribution
+    );
+    assert!(plan.strategy_applied);
+    assert_eq!(candidates[0].0.id, idle_account_id);
+}
+
+#[test]
 fn apply_candidate_rotation_keeps_existing_binding_before_thread_distribution() {
     let binding = sample_binding("acc-1");
     let routing = prepare_conversation_routing(

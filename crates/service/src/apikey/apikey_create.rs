@@ -48,6 +48,16 @@ fn ensure_platform_key_not_exists(storage: &Storage, key: &str) -> Result<(), St
     Ok(())
 }
 
+fn ensure_first_release_protocol(protocol_type: &str) -> Result<(), String> {
+    if protocol_type == crate::apikey_profile::PROTOCOL_OPENAI_COMPAT {
+        return Ok(());
+    }
+    Err(
+        "首版仅支持 OpenAI 格式平台 Key(protocol profile is not available in this release)"
+            .to_string(),
+    )
+}
+
 fn resolve_platform_key(storage: &Storage, custom_key: Option<String>) -> Result<String, String> {
     if let Some(key) = normalize_custom_key(custom_key)? {
         ensure_platform_key_not_exists(storage, &key)?;
@@ -87,6 +97,11 @@ pub(crate) fn create_api_key(
     aggregate_api_id: Option<String>,
     account_plan_filter: Option<String>,
     quota_limit_tokens: Option<i64>,
+    allowed_models: Vec<String>,
+    allowed_platforms: Vec<String>,
+    model_visibility: Option<String>,
+    expires_at: Option<i64>,
+    concurrency_limit: Option<i64>,
     custom_key: Option<String>,
 ) -> Result<ApiKeyCreateResult, String> {
     // 创建平台 Key 并写入存储
@@ -94,7 +109,16 @@ pub(crate) fn create_api_key(
     let key = resolve_platform_key(&storage, custom_key)?;
     let key_hash = hash_platform_key(&key);
     let key_id = generate_key_id();
+    let policy = crate::apikey::policy::normalize_policy(
+        &key_id,
+        allowed_models,
+        allowed_platforms,
+        model_visibility,
+        expires_at,
+        concurrency_limit,
+    )?;
     let protocol_type = normalize_protocol_type(protocol_type)?;
+    ensure_first_release_protocol(&protocol_type)?;
     let (client_type, protocol_type, auth_scheme) = profile_from_protocol(&protocol_type)?;
     let upstream_base_url = normalize_upstream_base_url(upstream_base_url)?;
     let static_headers_json = normalize_static_headers_json(static_headers_json)?;
@@ -140,9 +164,25 @@ pub(crate) fn create_api_key(
         let _ = storage.delete_api_key(&key_id);
         return Err(format!("persist api key quota limit failed: {err}"));
     }
+    if let Err(err) = crate::apikey::policy::save_api_key_policy_with_storage(&storage, &policy) {
+        let _ = storage.delete_api_key(&key_id);
+        return Err(err);
+    }
     if let Err(err) = storage.upsert_api_key_secret(&key_id, &key) {
         let _ = storage.delete_api_key(&key_id);
         return Err(format!("persist api key secret failed: {err}"));
     }
     Ok(ApiKeyCreateResult { id: key_id, key })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_first_release_protocol;
+
+    #[test]
+    fn first_release_accepts_only_openai_key_protocol() {
+        assert!(ensure_first_release_protocol("openai_compat").is_ok());
+        assert!(ensure_first_release_protocol("anthropic_native").is_err());
+        assert!(ensure_first_release_protocol("gemini_native").is_err());
+    }
 }

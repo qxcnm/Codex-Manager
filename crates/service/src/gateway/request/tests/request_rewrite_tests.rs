@@ -2478,3 +2478,30 @@ fn non_matching_endpoint_keeps_non_json_body() {
     let out = apply_request_overrides("/v1/non-standard", body.clone(), None, None, None);
     assert_eq!(out, body);
 }
+
+#[test]
+fn responses_repairs_interrupted_tool_item_id_before_backend_route_is_known() {
+    let body = json!({
+        "model": "gpt-5.6-sol",
+        "input": [{
+            "type": "custom_tool_call",
+            "id": "item_9de417a1597e50f2bd14f73b",
+            "call_id": "call_legacy",
+            "name": "legacy_tool",
+            "input": "{}"
+        }]
+    });
+
+    // This reproduces account routing where the common rewrite stage only
+    // knows the ChatGPT origin, not the final /backend-api/codex path yet.
+    let out = apply_request_overrides(
+        "/v1/responses",
+        serde_json::to_vec(&body).expect("serialize request body"),
+        None,
+        None,
+        Some("https://chatgpt.com"),
+    );
+    let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
+
+    assert_eq!(value["input"][0]["id"], "ctc_9de417a1597e50f2bd14f73b");
+}

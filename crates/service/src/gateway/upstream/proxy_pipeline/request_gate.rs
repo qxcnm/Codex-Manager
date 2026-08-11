@@ -17,9 +17,11 @@ pub(in super::super) fn acquire_request_gate(
     key_id: &str,
     path: &str,
     model_for_log: Option<&str>,
+    request_scope: &str,
     request_deadline: Option<Instant>,
 ) -> Option<super::super::super::request_gate::RequestGateGuard> {
-    let request_gate_lock = super::super::super::request_gate_lock(key_id, path, model_for_log);
+    let request_gate_lock =
+        super::super::super::request_gate_lock(key_id, path, model_for_log, request_scope);
     let request_gate_wait_timeout = super::super::super::request_gate_wait_timeout();
     super::super::super::trace_log::log_request_gate_wait(trace_id, key_id, path, model_for_log);
     let gate_wait_started_at = Instant::now();

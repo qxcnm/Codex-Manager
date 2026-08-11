@@ -74,6 +74,10 @@ pub async fn service_apikey_create(
     aggregate_api_id: Option<String>,
     account_plan_filter: Option<String>,
     quota_limit_tokens: Option<i64>,
+    allowed_models: Option<Vec<String>>,
+    allowed_platforms: Option<Vec<String>>,
+    expires_at: Option<i64>,
+    concurrency_limit: Option<i64>,
     custom_key: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let params = serde_json::json!({
@@ -88,6 +92,10 @@ pub async fn service_apikey_create(
       "aggregateApiId": aggregate_api_id,
       "accountPlanFilter": account_plan_filter,
       "quotaLimitTokens": quota_limit_tokens,
+      "allowedModels": allowed_models.unwrap_or_default(),
+      "allowedPlatforms": allowed_platforms.unwrap_or_default(),
+      "expiresAt": expires_at,
+      "concurrencyLimit": concurrency_limit,
       "customKey": custom_key,
     });
     rpc_call_in_background("apikey/create", addr, Some(params)).await
@@ -272,6 +280,11 @@ pub async fn service_apikey_update_model(
     rotation_strategy: Option<String>,
     aggregate_api_id: Option<String>,
     account_plan_filter: Option<String>,
+    quota_limit_tokens: Option<i64>,
+    allowed_models: Option<Vec<String>>,
+    allowed_platforms: Option<Vec<String>>,
+    expires_at: Option<i64>,
+    concurrency_limit: Option<i64>,
 ) -> Result<serde_json::Value, String> {
     let params = serde_json::json!({
       "id": key_id,
@@ -285,6 +298,11 @@ pub async fn service_apikey_update_model(
       "rotationStrategy": rotation_strategy,
       "aggregateApiId": aggregate_api_id,
       "accountPlanFilter": account_plan_filter,
+      "quotaLimitTokens": quota_limit_tokens,
+      "allowedModels": allowed_models.unwrap_or_default(),
+      "allowedPlatforms": allowed_platforms.unwrap_or_default(),
+      "expiresAt": expires_at,
+      "concurrencyLimit": concurrency_limit,
     });
     rpc_call_in_background("apikey/updateModel", addr, Some(params)).await
 }

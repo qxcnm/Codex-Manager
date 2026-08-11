@@ -134,7 +134,7 @@ pub(super) fn account_import_snapshots_list_sql() -> &'static str {
 }
 
 pub(super) fn account_summary_rows_list_sql() -> &'static str {
-    "SELECT id, label, group_name, sort, status
+    "SELECT id, label, group_name, sort, status, created_at, updated_at
      FROM accounts
      ORDER BY sort ASC, updated_at DESC, id ASC"
 }

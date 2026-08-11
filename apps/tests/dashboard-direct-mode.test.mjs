@@ -19,7 +19,7 @@ test("账号直连模式下会遮罩依赖网关请求日志的仪表盘区域",
   assert.match(source, /function DirectModeUnavailable/);
   assert.match(source, /账号直连模式下不可用/);
   assert.match(source, /切换到本地网关后可统计请求日志、Token 和费用/);
-  assert.match(source, /buildStaticRouteUrl\("\/platform-mode"\)/);
+  assert.match(source, /<ShellLink\s+href="\/platform-mode"/);
   assert.match(source, /当前为账号直连模式/);
   assert.match(source, /CodexManager 无法统计 CLI 请求日志和用量。/);
   assert.match(
@@ -91,7 +91,7 @@ test("托盘预览使用较轻的启动快照", async () => {
   assert.match(source, /includeAccountDetails: false/);
 });
 
-test("首页账户统计优先使用启动快照汇总", async () => {
+test("首页账户统计在完整列表中使用真实网关准入状态", async () => {
   const hookSource = await readSource("src/hooks/useDashboardStats.ts");
   assert.match(hookSource, /const accountSummary = data\?\.accountSummary;/);
   assert.match(
@@ -100,7 +100,11 @@ test("首页账户统计优先使用启动快照汇总", async () => {
   );
   assert.match(
     hookSource,
-    /accountSummary\?\.availableCount \?\? accounts\.filter\(\(item\) => item\.isAvailable\)\.length;/,
+    /const hasCompleteAccountList =[\s\S]*accounts\.length === totalAccounts;/,
+  );
+  assert.match(
+    hookSource,
+    /const availableAccounts = hasCompleteAccountList[\s\S]*accounts\.filter\(\(item\) => item\.isAvailable\)\.length[\s\S]*accountSummary\?\.availableCount/,
   );
 
   const normalizeSource = await readSource("src/lib/api/normalize.ts");

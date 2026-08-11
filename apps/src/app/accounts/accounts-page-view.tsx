@@ -15,6 +15,7 @@ import {
   PencilLine,
   Pin,
   Plus,
+  Radar,
   RefreshCw,
   Search,
   Trash2,
@@ -91,6 +92,7 @@ import {
   formatPlanFilterLabel,
   formatStatusFilterLabel,
   getAccountStatusAction,
+  getAccountRecoveryGuidance,
 } from "@/app/accounts/accounts-page-helpers";
 
 interface PlanTypeOption {
@@ -158,6 +160,8 @@ export interface AccountsPageViewProps {
   isReorderingAccounts: boolean;
   isUpdatingProfileAccountId: string | null;
   isUpdatingStatusAccountId: string | null;
+  isGeneratingAgentIdentityId: string | null;
+  isProbingAccountId: string | null;
   statusFilterOptions: StatusFilterOption[];
   importFileActionLabel: string;
   importDirectoryActionLabel: string;
@@ -215,6 +219,8 @@ export interface AccountsPageViewProps {
     enabled: boolean,
     currentStatus: string,
   ) => void;
+  generateAgentIdentity: (accountId: string) => Promise<void>;
+  probeAccount: (accountId: string) => Promise<void>;
 }
 
 export function AccountsPageView(props: AccountsPageViewProps) {
@@ -267,6 +273,8 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     isReorderingAccounts,
     isUpdatingProfileAccountId,
     isUpdatingStatusAccountId,
+    isGeneratingAgentIdentityId,
+    isProbingAccountId,
     statusFilterOptions,
     importFileActionLabel,
     importDirectoryActionLabel,
@@ -317,6 +325,8 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     clearPreferredAccount,
     setPreferredAccount,
     toggleAccountStatus,
+    generateAgentIdentity,
+    probeAccount,
   } = props;
   const cleanupSelectedCount = cleanupStatusOptions.reduce(
     (total, option) =>
@@ -832,6 +842,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                 visibleAccounts.map((account) => {
                   const quotaItems = buildQuotaSummaryItems(account, t);
                   const statusAction = getAccountStatusAction(account, t);
+                  const recoveryGuidance = getAccountRecoveryGuidance(account, t);
                   const StatusActionIcon = statusAction.icon;
                   const modelPoolText = account.modelSlugs.length
                     ? account.modelSlugs.slice(0, 2).join(", ")
@@ -965,6 +976,55 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                       </TableCell>
                       <TableCell className="table-sticky-action-cell">
                         <div className="table-action-cell gap-1">
+                          {recoveryGuidance.action !== "none" ? (
+                            <Button
+                              variant={recoveryGuidance.action === "remove" ? "destructive" : "outline"}
+                              size="sm"
+                              className="h-8 gap-1 px-2 text-[10px]"
+                              disabled={
+                                !isServiceReady ||
+                                isProbingAccountId === account.id ||
+                                isRefreshingCurrentAccount ||
+                                isRefreshingCurrentRt
+                              }
+                              onClick={() => {
+                                if (recoveryGuidance.action === "probe") {
+                                  void probeAccount(account.id);
+                                } else if (recoveryGuidance.action === "refresh_credentials") {
+                                  refreshAccountRt(account.id);
+                                } else if (
+                                  recoveryGuidance.action === "refresh_usage" ||
+                                  recoveryGuidance.action === "wait"
+                                ) {
+                                  refreshAccount(account.id);
+                                } else if (recoveryGuidance.action === "remove") {
+                                  handleDeleteSingle(account);
+                                }
+                              }}
+                              title={recoveryGuidance.detail}
+                            >
+                              {isProbingAccountId === account.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : recoveryGuidance.action === "probe" ? (
+                                <Radar className="h-3.5 w-3.5" />
+                              ) : recoveryGuidance.action === "refresh_credentials" ? (
+                                <KeyRound className="h-3.5 w-3.5" />
+                              ) : recoveryGuidance.action === "remove" ? (
+                                <Trash2 className="h-3.5 w-3.5" />
+                              ) : (
+                                <RefreshCw className="h-3.5 w-3.5" />
+                              )}
+                              {recoveryGuidance.action === "probe"
+                                ? t("重新探测")
+                                : recoveryGuidance.action === "refresh_credentials"
+                                  ? t("刷新凭据")
+                                  : recoveryGuidance.action === "remove"
+                                    ? t("清理")
+                                    : recoveryGuidance.action === "wait"
+                                      ? t("确认恢复")
+                                      : t("刷新状态")}
+                            </Button>
+                          ) : null}
                           <Button
                             variant="ghost"
                             size="icon"

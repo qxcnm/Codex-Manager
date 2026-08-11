@@ -14,6 +14,7 @@ use super::{
 };
 use serde_json::json;
 use std::io::{Read, Write};
+use std::sync::mpsc;
 use tiny_http::{HTTPVersion, Header};
 
 struct ChunkedTestReader {
@@ -433,6 +434,97 @@ fn non_stream_chat_completion_response_preserves_answer_and_reasoning_content() 
     assert_eq!(
         value["choices"][0]["message"]["reasoning_content"],
         "先想一下"
+    );
+}
+
+#[test]
+fn non_stream_chat_completion_response_preserves_function_calls() {
+    let body = json!({
+        "id": "resp_non_stream_tool",
+        "model": "claude-sonnet-4.6",
+        "output": [{
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "toolu_1",
+            "name": "read_file",
+            "arguments": "{\"path\":\"/tmp/a\"}"
+        }],
+        "usage": { "input_tokens": 4, "output_tokens": 1, "total_tokens": 5 }
+    });
+
+    let mapped = convert_responses_body_to_chat_completions(
+        serde_json::to_vec(&body).expect("body").as_slice(),
+    )
+    .expect("convert chat completion body");
+    let value: serde_json::Value = serde_json::from_slice(&mapped).expect("parse mapped body");
+
+    assert_eq!(
+        value["choices"][0]["message"]["content"],
+        serde_json::Value::Null
+    );
+    assert_eq!(value["choices"][0]["finish_reason"], "tool_calls");
+    assert_eq!(
+        value["choices"][0]["message"]["tool_calls"][0]["id"],
+        "toolu_1"
+    );
+    assert_eq!(
+        value["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
+        "read_file"
+    );
+    assert_eq!(
+        value["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"],
+        "{\"path\":\"/tmp/a\"}"
+    );
+}
+
+#[test]
+fn kiro_anthropic_tool_stream_reaches_responses_and_non_stream_chat() {
+    use crate::gateway::upstream::{GatewayByteStream, GatewayByteStreamItem};
+
+    let (tx, rx) = mpsc::sync_channel(8);
+    for frame in [
+        "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_kiro_tool\",\"model\":\"claude-sonnet-4.6\",\"usage\":{\"input_tokens\":4}}}\n\n",
+        "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_kiro_1\",\"name\":\"read_file\",\"input\":{}}}\n\n",
+        "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"/tmp/a\\\"}\"}}\n\n",
+        "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":1}}\n\n",
+        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+    ] {
+        tx.send(GatewayByteStreamItem::Chunk(bytes::Bytes::from(frame)))
+            .expect("queue Kiro SSE frame");
+    }
+    tx.send(GatewayByteStreamItem::Eof)
+        .expect("queue Kiro SSE eof");
+
+    let responses_sse = crate::gateway::adapt_anthropic_gateway_stream_to_responses(
+        GatewayByteStream::from_receiver(rx),
+        "claude-sonnet-4.6",
+        std::time::Instant::now(),
+    )
+    .read_all_bytes()
+    .expect("canonicalize Kiro stream");
+    let responses_text = String::from_utf8(responses_sse.to_vec()).expect("Responses SSE UTF-8");
+    assert!(responses_text.contains("response.output_item.done"));
+    assert!(responses_text.contains("toolu_kiro_1"), "{responses_text}");
+
+    let (responses_body, _) = collect_non_stream_json_from_sse_bytes(responses_sse.as_ref());
+    let responses_body = responses_body.expect("aggregate Responses body");
+    let responses: serde_json::Value =
+        serde_json::from_slice(&responses_body).expect("parse Responses body");
+    assert_eq!(responses["output"][0]["type"], "function_call");
+    assert_eq!(responses["output"][0]["call_id"], "toolu_kiro_1");
+
+    let chat_body = convert_responses_body_to_chat_completions(&responses_body)
+        .expect("convert non-stream Chat body");
+    let chat: serde_json::Value = serde_json::from_slice(&chat_body).expect("parse Chat body");
+    assert_eq!(chat["choices"][0]["finish_reason"], "tool_calls");
+    assert_eq!(
+        chat["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
+        "read_file"
+    );
+    assert_eq!(
+        chat["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"],
+        "{\"path\":\"/tmp/a\"}"
     );
 }
 

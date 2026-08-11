@@ -1,5 +1,17 @@
 use super::*;
 
+#[test]
+fn idempotency_key_is_captured_for_safe_post_retry() {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        "idempotency-key",
+        "request-stable-123".parse().expect("idempotency key"),
+    );
+
+    let snapshot = IncomingHeaderSnapshot::from_http_headers(&headers);
+    assert_eq!(snapshot.idempotency_key(), Some("request-stable-123"));
+}
+
 /// 函数 `strict_bearer_parsing_matches_auth_extraction_behavior`
 ///
 /// 作者: gaohongshun

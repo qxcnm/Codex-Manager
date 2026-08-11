@@ -1,7 +1,11 @@
+#[path = "account_agent_identity.rs"]
+pub(crate) mod agent_identity;
 #[path = "account_availability.rs"]
 pub(crate) mod availability;
 #[path = "account_cleanup.rs"]
 pub(crate) mod cleanup;
+#[path = "account_credential_repair.rs"]
+pub(crate) mod credential_repair;
 #[path = "account_delete.rs"]
 pub(crate) mod delete;
 #[path = "account_delete_many.rs"]

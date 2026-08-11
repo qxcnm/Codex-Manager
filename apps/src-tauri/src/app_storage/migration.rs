@@ -1,4 +1,3 @@
-use codexmanager_core::storage::Storage;
 use rusqlite::{backup::Backup, Connection};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -6,6 +5,7 @@ use std::time::Duration;
 
 const PRIMARY_APP_IDENTIFIER: &str = "com.codexmanager.desktop";
 const QA_APP_IDENTIFIER: &str = "com.codexmanager.desktop.qa";
+const UNIFIED_APP_IDENTIFIER: &str = "com.codexmanager.unified";
 
 /// 函数 `maybe_migrate_legacy_db`
 ///
@@ -181,23 +181,17 @@ fn db_has_user_data(path: &Path) -> bool {
     if !path.is_file() {
         return false;
     }
-    let storage = match Storage::open(path) {
-        Ok(storage) => storage,
+    let connection = match Connection::open_read_only(path) {
+        Ok(connection) => connection,
         Err(_) => return false,
     };
-    let _ = storage.init();
-    storage
-        .list_accounts()
-        .map(|items| !items.is_empty())
-        .unwrap_or(false)
-        || storage
-            .list_tokens()
-            .map(|items| !items.is_empty())
+    ["accounts", "tokens", "api_keys"].iter().any(|table| {
+        let sql = format!("SELECT EXISTS(SELECT 1 FROM {table} LIMIT 1)");
+        connection
+            .query_row(&sql, [], |row| row.get::<_, i64>(0))
+            .map(|exists| exists != 0)
             .unwrap_or(false)
-        || storage
-            .list_api_keys()
-            .map(|items| !items.is_empty())
-            .unwrap_or(false)
+    })
 }
 
 /// 函数 `legacy_db_candidates`
@@ -265,7 +259,9 @@ fn profile_db_candidates(current_db: &Path) -> Vec<PathBuf> {
     let Some(parent_name) = parent.file_name().and_then(|name| name.to_str()) else {
         return Vec::new();
     };
-    if !parent_name.eq_ignore_ascii_case(QA_APP_IDENTIFIER) {
+    if !parent_name.eq_ignore_ascii_case(QA_APP_IDENTIFIER)
+        && !parent_name.eq_ignore_ascii_case(UNIFIED_APP_IDENTIFIER)
+    {
         return Vec::new();
     }
 
@@ -303,9 +299,11 @@ fn dedup_candidates(current_db: &Path, candidates: Vec<PathBuf>) -> Vec<PathBuf>
 #[cfg(test)]
 mod tests {
     use super::{
-        maybe_migrate_legacy_db, profile_db_candidates, PRIMARY_APP_IDENTIFIER, QA_APP_IDENTIFIER,
+        db_has_user_data, maybe_migrate_legacy_db, profile_db_candidates, PRIMARY_APP_IDENTIFIER,
+        QA_APP_IDENTIFIER, UNIFIED_APP_IDENTIFIER,
     };
     use codexmanager_core::storage::{now_ts, Account, Storage};
+    use rusqlite::Connection;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -371,12 +369,22 @@ mod tests {
     /// # 返回
     /// 无
     #[test]
-    fn profile_db_candidates_only_seed_qa_profile_from_primary_profile() {
+    fn profile_db_candidates_seed_isolated_profiles_from_primary_profile() {
         let qa_db = PathBuf::from(format!(
             "C:/Users/test/AppData/Roaming/{QA_APP_IDENTIFIER}/codexmanager.db"
         ));
         assert_eq!(
             profile_db_candidates(&qa_db),
+            vec![PathBuf::from(format!(
+                "C:/Users/test/AppData/Roaming/{PRIMARY_APP_IDENTIFIER}/codexmanager.db"
+            ))]
+        );
+
+        let unified_db = PathBuf::from(format!(
+            "C:/Users/test/AppData/Roaming/{UNIFIED_APP_IDENTIFIER}/codexmanager.db"
+        ));
+        assert_eq!(
+            profile_db_candidates(&unified_db),
             vec![PathBuf::from(format!(
                 "C:/Users/test/AppData/Roaming/{PRIMARY_APP_IDENTIFIER}/codexmanager.db"
             ))]
@@ -421,6 +429,57 @@ mod tests {
         let migrated = Storage::open(&qa_db).expect("open migrated qa storage");
         migrated.init().expect("init migrated qa storage");
         assert_eq!(migrated.account_count().expect("count accounts"), 1);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn maybe_migrate_legacy_db_seeds_empty_unified_profile_without_sharing_state() {
+        let root = unique_temp_dir();
+        let unified_dir = root.join(UNIFIED_APP_IDENTIFIER);
+        let primary_dir = root.join(PRIMARY_APP_IDENTIFIER);
+        std::fs::create_dir_all(&unified_dir).expect("create unified dir");
+        std::fs::create_dir_all(&primary_dir).expect("create primary dir");
+
+        let unified_db = unified_dir.join("codexmanager.db");
+        let primary_db = primary_dir.join("codexmanager.db");
+        let _source_storage = create_populated_db(&primary_db);
+
+        maybe_migrate_legacy_db(&unified_db);
+
+        let migrated = Storage::open(&unified_db).expect("open unified storage");
+        migrated.init().expect("init unified storage");
+        assert_eq!(migrated.account_count().expect("count accounts"), 1);
+        assert_ne!(unified_db, primary_db);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn probing_legacy_database_does_not_run_current_schema_migrations() {
+        let root = unique_temp_dir();
+        std::fs::create_dir_all(&root).expect("create root");
+        let legacy_db = root.join("legacy.db");
+        let connection = Connection::open(&legacy_db).expect("open legacy db");
+        connection
+            .execute_batch(
+                "CREATE TABLE accounts (id TEXT PRIMARY KEY);\
+                 INSERT INTO accounts(id) VALUES ('legacy-account');",
+            )
+            .expect("seed legacy db");
+        drop(connection);
+
+        assert!(db_has_user_data(&legacy_db));
+
+        let connection = Connection::open(&legacy_db).expect("reopen legacy db");
+        let table_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count tables");
+        assert_eq!(table_count, 1, "source database must remain untouched");
 
         let _ = std::fs::remove_dir_all(&root);
     }

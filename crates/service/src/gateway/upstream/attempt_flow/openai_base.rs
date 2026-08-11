@@ -1,8 +1,9 @@
 use bytes::Bytes;
 use codexmanager_core::storage::{Account, Storage, Token};
-use reqwest::header::CONTENT_TYPE;
 
-use super::super::support::outcome::{decide_upstream_outcome, UpstreamOutcomeDecision};
+use super::super::support::outcome::{
+    decide_upstream_outcome_with_headers, UpstreamOutcomeDecision,
+};
 use super::super::GatewayUpstreamResponse;
 
 pub(in crate::gateway::upstream) enum OpenAiAttemptResult {
@@ -55,11 +56,11 @@ where
         strip_session_affinity,
         debug,
     ) {
-        Ok(Some(resp)) => match decide_upstream_outcome(
+        Ok(Some(resp)) => match decide_upstream_outcome_with_headers(
             storage,
             &account.id,
             resp.status(),
-            resp.headers().get(CONTENT_TYPE),
+            resp.headers(),
             base,
             has_more_candidates,
             &mut log_gateway_result,

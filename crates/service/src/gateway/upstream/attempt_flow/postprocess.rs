@@ -6,7 +6,9 @@ use crate::account_status::mark_account_unavailable_for_refresh_token_error;
 use crate::usage_token_refresh::token_refresh_ahead_secs;
 
 use super::super::support::backoff;
-use super::super::support::outcome::{decide_upstream_outcome, UpstreamOutcomeDecision};
+use super::super::support::outcome::{
+    decide_upstream_outcome_with_headers, UpstreamOutcomeDecision,
+};
 use super::super::support::retry::{retry_with_alternate_path, AltPathRetryResult};
 use super::super::GatewayUpstreamResponse;
 use super::fallback_branch::{handle_openai_fallback_branch, FallbackBranchResult};
@@ -92,7 +94,14 @@ fn try_refresh_chatgpt_access_token(
     Ok(Some(refreshed.to_string()))
 }
 
-/// 函数 `retry_upstream_server_error_once`
+fn should_retry_transient_upstream_status_once(url: &str, status: reqwest::StatusCode) -> bool {
+    status.as_u16() == 500
+        || (status.as_u16() == 404
+            && super::super::config::is_chatgpt_backend_base(url)
+            && url.to_ascii_lowercase().contains("/codex/"))
+}
+
+/// 函数 `retry_transient_upstream_status_once`
 ///
 /// 作者: gaohongshun
 ///
@@ -116,7 +125,7 @@ fn try_refresh_chatgpt_access_token(
 /// # 返回
 /// 返回函数执行结果
 #[allow(clippy::too_many_arguments)]
-fn retry_upstream_server_error_once(
+fn retry_transient_upstream_status_once(
     client: &reqwest::blocking::Client,
     method: &reqwest::Method,
     url: &str,
@@ -131,20 +140,20 @@ fn retry_upstream_server_error_once(
     debug: bool,
     status: reqwest::StatusCode,
 ) -> Result<Option<GatewayUpstreamResponse>, ()> {
-    if status.as_u16() != 500 {
+    if !should_retry_transient_upstream_status_once(url, status) {
         return Ok(None);
     }
     if debug {
         log::warn!(
-            "event=gateway_upstream_server_error_retry path={} status={} account_id={}",
+            "event=gateway_upstream_transient_status_retry path={} status={} account_id={}",
             request_ctx.request_path,
             status.as_u16(),
             account.id
         );
     }
     if !backoff::sleep_with_exponential_jitter(
-        std::time::Duration::from_millis(120),
-        std::time::Duration::from_millis(900),
+        std::time::Duration::from_millis(if status.as_u16() == 404 { 60 } else { 120 }),
+        std::time::Duration::from_millis(if status.as_u16() == 404 { 180 } else { 900 }),
         1,
         request_deadline,
     ) {
@@ -167,7 +176,7 @@ fn retry_upstream_server_error_once(
         Ok(resp) => Ok(Some(resp)),
         Err(err) => {
             log::warn!(
-                "event=gateway_upstream_server_error_retry_error path={} status=502 account_id={} err={}",
+                "event=gateway_upstream_transient_status_retry_error path={} status=502 account_id={} err={}",
                 request_ctx.request_path,
                 account.id,
                 err
@@ -328,7 +337,57 @@ where
         return PostRetryFlowDecision::Failover;
     }
 
-    if status.as_u16() == 401 {
+    if status.as_u16() == 401 && current_auth_token.starts_with("AgentAssertion ") {
+        match crate::account_agent_identity::recover_agent_identity_authorization(
+            storage,
+            &account.id,
+        ) {
+            Ok(Some(refreshed_auth_token)) => {
+                current_auth_token = refreshed_auth_token;
+                if debug {
+                    log::warn!(
+                        "event=gateway_agent_identity_task_recovery path={} account_id={}",
+                        path,
+                        account.id
+                    );
+                }
+                match super::transport::send_upstream_request(
+                    client,
+                    method,
+                    url,
+                    request_deadline,
+                    request_ctx,
+                    incoming_headers,
+                    body,
+                    is_stream,
+                    current_auth_token.as_str(),
+                    account,
+                    strip_session_affinity,
+                ) {
+                    Ok(resp) => {
+                        upstream = resp;
+                        status = upstream.status();
+                        upstream_content_type =
+                            upstream.headers().get(reqwest::header::CONTENT_TYPE);
+                        upstream_cf_ray = first_header_value(upstream.headers(), "cf-ray");
+                    }
+                    Err(err) => log::warn!(
+                        "event=gateway_agent_identity_task_recovery_retry_error path={} account_id={} err={}",
+                        path,
+                        account.id,
+                        err
+                    ),
+                }
+            }
+            Ok(None) => {}
+            Err(error) => log::warn!(
+                "event=gateway_agent_identity_task_recovery_failed path={} account_id={} err={}",
+                path,
+                account.id,
+                error
+            ),
+        }
+    } else if status.as_u16() == 401 {
         match try_refresh_chatgpt_access_token(storage, upstream_base, account, token) {
             Ok(Some(refreshed_auth_token)) => {
                 current_auth_token = refreshed_auth_token;
@@ -423,7 +482,7 @@ where
         }
     }
 
-    match retry_upstream_server_error_once(
+    match retry_transient_upstream_status_once(
         client,
         method,
         url,
@@ -580,11 +639,11 @@ where
         );
     }
 
-    match decide_upstream_outcome(
+    match decide_upstream_outcome_with_headers(
         storage,
         &account.id,
         status,
-        upstream_content_type,
+        upstream.headers(),
         url,
         has_more_candidates,
         &mut log_gateway_result,

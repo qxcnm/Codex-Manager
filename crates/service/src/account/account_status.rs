@@ -31,6 +31,75 @@ pub(crate) struct AccountStatusContext {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CredentialStateSnapshot {
+    pub state: &'static str,
+    pub action: &'static str,
+}
+
+/// Derive the credential lifecycle independently from the account/quota status.
+/// Only explicit upstream deactivation evidence is allowed to produce a terminal
+/// state. A rejected or expired token is always treated as repairable.
+pub(crate) fn derive_credential_state(
+    account_status: &str,
+    status_reason: Option<&str>,
+    has_token: bool,
+    access_token_expires_at: Option<i64>,
+    now: i64,
+) -> CredentialStateSnapshot {
+    let status = account_status.trim().to_ascii_lowercase();
+    let reason = status_reason
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+
+    let result = |state, action| CredentialStateSnapshot { state, action };
+
+    match reason.as_str() {
+        "account_deactivated" => return result("account_deactivated", "stop"),
+        "workspace_deactivated" | "deactivated_workspace" => {
+            return result("workspace_deactivated", "stop")
+        }
+        "credential_reauth_in_progress" => return result("reauth_in_progress", "reauthenticate"),
+        "credential_reauth_required" => return result("reauth_required", "reauthenticate"),
+        "credential_repair_network_unknown"
+        | "refresh_token_region_blocked"
+        | "usage_cloudflare_challenge"
+        | "usage_refresh_timeout"
+        | "usage_refresh_connection"
+        | "usage_refresh_dns"
+        | "usage_refresh_failed" => return result("network_unknown", "retry_network"),
+        "usage_http_401" => return result("access_token_rejected", "refresh"),
+        _ => {}
+    }
+
+    if let Some(detail) = reason.strip_prefix("refresh_token_invalid:") {
+        return match detail {
+            "refresh_token_expired" => result("refresh_token_expired", "reauthenticate"),
+            "refresh_token_invalidated" | "refresh_token_reused" | "app_session_terminated" => {
+                result("refresh_token_revoked", "reauthenticate")
+            }
+            _ => result("reauth_required", "reauthenticate"),
+        };
+    }
+
+    if !has_token {
+        return result("reauth_required", "reauthenticate");
+    }
+    if access_token_expires_at.is_some_and(|expires_at| expires_at <= now) {
+        return result("access_token_expired", "refresh");
+    }
+    if status == "banned" {
+        // A legacy/manual banned value without a reason is terminal, but must not
+        // be presented as proof that OpenAI deactivated the account.
+        return result("stopped_unknown", "stop");
+    }
+    if status == "unavailable" && !reason.is_empty() {
+        return result("credential_unknown", "reauthenticate");
+    }
+    result("healthy", "none")
+}
+
 /// 函数 `latest_status_reason`
 ///
 /// 作者: gaohongshun
@@ -148,6 +217,9 @@ fn should_preserve_manual_account_status(storage: &Storage, account_id: &str) ->
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn classify_account_availability_signal(err: &str) -> Option<AccountAvailabilitySignal> {
+    if crate::usage_http::is_cloudflare_challenge_error_message(err) {
+        return None;
+    }
     if crate::usage_http::is_refresh_token_region_blocked_error_message(err) {
         return Some(AccountAvailabilitySignal::RefreshTokenRegionBlocked);
     }

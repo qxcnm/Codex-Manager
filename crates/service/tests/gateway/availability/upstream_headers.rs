@@ -161,11 +161,17 @@ fn codex_header_profile_sets_required_headers_for_stream() {
         Some("text/event-stream")
     );
     assert!(find_header(&headers, "Connection").is_none());
-    assert!(find_header(&headers, "Version").is_none());
+    assert_eq!(
+        find_header(&headers, "Version").as_deref(),
+        Some(expected_version.as_str())
+    );
     assert!(find_header(&headers, "User-Agent")
         .as_deref()
         .is_some_and(|value| value.contains(expected_version.as_str())));
-    assert!(find_header(&headers, "OpenAI-Beta").is_none());
+    assert_eq!(
+        find_header(&headers, "OpenAI-Beta").as_deref(),
+        Some("responses=experimental")
+    );
     assert_eq!(
         find_header(&headers, "x-responsesapi-include-timing-metrics").as_deref(),
         Some("true")
@@ -256,9 +262,15 @@ fn codex_header_profile_uses_json_accept_for_non_stream() {
         Some("text/event-stream")
     );
     assert!(find_header(&headers, "Content-Type").is_none());
-    assert!(find_header(&headers, "Openai-Beta").is_none());
+    assert_eq!(
+        find_header(&headers, "OpenAI-Beta").as_deref(),
+        Some("responses=experimental")
+    );
     assert!(find_header(&headers, "x-responsesapi-include-timing-metrics").is_none());
-    assert!(find_header(&headers, "Version").is_none());
+    assert_eq!(
+        find_header(&headers, "Version").as_deref(),
+        Some(expected_version.as_str())
+    );
     assert!(find_header(&headers, "User-Agent")
         .as_deref()
         .is_some_and(|value| value.contains(expected_version.as_str())));
@@ -326,7 +338,10 @@ fn codex_compact_header_profile_matches_remote_compact_shape() {
         find_header(&headers, "Accept").as_deref(),
         Some("application/json")
     );
-    assert!(find_header(&headers, "Version").is_none());
+    assert_eq!(
+        find_header(&headers, "Version").as_deref(),
+        Some(expected_version.as_str())
+    );
     assert_eq!(
         find_header(&headers, "session_id").as_deref(),
         Some("session-compact")
@@ -336,7 +351,10 @@ fn codex_compact_header_profile_matches_remote_compact_shape() {
         Some("thread-compact")
     );
     assert!(find_header(&headers, "Cookie").is_none());
-    assert!(find_header(&headers, "Openai-Beta").is_none());
+    assert_eq!(
+        find_header(&headers, "OpenAI-Beta").as_deref(),
+        Some("responses=experimental")
+    );
     assert_eq!(
         find_header(&headers, "Originator").as_deref(),
         Some("codex_cli_rs")
@@ -487,7 +505,10 @@ fn codex_header_profile_uses_dynamic_originator_and_residency_requirement() {
         find_header(&headers, "x-openai-internal-codex-residency").as_deref(),
         Some("us")
     );
-    assert!(find_header(&headers, "Version").is_none());
+    assert_eq!(
+        find_header(&headers, "Version").as_deref(),
+        Some(expected_version.as_str())
+    );
     assert!(find_header(&headers, "OpenAI-Organization").is_none());
     assert!(find_header(&headers, "OpenAI-Project").is_none());
     assert_eq!(
@@ -727,7 +748,10 @@ fn codex_header_profile_can_disable_affinity_headers() {
         has_body: true,
     });
 
-    assert!(find_header(&headers, "OpenAI-Beta").is_none());
+    assert_eq!(
+        find_header(&headers, "OpenAI-Beta").as_deref(),
+        Some("responses=experimental")
+    );
     assert!(find_header(&headers, "x-codex-turn-state").is_none());
     assert!(find_header(&headers, "Conversation_id").is_none());
     assert_eq!(

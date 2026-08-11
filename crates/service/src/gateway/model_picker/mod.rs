@@ -9,7 +9,7 @@ mod parse;
 mod request;
 
 pub(crate) use parse::parse_models_response;
-use request::send_models_request;
+use request::{send_models_probe_request, send_models_request};
 
 /// 函数 `should_retry_models_with_openai_fallback`
 ///
@@ -100,6 +100,37 @@ pub(crate) fn fetch_models_for_picker() -> Result<ModelsResponse, String> {
     }
 
     Err(last_error)
+}
+
+/// Probe the Codex model catalog with one exact account instead of accepting a
+/// successful usage/quota response as proof that the account can serve Codex.
+pub(crate) fn probe_models_for_account(
+    storage: &Storage,
+    account_id: &str,
+) -> Result<ModelsResponse, String> {
+    let account = storage
+        .find_account_by_id(account_id)
+        .map_err(|err| format!("find probe account failed: {err}"))?
+        .ok_or_else(|| "probe account not found".to_string())?;
+    let mut token = storage
+        .find_token_by_account_id(account_id)
+        .map_err(|err| format!("find probe account token failed: {err}"))?
+        .ok_or_else(|| "probe account token not found".to_string())?;
+    let upstream_base = super::resolve_upstream_base_url();
+    let path = super::normalize_models_path("/v1/models");
+    let body = send_models_probe_request(
+        storage,
+        &Method::GET,
+        upstream_base.as_str(),
+        path.as_str(),
+        &account,
+        &mut token,
+    )?;
+    let models = parse_models_response(&body);
+    if models.models.is_empty() {
+        return Err("codex models probe returned no available models".to_string());
+    }
+    Ok(models)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

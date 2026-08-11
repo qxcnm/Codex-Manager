@@ -1,3 +1,5 @@
+use std::io::Read;
+use std::sync::{mpsc, Arc, Mutex};
 use tiny_http::Request;
 
 use crate::gateway::upstream::GatewayUpstreamResponse;
@@ -12,7 +14,7 @@ mod metadata;
 #[cfg(test)]
 mod openai;
 mod response_helpers;
-use aggregate::openai_responses_event::{OpenAIResponsesEvent, OpenAIResponsesOutputTextState};
+use aggregate::openai_responses_event::{CanonicalEvent, OpenAIResponsesOutputTextState};
 pub(crate) use aggregate::PassthroughSseProtocol;
 #[allow(unused_imports)]
 use aggregate::{
@@ -99,6 +101,96 @@ pub(crate) fn summarize_upstream_error_hint_from_body(
     body: &[u8],
 ) -> Option<String> {
     aggregate::extract_error_hint_from_body(status_code, body)
+}
+
+/// Converts the vendored Kiro Anthropic SSE stream into canonical OpenAI
+/// Responses SSE before the normal client-facing adapter runs.
+pub(crate) fn adapt_anthropic_gateway_stream_to_responses(
+    stream: crate::gateway::upstream::GatewayByteStream,
+    fallback_model: &str,
+    request_started_at: std::time::Instant,
+) -> crate::gateway::upstream::GatewayByteStream {
+    struct StreamReader {
+        stream: crate::gateway::upstream::GatewayByteStream,
+        current: std::io::Cursor<Vec<u8>>,
+        finished: bool,
+    }
+
+    impl Read for StreamReader {
+        fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+            loop {
+                let read = self.current.read(output)?;
+                if read > 0 {
+                    return Ok(read);
+                }
+                if self.finished {
+                    return Ok(0);
+                }
+                match self.stream.recv() {
+                    Ok(crate::gateway::upstream::GatewayByteStreamItem::Chunk(bytes)) => {
+                        self.current = std::io::Cursor::new(bytes.to_vec());
+                    }
+                    Ok(crate::gateway::upstream::GatewayByteStreamItem::Eof) | Err(_) => {
+                        self.finished = true;
+                    }
+                    Ok(crate::gateway::upstream::GatewayByteStreamItem::Error(error)) => {
+                        return Err(std::io::Error::other(error));
+                    }
+                }
+            }
+        }
+    }
+
+    let (tx, rx) = mpsc::sync_channel(128);
+    let spawn_error_tx = tx.clone();
+    let fallback_model = fallback_model.to_string();
+    if let Err(error) = std::thread::Builder::new()
+        .name("codexmanager-kiro-responses-adapter".into())
+        .spawn(move || {
+            let reader = StreamReader {
+                stream,
+                current: std::io::Cursor::new(Vec::new()),
+                finished: false,
+            };
+            let usage = Arc::new(Mutex::new(UpstreamResponseUsage::default()));
+            let mut adapter = ResponsesFromAnthropicSseReader::from_reader(
+                reader,
+                usage,
+                Some(fallback_model.as_str()),
+                request_started_at,
+            );
+            let mut buffer = vec![0_u8; 8 * 1024];
+            loop {
+                match adapter.read(&mut buffer) {
+                    Ok(0) => {
+                        let _ = tx.send(crate::gateway::upstream::GatewayByteStreamItem::Eof);
+                        return;
+                    }
+                    Ok(read) => {
+                        if tx
+                            .send(crate::gateway::upstream::GatewayByteStreamItem::Chunk(
+                                bytes::Bytes::copy_from_slice(&buffer[..read]),
+                            ))
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = tx.send(crate::gateway::upstream::GatewayByteStreamItem::Error(
+                            error.to_string(),
+                        ));
+                        return;
+                    }
+                }
+            }
+        })
+    {
+        let _ = spawn_error_tx.send(crate::gateway::upstream::GatewayByteStreamItem::Error(
+            format!("spawn Kiro Responses adapter failed: {error}"),
+        ));
+    }
+    crate::gateway::upstream::GatewayByteStream::from_receiver(rx)
 }
 
 mod delivery;

@@ -8,7 +8,9 @@ use super::{
     ImagesResponseFormat, OpenAIResponsesPassthroughSseReader, PassthroughSseCollector,
     PassthroughSseProtocol, PassthroughSseUsageReader, SseKeepAliveFrame,
 };
+use crate::gateway::upstream::{GatewayByteStream, GatewayByteStreamItem, GatewayStreamResponse};
 use crate::gateway::GeminiStreamOutputMode;
+use bytes::Bytes;
 use serde_json::json;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -2090,7 +2092,9 @@ fn passthrough_sse_reader_emits_keepalive_for_responses_stream() {
                 "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_keepalive_1\"}}\n\n",
                 0,
             ),
-            ("data: [DONE]\n\n", 50),
+            // Leave enough wall-clock time for the 15 ms keepalive timer to
+            // fire even when Windows/reqwest coalesces the first read.
+            ("data: [DONE]\n\n", 250),
         ],
     );
     let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
@@ -2155,23 +2159,30 @@ fn openai_responses_passthrough_reader_emits_keepalive_during_silent_gap() {
     let _keepalive_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_INTERVAL_MS", "15");
     super::reload_from_env();
 
-    let (upstream, server) = open_streaming_mock_http_response(
-        "text/event-stream",
-        &[
-            (
-                "event: response.created\n\
-                 data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_eventsource_keepalive\"}}\n\n",
-                0,
-            ),
-            (
-                "event: response.completed\n\
-                 data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_eventsource_keepalive\"}}\n\n",
-                80,
-            ),
-        ],
+    let (stream_tx, stream_rx) = std::sync::mpsc::sync_channel(8);
+    let producer = thread::spawn(move || {
+        stream_tx
+            .send(GatewayByteStreamItem::Chunk(Bytes::from_static(
+                b"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_eventsource_keepalive\"}}\n\n",
+            )))
+            .expect("send created frame");
+        thread::sleep(Duration::from_millis(80));
+        stream_tx
+            .send(GatewayByteStreamItem::Chunk(Bytes::from_static(
+                b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_eventsource_keepalive\"}}\n\n",
+            )))
+            .expect("send completed frame");
+        stream_tx
+            .send(GatewayByteStreamItem::Eof)
+            .expect("send stream eof");
+    });
+    let upstream = GatewayStreamResponse::new(
+        reqwest::StatusCode::OK,
+        reqwest::header::HeaderMap::new(),
+        GatewayByteStream::from_receiver(stream_rx),
     );
     let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
-    let mut reader = OpenAIResponsesPassthroughSseReader::new(
+    let mut reader = OpenAIResponsesPassthroughSseReader::from_stream_response(
         upstream,
         Arc::clone(&usage_collector),
         SseKeepAliveFrame::OpenAIResponses,
@@ -2181,9 +2192,9 @@ fn openai_responses_passthrough_reader_emits_keepalive_during_silent_gap() {
     reader
         .read_to_string(&mut mapped)
         .expect("read openai responses passthrough sse");
-    server
+    producer
         .join()
-        .expect("join openai responses keepalive upstream");
+        .expect("join openai responses stream producer");
     super::reload_from_env();
 
     let collector = usage_collector

@@ -226,6 +226,20 @@ fn source_id_expr(source_kind: &str) -> Option<&'static str> {
                 ELSE NULL
              END",
         ),
+        "kiro" => Some(
+            "CASE
+                WHEN t.actual_source_kind = 'kiro' THEN NULLIF(TRIM(t.actual_source_id), '')
+                WHEN r.actual_source_kind = 'kiro' THEN NULLIF(TRIM(r.actual_source_id), '')
+                ELSE NULL
+             END",
+        ),
+        "grok" => Some(
+            "CASE
+                WHEN t.actual_source_kind = 'grok' THEN NULLIF(TRIM(t.actual_source_id), '')
+                WHEN r.actual_source_kind = 'grok' THEN NULLIF(TRIM(r.actual_source_id), '')
+                ELSE NULL
+             END",
+        ),
         "aggregate_api" => Some(
             // Prefer actual_source_* written by routing. Legacy aggregate API
             // context is only used when actual source metadata was not captured.
@@ -254,6 +268,12 @@ fn hourly_source_id_expr(source_kind: &str) -> Option<&'static str> {
                     THEN NULLIF(TRIM(h.account_id), '')
                 ELSE NULL
              END",
+        ),
+        "kiro" => Some(
+            "CASE WHEN h.actual_source_kind = 'kiro' THEN NULLIF(TRIM(h.actual_source_id), '') ELSE NULL END",
+        ),
+        "grok" => Some(
+            "CASE WHEN h.actual_source_kind = 'grok' THEN NULLIF(TRIM(h.actual_source_id), '') ELSE NULL END",
         ),
         "aggregate_api" => Some(
             "CASE

@@ -35,11 +35,17 @@ const LAZY_PAGE_COMPONENTS: Record<
   Exclude<TopLevelRoutePath, typeof ROOT_ROUTE_PATH>,
   LazyExoticComponent<ComponentType>
 > = {
+  "/import": lazy(() => import("@/app/import/page")),
+  "/adapters": lazy(() => import("@/app/adapters/page")),
   "/accounts": lazy(() => import("@/app/accounts/page")),
+  "/kiro": lazy(() => import("@/app/kiro/page")),
+  "/grok": lazy(() => import("@/app/grok/page")),
   "/account-manager": lazy(() => import("@/app/account-manager/page")),
   "/aggregate-api": lazy(() => import("@/app/aggregate-api/page")),
   "/apikeys": lazy(() => import("@/app/apikeys/page")),
   "/platform-mode": lazy(() => import("@/app/platform-mode/page")),
+  "/proxies": lazy(() => import("@/app/proxies/page")),
+  "/routing": lazy(() => import("@/app/routing/page")),
   "/models": lazy(() => import("@/app/models/page")),
   "/model-groups": lazy(() => import("@/app/model-groups/page")),
   "/plugins": lazy(() => import("@/app/plugins/page")),
@@ -143,7 +149,7 @@ export function PageKeepAliveViewport({
   }, [syncShellPathFromLocation]);
 
   useEffect(() => {
-    document.title = `${t(getTopLevelRouteLabel(currentShellPath, routeAccess))} - CodexManager`;
+    document.title = `${t(getTopLevelRouteLabel(currentShellPath, routeAccess))} · OpenRuntime`;
   }, [currentShellPath, routeAccess, t]);
 
   useEffect(() => {
@@ -180,3 +186,5 @@ export function PageKeepAliveViewport({
     </div>
   );
 }
+
+

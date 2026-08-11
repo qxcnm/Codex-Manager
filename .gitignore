@@ -35,6 +35,10 @@
 
 # Logs & local data
 /data/
+/exports/
+/cases/
+.env
+.env.*
 *.log
 *.db
 *.sqlite

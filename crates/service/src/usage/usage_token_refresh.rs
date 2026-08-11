@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::auth_tokens::obtain_api_key;
 use crate::usage_http::{
-    refresh_access_token, refresh_token_auth_error_reason_from_message, RefreshTokenAuthErrorReason,
+    refresh_access_token_for_account, refresh_token_auth_error_reason_from_message,
+    RefreshTokenAuthErrorReason,
 };
 
 pub(crate) const DEFAULT_TOKEN_REFRESH_AHEAD_SECS: i64 = 3600;
@@ -52,7 +53,9 @@ pub(crate) fn refresh_and_persist_access_token(
     }
 
     let refresh_client_id = token_refresh_client_id(token, client_id);
-    let refreshed = match refresh_access_token(issuer, &refresh_client_id, &token.refresh_token) {
+    let refreshed = match refresh_access_token_for_account(
+        issuer, &refresh_client_id, &token.refresh_token, &token.account_id,
+    ) {
         Ok(refreshed) => refreshed,
         Err(err) => {
             if recover_refresh_race_from_latest_token(

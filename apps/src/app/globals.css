@@ -845,3 +845,298 @@ body.low-transparency .sonner-toast {
 
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+.openruntime-console {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border: 1px solid rgb(var(--primary-rgb) / 0.22);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(145deg, rgb(var(--surface-rgb) / 0.76), rgb(var(--surface-contrast-rgb) / 0.42)),
+    var(--console-panel-strong);
+  box-shadow:
+    0 28px 70px -52px rgb(var(--primary-rgb) / 0.72),
+    inset 0 1px 0 rgb(255 255 255 / 0.20);
+}
+
+.openruntime-console::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.035);
+}
+
+.openruntime-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.42;
+  background-image:
+    linear-gradient(rgb(var(--primary-rgb) / 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(var(--primary-rgb) / 0.055) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: linear-gradient(to bottom, #000, transparent 72%);
+}
+
+.openruntime-glow {
+  position: absolute;
+  width: 28rem;
+  height: 28rem;
+  left: -12rem;
+  top: -18rem;
+  border-radius: 999px;
+  pointer-events: none;
+  background: rgb(6 182 212 / 0.17);
+  filter: blur(70px);
+}
+
+.openruntime-mark {
+  position: relative;
+  display: flex;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(var(--primary-rgb) / 0.28);
+  border-radius: 0.625rem;
+  color: var(--primary);
+  background: rgb(var(--primary-rgb) / 0.08);
+  box-shadow: inset 0 0 20px rgb(var(--primary-rgb) / 0.06);
+}
+
+.openruntime-mark-core {
+  position: absolute;
+  right: 0.35rem;
+  top: 0.35rem;
+  width: 0.28rem;
+  height: 0.28rem;
+  border-radius: 999px;
+  background: #10b981;
+  box-shadow: 0 0 9px #10b981;
+}
+
+.openruntime-zone,
+.openruntime-kernel {
+  min-width: 0;
+  border: 1px solid rgb(var(--primary-rgb) / 0.13);
+  border-radius: 0.5rem;
+  background: rgb(var(--surface-rgb) / 0.36);
+  padding: 0.75rem;
+}
+
+.openruntime-kernel {
+  border-color: rgb(139 92 246 / 0.25);
+  background:
+    radial-gradient(circle at 50% 44%, rgb(139 92 246 / 0.12), transparent 58%),
+    rgb(var(--surface-rgb) / 0.32);
+}
+
+.openruntime-zone-label {
+  margin-bottom: 0.625rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.5625rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.16em;
+  color: var(--muted-foreground);
+}
+
+.openruntime-adapter-node {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.625rem;
+  border: 1px solid currentColor;
+  border-radius: 0.375rem;
+  padding: 0.625rem;
+  background: rgb(var(--surface-rgb) / 0.48);
+}
+
+.openruntime-adapter-cyan { color: #0891b2; border-color: rgb(6 182 212 / 0.22); }
+.openruntime-adapter-emerald { color: #059669; border-color: rgb(16 185 129 / 0.22); }
+
+.openruntime-rail {
+  display: none;
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  gap: 0.18rem;
+}
+
+.openruntime-rail::before,
+.openruntime-rail::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgb(var(--primary-rgb) / 0.48), transparent);
+}
+
+.openruntime-rail span {
+  z-index: 1;
+  width: 0.22rem;
+  height: 0.22rem;
+  border-radius: 999px;
+  background: var(--primary);
+  box-shadow: 0 0 7px rgb(var(--primary-rgb) / 0.7);
+}
+
+.openruntime-kernel-orbit {
+  display: flex;
+  min-height: 3.75rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.625rem;
+  border: 1px dashed rgb(139 92 246 / 0.34);
+  border-radius: 999px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  color: #8b5cf6;
+}
+
+.openruntime-chip {
+  border: 1px solid rgb(var(--primary-rgb) / 0.13);
+  border-radius: 0.25rem;
+  background: rgb(var(--surface-rgb) / 0.38);
+  padding: 0.16rem 0.4rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.5rem;
+  color: var(--muted-foreground);
+}
+
+.openruntime-endpoint {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid rgb(var(--primary-rgb) / 0.14);
+  border-radius: 0.375rem;
+  background: rgb(var(--surface-rgb) / 0.45);
+  padding: 0.65rem 0.625rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.5625rem;
+  color: var(--foreground);
+}
+
+.openruntime-endpoint > :last-child {
+  font-size: 0.45rem;
+  letter-spacing: 0.12em;
+  color: var(--muted-foreground);
+}
+
+@media (min-width: 64rem) {
+  .openruntime-rail { display: flex; }
+}
+
+body.low-transparency .openruntime-console,
+body.low-transparency .openruntime-zone,
+body.low-transparency .openruntime-kernel,
+body.low-transparency .openruntime-adapter-node,
+body.low-transparency .openruntime-endpoint {
+  background: var(--card-solid) !important;
+}
+
+body.low-transparency .openruntime-grid,
+body.low-transparency .openruntime-glow {
+  display: none;
+}
+
+.resource-pool-frame {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border: 1px solid rgb(245 158 11 / 0.20);
+  background:
+    radial-gradient(circle at 18% 0%, rgb(251 191 36 / 0.12), transparent 18rem),
+    radial-gradient(circle at 92% 8%, rgb(245 158 11 / 0.08), transparent 16rem),
+    linear-gradient(180deg, rgb(var(--surface-rgb) / 0.42), transparent 72%);
+  box-shadow:
+    0 18px 48px -42px rgb(120 53 15 / 0.52),
+    inset 0 0 0 1px rgb(255 255 255 / 0.10);
+}
+
+.resource-pool-frame > * {
+  position: relative;
+  z-index: 2;
+}
+
+.resource-pool-frame::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, transparent 8%, rgb(253 224 71 / 0.66), rgb(245 158 11 / 0.28), transparent 62%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0.72;
+}
+
+.resource-pool-frame::after,
+.resource-pool-gilded::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(110deg, transparent 39%, rgb(255 255 255 / 0.0) 44%, rgb(253 224 71 / 0.30) 49%, rgb(255 255 255 / 0.20) 51%, transparent 58%);
+  transform: translateX(-62%) rotate(8deg);
+  animation: resource-pool-sheen 6.5s ease-in-out infinite;
+  opacity: 0.42;
+}
+
+.resource-pool-frame::after {
+  inset: -36% -18%;
+  z-index: 1;
+  animation-delay: 0.8s;
+}
+
+.resource-pool-gilded {
+  border-color: rgb(245 158 11 / 0.22) !important;
+  box-shadow:
+    var(--glass-shadow),
+    0 0 0 1px rgb(253 224 71 / 0.08),
+    0 16px 40px -34px rgb(180 83 9 / 0.58);
+}
+
+.resource-pool-gilded::before {
+  inset: 0;
+  border-radius: inherit;
+  background:
+    linear-gradient(180deg, rgb(253 224 71 / 0.10), transparent 44%),
+    linear-gradient(90deg, rgb(245 158 11 / 0.16), transparent 24%) left top / 1px 100% no-repeat,
+    linear-gradient(90deg, transparent, rgb(253 224 71 / 0.34), transparent) left top / 100% 1px no-repeat;
+  opacity: 0.78;
+}
+
+.resource-pool-gilded::after {
+  inset: -54% -70%;
+  z-index: 1;
+}
+
+.resource-pool-detail::after {
+  animation-delay: 1.7s;
+}
+
+@keyframes resource-pool-sheen {
+  0%, 46% { transform: translateX(-62%) rotate(8deg); opacity: 0; }
+  58% { opacity: 0.46; }
+  78%, 100% { transform: translateX(62%) rotate(8deg); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .resource-pool-frame::after,
+  .resource-pool-gilded::after {
+    animation: none;
+    opacity: 0;
+  }
+}

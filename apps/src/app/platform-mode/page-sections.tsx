@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { ChevronDown, Loader2, Network, RefreshCw, RotateCcw, ShieldCheck, Trash2, UserRoundCheck, Wrench } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { ShellLink } from "@/components/layout/shell-link";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -20,7 +21,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { buildStaticRouteUrl } from "@/lib/utils/static-routes";
 import { cn } from "@/lib/utils";
 import { CODEX_PROFILE_MODE_LABELS } from "@/hooks/useCodexProfileModeStatus";
 import type {
@@ -85,12 +85,12 @@ function ActionLink({
   children: ReactNode;
 }) {
   return (
-    <a
-      href={buildStaticRouteUrl(href)}
+    <ShellLink
+      href={href}
       className="inline-flex h-8 w-fit items-center justify-center rounded-lg border border-border bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted"
     >
       {children}
-    </a>
+    </ShellLink>
   );
 }
 

@@ -5,7 +5,7 @@ use std::sync::{Mutex, OnceLock};
 use crate::account_status::{
     mark_account_unavailable_for_deactivation_error,
     mark_account_unavailable_for_refresh_token_error,
-    mark_account_unavailable_for_usage_http_error,
+    mark_account_unavailable_for_usage_http_error, set_account_status,
 };
 
 const DEFAULT_USAGE_REFRESH_FAILURE_EVENT_WINDOW_SECS: i64 = 60;
@@ -46,13 +46,32 @@ pub(super) fn record_usage_refresh_failure(storage: &Storage, account_id: &str, 
         message: message.to_string(),
         created_at,
     });
-    if let Some(reason) = status_reason_for_refresh_failure(&error_class) {
+    // Network/Cloudflare observations must never resurrect an account whose
+    // credential was already proven invalid. Only attach a visible diagnostic
+    // to accounts that are still active.
+    let account_is_active = storage
+        .find_account_status_by_id(account_id)
+        .ok()
+        .flatten()
+        .is_some_and(|status| status.trim().eq_ignore_ascii_case("active"));
+    if !account_is_active {
+        return;
+    }
+    if error_class == "cloudflare_challenge" {
+        set_account_status(storage, account_id, "active", "usage_cloudflare_challenge");
+    } else if let Some(reason) = status_reason_for_refresh_failure(&error_class) {
         let _ = storage.insert_event(&Event {
             account_id: Some(account_id.to_string()),
             event_type: "account_status_update".to_string(),
             message: format!("status=active reason={reason}"),
             created_at,
         });
+    }
+    if matches!(
+        error_class.as_str(),
+        "cloudflare_challenge" | "timeout" | "connection" | "dns"
+    ) {
+        super::schedule_codex_network_reprobe(account_id);
     }
 }
 
@@ -89,7 +108,9 @@ pub(super) fn mark_usage_unreachable_if_needed(storage: &Storage, account_id: &s
 /// # 返回
 /// 返回函数执行结果
 pub(super) fn should_retry_with_refresh(err: &str) -> bool {
-    if crate::usage_http::is_region_blocked_error_message(err) {
+    if crate::usage_http::is_cloudflare_challenge_error_message(err)
+        || crate::usage_http::is_region_blocked_error_message(err)
+    {
         return false;
     }
     err.contains("401") || err.contains("403")
@@ -127,6 +148,9 @@ fn usage_refresh_failure_event_window_secs() -> i64 {
 /// 返回函数执行结果
 fn classify_usage_refresh_error(message: &str) -> String {
     let normalized = message.trim().to_ascii_lowercase();
+    if crate::usage_http::is_cloudflare_challenge_error_message(message) {
+        return "cloudflare_challenge".to_string();
+    }
     if let Some(status_code) = extract_usage_status_code(&normalized) {
         return format!("usage_status_{status_code}");
     }
@@ -159,6 +183,7 @@ fn status_reason_for_refresh_failure(error_class: &str) -> Option<&'static str> 
         "timeout" => Some("usage_refresh_timeout"),
         "connection" => Some("usage_refresh_connection"),
         "dns" => Some("usage_refresh_dns"),
+        "cloudflare_challenge" => Some("usage_cloudflare_challenge"),
         "other" => Some("usage_refresh_failed"),
         _ => None,
     }

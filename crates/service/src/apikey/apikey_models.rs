@@ -632,34 +632,7 @@ where
     for api_id in api_ids {
         match discover_models(api_id.as_str()) {
             Ok(models) => {
-                let previous_upstream_models = stale_source_upstream_models(
-                    storage,
-                    ROUTING_SOURCE_KIND_AGGREGATE_API,
-                    api_id.as_str(),
-                )?;
-                let synced_source_models = storage
-                    .upsert_discovered_model_source_models(
-                        ROUTING_SOURCE_KIND_AGGREGATE_API,
-                        api_id.as_str(),
-                        models.as_slice(),
-                        "synced",
-                    )
-                    .map_err(|err| format!("sync aggregate api source models failed: {err}"))?;
-                let synced_upstream_models = synced_source_models
-                    .into_iter()
-                    .map(|model| model.upstream_model)
-                    .collect::<HashSet<_>>();
-                let disappeared_upstream_models = previous_upstream_models
-                    .difference(&synced_upstream_models)
-                    .cloned()
-                    .collect::<HashSet<_>>();
-                cleanup_orphan_auto_catalog_models(storage, &disappeared_upstream_models)?;
-                auto_associate_source_models(
-                    storage,
-                    ROUTING_SOURCE_KIND_AGGREGATE_API,
-                    api_id.as_str(),
-                    true,
-                )?;
+                sync_discovered_aggregate_api_models(storage, api_id.as_str(), models)?;
                 synced_any = true;
             }
             Err(err) => {
@@ -673,6 +646,42 @@ where
         }
     }
     Ok(())
+}
+
+/// Persist model IDs returned by the same successful aggregate-API probe.
+///
+/// Keeping this separate from network discovery avoids a second `/models`
+/// request between connectivity admission and route registration. Some relay
+/// services are burst-sensitive, so that second request could fail even though
+/// the first one had already returned a valid catalog.
+pub(crate) fn sync_discovered_aggregate_api_models(
+    storage: &Storage,
+    source_id: &str,
+    models: Vec<String>,
+) -> Result<(), String> {
+    if models.is_empty() {
+        return Ok(());
+    }
+    let previous_upstream_models =
+        stale_source_upstream_models(storage, ROUTING_SOURCE_KIND_AGGREGATE_API, source_id)?;
+    let synced_source_models = storage
+        .upsert_discovered_model_source_models(
+            ROUTING_SOURCE_KIND_AGGREGATE_API,
+            source_id,
+            models.as_slice(),
+            "synced",
+        )
+        .map_err(|err| format!("sync aggregate api source models failed: {err}"))?;
+    let synced_upstream_models = synced_source_models
+        .into_iter()
+        .map(|model| model.upstream_model)
+        .collect::<HashSet<_>>();
+    let disappeared_upstream_models = previous_upstream_models
+        .difference(&synced_upstream_models)
+        .cloned()
+        .collect::<HashSet<_>>();
+    cleanup_orphan_auto_catalog_models(storage, &disappeared_upstream_models)?;
+    auto_associate_source_models(storage, ROUTING_SOURCE_KIND_AGGREGATE_API, source_id, true)
 }
 
 fn active_openai_account_sources(

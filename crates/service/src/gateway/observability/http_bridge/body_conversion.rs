@@ -664,11 +664,52 @@ pub(super) fn convert_responses_body_to_chat_completions(body: &[u8]) -> Option<
         completion["choices"][0]["message"]["reasoning"] = Value::String(reasoning_text.clone());
         completion["choices"][0]["message"]["reasoning_content"] = Value::String(reasoning_text);
     }
+    let tool_calls = collect_responses_function_calls(response);
+    if !tool_calls.is_empty() {
+        completion["choices"][0]["message"]["tool_calls"] = Value::Array(tool_calls);
+        completion["choices"][0]["finish_reason"] = Value::String("tool_calls".to_string());
+        if text.is_empty() {
+            completion["choices"][0]["message"]["content"] = Value::Null;
+        }
+    }
     let images = collect_image_generation_chat_images(response);
     if !images.is_empty() {
         completion["choices"][0]["message"]["images"] = Value::Array(images);
     }
     serde_json::to_vec(&completion).ok()
+}
+
+fn collect_responses_function_calls(response: &Value) -> Vec<Value> {
+    response
+        .get("output")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            if item.get("type").and_then(Value::as_str) != Some("function_call") {
+                return None;
+            }
+            let name = item.get("name").and_then(Value::as_str)?;
+            let id = item
+                .get("call_id")
+                .or_else(|| item.get("id"))
+                .and_then(Value::as_str)
+                .unwrap_or("call_codexmanager");
+            let arguments = match item.get("arguments") {
+                Some(Value::String(arguments)) => arguments.clone(),
+                Some(arguments) => arguments.to_string(),
+                None => "{}".to_string(),
+            };
+            Some(json!({
+                "id": id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": arguments,
+                }
+            }))
+        })
+        .collect()
 }
 
 fn collect_chat_completion_message_text(value: &Value, out: &mut String) {

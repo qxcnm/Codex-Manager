@@ -2,14 +2,14 @@ use super::*;
 use codexmanager_core::storage::UsageSnapshotRecord;
 
 /// 当上游用 200 + SSE `data:` 正文夹带 "You've hit your usage limit" 回应时，
-/// 网关不能在同一次请求里重试（流已经吐给客户端），但必须把该请求内部标记成 failover：
-/// - 客户端侧 HTTP status 仍保持 200（原样透传上游响应）
-/// - request_log 的 status_code 应为 502（failover 记账，用于观察/冷却）
+/// 网关在内容尚未提交给客户端前识别该失败，并自动切换到下一个健康账号：
+/// - 客户端侧 HTTP status 保持 200，且只看到第二个账号的完整回答
+/// - request_log 只保留最终成功结果，避免把内部切换暴露成客户端断线
 ///
 /// 这条链路覆盖：PassthroughSseUsageReader 扫描 data 正文（Fix A）→
 /// bridge.stream_terminal_error → response_finalize 的 failover 分支。
 #[test]
-fn gateway_usage_limit_in_sse_marks_request_as_failover() {
+fn gateway_usage_limit_in_sse_fails_over_before_downstream_commit() {
     let _lock = test_env_guard();
     let dir = new_test_dir("codexmanager-gateway-usage-limit-sse-failover");
     let db_path: PathBuf = dir.join("codexmanager.db");
@@ -19,14 +19,22 @@ fn gateway_usage_limit_in_sse_marks_request_as_failover() {
         "data: {\"type\":\"response.output_text.delta\",\"delta\":\"You've hit your usage limit. To get more access now, send a request to your admin or try again at 7:44 PM.\"}\n\n",
         "data: [DONE]\n\n"
     );
+    let ok_sse = concat!(
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_failover_ok\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1,\"total_tokens\":3}}}\n\n",
+        "data: [DONE]\n\n"
+    );
 
     let (upstream_addr, upstream_rx, upstream_join) =
         start_mock_upstream_sequence_lenient_with_content_types(
-            vec![(
-                200,
-                usage_limit_sse.to_string(),
-                "text/event-stream".to_string(),
-            )],
+            vec![
+                (
+                    200,
+                    usage_limit_sse.to_string(),
+                    "text/event-stream".to_string(),
+                ),
+                (200, ok_sse.to_string(), "text/event-stream".to_string()),
+            ],
             Duration::from_secs(3),
         );
     let upstream_base = format!("http://{upstream_addr}/backend-api/codex");
@@ -110,7 +118,7 @@ fn gateway_usage_limit_in_sse_marks_request_as_failover() {
         "stream": true
     });
     let req_body = serde_json::to_string(&req_body_json).expect("serialize request");
-    let (status, _body) = post_http_raw(
+    let (status, body) = post_http_raw(
         &server.addr,
         "/v1/responses",
         &req_body,
@@ -120,20 +128,34 @@ fn gateway_usage_limit_in_sse_marks_request_as_failover() {
         ],
     );
     server.join();
-    assert_eq!(status, 200, "客户端看到的 HTTP status 应原样透传 200");
+    assert_eq!(status, 200, "客户端应看到第二个账号的成功响应");
+    assert!(body.contains("\"delta\":\"ok\""));
+    assert!(!body.contains("You've hit your usage limit"));
 
-    let captured = upstream_rx
+    let first = upstream_rx
         .recv_timeout(Duration::from_secs(3))
-        .expect("receive upstream request");
+        .expect("receive first upstream request");
+    let second = upstream_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("receive failover upstream request");
     upstream_join.join().expect("join mock upstream");
-    let auth = captured
+    let first_auth = first
         .headers
         .get("authorization")
         .map(String::as_str)
         .unwrap_or_default();
     assert!(
-        auth.contains("access_acc_primary"),
-        "应命中 sort=0 的 primary 账号，实际 auth 头：{auth}"
+        first_auth.contains("access_acc_primary"),
+        "首次应命中 primary 账号，实际 auth 头：{first_auth}"
+    );
+    let second_auth = second
+        .headers
+        .get("authorization")
+        .map(String::as_str)
+        .unwrap_or_default();
+    assert!(
+        second_auth.contains("access_acc_secondary"),
+        "额度失败后应切换 secondary 账号，实际 auth 头：{second_auth}"
     );
 
     // 等 request log 异步落盘。
@@ -153,14 +175,14 @@ fn gateway_usage_limit_in_sse_marks_request_as_failover() {
     let log = log.expect("request log should be recorded");
     assert_eq!(
         log.status_code,
-        Some(502),
-        "usage-limit 在 SSE 正文里时应触发 failover 记账（status_for_log=502），实际 {:?}",
+        Some(200),
+        "内部切换成功后客户端请求应记录最终成功，实际 {:?}",
         log.status_code
     );
     assert_eq!(
         log.account_id.as_deref(),
-        Some("acc_primary"),
-        "failover 记录应记在命中 usage-limit 的 primary 账号下"
+        Some("acc_secondary"),
+        "最终请求日志应记录成功返回的 secondary 账号"
     );
 }
 
@@ -169,6 +191,9 @@ fn gateway_usage_limit_in_sse_marks_request_as_failover() {
 #[test]
 fn gateway_low_quota_account_is_skipped_on_first_request() {
     let _lock = test_env_guard();
+    // Low-quota protection is intentionally opt-in in production. This test
+    // exercises the enabled behavior, so make that precondition explicit.
+    let _quota_guard = EnvGuard::set("CODEXMANAGER_QUOTA_GUARD_ENABLED", "1");
     let dir = new_test_dir("codexmanager-gateway-low-quota-skip");
     let db_path: PathBuf = dir.join("codexmanager.db");
     let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());

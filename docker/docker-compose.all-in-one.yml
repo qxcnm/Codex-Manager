@@ -11,6 +11,10 @@ services:
       TZ: ${TZ:-Asia/Shanghai}
       CODEXMANAGER_DB_PATH: /data/codexmanager.db
       CODEXMANAGER_RPC_TOKEN_FILE: /data/codexmanager.rpc-token
+      # Linux credential vault: inject one persistent 32-byte key from the
+      # cloud secret manager. Generate once with: openssl rand -base64 32
+      CODEXMANAGER_VAULT_MASTER_KEY: ${CODEXMANAGER_VAULT_MASTER_KEY:?set a persistent vault key}
+      # Or mount a secret and set CODEXMANAGER_VAULT_MASTER_KEY_FILE.
       CODEXMANAGER_GATEWAY_TRACE_STDOUT: "1"
       CODEXMANAGER_GATEWAY_ERROR_STDOUT: "1"
       # Optional mitigation for same key/path/model head-of-line gate waits:
@@ -18,7 +22,8 @@ services:
     volumes:
       - codexmanager-data:/data
     ports:
-      - "48761:48761"
+      - "${CODEXMANAGER_GATEWAY_PORT:-48764}:48760"
+      - "${CODEXMANAGER_WEB_PORT:-48765}:48761"
 
 volumes:
   codexmanager-data:

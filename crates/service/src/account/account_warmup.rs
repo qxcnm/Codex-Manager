@@ -3,6 +3,7 @@ use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::Serialize;
 use serde_json::json;
+use rand::RngCore;
 use std::io::{BufRead, BufReader, Read};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -19,6 +20,7 @@ const WARMUP_UPSTREAM_URL: &str = "https://chatgpt.com/backend-api/codex/respons
 const DEFAULT_WARMUP_MODEL: &str = "gpt-5.3-codex";
 const WARMUP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const WARMUP_TOTAL_TIMEOUT: Duration = Duration::from_secs(90);
+const BATCH_ADMISSION_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 static WARMUP_HTTP_CLIENT: OnceLock<Mutex<Option<WarmupClientCacheEntry>>> = OnceLock::new();
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,9 +93,17 @@ pub(crate) fn warmup_accounts(
             account,
             warmup_model.as_str(),
             warmup_message.as_str(),
+            WARMUP_TOTAL_TIMEOUT,
         );
         if item.ok {
             succeeded += 1;
+            crate::usage_refresh::record_codex_responses_verified(&storage, &item.account_id);
+        } else {
+            crate::usage_refresh::record_codex_admission_probe_failure(
+                &storage,
+                &item.account_id,
+                &item.message,
+            );
         }
         results.push(item);
     }
@@ -104,6 +114,40 @@ pub(crate) fn warmup_accounts(
         failed: results.len().saturating_sub(succeeded),
         results,
     })
+}
+
+/// A batch admission probe uses the real Codex Responses endpoint with a tiny
+/// internal prompt. It is intentionally separate from import/model discovery:
+/// only this proves that the exact account, workspace, route and requested
+/// model can execute before the account is admitted into a live batch.
+pub(crate) fn probe_account_responses_for_batch(
+    account_id: &str,
+    model_slug: Option<&str>,
+) -> Result<(), String> {
+    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let mut targets = resolve_target_accounts(&storage, &[account_id.to_string()])?;
+    let target = targets
+        .pop()
+        .ok_or_else(|| "account is not gateway eligible for admission probe".to_string())?;
+    let client = warmup_client()?;
+    let model = model_slug
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| resolve_warmup_model_slug(&storage));
+    let result = warmup_single_account(
+        &storage,
+        &client,
+        target,
+        model.as_str(),
+        ".",
+        BATCH_ADMISSION_PROBE_TIMEOUT,
+    );
+    if result.ok {
+        Ok(())
+    } else {
+        Err(result.message)
+    }
 }
 
 fn resolve_target_accounts(
@@ -165,6 +209,13 @@ fn warmup_client() -> Result<Client, String> {
     Ok(client)
 }
 
+pub(crate) fn reload_warmup_client() {
+    if let Some(cache) = WARMUP_HTTP_CLIENT.get() {
+        let mut guard = crate::lock_utils::lock_recover(cache, "warmup_http_client");
+        *guard = None;
+    }
+}
+
 fn build_warmup_client_for_config(config: &WarmupClientConfig) -> Result<Client, String> {
     #[cfg(test)]
     WARMUP_CLIENT_BUILD_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -210,12 +261,19 @@ fn warmup_single_account(
     target: AccountWarmupTarget,
     model_slug: &str,
     message: &str,
+    request_timeout: Duration,
 ) -> AccountWarmupItemResult {
     let AccountWarmupTarget { account, mut token } = target;
     let account_name = account.label.clone();
     let started_at = Instant::now();
-    let mut outcome =
-        send_warmup_request_with_fallback(client, &account, &token, model_slug, message);
+    let mut outcome = send_warmup_request_with_fallback(
+        client,
+        &account,
+        &token,
+        model_slug,
+        message,
+        request_timeout,
+    );
 
     if let Err(err) = outcome.as_ref() {
         if should_retry_warmup_with_refresh(&token, err) {
@@ -231,7 +289,14 @@ fn warmup_single_account(
                 token_refresh_ahead_secs(),
             )
             .and_then(|_| {
-                send_warmup_request_with_fallback(client, &account, &token, model_slug, message)
+                send_warmup_request_with_fallback(
+                    client,
+                    &account,
+                    &token,
+                    model_slug,
+                    message,
+                    request_timeout,
+                )
             });
         }
     }
@@ -350,15 +415,21 @@ fn send_warmup_request_with_fallback(
     token: &Token,
     model_slug: &str,
     message: &str,
+    request_timeout: Duration,
 ) -> Result<String, String> {
-    let primary = send_warmup_request(client, account, token, model_slug, message);
+    let primary = send_warmup_request(client, account, token, model_slug, message, request_timeout);
     match primary {
         Ok(()) => Ok("已发送预热消息".to_string()),
-        Err(primary_err) if message == DEFAULT_WARMUP_MESSAGE => {
-            send_warmup_request(client, account, token, model_slug, FALLBACK_WARMUP_MESSAGE)
-                .map(|_| "已发送预热消息".to_string())
-                .map_err(|fallback_err| format!("{primary_err}; fallback={fallback_err}"))
-        }
+        Err(primary_err) if message == DEFAULT_WARMUP_MESSAGE => send_warmup_request(
+            client,
+            account,
+            token,
+            model_slug,
+            FALLBACK_WARMUP_MESSAGE,
+            request_timeout,
+        )
+        .map(|_| "已发送预热消息".to_string())
+        .map_err(|fallback_err| format!("{primary_err}; fallback={fallback_err}")),
         Err(err) => Err(err),
     }
 }
@@ -368,11 +439,14 @@ fn should_retry_warmup_with_refresh(token: &Token, err: &str) -> bool {
         return false;
     }
     let normalized = err.to_ascii_lowercase();
+    if crate::usage_http::is_cloudflare_challenge_error_message(err)
+        || crate::usage_http::is_region_blocked_error_message(err)
+    {
+        return false;
+    }
     normalized.contains("status=401")
-        || normalized.contains("status=403")
         || normalized.contains("auth error")
         || normalized.contains("unauthorized")
-        || normalized.contains("forbidden")
 }
 
 fn send_warmup_request(
@@ -381,6 +455,7 @@ fn send_warmup_request(
     token: &Token,
     model_slug: &str,
     message: &str,
+    request_timeout: Duration,
 ) -> Result<(), String> {
     let body = json!({
         "model": model_slug,
@@ -400,6 +475,7 @@ fn send_warmup_request(
     let headers = build_warmup_headers(account, token.access_token.as_str())?;
     let response = client
         .post(WARMUP_UPSTREAM_URL)
+        .timeout(request_timeout)
         .headers(headers)
         .json(&body)
         .send()
@@ -478,7 +554,9 @@ fn process_warmup_sse_event(
     let data = data_lines.join("\n");
     let trimmed = data.trim();
     if trimmed == "[DONE]" {
-        return Ok(true);
+        // The transport terminator alone does not prove that Codex completed
+        // the response; admission requires an explicit response.completed.
+        return Ok(false);
     }
     let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
         return Ok(false);
@@ -508,7 +586,7 @@ fn process_warmup_sse_event(
 }
 
 fn is_warmup_terminal_event(value: &str) -> bool {
-    matches!(value.trim(), "response.completed" | "response.done")
+    value.trim() == "response.completed"
 }
 
 fn is_warmup_error_event(value: &str) -> bool {
@@ -564,6 +642,18 @@ fn build_warmup_headers(account: &Account, bearer: &str) -> Result<HeaderMap, St
         HeaderName::from_static("originator"),
         header_value(&crate::gateway::current_wire_originator())?,
     );
+    headers.insert(
+        HeaderName::from_static("version"),
+        header_value(&crate::gateway::current_codex_user_agent_version())?,
+    );
+    headers.insert(
+        HeaderName::from_static("openai-beta"),
+        HeaderValue::from_static("responses=experimental"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-codex-window-id"),
+        header_value(&new_probe_window_id())?,
+    );
 
     if let Some(residency_requirement) = crate::gateway::current_residency_requirement() {
         headers.insert(
@@ -579,6 +669,20 @@ fn build_warmup_headers(account: &Account, bearer: &str) -> Result<HeaderMap, St
     }
 
     Ok(headers)
+}
+
+fn new_probe_window_id() -> String {
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3],
+        bytes[4], bytes[5], bytes[6], bytes[7],
+        bytes[8], bytes[9], bytes[10], bytes[11],
+        bytes[12], bytes[13], bytes[14], bytes[15]
+    )
 }
 
 fn header_value(value: &str) -> Result<HeaderValue, String> {
@@ -632,9 +736,11 @@ fn maybe_mark_account_auth_error(
     account_id: &str,
     err: &str,
 ) -> Result<(), String> {
-    if err.to_ascii_lowercase().contains("auth error")
-        || err.to_ascii_lowercase().contains("status=401")
-        || err.to_ascii_lowercase().contains("status=403")
+    let normalized = err.to_ascii_lowercase();
+    let cloudflare_or_region = crate::usage_http::is_cloudflare_challenge_error_message(err)
+        || crate::usage_http::is_region_blocked_error_message(err);
+    if !cloudflare_or_region
+        && (normalized.contains("auth error") || normalized.contains("status=401"))
     {
         let _ = mark_account_unavailable_for_auth_error(storage, account_id, err);
     }

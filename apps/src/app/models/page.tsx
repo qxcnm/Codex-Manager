@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+  ArrowRight,
+  Boxes,
+  Cable,
+  Cpu,
   Database,
   Download,
   Link2,
@@ -14,6 +18,7 @@ import {
   Trash2,
   Unlink,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -120,6 +125,51 @@ function MiniStatBadge({
     <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background/45 px-3 py-1.5 text-xs text-muted-foreground">
       <span>{label}</span>
       <span className="font-semibold text-foreground">{value}</span>
+    </div>
+  );
+}
+
+function RuntimeFlowNode({
+  icon: Icon,
+  label,
+  detail,
+  active = false,
+}: {
+  icon: LucideIcon;
+  label: string;
+  detail: string;
+  active?: boolean;
+}) {
+  return (
+    <div
+      className={`flex min-w-0 items-center gap-2 rounded-lg border px-3 py-2 ${
+        active
+          ? "border-primary/35 bg-primary/10 shadow-[inset_0_1px_0_rgb(255_255_255/0.06)]"
+          : "border-border/60 bg-background/35"
+      }`}
+    >
+      <div
+        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${
+          active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+        }`}
+      >
+        <Icon className="h-3.5 w-3.5" />
+      </div>
+      <div className="min-w-0">
+        <div className="truncate text-xs font-semibold text-foreground">{label}</div>
+        <div className="truncate text-[10px] text-muted-foreground">{detail}</div>
+      </div>
+    </div>
+  );
+}
+
+function RuntimeMetric({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="flex min-h-[104px] min-w-0 flex-col justify-center px-3 text-center">
+      <div className="font-mono text-xl font-semibold tabular-nums text-foreground">{value}</div>
+      <div className="mt-1 text-[10px] font-medium uppercase leading-4 tracking-[0.08em] text-muted-foreground">
+        {label}
+      </div>
     </div>
   );
 }
@@ -295,6 +345,16 @@ export default function ModelsPage() {
     }),
     [models, routing.mappings]
   );
+
+  const adapterStats = useMemo(() => {
+    const enabledMappings = routing.mappings.filter((mapping) => mapping.enabled);
+    return {
+      adapters: new Set(enabledMappings.map((mapping) => mapping.sourceKind)).size,
+      upstreamModels: routing.sourceModels.filter(
+        (sourceModel) => sourceModel.status === "available"
+      ).length,
+    };
+  }, [routing.mappings, routing.sourceModels]);
 
   const filteredModels = useMemo(() => {
     const keyword = search.trim().toLowerCase();
@@ -586,33 +646,22 @@ export default function ModelsPage() {
     <>
       <PageWorkspace>
         <PageHeader
-          eyebrow={isAdminMode ? t("模型目录") : t("可用模型")}
-          title={isAdminMode ? t("模型管理") : t("可用模型")}
+          eyebrow={t("OPENRUNTIME · MODEL PLANE")}
+          title={t("Model Registry")}
           description={
             isAdminMode
-              ? t("这里维护本地结构化模型目录。默认绑定模型会优先展示 supportedInApi=true 的模型，而 Codex CLI 仍会拿到完整目录。")
-              : t("查看当前账号可调用的平台模型。成员界面只展示平台模型名，不展示真实上游模型或来源配置。")
+              ? t("One Runtime. Every AI. 在统一模型命名空间中发布能力，再由 Adapter Matrix 连接不同 AI 平台。")
+              : t("Build Once. Connect Every AI. 使用统一的 OpenAI-compatible 模型契约调用已发布能力。")
           }
           meta={
-            isAdminMode ? (
-              <>
-                <Badge variant="secondary" className="rounded-md px-2.5">
-                  {t("完整目录会同步到 Codex CLI")}
-                </Badge>
-                <Badge variant="secondary" className="rounded-md px-2.5">
-                  {t("远端刷新可与本地覆写共存")}
-                </Badge>
-              </>
-            ) : (
-              <>
-                <Badge variant="secondary" className="rounded-md px-2.5">
-                  {t("仅展示平台模型")}
-                </Badge>
-                <Badge variant="secondary" className="rounded-md px-2.5">
-                  {t("隐藏真实上游")}
-                </Badge>
-              </>
-            )
+            <>
+              <Badge variant="secondary" className="rounded-md px-2.5 font-mono text-[10px]">
+                OPENAI-COMPATIBLE
+              </Badge>
+              <Badge variant="secondary" className="rounded-md px-2.5 font-mono text-[10px]">
+                /v1/responses · /v1/chat/completions
+              </Badge>
+            </>
           }
           actions={
             isAdminMode ? (
@@ -626,7 +675,7 @@ export default function ModelsPage() {
                   <RefreshCw
                     className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`}
                   />
-                  {t("远端并入")}
+                  {t("同步 Registry")}
                 </Button>
                 <Button
                   variant="outline"
@@ -638,7 +687,7 @@ export default function ModelsPage() {
                   <Trash2
                     className={`h-4 w-4 ${isPruningStaleRemote ? "animate-pulse" : ""}`}
                   />
-                  {t("清理远端旧模型")}
+                  {t("移除失效条目")}
                 </Button>
                 {canExportCodexCache ? (
                   <Button
@@ -650,7 +699,7 @@ export default function ModelsPage() {
                     <Download
                       className={`h-4 w-4 ${isExporting ? "animate-spin" : ""}`}
                     />
-                    {t("导出到本地 Codex 缓存")}
+                    {t("导出 Registry")}
                   </Button>
                 ) : null}
                 <Button
@@ -661,23 +710,90 @@ export default function ModelsPage() {
                   }}
                 >
                   <Plus className="h-4 w-4" />
-                  {t("新增自定义模型")}
+                  {t("注册模型")}
                 </Button>
               </>
             ) : null
           }
         />
 
+        <Card className="glass-card mission-panel console-panel overflow-hidden py-0 shadow-sm">
+          <CardContent className="grid gap-0 p-0 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <div className="min-w-0 border-b border-border/60 px-4 py-3 xl:border-b-0 xl:border-r">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <Cable className="h-4 w-4 text-primary" />
+                  <span className="text-xs font-semibold uppercase tracking-[0.14em] text-foreground">
+                    {t("Runtime Flow")}
+                  </span>
+                  <Badge
+                    variant="outline"
+                    className={
+                      isServiceReady
+                        ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-600"
+                        : "text-muted-foreground"
+                    }
+                  >
+                    <span
+                      className={`mr-1.5 h-1.5 w-1.5 rounded-full ${
+                        isServiceReady ? "bg-emerald-500" : "bg-muted-foreground"
+                      }`}
+                    />
+                    {isServiceReady ? t("Runtime online") : t("Runtime offline")}
+                  </Badge>
+                </div>
+                <span className="hidden font-mono text-[10px] text-muted-foreground sm:inline">
+                  {t("ONE CONTRACT · MANY PROVIDERS")}
+                </span>
+              </div>
+              <div className="grid items-center gap-2 md:grid-cols-[1fr_auto_1.15fr_auto_1fr_auto_1fr]">
+                <RuntimeFlowNode
+                  icon={Boxes}
+                  label={t("AI Applications")}
+                  detail={t("OpenAI SDK / Agents")}
+                />
+                <ArrowRight className="mx-auto hidden h-4 w-4 text-primary/55 md:block" />
+                <RuntimeFlowNode
+                  icon={Cpu}
+                  label="OpenRuntime"
+                  detail={t("统一协议与能力契约")}
+                  active
+                />
+                <ArrowRight className="mx-auto hidden h-4 w-4 text-primary/55 md:block" />
+                <RuntimeFlowNode
+                  icon={Cable}
+                  label={t("Adapter Matrix")}
+                  detail={t("鉴权 · 转换 · 路由")}
+                />
+                <ArrowRight className="mx-auto hidden h-4 w-4 text-primary/55 md:block" />
+                <RuntimeFlowNode
+                  icon={Database}
+                  label={t("Every AI")}
+                  detail={t("Claude · GPT · 更多")}
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 divide-x divide-border/60 bg-background/20">
+              <RuntimeMetric label={t("Published Models")} value={stats.apiEnabled} />
+              <RuntimeMetric label={t("Active Routes")} value={stats.routable} />
+              <RuntimeMetric
+                label={t("Adapters / Upstreams")}
+                value={`${adapterStats.adapters}/${adapterStats.upstreamModels}`}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
         <Card className="glass-card mission-panel console-panel shadow-sm">
           <CardHeader className="pb-3">
             <div className="flex flex-col gap-3">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div>
-                  <CardTitle>{isAdminMode ? t("模型目录明细") : t("可用模型列表")}</CardTitle>
+                  <CardTitle>{isAdminMode ? t("Registry Entries") : t("Published Models")}</CardTitle>
                   <p className="mt-1 text-xs text-muted-foreground">
                     {isAdminMode
-                      ? t("按 slug、显示名称或描述快速定位，并结合来源与覆写状态查看当前目录。")
-                      : t("按 slug、显示名称或描述快速定位，只展示当前可见的平台模型。")}
+                      ? t("定义稳定的 Runtime Model ID，并查看它与真实上游能力之间的 Adapter 路由。")
+                      : t("选择已发布的 Runtime Model ID；底层供应商差异由 OpenRuntime 接管。")}
                   </p>
                 </div>
                 {isAdminMode ? (
@@ -695,16 +811,16 @@ export default function ModelsPage() {
                 ) : null}
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <MiniStatBadge label={t("模型总数")} value={`${stats.total}`} />
-                <MiniStatBadge label={t("API 可用")} value={`${stats.apiEnabled}`} />
+                <MiniStatBadge label={t("Registry 条目")} value={`${stats.total}`} />
+                <MiniStatBadge label={t("已发布")} value={`${stats.apiEnabled}`} />
                 <MiniStatBadge
-                  label={isAdminMode ? t("可调用映射") : t("可调用")}
+                  label={isAdminMode ? t("已连接路由") : t("可调用")}
                   value={`${stats.routable}`}
                 />
                 {isAdminMode ? (
                   <>
-                    <MiniStatBadge label={t("自定义模型")} value={`${stats.custom}`} />
-                    <MiniStatBadge label={t("本地覆写")} value={`${stats.edited}`} />
+                    <MiniStatBadge label={t("自定义规格")} value={`${stats.custom}`} />
+                    <MiniStatBadge label={t("本地 Override")} value={`${stats.edited}`} />
                   </>
                 ) : null}
                 <Badge variant="secondary" className="rounded-full px-3 py-1">

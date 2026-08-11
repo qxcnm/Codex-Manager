@@ -1,5 +1,9 @@
 use tiny_http::{Request, Response};
 
+fn should_serve_local_models(rotation_strategy: &str) -> bool {
+    rotation_strategy != crate::apikey_profile::ROTATION_AGGREGATE_API
+}
+
 /// 函数 `handle_gateway_request`
 ///
 /// 作者: gaohongshun
@@ -97,9 +101,31 @@ pub(crate) fn handle_gateway_request(mut request: Request) -> Result<(), String>
             }
         };
 
-    let request = if validated.rotation_strategy == crate::apikey_profile::ROTATION_AGGREGATE_API
-        || validated.rotation_strategy == crate::apikey_profile::ROTATION_HYBRID
-    {
+    let _api_key_inflight_guard = match super::try_acquire_api_key_inflight(
+        validated.key_id.as_str(),
+        validated.concurrency_limit,
+    ) {
+        Ok(guard) => guard,
+        Err(current) => {
+            let message = super::bilingual_error(
+                "API Key 并发请求已达到上限",
+                format!("api key concurrency limit exceeded: active {current}"),
+            );
+            super::record_gateway_request_outcome(request_path_for_log.as_str(), 429, None);
+            let response = super::error_response::terminal_text_response(
+                429,
+                super::error_message_for_client(
+                    super::prefers_raw_errors_for_tiny_http_request(&request),
+                    message.as_str(),
+                ),
+                Some(trace_id.as_str()),
+            );
+            let _ = request.respond(response);
+            return Ok(());
+        }
+    };
+
+    let request = if !should_serve_local_models(validated.rotation_strategy.as_str()) {
         request
     } else {
         match super::maybe_respond_local_models(
@@ -150,4 +176,22 @@ pub(crate) fn handle_gateway_request(mut request: Request) -> Result<(), String>
     };
 
     super::proxy_validated_request(request, validated, debug)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_serve_local_models;
+
+    #[test]
+    fn hybrid_keys_use_the_unified_local_model_catalog() {
+        assert!(should_serve_local_models(
+            crate::apikey_profile::ROTATION_HYBRID
+        ));
+        assert!(should_serve_local_models(
+            crate::apikey_profile::ROTATION_ACCOUNT
+        ));
+        assert!(!should_serve_local_models(
+            crate::apikey_profile::ROTATION_AGGREGATE_API
+        ));
+    }
 }

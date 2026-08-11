@@ -1,13 +1,15 @@
 "use client";
 
 import type { LucideIcon } from "lucide-react";
-import { Power, PowerOff, RefreshCw, Zap } from "lucide-react";
+import { Gift, Power, PowerOff, RefreshCw, Zap } from "lucide-react";
 import { useI18n } from "@/lib/i18n/provider";
 import { cn } from "@/lib/utils";
+import { resolveAccountCallability } from "@/lib/account-callability";
 import {
   formatRemainingDurationFromSeconds,
   formatTsFromSeconds,
   getExtraUsageDisplayRows,
+  getResetEntitlementDisplayRows,
   getUsageDisplayBuckets,
   isPrimaryWindowOnlyUsage,
   isSecondaryWindowOnlyUsage,
@@ -24,6 +26,21 @@ import type { Account } from "@/types";
 export type StatusFilter = "all" | "available" | "low_quota" | "limited" | "banned";
 export type AccountExportMode = "single" | "multiple";
 export type AccountSizeSortMode = "large-first" | "small-first";
+export type AccountRecoveryAction =
+  | "none"
+  | "probe"
+  | "refresh_usage"
+  | "refresh_credentials"
+  | "wait"
+  | "remove";
+
+export interface AccountRecoveryGuidance {
+  action: AccountRecoveryAction;
+  badge: string;
+  title: string;
+  detail: string;
+  tone: "ready" | "info" | "warning" | "danger" | "muted";
+}
 
 const ACCOUNT_SORT_STEP = 5;
 
@@ -93,13 +110,13 @@ export function formatStatusFilterLabel(value: string, t: TranslateFn) {
   const nextValue = String(value || "").trim();
   switch (nextValue) {
     case "available":
-      return t("可用");
+      return t("可调用");
     case "low_quota":
       return t("低配额");
     case "limited":
       return t("限流");
     case "banned":
-      return t("封禁");
+      return t("明确停用");
     case "all":
     default:
       return t("全部");
@@ -394,6 +411,9 @@ export function formatAccountStatusReasonLabel(
   if (reason === "usage_refresh_failed") {
     return t("用量刷新失败，请查看后台日志");
   }
+  if (reason === "usage_cloudflare_challenge") {
+    return t("Cloudflare 风控拦截，暂未判定账号失效");
+  }
 
   const usageHttpStatus = reason.match(/^usage_http_(\d{3})$/);
   if (usageHttpStatus) {
@@ -420,11 +440,244 @@ export function formatAccountStatusReasonLabel(
   }
 }
 
+export function formatCredentialStateLabel(account: Account, t: TranslateFn): string {
+  switch (account.credentialState) {
+    case "healthy":
+      return t("凭据正常");
+    case "access_token_expired":
+      return t("AT 已过期，等待自动刷新");
+    case "access_token_rejected":
+      return t("AT 被拒绝，正在尝试刷新");
+    case "refresh_token_expired":
+      return t("RT 已过期，可重新登录修复");
+    case "refresh_token_revoked":
+      return t("RT 已撤销，可重新登录修复");
+    case "reauth_required":
+      return t("需要重新登录取回凭据");
+    case "reauth_in_progress":
+      return t("正在重新获取凭据");
+    case "account_deactivated":
+      return t("已确认账号停用，不再重试");
+    case "workspace_deactivated":
+      return t("已确认工作区停用，不再重试");
+    case "network_unknown":
+      return t("网络或风控异常，账号状态待确认");
+    case "stopped_unknown":
+      return t("已停止，但没有账号停用证据");
+    default:
+      return t("凭据状态待确认");
+  }
+}
+
+function formatRecoveryTime(timestamp: number | null, t: TranslateFn): string | null {
+  if (!timestamp) return null;
+  const seconds = Math.max(0, timestamp - Math.floor(Date.now() / 1000));
+  if (seconds <= 0) return t("现在可以重试");
+  if (seconds < 60) return t("约 {seconds} 秒后重试", { seconds });
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return t("约 {minutes} 分钟后恢复", { minutes });
+  const hours = Math.ceil(minutes / 60);
+  return t("约 {hours} 小时后恢复", { hours });
+}
+
+export function getAccountRecoveryGuidance(
+  account: Account,
+  t: TranslateFn,
+): AccountRecoveryGuidance {
+  const probeStatus = String(account.gatewayProbeStatus || "").toLowerCase();
+  const probeReason = String(account.gatewayProbeReason || "").toLowerCase();
+  const statusReason = String(account.statusReason || "").toLowerCase();
+  const credentialState = account.credentialState;
+  const quotaResetAt = Math.max(
+    account.usage?.resetsAt || 0,
+    account.usage?.secondaryResetsAt || 0,
+  ) || null;
+  const retryAt = account.gatewayProbeRetryAfter || quotaResetAt;
+  const retryText = formatRecoveryTime(retryAt, t);
+
+  if (String(account.status).toLowerCase() === "disabled") {
+    return {
+      action: "none",
+      badge: t("已停用"),
+      title: t("不会参与调用"),
+      detail: t("这是手动关闭状态；需要时点击启用账号，不必删除。"),
+      tone: "muted",
+    };
+  }
+
+  if (statusReason === "usage_cloudflare_challenge") {
+    return {
+      action: "probe",
+      badge: t("自动重探中"),
+      title: t("网络出口被 Cloudflare 拦截"),
+      detail: t(
+        "系统将在30秒、2分钟、5分钟后自动重探；切换出口后也可立即探测。",
+      ),
+      tone: "info",
+    };
+  }
+
+  if (
+    ["account_deactivated", "workspace_deactivated"].includes(credentialState) ||
+    account.credentialAction === "stop" ||
+    ["account_deactivated", "workspace_deactivated", "deactivated_workspace"].includes(
+      statusReason,
+    )
+  ) {
+    return {
+      action: "remove",
+      badge: t("已确认停用"),
+      title: t("已确认账号或工作区停用"),
+      detail: t("这是明确的停用证据，不是普通 401、限额或网络异常；系统不会再自动重试。"),
+      tone: "danger",
+    };
+  }
+
+  if (probeReason === "quota_exhausted" || statusReason === "usage_limit_exhausted") {
+    return {
+      action: "wait",
+      badge: t("等待恢复"),
+      title: t("额度或限流窗口尚未恢复"),
+      detail: retryText
+        ? `${retryText}，${t("不要删除账号，恢复后会自动回池。")}`
+        : t("不要删除账号；等待额度窗口恢复，也可以手动刷新确认。"),
+      tone: "warning",
+    };
+  }
+
+  if (
+    ["refresh_token_expired", "refresh_token_revoked", "reauth_required"].includes(
+      credentialState,
+    )
+  ) {
+    return {
+      action: "refresh_credentials",
+      badge: t("需要重新登录"),
+      title: t("Refresh Token 已无法自动修复"),
+      detail: t("先点击刷新 AT/RT；仍失败时重新登录取回凭据，不要直接删除。"),
+      tone: "danger",
+    };
+  }
+
+  if (
+    ["codex_responses_unauthorized", "codex_unauthorized", "usage_status_401"].includes(
+      probeReason,
+    ) ||
+    ["access_token_expired", "access_token_rejected"].includes(credentialState)
+  ) {
+    return {
+      action: "refresh_credentials",
+      badge: t("刷新凭据"),
+      title: t("真实调用授权失败"),
+      detail: retryText
+        ? `${retryText}；${t("建议立即刷新 AT/RT，再重新探测。")}`
+        : t("建议立即刷新 AT/RT，再重新探测。"),
+      tone: "warning",
+    };
+  }
+
+  if (probeReason === "codex_responses_not_found") {
+    return {
+      action: "refresh_credentials",
+      badge: t("调用入口不可用"),
+      title: t("真实 Responses 调用返回 404"),
+      detail: t("先重新登录或更换工作区后再探测；仍然 404 时再考虑清理。"),
+      tone: "danger",
+    };
+  }
+
+  if (
+    credentialState === "network_unknown" ||
+    ["codex_responses_probe_failed", "codex_models_probe_failed"].includes(probeReason)
+  ) {
+    return {
+      action: "probe",
+      badge: t("稍后重探"),
+      title: t("网络或风控异常，尚未判定死号"),
+      detail: retryText
+        ? `${retryText}；${t("不要删除，重新探测即可。")}`
+        : t("不要删除，检查网络后重新探测即可。"),
+      tone: "info",
+    };
+  }
+
+  if (
+    probeStatus === "available" &&
+    probeReason === "codex_responses_verified" &&
+    account.isAvailable
+  ) {
+    return {
+      action: "none",
+      badge: t("正在服役"),
+      title: t("已通过真实调用准入"),
+      detail: t("当前会进入网关批次，无需处理。"),
+      tone: "ready",
+    };
+  }
+
+  return {
+    action: "probe",
+    badge: t("等待准入"),
+    title: t("尚未通过真实调用探测"),
+    detail: t("点击立即探测；成功后才会进入用户调用批次。"),
+    tone: "info",
+  };
+}
+
+function recoveryToneClass(tone: AccountRecoveryGuidance["tone"]): string {
+  switch (tone) {
+    case "ready":
+      return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+    case "warning":
+      return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300";
+    case "danger":
+      return "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300";
+    case "info":
+      return "border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300";
+    default:
+      return "border-border/60 bg-muted/60 text-muted-foreground";
+  }
+}
+
 export function AccountStatusCell({ account }: { account: Account }) {
   const { t } = useI18n();
   const statusReasonCode = getAccountStatusReasonCode(account);
   const statusReasonLabel = formatAccountStatusReasonLabel(account, t);
   const statusText = t(account.availabilityText || "未知");
+  const credentialStateLabel = formatCredentialStateLabel(account, t);
+  const showCredentialState = account.credentialState !== "healthy";
+  const guidance = getAccountRecoveryGuidance(account, t);
+  const callability = resolveAccountCallability(account);
+  const statusTone =
+    callability === "callable"
+      ? "ready"
+      : callability === "network_unknown" || callability === "unprobed"
+        ? "info"
+        : callability === "quota_limited" || callability === "auth_failed"
+          ? "warning"
+          : callability === "disabled"
+            ? "muted"
+            : "danger";
+  const statusDotClass =
+    statusTone === "ready"
+      ? "bg-emerald-500"
+      : statusTone === "warning"
+        ? "bg-amber-500"
+        : statusTone === "info"
+          ? "bg-blue-500"
+          : statusTone === "muted"
+            ? "bg-slate-400"
+            : "bg-red-500";
+  const statusTextClass =
+    statusTone === "ready"
+      ? "text-emerald-600 dark:text-emerald-400"
+      : statusTone === "warning"
+        ? "text-amber-600 dark:text-amber-400"
+        : statusTone === "info"
+          ? "text-blue-600 dark:text-blue-400"
+          : statusTone === "muted"
+            ? "text-muted-foreground"
+            : "text-red-600 dark:text-red-400";
 
   return (
     <Tooltip>
@@ -434,15 +687,13 @@ export function AccountStatusCell({ account }: { account: Account }) {
             <div
               className={cn(
                 "h-1.5 w-1.5 shrink-0 rounded-full",
-                account.isAvailable ? "bg-green-500" : "bg-red-500",
+                statusDotClass,
               )}
             />
             <span
               className={cn(
                 "text-[11px] font-medium",
-                account.isAvailable
-                  ? "text-green-600 dark:text-green-400"
-                  : "text-red-600 dark:text-red-400",
+                statusTextClass,
               )}
             >
               {statusText}
@@ -460,6 +711,26 @@ export function AccountStatusCell({ account }: { account: Account }) {
               {statusReasonLabel}
             </span>
           ) : null}
+          {showCredentialState ? (
+            <span
+              className={cn(
+                "block max-w-[180px] whitespace-normal break-words text-[10px] font-medium leading-snug",
+                account.credentialAction === "stop"
+                  ? "text-red-600 dark:text-red-400"
+                  : account.credentialAction === "retry_network"
+                    ? "text-amber-600 dark:text-amber-400"
+                    : "text-blue-600 dark:text-blue-400",
+              )}
+            >
+              {credentialStateLabel}
+            </span>
+          ) : null}
+          <Badge
+            variant="outline"
+            className={cn("w-fit px-1.5 py-0 text-[9px]", recoveryToneClass(guidance.tone))}
+          >
+            {guidance.badge}
+          </Badge>
         </div>
       </TooltipTrigger>
       <TooltipContent
@@ -472,6 +743,13 @@ export function AccountStatusCell({ account }: { account: Account }) {
             <div className="text-[10px] text-muted-foreground">{t("当前状态")}</div>
             <div className="font-medium">{statusText}</div>
           </div>
+          <div className="space-y-0.5 rounded-md border border-border/60 bg-background/60 p-2">
+            <div className="text-[10px] text-muted-foreground">{t("建议操作")}</div>
+            <div className="font-medium">{guidance.title}</div>
+            <div className="text-[11px] leading-relaxed text-muted-foreground">
+              {guidance.detail}
+            </div>
+          </div>
           {statusReasonLabel ? (
             <div className="space-y-0.5">
               <div className="text-[10px] text-muted-foreground">{t("状态原因")}</div>
@@ -483,6 +761,18 @@ export function AccountStatusCell({ account }: { account: Account }) {
               <div className="text-[10px] text-muted-foreground">{t("原因码")}</div>
               <div className="break-all rounded-md bg-muted px-2 py-1 font-mono text-[10px]">
                 {statusReasonCode}
+              </div>
+            </div>
+          ) : null}
+          <div className="space-y-0.5">
+            <div className="text-[10px] text-muted-foreground">{t("凭据判断")}</div>
+            <div className="font-medium">{credentialStateLabel}</div>
+          </div>
+          {account.accessTokenExpiresAt != null ? (
+            <div className="space-y-0.5">
+              <div className="text-[10px] text-muted-foreground">{t("AT 到期时间")}</div>
+              <div className="font-medium">
+                {formatTsFromSeconds(account.accessTokenExpiresAt, t("未知"))}
               </div>
             </div>
           ) : null}
@@ -644,6 +934,10 @@ export function buildQuotaSummaryItems(
   const secondaryWindowOnly = isSecondaryWindowOnlyUsage(account.usage);
   const usageBuckets = getUsageDisplayBuckets(account.usage);
   const extraUsageRows = getExtraUsageDisplayRows(account.usage);
+  const resetEntitlements =
+    account.resetEntitlements?.length > 0
+      ? account.resetEntitlements
+      : getResetEntitlementDisplayRows(account.usage);
   return [
     {
       id: `${account.id}-primary`,
@@ -676,6 +970,20 @@ export function buildQuotaSummaryItems(
       tone: "amber" as const,
       caption: t(item.windowLabel, item.windowLabelValues),
       emptyText: "--",
+      emptyResetText: t("未知"),
+    })),
+    ...resetEntitlements.map((item) => ({
+      id: item.id,
+      label: t(item.label),
+      remainPercent: null,
+      resetsAt: item.expiresAt,
+      icon: Gift,
+      tone: "amber" as const,
+      caption:
+        item.count == null
+          ? t("重置权益")
+          : t("可用{count}张重置卡", { count: item.count }),
+      emptyText: item.count == null ? "--" : `${item.count}${t("张")}`,
       emptyResetText: t("未知"),
     })),
   ];
@@ -732,6 +1040,21 @@ export function AccountInfoCell({
                 {accountPlanLabel}
               </Badge>
             ) : null}
+            {account.authMode === "agentIdentity" ? (
+              <Badge
+                variant="secondary"
+                className={cn(
+                  "h-4 shrink-0 px-1.5 text-[9px]",
+                  account.hasAgentIdentityTask
+                    ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                    : "bg-amber-500/15 text-amber-700 dark:text-amber-300",
+                )}
+              >
+                {account.hasAgentIdentityTask
+                  ? t("Agent 身份")
+                  : t("Agent 身份待就绪")}
+              </Badge>
+            ) : null}
             {isPreferred ? (
               <Badge
                 variant="secondary"
@@ -753,6 +1076,18 @@ export function AccountInfoCell({
       <TooltipContent className="max-w-sm border border-border bg-popover text-popover-foreground shadow-lg">
         <div className="flex min-w-[260px] flex-col gap-2">
           <div className="grid gap-2 sm:grid-cols-2">
+            <div className="space-y-0.5">
+              <div className="text-[10px] text-muted-foreground">
+                {t("认证方式")}
+              </div>
+              <div className="font-medium">
+                {account.authMode === "agentIdentity"
+                  ? account.hasAgentIdentityTask
+                    ? t("Agent Identity（已就绪）")
+                    : t("Agent Identity（等待任务注册）")
+                  : t("OAuth Token")}
+              </div>
+            </div>
             <div className="space-y-0.5">
               <div className="text-[10px] text-muted-foreground">
                 {t("账号类型")}

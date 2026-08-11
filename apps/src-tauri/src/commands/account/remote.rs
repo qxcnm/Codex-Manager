@@ -98,6 +98,56 @@ pub async fn service_account_list(
     rpc_call_in_background("account/list", addr, None).await
 }
 
+#[tauri::command]
+pub async fn service_account_agent_identity_list(
+    app: tauri::AppHandle,
+    addr: Option<String>,
+) -> Result<serde_json::Value, String> {
+    apply_runtime_storage_env(&app);
+    rpc_call_in_background("account/agentIdentity/list", addr, None).await
+}
+
+#[tauri::command]
+pub async fn service_account_agent_identity_generate(
+    addr: Option<String>,
+    account_id: String,
+) -> Result<serde_json::Value, String> {
+    rpc_call_in_background(
+        "account/agentIdentity/generate",
+        addr,
+        Some(serde_json::json!({ "accountId": account_id })),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn service_account_agent_identity_generate_many(
+    addr: Option<String>,
+    account_ids: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    rpc_call_in_background(
+        "account/agentIdentity/generateMany",
+        addr,
+        Some(serde_json::json!({ "accountIds": account_ids })),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn service_account_credential_repair_report(
+    addr: Option<String>,
+    account_id: String,
+    outcome: String,
+    detail: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({
+        "accountId": account_id,
+        "outcome": outcome,
+        "detail": detail,
+    });
+    rpc_call_in_background("account/credentialRepair/report", addr, Some(params)).await
+}
+
 /// 函数 `service_account_delete`
 ///
 /// 作者: gaohongshun

@@ -5,6 +5,12 @@ import { exportAccountsViaBrowser, pickImportFilesFromBrowser } from "./browser-
 export function createAccountWebCommands(postWebRpc: WebRpcCaller): Record<string, WebCommandDescriptor> {
   return {
     service_account_list: { rpcMethod: "account/list" },
+    service_account_agent_identity_list: { rpcMethod: "account/agentIdentity/list" },
+    service_account_agent_identity_generate: { rpcMethod: "account/agentIdentity/generate" },
+    service_account_agent_identity_generate_many: { rpcMethod: "account/agentIdentity/generateMany" },
+    service_account_credential_repair_report: {
+      rpcMethod: "account/credentialRepair/report",
+    },
     service_account_delete: { rpcMethod: "account/delete" },
     service_account_delete_many: { rpcMethod: "account/deleteMany" },
     service_account_delete_by_statuses: { rpcMethod: "account/deleteByStatuses" },

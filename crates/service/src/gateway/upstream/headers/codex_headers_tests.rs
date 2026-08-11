@@ -1,5 +1,5 @@
 use super::{
-    build_codex_compact_upstream_headers, build_codex_upstream_headers,
+    authorization_header_value, build_codex_compact_upstream_headers, build_codex_upstream_headers,
     resolve_codex_installation_id,
 };
 use crate::gateway::{
@@ -9,6 +9,18 @@ use crate::gateway::{
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const CODEXMANAGER_DB_PATH_ENV: &str = "CODEXMANAGER_DB_PATH";
+
+#[test]
+fn agent_identity_authorization_is_not_wrapped_as_bearer() {
+    assert_eq!(
+        authorization_header_value("AgentAssertion signed-envelope"),
+        "AgentAssertion signed-envelope"
+    );
+    assert_eq!(
+        authorization_header_value("plain-token"),
+        "Bearer plain-token"
+    );
+}
 
 struct RuntimeEnvGuard {
     name: &'static str,
@@ -156,7 +168,10 @@ fn build_codex_upstream_headers_keeps_final_affinity_shape() {
         Some("application/json")
     );
     assert_eq!(header_value(&headers, "Accept"), Some("text/event-stream"));
-    assert_eq!(header_value(&headers, "OpenAI-Beta"), None);
+    assert_eq!(
+        header_value(&headers, "OpenAI-Beta"),
+        Some("responses=experimental")
+    );
     assert_eq!(
         header_value(&headers, "x-responsesapi-include-timing-metrics"),
         Some("true")
@@ -180,7 +195,7 @@ fn build_codex_upstream_headers_keeps_final_affinity_shape() {
         header_value(&headers, "originator"),
         Some("codex_cli_rs_tests")
     );
-    assert_eq!(header_value(&headers, "version"), None);
+    assert_eq!(header_value(&headers, "version"), Some("0.999.0"));
     assert_eq!(header_value(&headers, "OpenAI-Organization"), None);
     assert_eq!(header_value(&headers, "OpenAI-Project"), None);
     assert_eq!(
@@ -336,12 +351,15 @@ fn build_codex_compact_upstream_headers_use_session_fallback_only() {
         Some("conversation-anchor:0")
     );
     assert_eq!(header_value(&headers, "x-codex-turn-state"), None);
-    assert_eq!(header_value(&headers, "OpenAI-Beta"), None);
+    assert_eq!(
+        header_value(&headers, "OpenAI-Beta"),
+        Some("responses=experimental")
+    );
     assert_eq!(
         header_value(&headers, "x-responsesapi-include-timing-metrics"),
         None
     );
-    assert_eq!(header_value(&headers, "version"), None);
+    assert_eq!(header_value(&headers, "version"), Some("0.999.2"));
     assert_eq!(
         header_value(&headers, "x-openai-subagent"),
         Some("subagent-b")
@@ -425,6 +443,81 @@ fn build_codex_upstream_headers_prefers_incoming_codex_identity() {
         header_value(&headers, "User-Agent"),
         Some("codex_sdk_ts/1.2.3 (Windows 11; x86_64) node")
     );
+    assert_eq!(header_value(&headers, "version"), Some("1.2.3"));
+}
+
+#[test]
+fn build_codex_upstream_headers_upgrades_obsolete_identity_version_header() {
+    let _guard = crate::test_env_guard();
+    let _ = set_originator("codex_cli_rs").expect("set originator");
+    let _ = set_codex_user_agent_version("0.146.0").expect("set ua version");
+
+    let headers = build_codex_upstream_headers(CodexUpstreamHeaderInput {
+        auth_token: "token-old-client",
+        chatgpt_account_id: None,
+        incoming_user_agent: Some("codex_cli_rs/0.118.0 (Ubuntu 22.4.0; x86_64) xterm-256color"),
+        incoming_originator: Some("codex_cli_rs"),
+        preserve_client_identity: false,
+        incoming_session_id: None,
+        incoming_window_id: None,
+        incoming_client_request_id: None,
+        incoming_subagent: None,
+        incoming_beta_features: None,
+        incoming_turn_metadata: None,
+        incoming_parent_thread_id: None,
+        incoming_responsesapi_include_timing_metrics: None,
+        incoming_inference_call_id: None,
+        incoming_oai_attestation: None,
+        passthrough_codex_headers: &[],
+        fallback_session_id: Some("fallback-old-client"),
+        incoming_turn_state: None,
+        include_turn_state: true,
+        strip_session_affinity: false,
+        has_body: true,
+    });
+
+    assert_eq!(header_value(&headers, "originator"), Some("codex_cli_rs"));
+    assert_eq!(
+        header_value(&headers, "User-Agent"),
+        Some("codex_cli_rs/0.118.0 (Ubuntu 22.4.0; x86_64) xterm-256color")
+    );
+    assert_eq!(header_value(&headers, "version"), Some("0.146.0"));
+}
+
+#[test]
+fn build_codex_upstream_headers_rebuilds_unpaired_codex_identity() {
+    let _guard = crate::test_env_guard();
+    let _ = set_originator("codex_cli_rs").expect("set originator");
+    let _ = set_codex_user_agent_version("0.999.6").expect("set ua version");
+
+    let headers = build_codex_upstream_headers(CodexUpstreamHeaderInput {
+        auth_token: "token-ident-mismatch",
+        chatgpt_account_id: None,
+        incoming_user_agent: Some("codex-tui/0.146.0 (Mac OS; arm64)"),
+        incoming_originator: Some("codex_sdk_ts"),
+        preserve_client_identity: false,
+        incoming_session_id: None,
+        incoming_window_id: None,
+        incoming_client_request_id: None,
+        incoming_subagent: None,
+        incoming_beta_features: None,
+        incoming_turn_metadata: None,
+        incoming_parent_thread_id: None,
+        incoming_responsesapi_include_timing_metrics: None,
+        incoming_inference_call_id: None,
+        incoming_oai_attestation: None,
+        passthrough_codex_headers: &[],
+        fallback_session_id: Some("fallback-ident"),
+        incoming_turn_state: None,
+        include_turn_state: true,
+        strip_session_affinity: false,
+        has_body: true,
+    });
+
+    assert_eq!(header_value(&headers, "originator"), Some("codex_cli_rs"));
+    assert!(header_value(&headers, "User-Agent")
+        .is_some_and(|value| value.starts_with("codex_cli_rs/0.999.6")));
+    assert_eq!(header_value(&headers, "version"), Some("0.999.6"));
 }
 
 #[test]

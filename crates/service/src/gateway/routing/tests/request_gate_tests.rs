@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 fn same_scope_reuses_same_lock_instance() {
     let _guard = crate::test_env_guard();
     clear_request_gate_locks_for_tests();
-    let first = request_gate_lock("gk_1", "/v1/responses", Some("gpt-5.3-codex"));
-    let second = request_gate_lock("gk_1", "/v1/responses", Some("gpt-5.3-codex"));
+    let first = request_gate_lock("gk_1", "/v1/responses", Some("gpt-5.3-codex"), "conv-1");
+    let second = request_gate_lock("gk_1", "/v1/responses", Some("gpt-5.3-codex"), "conv-1");
     assert!(Arc::ptr_eq(&first, &second));
 }
 
@@ -37,9 +37,17 @@ fn same_scope_reuses_same_lock_instance() {
 fn different_scope_uses_different_lock_instances() {
     let _guard = crate::test_env_guard();
     clear_request_gate_locks_for_tests();
-    let first = request_gate_lock("gk_1", "/v1/responses", Some("gpt-5.3-codex"));
-    let second = request_gate_lock("gk_1", "/v1/responses", Some("gpt-5.3-codex-high"));
+    let first = request_gate_lock("gk_1", "/v1/responses", Some("gpt-5.3-codex"), "conv-1");
+    let second = request_gate_lock(
+        "gk_1",
+        "/v1/responses",
+        Some("gpt-5.3-codex-high"),
+        "conv-1",
+    );
     assert!(!Arc::ptr_eq(&first, &second));
+
+    let third = request_gate_lock("gk_1", "/v1/responses", Some("gpt-5.3-codex"), "conv-2");
+    assert!(!Arc::ptr_eq(&first, &third));
 }
 
 /// 函数 `stale_unshared_lock_entry_is_reclaimed`
@@ -57,8 +65,8 @@ fn different_scope_uses_different_lock_instances() {
 fn stale_unshared_lock_entry_is_reclaimed() {
     let _guard = crate::test_env_guard();
     clear_request_gate_locks_for_tests();
-    let key = gate_key("gk_1", "/v1/responses", Some("gpt-5.3-codex"));
-    let first = request_gate_lock("gk_1", "/v1/responses", Some("gpt-5.3-codex"));
+    let key = gate_key("gk_1", "/v1/responses", Some("gpt-5.3-codex"), "conv-1");
+    let first = request_gate_lock("gk_1", "/v1/responses", Some("gpt-5.3-codex"), "conv-1");
     let weak = Arc::downgrade(&first);
     drop(first);
 
@@ -73,7 +81,7 @@ fn stale_unshared_lock_entry_is_reclaimed() {
     table.last_cleanup_at = now - REQUEST_GATE_LOCK_CLEANUP_INTERVAL_SECS - 1;
     drop(table);
 
-    let _second = request_gate_lock("gk_1", "/v1/responses", Some("gpt-5.3-codex"));
+    let _second = request_gate_lock("gk_1", "/v1/responses", Some("gpt-5.3-codex"), "conv-1");
     assert!(weak.upgrade().is_none());
 }
 
@@ -92,8 +100,8 @@ fn stale_unshared_lock_entry_is_reclaimed() {
 fn stale_shared_lock_entry_is_not_reclaimed() {
     let _guard = crate::test_env_guard();
     clear_request_gate_locks_for_tests();
-    let key = gate_key("gk_1", "/v1/responses", Some("gpt-5.3-codex"));
-    let first = request_gate_lock("gk_1", "/v1/responses", Some("gpt-5.3-codex"));
+    let key = gate_key("gk_1", "/v1/responses", Some("gpt-5.3-codex"), "conv-1");
+    let first = request_gate_lock("gk_1", "/v1/responses", Some("gpt-5.3-codex"), "conv-1");
 
     let lock = REQUEST_GATE_LOCKS.get_or_init(|| Mutex::new(RequestGateLockTable::default()));
     let mut table = lock.lock().expect("request gate table lock");
@@ -106,7 +114,7 @@ fn stale_shared_lock_entry_is_not_reclaimed() {
     table.last_cleanup_at = now - REQUEST_GATE_LOCK_CLEANUP_INTERVAL_SECS - 1;
     drop(table);
 
-    let second = request_gate_lock("gk_1", "/v1/responses", Some("gpt-5.3-codex"));
+    let second = request_gate_lock("gk_1", "/v1/responses", Some("gpt-5.3-codex"), "conv-1");
     assert!(Arc::ptr_eq(&first, &second));
 }
 
@@ -114,7 +122,12 @@ fn stale_shared_lock_entry_is_not_reclaimed() {
 fn acquire_waits_until_previous_guard_released() {
     let _guard = crate::test_env_guard();
     clear_request_gate_locks_for_tests();
-    let lock = request_gate_lock("gk_wait", "/v1/responses", Some("gpt-5.3-codex"));
+    let lock = request_gate_lock(
+        "gk_wait",
+        "/v1/responses",
+        Some("gpt-5.3-codex"),
+        "conv-wait",
+    );
     let first_guard = lock
         .try_acquire()
         .expect("lock should not be poisoned")

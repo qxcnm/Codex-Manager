@@ -7,8 +7,12 @@ static ACCOUNT_UPDATE_TEST_DIR_SEQ: AtomicUsize = AtomicUsize::new(0);
 
 fn new_test_dir(prefix: &str) -> PathBuf {
     let seq = ACCOUNT_UPDATE_TEST_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
     let mut dir = std::env::temp_dir();
-    dir.push(format!("{prefix}-{}-{seq}", std::process::id()));
+    dir.push(format!("{prefix}-{}-{seq}-{nanos}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     dir
 }

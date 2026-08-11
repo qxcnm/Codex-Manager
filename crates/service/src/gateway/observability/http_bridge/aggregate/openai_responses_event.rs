@@ -72,6 +72,11 @@ pub(in super::super) struct OpenAIResponsesEvent {
     pub(in super::super) upstream_error_hint: Option<String>,
 }
 
+/// Canonical provider-neutral event consumed by the downstream Chat and
+/// Responses output adapters. Providers normalize their wire events to this
+/// OpenAI Responses event representation before delivery.
+pub(in super::super) type CanonicalEvent = OpenAIResponsesEvent;
+
 impl OpenAIResponsesEvent {
     pub(in super::super) fn parse(lines: &[String]) -> Option<Self> {
         let value = parse_sse_frame_json(lines)?;

@@ -11,10 +11,11 @@ use super::author_links::{
 };
 use super::{
     current_background_tasks_snapshot_value, current_env_overrides,
-    current_gateway_account_max_inflight, current_gateway_compact_model_forward_rules,
-    current_gateway_free_account_max_model, current_gateway_model_catalog_auto_remote_fetch,
-    current_gateway_model_forward_rules, current_gateway_originator, current_gateway_quota_guard,
-    current_gateway_residency_requirement, current_gateway_sse_keepalive_interval_ms,
+    current_gateway_account_batch_rotation, current_gateway_account_max_inflight,
+    current_gateway_compact_model_forward_rules, current_gateway_free_account_max_model,
+    current_gateway_model_catalog_auto_remote_fetch, current_gateway_model_forward_rules,
+    current_gateway_originator, current_gateway_quota_guard, current_gateway_residency_requirement,
+    current_gateway_sse_keepalive_interval_ms,
     current_gateway_thread_aware_account_distribution_enabled,
     current_gateway_upstream_proxy_bypass_hosts, current_gateway_upstream_stream_timeout_ms,
     current_gateway_upstream_total_timeout_ms, current_gateway_user_agent_version,
@@ -196,6 +197,8 @@ fn current_app_settings_value_inner(
     let model_forward_rules = current_gateway_model_forward_rules();
     let compact_model_forward_rules = current_gateway_compact_model_forward_rules();
     let account_max_inflight = current_gateway_account_max_inflight();
+    let account_batch_rotation = current_gateway_account_batch_rotation();
+    let account_batch_rotation_status = crate::gateway::account_batch_rotation_status();
     let thread_aware_account_distribution_enabled =
         current_gateway_thread_aware_account_distribution_enabled();
     let quota_guard = current_gateway_quota_guard();
@@ -364,6 +367,16 @@ fn current_app_settings_value_inner(
         "webAccessPasswordConfigured": web_access_password_configured(),
     });
     if let Some(object) = result.as_object_mut() {
+        object.insert(
+            "accountBatchRotation".to_string(),
+            serde_json::to_value(account_batch_rotation)
+                .map_err(|err| format!("serialize account batch rotation failed: {err}"))?,
+        );
+        object.insert(
+            "accountBatchRotationStatus".to_string(),
+            serde_json::to_value(account_batch_rotation_status)
+                .map_err(|err| format!("serialize account batch rotation status failed: {err}"))?,
+        );
         object.insert("autoStartEnabled".to_string(), auto_start_enabled.into());
         object.insert("autoStartSupported".to_string(), false.into());
         object.insert(

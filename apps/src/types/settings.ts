@@ -40,6 +40,23 @@ export interface QuotaGuardSettings {
   allowAllLowQuotaFallback: boolean;
 }
 
+export interface AccountBatchRotationSettings {
+  enabled: boolean;
+  batchSize: number;
+  fallbackWindowMinutes: number;
+  maxAttemptsPerRequest: number;
+}
+
+export interface AccountBatchRotationStatus extends AccountBatchRotationSettings {
+  scope?: string | null;
+  currentBatch: number;
+  totalBatches: number;
+  cycle: number;
+  currentBatchAccounts: number;
+  currentBatchAvailable: number;
+  earliestResetAt?: number | null;
+}
+
 export interface AppSettings {
   updateAutoCheck: boolean;
   autoStartEnabled: boolean;
@@ -69,6 +86,8 @@ export interface AppSettings {
   modelForwardRules: string;
   compactModelForwardRules: string;
   accountMaxInflight: number;
+  accountBatchRotation: AccountBatchRotationSettings;
+  accountBatchRotationStatus: AccountBatchRotationStatus;
   threadAwareAccountDistributionEnabled: boolean;
   quotaGuard: QuotaGuardSettings;
   gatewayOriginator: string;

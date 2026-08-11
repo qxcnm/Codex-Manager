@@ -765,7 +765,21 @@ fn import_single_item_with_account_id(
     item: &Value,
     sequence: usize,
 ) -> Result<ImportedAccount, String> {
-    let payload = extract_token_payload(item)?;
+    let imported_identity = crate::account_agent_identity::parse_imported_agent_identity(item)?;
+    let payload = match extract_token_payload(item) {
+        Ok(payload) => payload,
+        Err(_error) if imported_identity.is_some() => {
+            let identity = imported_identity.as_ref().expect("identity checked");
+            ImportTokenPayload {
+                access_token: String::new(),
+                id_token: String::new(),
+                refresh_token: String::new(),
+                account_id_hint: identity.account_id.clone(),
+                chatgpt_account_id_hint: identity.account_id.clone(),
+            }
+        }
+        Err(error) => return Err(error),
+    };
     let meta = extract_account_meta(item);
     let claims = parse_id_token_claims(&payload.id_token).ok();
     let token_fingerprint = token_fingerprint(&payload.refresh_token);
@@ -774,7 +788,17 @@ fn import_single_item_with_account_id(
         &payload.id_token,
         &payload.access_token,
         &payload.refresh_token,
-    );
+    )
+    .or_else(|| {
+        imported_identity
+            .as_ref()
+            .and_then(|identity| identity.chatgpt_user_id.clone())
+    })
+    .or_else(|| {
+        imported_identity
+            .as_ref()
+            .and_then(|identity| identity.account_id.clone())
+    });
     let chatgpt_account_id = clean_value(
         meta.chatgpt_account_id
             .clone()
@@ -825,14 +849,16 @@ fn import_single_item_with_account_id(
         &payload,
     );
 
-    let label = meta
-        .label
-        .clone()
+    let label = imported_identity
+        .as_ref()
+        .and_then(|identity| identity.email.clone())
         .or_else(|| {
-            claims
-                .as_ref()
-                .and_then(|c| c.email.clone())
-                .filter(|v| !v.trim().is_empty())
+            meta.label.clone().or_else(|| {
+                claims
+                    .as_ref()
+                    .and_then(|c| c.email.clone())
+                    .filter(|v| !v.trim().is_empty())
+            })
         })
         .or_else(|| {
             item.get("email")
@@ -914,6 +940,20 @@ fn import_single_item_with_account_id(
     storage
         .upsert_imported_account_bundle(&account, note.as_deref(), tags.as_deref(), &token)
         .map_err(|e| e.to_string())?;
+    // An import may replace the token of an existing account. Its previous
+    // probe result must not authorize the new credential into a gateway batch.
+    // Import/model discovery remains separate evidence. Batch refill performs
+    // its own real Responses admission before customer traffic can use it.
+    storage
+        .mark_adapter_credential_unprobed("codex", &account_id, now)
+        .map_err(|error| format!("reset imported account probe state failed: {error}"))?;
+    if let Some(identity) = imported_identity.as_ref() {
+        crate::account_agent_identity::save_imported_agent_identity(
+            storage,
+            &account_id,
+            identity,
+        )?;
+    }
     index.upsert_index(&account);
     let account_snapshot = account_import_snapshot_from_account(&account);
     let token_subject = AccountImportTokenSubject {

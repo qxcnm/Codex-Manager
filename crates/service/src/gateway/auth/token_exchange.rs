@@ -6,7 +6,6 @@ use codexmanager_core::storage::{now_ts, Account, Storage, Token};
 
 use crate::account_status::mark_account_unavailable_for_auth_error;
 use crate::auth_tokens;
-use crate::usage_http::refresh_access_token;
 
 const ACCOUNT_TOKEN_EXCHANGE_LOCK_TTL_SECS: i64 = 30 * 60;
 const ACCOUNT_TOKEN_EXCHANGE_LOCK_CLEANUP_INTERVAL_SECS: i64 = 60;
@@ -266,7 +265,9 @@ pub(super) fn resolve_openai_bearer_token(
         Ok(token) => return Ok(token),
         Err(exchange_err) => {
             if !token.refresh_token.trim().is_empty() {
-                match refresh_access_token(&issuer, &client_id, &token.refresh_token) {
+                match crate::usage_http::refresh_access_token_for_account(
+                    &issuer, &client_id, &token.refresh_token, &account.id,
+                ) {
                     Ok(refreshed) => {
                         token.access_token = refreshed.access_token;
                         if let Some(refresh_token) = refreshed.refresh_token {

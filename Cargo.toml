@@ -1,6 +1,8 @@
 [workspace]
 members = [
   "crates/core",
+  "crates/grok-provider",
+  "crates/kiro-provider",
   "crates/rusqlite",
   "crates/service",
   "crates/start",
@@ -13,4 +15,3 @@ resolver = "2"
 
 [workspace.package]
 version = "0.4.0"
-

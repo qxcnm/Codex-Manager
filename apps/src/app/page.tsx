@@ -22,6 +22,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { ApiKeyModal } from "@/components/modals/api-key-modal";
+import { RuntimeCommandCenter } from "@/components/dashboard/runtime-command-center";
+import { ShellLink } from "@/components/layout/shell-link";
+import { AdapterPoolConsole } from "@/components/dashboard/adapter-pool-console";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -74,7 +77,6 @@ import {
 import type { AppLocale } from "@/lib/i18n/config";
 import { useI18n } from "@/lib/i18n/provider";
 import { cn } from "@/lib/utils";
-import { buildStaticRouteUrl } from "@/lib/utils/static-routes";
 import { formatLocalDateTimeFromSeconds } from "@/lib/utils/time";
 import {
   Area,
@@ -342,12 +344,12 @@ function DirectModeUnavailable({
               {t("切换到本地网关后可统计请求日志、Token 和费用")}
             </div>
           </div>
-          <a
-            href={buildStaticRouteUrl("/platform-mode")}
+          <ShellLink
+            href="/platform-mode"
             className="inline-flex h-8 items-center justify-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
           >
             {t("去切换为本地网关")}
-          </a>
+          </ShellLink>
         </div>
       </div>
     </div>
@@ -878,15 +880,39 @@ function AdminDashboard() {
             <span>
               {t("CodexManager 无法统计 CLI 请求日志和用量。")}
             </span>
-            <a
-              href={buildStaticRouteUrl("/platform-mode")}
+            <ShellLink
+              href="/platform-mode"
               className="inline-flex h-7 w-fit items-center justify-center rounded-md border border-amber-500/40 bg-background/70 px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-background"
             >
               {t("去切换为本地网关")}
-            </a>
+            </ShellLink>
           </AlertDescription>
         </Alert>
       ) : null}
+
+      <RuntimeCommandCenter
+        serviceReady={isServiceReady}
+        directAccountMode={isDirectAccountMode}
+        codexTotal={stats.total}
+        codexAvailable={stats.available}
+      />
+
+      <AdapterPoolConsole
+        serviceReady={isServiceReady}
+        codexTotal={stats.total}
+        codexAvailable={stats.available}
+      />
+
+      <div className="flex items-center gap-3 pt-1">
+        <div className="flex items-center gap-2 text-xs font-semibold">
+          <Activity className="h-3.5 w-3.5 text-primary" />
+          {t("资源健康")}
+        </div>
+        <div className="h-px flex-1 bg-border/70" />
+        <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
+          PROVIDER HEALTH
+        </span>
+      </div>
 
       <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
         {isLoading ? (
@@ -991,6 +1017,17 @@ function AdminDashboard() {
             </Card>
           </>
         )}
+      </div>
+
+      <div className="flex items-center gap-3 pt-1">
+        <div className="flex items-center gap-2 text-xs font-semibold">
+          <LineChart className="h-3.5 w-3.5 text-primary" />
+          {t("用量与趋势")}
+        </div>
+        <div className="h-px flex-1 bg-border/70" />
+        <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground">
+          USAGE ANALYTICS
+        </span>
       </div>
 
       <DirectModeUnavailable active={isDirectAccountMode}>
@@ -1152,13 +1189,13 @@ function MemberAlerts({
               {alert.actionLabel ? t(alert.actionLabel) : t("创建 Key")}
             </Button>
           ) : alert.actionHref ? (
-            <a
-              href={buildStaticRouteUrl(alert.actionHref)}
+            <ShellLink
+              href={alert.actionHref}
               className="inline-flex h-6 items-center gap-1 rounded-md border border-border/60 bg-background/40 px-2 text-xs font-medium text-foreground transition-colors hover:bg-muted"
             >
               {alert.actionLabel ? t(alert.actionLabel) : t("查看")}
               <ArrowRight className="h-3 w-3" />
-            </a>
+            </ShellLink>
           ) : null;
         return (
           <div
@@ -1203,13 +1240,13 @@ function MemberKeyUsageCard({
             <Plus className="h-3.5 w-3.5" />
             {t("创建 Key")}
           </Button>
-          <a
-            href={buildStaticRouteUrl("/apikeys/")}
+          <ShellLink
+            href="/apikeys"
             className="inline-flex h-7 items-center gap-1 rounded-md border border-border/60 bg-background/40 px-2.5 text-[0.8rem] font-medium text-muted-foreground transition-colors hover:text-foreground"
           >
             {t("查看全部")}
             <ArrowRight className="h-3.5 w-3.5" />
-          </a>
+          </ShellLink>
         </div>
       </CardHeader>
       <CardContent>

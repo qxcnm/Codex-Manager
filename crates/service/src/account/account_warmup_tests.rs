@@ -150,7 +150,7 @@ fn resolve_target_accounts_only_returns_gateway_available_accounts() {
 }
 
 #[test]
-fn build_warmup_headers_omits_non_codex_headers() {
+fn build_warmup_headers_include_complete_codex_identity() {
     let account = Account {
         id: "acc-1".to_string(),
         label: "acc-1".to_string(),
@@ -166,10 +166,37 @@ fn build_warmup_headers_omits_non_codex_headers() {
 
     let headers = build_warmup_headers(&account, "bearer-token").expect("build warmup headers");
 
-    assert!(headers.get("version").is_none());
+    assert_eq!(
+        headers.get("version").and_then(|value| value.to_str().ok()),
+        Some(crate::gateway::current_codex_user_agent_version().as_str())
+    );
+    assert_eq!(
+        headers
+            .get("openai-beta")
+            .and_then(|value| value.to_str().ok()),
+        Some("responses=experimental")
+    );
+    assert!(headers.get("x-codex-window-id").is_some());
     assert!(headers.get("openai-organization").is_none());
     assert!(headers.get("openai-project").is_none());
     assert!(headers.get("client_version").is_none());
+}
+
+#[test]
+fn cloudflare_challenge_does_not_refresh_access_token() {
+    let token = Token {
+        account_id: "account-1".to_string(),
+        id_token: String::new(),
+        access_token: "access-token".to_string(),
+        refresh_token: "refresh-token".to_string(),
+        api_key_access_token: None,
+        last_refresh: 0,
+    };
+
+    assert!(!should_retry_warmup_with_refresh(
+        &token,
+        "status=403 body=Cloudflare 安全验证页 kind=cloudflare_challenge"
+    ));
 }
 
 #[test]
@@ -192,6 +219,14 @@ fn consume_warmup_stream_rejects_incomplete_stream() {
     );
 
     let err = consume_warmup_stream(stream).expect_err("stream should be incomplete");
+    assert!(err.contains("before response.completed"));
+}
+
+#[test]
+fn consume_warmup_stream_does_not_accept_done_without_completed_event() {
+    let stream = Cursor::new("data: [DONE]\n\n");
+
+    let err = consume_warmup_stream(stream).expect_err("DONE alone is not admission evidence");
     assert!(err.contains("before response.completed"));
 }
 

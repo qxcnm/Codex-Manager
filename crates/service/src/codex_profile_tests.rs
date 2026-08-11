@@ -298,7 +298,14 @@ fn auth_json_shapes_match_codex_modes() {
 
 #[test]
 fn write_profile_files_uses_internal_marker() {
+    let _lock = crate::test_env_guard();
     let dir = temp_profile("internal-marker");
+    fs::create_dir_all(&dir).expect("mkdir profile");
+    let db_path = dir.join("codexmanager.db");
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+    let storage = Storage::open(&db_path).expect("open storage");
+    storage.init().expect("init storage");
+    drop(storage);
     let state = ManagedState {
         profile_dir: profile_key(&dir),
         mode: CodexProfileMode::Gateway,

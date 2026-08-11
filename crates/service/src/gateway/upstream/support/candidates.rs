@@ -54,6 +54,9 @@ pub(crate) fn prepare_gateway_candidates(
             low_quota_mode,
         )?
     };
+    // A profile-bound account must never leak to the global proxy or direct
+    // connection when its configured exit is disabled or unhealthy.
+    candidates.retain(|(account, _)| !crate::proxy_profiles::account_is_proxy_blocked(&account.id));
     let normalized_filter = account_plan_filter
         .map(str::trim)
         .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("all"));
@@ -76,6 +79,15 @@ pub(crate) fn prepare_gateway_candidates(
             )
         });
     }
+    let model_account_ids = account_source_ids
+        .as_ref()
+        .map(|ids| ids.iter().cloned().collect::<HashSet<_>>());
+    super::super::super::account_batch_rotation::apply_account_batch_rotation(
+        storage,
+        normalized_model,
+        model_account_ids.as_ref(),
+        &mut candidates,
+    )?;
     Ok(candidates)
 }
 

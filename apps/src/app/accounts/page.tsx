@@ -6,6 +6,7 @@ import { useAccounts } from "@/hooks/useAccounts";
 import { useDesktopPageActive } from "@/hooks/useDesktopPageActive";
 import { usePageTransitionReady } from "@/hooks/usePageTransitionReady";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
+import { accountClient } from "@/lib/api/account-client";
 import { useI18n } from "@/lib/i18n/provider";
 import {
   buildAccountsBySizeOrder,
@@ -111,6 +112,8 @@ export default function AccountsPage() {
   const [deleteDialogState, setDeleteDialogState] =
     useState<DeleteDialogState>(null);
   const [cleanupDialogOpen, setCleanupDialogOpen] = useState(false);
+  const [isGeneratingAgentIdentityId, setIsGeneratingAgentIdentityId] = useState<string | null>(null);
+  const [isProbingAccountId, setIsProbingAccountId] = useState<string | null>(null);
   const [cleanupStatusDraft, setCleanupStatusDraft] = useState<CleanupStatus[]>([
     "unavailable",
     "banned",
@@ -155,7 +158,7 @@ export default function AccountsPage() {
       { id: "all" as const, label: `${t("全部")} (${accounts.length})` },
       {
         id: "available" as const,
-        label: `${t("可用")} (${accounts.filter((account) => account.isAvailable).length})`,
+        label: `${t("可调用")} (${accounts.filter((account) => account.isAvailable).length})`,
       },
       {
         id: "low_quota" as const,
@@ -167,7 +170,7 @@ export default function AccountsPage() {
       },
       {
         id: "banned" as const,
-        label: `${t("封禁")} (${accounts.filter((account) => isBannedAccount(account)).length})`,
+        label: `${t("明确停用")} (${accounts.filter((account) => isBannedAccount(account)).length})`,
       },
     ],
     [accounts, t],
@@ -252,6 +255,63 @@ export default function AccountsPage() {
     const offset = (safePage - 1) * pageSizeNumber;
     return filteredAccounts.slice(offset, offset + pageSizeNumber);
   }, [filteredAccounts, pageSizeNumber, safePage]);
+
+  const generateAgentIdentity = async (accountId: string) => {
+    if (!isServiceReady || isGeneratingAgentIdentityId) return;
+    setIsGeneratingAgentIdentityId(accountId);
+    try {
+      const result = await accountClient.generateAgentIdentity(accountId);
+      toast.success(
+        result.hasTask
+          ? t("Agent Identity 已生成并可以使用")
+          : t("Agent Identity 已创建，正在注册任务"),
+      );
+      refreshAccountList();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsGeneratingAgentIdentityId(null);
+    }
+  };
+
+  const probeAccount = async (accountId: string) => {
+    if (!isServiceReady || isProbingAccountId) return;
+    setIsProbingAccountId(accountId);
+    const account = accounts.find((item) => item.id === accountId);
+    const previousStatus = String(account?.status || "active");
+    const temporarilyEnable = !["active", "available"].includes(
+      previousStatus.toLowerCase(),
+    );
+    try {
+      // 失败账号仍要允许用户主动复检；先临时启用，但真实准入证据写入前
+      // 网关不会把它交给正式请求。失败后恢复原状态。
+      if (temporarilyEnable) {
+        await accountClient.enableAccount(accountId);
+      }
+      const result = await warmupAccounts({ accountIds: [accountId], message: "." });
+      refreshAccountList();
+      if ((result?.succeeded ?? 0) > 0) {
+        toast.success(t("真实调用探测通过，账号可以进入网关批次"));
+      } else {
+        if (temporarilyEnable) {
+          await accountClient.updateProfile(accountId, { status: previousStatus });
+        }
+        toast.warning(t("探测未通过，请按状态建议刷新凭据、等待恢复或重新登录"));
+      }
+    } catch (error) {
+      if (temporarilyEnable) {
+        try {
+          await accountClient.updateProfile(accountId, { status: previousStatus });
+        } catch {
+          // 保留原始探测错误；列表刷新后会显示当前真实状态。
+        }
+      }
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      refreshAccountList();
+      setIsProbingAccountId(null);
+    }
+  };
 
   const filteredAccountIndexMap = useMemo(
     () =>
@@ -663,6 +723,8 @@ const toggleCleanupStatus = (rawStatus: string) => {
       isReorderingAccounts={isReorderingAccounts}
       isUpdatingProfileAccountId={isUpdatingProfileAccountId}
       isUpdatingStatusAccountId={isUpdatingStatusAccountId}
+      isGeneratingAgentIdentityId={isGeneratingAgentIdentityId}
+      isProbingAccountId={isProbingAccountId}
       statusFilterOptions={statusFilterOptions}
       importFileActionLabel={importFileActionLabel}
       importDirectoryActionLabel={importDirectoryActionLabel}
@@ -713,6 +775,8 @@ const toggleCleanupStatus = (rawStatus: string) => {
       clearPreferredAccount={clearPreferredAccount}
       setPreferredAccount={setPreferredAccount}
       toggleAccountStatus={toggleAccountStatus}
+      generateAgentIdentity={generateAgentIdentity}
+      probeAccount={probeAccount}
     />
   );
 }

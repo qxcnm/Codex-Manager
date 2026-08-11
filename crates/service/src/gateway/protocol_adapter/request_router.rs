@@ -47,6 +47,7 @@ pub(crate) fn adapt_openai_responses_to_anthropic_messages(
                 .and_then(normalize_text)
         })
         .ok_or_else(|| "responses request model is required for anthropic upstream".to_string())?;
+    let preserve_images = anthropic_upstream_supports_images(model.as_str());
 
     let mut rewritten = Map::new();
     rewritten.insert("model".to_string(), Value::String(model));
@@ -72,7 +73,12 @@ pub(crate) fn adapt_openai_responses_to_anthropic_messages(
     }
 
     let mut messages = Vec::new();
-    responses_input_to_anthropic_messages(obj.get("input"), &mut system_parts, &mut messages)?;
+    responses_input_to_anthropic_messages(
+        obj.get("input"),
+        &mut system_parts,
+        &mut messages,
+        preserve_images,
+    )?;
     if messages.is_empty() {
         messages.push(json!({
             "role": "user",
@@ -429,6 +435,7 @@ fn responses_input_to_anthropic_messages(
     input: Option<&Value>,
     system_parts: &mut Vec<String>,
     messages: &mut Vec<Value>,
+    preserve_images: bool,
 ) -> Result<(), String> {
     match input {
         Some(Value::String(text)) => {
@@ -436,11 +443,11 @@ fn responses_input_to_anthropic_messages(
         }
         Some(Value::Array(items)) => {
             for item in items {
-                responses_input_item_to_anthropic(item, system_parts, messages)?;
+                responses_input_item_to_anthropic(item, system_parts, messages, preserve_images)?;
             }
         }
         Some(item @ Value::Object(_)) => {
-            responses_input_item_to_anthropic(item, system_parts, messages)?;
+            responses_input_item_to_anthropic(item, system_parts, messages, preserve_images)?;
         }
         Some(_) | None => {}
     }
@@ -451,6 +458,7 @@ fn responses_input_item_to_anthropic(
     item: &Value,
     system_parts: &mut Vec<String>,
     messages: &mut Vec<Value>,
+    preserve_images: bool,
 ) -> Result<(), String> {
     let Some(obj) = item.as_object() else {
         return Ok(());
@@ -462,7 +470,8 @@ fn responses_input_item_to_anthropic(
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .unwrap_or("user");
-            let content = responses_message_content_to_anthropic(obj.get("content"))?;
+            let content =
+                responses_message_content_to_anthropic(obj.get("content"), preserve_images)?;
             if matches!(role, "developer" | "system") {
                 let text = anthropic_content_to_text(&content);
                 if !text.trim().is_empty() {
@@ -527,27 +536,35 @@ fn responses_input_item_to_anthropic(
     Ok(())
 }
 
-fn responses_message_content_to_anthropic(content: Option<&Value>) -> Result<Vec<Value>, String> {
+fn responses_message_content_to_anthropic(
+    content: Option<&Value>,
+    preserve_images: bool,
+) -> Result<Vec<Value>, String> {
     match content {
         Some(Value::String(text)) => Ok(vec![anthropic_text_block(text)]),
         Some(Value::Array(parts)) => {
             let mut out = Vec::new();
             for part in parts {
-                if let Some(mapped) = responses_content_part_to_anthropic(part)? {
+                if let Some(mapped) = responses_content_part_to_anthropic(part, preserve_images)? {
                     out.push(mapped);
                 }
             }
             Ok(out)
         }
-        Some(part @ Value::Object(_)) => Ok(responses_content_part_to_anthropic(part)?
-            .map(|part| vec![part])
-            .unwrap_or_default()),
+        Some(part @ Value::Object(_)) => {
+            Ok(responses_content_part_to_anthropic(part, preserve_images)?
+                .map(|part| vec![part])
+                .unwrap_or_default())
+        }
         Some(other) => Ok(vec![anthropic_text_block(other.to_string().as_str())]),
         None => Ok(Vec::new()),
     }
 }
 
-fn responses_content_part_to_anthropic(part: &Value) -> Result<Option<Value>, String> {
+fn responses_content_part_to_anthropic(
+    part: &Value,
+    preserve_images: bool,
+) -> Result<Option<Value>, String> {
     let Some(obj) = part.as_object() else {
         return Ok(part.as_str().map(anthropic_text_block));
     };
@@ -557,9 +574,42 @@ fn responses_content_part_to_anthropic(part: &Value) -> Result<Option<Value>, St
             .get("text")
             .and_then(Value::as_str)
             .map(anthropic_text_block)),
+        "input_image" | "image" if preserve_images => Ok(responses_image_part_to_anthropic(obj)),
         "input_image" | "image" => Ok(None),
         _ => Ok(None),
     }
+}
+
+fn anthropic_upstream_supports_images(model: &str) -> bool {
+    let model = model.trim().to_ascii_lowercase();
+    model.starts_with("claude-") || model.starts_with("kiro/claude-")
+}
+
+fn responses_image_part_to_anthropic(obj: &Map<String, Value>) -> Option<Value> {
+    let image_url = obj
+        .get("image_url")
+        .and_then(|value| {
+            value
+                .as_str()
+                .or_else(|| value.get("url").and_then(Value::as_str))
+        })
+        .and_then(normalize_text)?;
+    let data_url = image_url.strip_prefix("data:")?;
+    let (metadata, data) = data_url.split_once(',')?;
+    let mut metadata_parts = metadata.split(';');
+    let media_type = metadata_parts.next().and_then(normalize_text)?;
+    if !metadata_parts.any(|part| part.eq_ignore_ascii_case("base64")) {
+        return None;
+    }
+    let data = normalize_text(data)?;
+    Some(json!({
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": media_type,
+            "data": data,
+        }
+    }))
 }
 
 fn anthropic_message(role: &str, content: Vec<Value>) -> Value {
@@ -610,7 +660,11 @@ fn responses_tools_to_anthropic(tools: Option<&Value>) -> Result<Option<Value>, 
             .and_then(Value::as_str)
             .is_some_and(|kind| kind == "web_search")
         {
-            out.push(json!({ "type": "web_search_20250305" }));
+            out.push(json!({
+                "type": "web_search_20250305",
+                "name": "web_search",
+                "max_uses": tool.get("max_uses").and_then(Value::as_i64).unwrap_or(8),
+            }));
             continue;
         }
         if tool

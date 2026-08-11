@@ -354,7 +354,7 @@ fn resolve_active_explicit_aggregate_candidate(
     let candidate = storage
         .find_aggregate_api_by_id(api_id)
         .map_err(|err| format!("find explicit aggregate api failed: {err}"))?;
-    Ok(candidate.filter(|api| api.status.trim().eq_ignore_ascii_case("active")))
+    Ok(candidate.filter(super::protocol::aggregate_api::aggregate_api_is_routable))
 }
 
 fn apply_aggregate_model_filter(
@@ -612,6 +612,153 @@ fn proxy_with_aggregate_candidates(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+fn proxy_with_direct_provider(
+    provider: &'static dyn super::super::provider_runtime::ProviderRuntimeAdapter,
+    request: Request,
+    storage: &crate::storage_helpers::StorageHandle,
+    trace_id: &str,
+    key_id: &str,
+    original_path: &str,
+    path: &str,
+    request_method: &str,
+    body: &bytes::Bytes,
+    client_is_stream: bool,
+    response_adapter: super::super::ResponseAdapter,
+    gateway_mode_for_log: Option<&str>,
+    client_model_for_log: Option<&str>,
+    model_for_log: &str,
+    model_source_for_log: Option<&str>,
+    client_reasoning_for_log: Option<&str>,
+    reasoning_for_log: Option<&str>,
+    reasoning_source_for_log: Option<&str>,
+    service_tier_for_log: Option<&str>,
+    effective_service_tier_for_log: Option<&str>,
+    service_tier_source_for_log: Option<&str>,
+    started_at: Instant,
+    route_source_for_log: &str,
+) -> Result<(), String> {
+    let provider_id = provider.id();
+    let upstream_url = format!("{provider_id}://provider");
+    let upstream = match provider.execute(storage, body, model_for_log) {
+        Ok(upstream) => upstream,
+        Err(message) => {
+            super::super::record_gateway_request_outcome(path, 502, Some(provider_id));
+            super::super::write_request_log(
+                storage,
+                super::super::request_log::RequestLogTraceContext {
+                    trace_id: Some(trace_id),
+                    original_path: Some(original_path),
+                    adapted_path: Some(path),
+                    gateway_mode: gateway_mode_for_log,
+                    route_strategy: Some(super::super::current_route_strategy()),
+                    route_source: Some(route_source_for_log),
+                    client_model: client_model_for_log,
+                    model_source: model_source_for_log,
+                    client_reasoning_effort: client_reasoning_for_log,
+                    reasoning_source: reasoning_source_for_log,
+                    response_adapter: Some(response_adapter),
+                    service_tier: service_tier_for_log,
+                    effective_service_tier: effective_service_tier_for_log,
+                    service_tier_source: service_tier_source_for_log,
+                    upstream_model: Some(provider.upstream_model(model_for_log)),
+                    actual_source_kind: Some(provider_id),
+                    ..Default::default()
+                },
+                Some(key_id),
+                None,
+                path,
+                request_method,
+                Some(model_for_log),
+                reasoning_for_log,
+                Some(upstream_url.as_str()),
+                Some(502),
+                RequestLogUsage::default(),
+                Some(message.as_str()),
+                Some(started_at.elapsed().as_millis()),
+            );
+            let raw_errors = super::super::prefers_raw_errors_for_tiny_http_request(&request);
+            respond_terminal(
+                request,
+                502,
+                super::super::error_message_for_client(raw_errors, message),
+                Some(trace_id),
+            )?;
+            return Ok(());
+        }
+    };
+
+    let actual_provider_source_id = upstream.actual_source_id().map(str::to_string);
+    let inflight_guard = super::super::acquire_account_inflight(key_id);
+    let bridge = super::super::respond_with_upstream(
+        request,
+        upstream,
+        inflight_guard,
+        response_adapter,
+        None,
+        None,
+        path,
+        None,
+        client_is_stream,
+        false,
+        Some(trace_id),
+        Some(model_for_log),
+        started_at,
+    )?;
+    let ok = bridge.is_ok(client_is_stream);
+    let status_code = bridge
+        .delivered_status_code
+        .unwrap_or(if ok { 200 } else { 502 });
+    let error = (!ok).then(|| {
+        bridge
+            .error_message(client_is_stream)
+            .unwrap_or_else(|| format!("{provider_id} upstream response incomplete"))
+    });
+    super::super::record_gateway_request_outcome(path, status_code, Some(provider_id));
+    super::super::write_request_log(
+        storage,
+        super::super::request_log::RequestLogTraceContext {
+            trace_id: Some(trace_id),
+            original_path: Some(original_path),
+            adapted_path: Some(path),
+            gateway_mode: gateway_mode_for_log,
+            route_strategy: Some(super::super::current_route_strategy()),
+            route_source: Some(route_source_for_log),
+            client_model: client_model_for_log,
+            model_source: model_source_for_log,
+            client_reasoning_effort: client_reasoning_for_log,
+            reasoning_source: reasoning_source_for_log,
+            response_adapter: Some(response_adapter),
+            service_tier: service_tier_for_log,
+            effective_service_tier: effective_service_tier_for_log,
+            service_tier_source: service_tier_source_for_log,
+            upstream_model: Some(provider.upstream_model(model_for_log)),
+            actual_source_kind: Some(provider_id),
+            actual_source_id: actual_provider_source_id.as_deref(),
+            ..Default::default()
+        },
+        Some(key_id),
+        None,
+        path,
+        request_method,
+        Some(model_for_log),
+        reasoning_for_log,
+        Some(upstream_url.as_str()),
+        Some(status_code),
+        RequestLogUsage {
+            input_tokens: bridge.usage.input_tokens,
+            cached_input_tokens: bridge.usage.cached_input_tokens,
+            output_tokens: bridge.usage.output_tokens,
+            total_tokens: bridge.usage.total_tokens,
+            reasoning_output_tokens: bridge.usage.reasoning_output_tokens,
+            first_response_ms: bridge.usage.first_response_ms,
+        },
+        error.as_deref(),
+        Some(started_at.elapsed().as_millis()),
+    );
+    Ok(())
+}
+
 fn resolve_hybrid_aggregate_candidates_for_prepare(
     storage: &codexmanager_core::storage::Storage,
     protocol_type: &str,
@@ -677,7 +824,7 @@ pub(in super::super) fn proxy_validated_request(
         passthrough_path,
         path,
         passthrough_body,
-        body,
+        mut body,
         is_stream,
         has_prompt_cache_key,
         request_shape,
@@ -685,6 +832,8 @@ pub(in super::super) fn proxy_validated_request(
         rotation_strategy,
         aggregate_api_id,
         account_plan_filter,
+        allowed_platforms,
+        concurrency_limit: _concurrency_limit,
         response_adapter,
         gemini_stream_output_mode,
         tool_name_restore_map,
@@ -696,8 +845,8 @@ pub(in super::super) fn proxy_validated_request(
         route_conversation_source,
         conversation_binding,
         client_model_for_log,
-        model_for_log,
-        model_source_for_log,
+        mut model_for_log,
+        mut model_source_for_log,
         client_reasoning_for_log,
         reasoning_for_log,
         reasoning_source_for_log,
@@ -713,6 +862,46 @@ pub(in super::super) fn proxy_validated_request(
     // 下游是否流式仍由客户端 `stream` 参数决定（在 response bridge 层聚合/透传）。
     let upstream_is_stream = resolve_upstream_is_stream(client_is_stream, path.as_str());
     let request_deadline = request_deadline_for_path(started_at, client_is_stream, path.as_str());
+    let mut kiro_route_source = "kiro_exact_model";
+    if let Some(canonical_codex_model) = model_for_log
+        .as_deref()
+        .and_then(|model| model.strip_prefix("codex/"))
+        .filter(|model| model.starts_with("gpt-"))
+        .map(str::to_string)
+    {
+        body = crate::kiro::routing::rewrite_request_model(&body, &canonical_codex_model)?;
+        model_for_log = Some(canonical_codex_model);
+        model_source_for_log = Some("codex_exact_alias".into());
+    } else if crate::kiro::routing::is_smart_alias(model_for_log.as_deref()) {
+        let alias = model_for_log.as_deref().unwrap_or_default();
+        let decision = crate::kiro::routing::resolve_smart_route(
+            &storage,
+            key_id.as_str(),
+            alias,
+            &body,
+            &allowed_platforms,
+        )?;
+        body = crate::kiro::routing::rewrite_request_model(&body, &decision.selected_model)?;
+        log::info!(
+            "event=kiro_smart_route trace_id={} {}",
+            trace_id,
+            decision.explanation
+        );
+        model_for_log = Some(decision.selected_model);
+        model_source_for_log = Some(format!("smart_alias|{}", decision.explanation));
+        kiro_route_source = decision.route_source;
+    }
+
+    // Every first-party provider receives the same normalized internal request.
+    // Chat Completions has already been converted to Responses by local
+    // validation; this typed round trip also preserves unknown future fields.
+    if path == "/v1/responses" || path.starts_with("/v1/responses?") {
+        let canonical = crate::gateway::canonical::CanonicalRequest::from_responses_bytes(&body)?;
+        body = bytes::Bytes::from(crate::gateway::canonical::ProviderAdapter::adapt_request(
+            &crate::gateway::canonical::CodexProviderAdapter,
+            &canonical,
+        )?);
+    }
 
     super::super::trace_log::log_request_start(
         trace_id.as_str(),
@@ -738,6 +927,114 @@ pub(in super::super) fn proxy_validated_request(
                 super::super::GeminiStreamOutputMode::Raw => "raw",
             }),
             body.as_ref(),
+        );
+    }
+
+    if let Some(provider) = model_for_log
+        .as_deref()
+        .and_then(super::super::provider_runtime::direct_provider_for_model)
+    {
+        let provider_model = model_for_log.as_deref().unwrap_or_default();
+        let route_error = if !provider.is_supported_model(provider_model) {
+            Some((404, format!("model_not_found: {provider_model}")))
+        } else if let Err(error) =
+            crate::resolve_api_key_model_group_access(&storage, key_id.as_str(), provider_model)
+        {
+            Some((
+                if error.contains("model_not_allowed") {
+                    403
+                } else {
+                    500
+                },
+                error,
+            ))
+        } else {
+            match provider.has_available_credentials(&storage) {
+                Ok(true) => None,
+                Ok(false) => Some((
+                    503,
+                    format!("model_unavailable: no active {} credential", provider.id()),
+                )),
+                Err(error) => Some((500, error)),
+            }
+        };
+        if let Some((status, message)) = route_error {
+            return respond_model_route_error(
+                request,
+                &storage,
+                trace_id.as_str(),
+                key_id.as_str(),
+                original_path.as_str(),
+                path.as_str(),
+                request_method.as_str(),
+                response_adapter,
+                service_tier_for_log.as_deref(),
+                effective_service_tier_for_log.as_deref(),
+                service_tier_source_for_log.as_deref(),
+                gateway_mode_for_log.as_deref(),
+                client_model_for_log.as_deref(),
+                model_for_log.as_deref(),
+                model_source_for_log.as_deref(),
+                client_reasoning_for_log.as_deref(),
+                reasoning_for_log.as_deref(),
+                reasoning_source_for_log.as_deref(),
+                started_at,
+                status,
+                message,
+            );
+        }
+        if path != "/v1/responses" && !path.starts_with("/v1/responses?") {
+            return respond_model_route_error(
+                request,
+                &storage,
+                trace_id.as_str(),
+                key_id.as_str(),
+                original_path.as_str(),
+                path.as_str(),
+                request_method.as_str(),
+                response_adapter,
+                service_tier_for_log.as_deref(),
+                effective_service_tier_for_log.as_deref(),
+                service_tier_source_for_log.as_deref(),
+                gateway_mode_for_log.as_deref(),
+                client_model_for_log.as_deref(),
+                model_for_log.as_deref(),
+                model_source_for_log.as_deref(),
+                client_reasoning_for_log.as_deref(),
+                reasoning_for_log.as_deref(),
+                reasoning_source_for_log.as_deref(),
+                started_at,
+                400,
+                format!(
+                    "{} provider requires the canonical Responses path",
+                    provider.id()
+                ),
+            );
+        }
+        return proxy_with_direct_provider(
+            provider,
+            request,
+            &storage,
+            trace_id.as_str(),
+            key_id.as_str(),
+            original_path.as_str(),
+            path.as_str(),
+            request_method.as_str(),
+            &body,
+            client_is_stream,
+            response_adapter,
+            gateway_mode_for_log.as_deref(),
+            client_model_for_log.as_deref(),
+            model_for_log.as_deref().unwrap_or_default(),
+            model_source_for_log.as_deref(),
+            client_reasoning_for_log.as_deref(),
+            reasoning_for_log.as_deref(),
+            reasoning_source_for_log.as_deref(),
+            service_tier_for_log.as_deref(),
+            effective_service_tier_for_log.as_deref(),
+            service_tier_source_for_log.as_deref(),
+            started_at,
+            kiro_route_source,
         );
     }
 
@@ -999,6 +1296,9 @@ pub(in super::super) fn proxy_validated_request(
         key_id.as_str(),
         path.as_str(),
         model_for_log.as_deref(),
+        route_conversation_id
+            .as_deref()
+            .unwrap_or(trace_id.as_str()),
         request_deadline,
     );
     let exhausted = match execute_candidate_sequence(

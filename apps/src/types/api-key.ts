@@ -12,7 +12,13 @@ export interface ApiKey {
   accountPlanFilter: string | null;
   aggregateApiUrl: string | null;
   quotaLimitTokens: number | null;
+  allowedModels: string[];
+  allowedPlatforms: Array<"codex" | "kiro" | "grok">;
+  modelVisibility: "selectable" | "managed";
+  expiresAt: number | null;
+  concurrencyLimit: number | null;
   protocol: string;
+  protocolProfile: "openai" | "claude";
   clientType: string;
   authScheme: string;
   upstreamBaseUrl: string;

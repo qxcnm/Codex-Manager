@@ -23,6 +23,7 @@ fn acquire_request_gate_times_out_before_request_deadline_when_busy() {
         "gk_gate_bounded",
         "/v1/responses",
         Some("gpt-5.5"),
+        "conversation-gate-bounded",
         Some(Instant::now() + Duration::from_secs(5)),
     )
     .expect("first request should acquire the gate immediately");
@@ -33,6 +34,7 @@ fn acquire_request_gate_times_out_before_request_deadline_when_busy() {
         "gk_gate_bounded",
         "/v1/responses",
         Some("gpt-5.5"),
+        "conversation-gate-bounded",
         Some(Instant::now() + Duration::from_secs(5)),
     );
     let waited = started_at.elapsed();

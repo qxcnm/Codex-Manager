@@ -1,9 +1,75 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-static ACCOUNT_INFLIGHT: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+static ACCOUNT_INFLIGHT: OnceLock<Mutex<AccountInflightState>> = OnceLock::new();
+const MAX_ACCOUNT_INFLIGHT_WAITERS: usize = 4096;
+
+#[derive(Default)]
+struct AccountInflightState {
+    counts: HashMap<String, usize>,
+    waiters: VecDeque<Arc<AccountInflightWaiter>>,
+    next_ticket: u64,
+}
+
+struct AccountInflightWaiter {
+    ticket: u64,
+    account_ids: Vec<String>,
+    limit: usize,
+    grant: Mutex<Option<String>>,
+    available: Condvar,
+}
+
+fn first_available_account(
+    state: &AccountInflightState,
+    account_ids: &[String],
+    limit: usize,
+) -> Option<String> {
+    account_ids
+        .iter()
+        .find(|account_id| {
+            state
+                .counts
+                .get(account_id.as_str())
+                .copied()
+                .unwrap_or_default()
+                < limit
+        })
+        .cloned()
+}
+
+/// Reserves available slots for the oldest satisfiable waiters. A waiter whose
+/// candidates are all busy does not block an older-independent account from
+/// serving the next waiter, so this is FIFO without cross-account HOL stalls.
+fn dispatch_account_waiters_locked(
+    state: &mut AccountInflightState,
+) -> Vec<(Arc<AccountInflightWaiter>, String)> {
+    let mut grants = Vec::new();
+    let mut index = 0;
+    while index < state.waiters.len() {
+        let waiter = state.waiters[index].clone();
+        let Some(account_id) =
+            first_available_account(state, waiter.account_ids.as_slice(), waiter.limit)
+        else {
+            index += 1;
+            continue;
+        };
+        *state.counts.entry(account_id.clone()).or_insert(0) += 1;
+        state.waiters.remove(index);
+        grants.push((waiter, account_id));
+    }
+    grants
+}
+
+fn deliver_account_waiter_grants(grants: Vec<(Arc<AccountInflightWaiter>, String)>) {
+    for (waiter, account_id) in grants {
+        let mut grant = crate::lock_utils::lock_recover(&waiter.grant, "account_inflight_grant");
+        *grant = Some(account_id);
+        drop(grant);
+        waiter.available.notify_one();
+    }
+}
 static GATEWAY_REQUEST_LABELS: OnceLock<Mutex<HashMap<GatewayRequestLabelKey, usize>>> =
     OnceLock::new();
 static GATEWAY_TOTAL_REQUESTS: AtomicUsize = AtomicUsize::new(0);
@@ -404,9 +470,9 @@ pub(crate) fn duration_to_millis(duration: Duration) -> u64 {
 /// # 返回
 /// 返回函数执行结果
 fn account_inflight_total() -> usize {
-    let lock = ACCOUNT_INFLIGHT.get_or_init(|| Mutex::new(HashMap::new()));
-    let map = crate::lock_utils::lock_recover(lock, "account_inflight");
-    map.values().copied().sum()
+    let lock = ACCOUNT_INFLIGHT.get_or_init(|| Mutex::new(AccountInflightState::default()));
+    let state = crate::lock_utils::lock_recover(lock, "account_inflight");
+    state.counts.values().copied().sum()
 }
 
 /// 函数 `gateway_metrics_snapshot`
@@ -658,9 +724,9 @@ fn classify_protocol(protocol_type: Option<&str>) -> &'static str {
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn account_inflight_count(account_id: &str) -> usize {
-    let lock = ACCOUNT_INFLIGHT.get_or_init(|| Mutex::new(HashMap::new()));
-    let map = crate::lock_utils::lock_recover(lock, "account_inflight");
-    map.get(account_id).copied().unwrap_or(0)
+    let lock = ACCOUNT_INFLIGHT.get_or_init(|| Mutex::new(AccountInflightState::default()));
+    let state = crate::lock_utils::lock_recover(lock, "account_inflight");
+    state.counts.get(account_id).copied().unwrap_or(0)
 }
 
 pub(crate) struct AccountInFlightGuard {
@@ -680,15 +746,18 @@ impl Drop for AccountInFlightGuard {
     /// # 返回
     /// 无
     fn drop(&mut self) {
-        let lock = ACCOUNT_INFLIGHT.get_or_init(|| Mutex::new(HashMap::new()));
-        let mut map = crate::lock_utils::lock_recover(lock, "account_inflight");
-        if let Some(value) = map.get_mut(&self.account_id) {
+        let lock = ACCOUNT_INFLIGHT.get_or_init(|| Mutex::new(AccountInflightState::default()));
+        let mut state = crate::lock_utils::lock_recover(lock, "account_inflight");
+        if let Some(value) = state.counts.get_mut(&self.account_id) {
             if *value > 1 {
                 *value -= 1;
             } else {
-                map.remove(&self.account_id);
+                state.counts.remove(&self.account_id);
             }
         }
+        let grants = dispatch_account_waiters_locked(&mut state);
+        drop(state);
+        deliver_account_waiter_grants(grants);
     }
 }
 
@@ -704,12 +773,131 @@ impl Drop for AccountInFlightGuard {
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn acquire_account_inflight(account_id: &str) -> AccountInFlightGuard {
-    let lock = ACCOUNT_INFLIGHT.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut map = crate::lock_utils::lock_recover(lock, "account_inflight");
-    let entry = map.entry(account_id.to_string()).or_insert(0);
+    try_acquire_account_inflight(account_id, 0)
+        .expect("unlimited account inflight acquisition must succeed")
+}
+
+/// Atomically reserves an in-flight slot for one upstream account.
+///
+/// A zero limit preserves the historical unlimited behavior. Keeping the
+/// check and increment under the same mutex prevents concurrent platform keys
+/// from racing past the per-account limit.
+pub(crate) fn try_acquire_account_inflight(
+    account_id: &str,
+    limit: usize,
+) -> Option<AccountInFlightGuard> {
+    let lock = ACCOUNT_INFLIGHT.get_or_init(|| Mutex::new(AccountInflightState::default()));
+    let mut state = crate::lock_utils::lock_recover(lock, "account_inflight");
+    let entry = state.counts.entry(account_id.to_string()).or_insert(0);
+    if limit > 0 && *entry >= limit {
+        return None;
+    }
     *entry += 1;
-    AccountInFlightGuard {
+    Some(AccountInFlightGuard {
         account_id: account_id.to_string(),
+    })
+}
+
+/// Waits until one of the ordered candidate accounts has an available slot and
+/// atomically reserves it. This keeps a burst of client sessions queued locally
+/// instead of forwarding unlimited concurrent long streams through one account.
+pub(crate) fn wait_acquire_candidate_account_inflight(
+    account_ids: &[String],
+    limit: usize,
+    timeout: Option<Duration>,
+) -> Option<(String, AccountInFlightGuard)> {
+    if account_ids.is_empty() {
+        return None;
+    }
+    if limit == 0 {
+        let account_id = account_ids[0].clone();
+        return try_acquire_account_inflight(account_id.as_str(), 0)
+            .map(|guard| (account_id, guard));
+    }
+
+    let lock = ACCOUNT_INFLIGHT.get_or_init(|| Mutex::new(AccountInflightState::default()));
+    let mut state = crate::lock_utils::lock_recover(lock, "account_inflight");
+    if state.waiters.is_empty() {
+        if let Some(account_id) = first_available_account(&state, account_ids, limit) {
+            *state.counts.entry(account_id.clone()).or_insert(0) += 1;
+            return Some((account_id.clone(), AccountInFlightGuard { account_id }));
+        }
+    }
+    if state.waiters.len() >= MAX_ACCOUNT_INFLIGHT_WAITERS {
+        // Bound local memory under an upstream outage. Callers treat this as no
+        // slot available and return through the existing deadline/error path.
+        return None;
+    }
+
+    let ticket = state.next_ticket;
+    state.next_ticket = state.next_ticket.wrapping_add(1);
+    let waiter = Arc::new(AccountInflightWaiter {
+        ticket,
+        account_ids: account_ids.to_vec(),
+        limit,
+        grant: Mutex::new(None),
+        available: Condvar::new(),
+    });
+    state.waiters.push_back(waiter.clone());
+    let grants = dispatch_account_waiters_locked(&mut state);
+    drop(state);
+    deliver_account_waiter_grants(grants);
+
+    let started_at = Instant::now();
+    let mut grant = crate::lock_utils::lock_recover(&waiter.grant, "account_inflight_grant");
+    loop {
+        if let Some(account_id) = grant.take() {
+            return Some((account_id.clone(), AccountInFlightGuard { account_id }));
+        }
+        grant = match timeout {
+            Some(timeout) => {
+                let Some(remaining) = timeout.checked_sub(started_at.elapsed()) else {
+                    break;
+                };
+                if remaining.is_zero() {
+                    break;
+                }
+                match waiter.available.wait_timeout(grant, remaining) {
+                    Ok((next, result)) => {
+                        if result.timed_out() {
+                            grant = next;
+                            break;
+                        }
+                        next
+                    }
+                    Err(poisoned) => poisoned.into_inner().0,
+                }
+            }
+            None => match waiter.available.wait(grant) {
+                Ok(next) => next,
+                Err(poisoned) => poisoned.into_inner(),
+            },
+        };
+    }
+    drop(grant);
+
+    let mut state = crate::lock_utils::lock_recover(lock, "account_inflight");
+    if let Some(index) = state
+        .waiters
+        .iter()
+        .position(|queued| queued.ticket == ticket)
+    {
+        state.waiters.remove(index);
+        return None;
+    }
+    drop(state);
+
+    // Dispatcher has already reserved the slot and removed this ticket. Wait
+    // for its handoff rather than leaking the reservation at the timeout race.
+    let mut grant = crate::lock_utils::lock_recover(&waiter.grant, "account_inflight_grant");
+    loop {
+        if let Some(account_id) = grant.take() {
+            return Some((account_id.clone(), AccountInFlightGuard { account_id }));
+        }
+        grant = match waiter.available.wait(grant) {
+            Ok(next) => next,
+            Err(poisoned) => poisoned.into_inner(),
+        };
     }
 }
 
@@ -758,4 +946,171 @@ fn is_db_busy_error(err: &str) -> bool {
     normalized.contains("database is locked")
         || normalized.contains("sqlite_busy")
         || normalized.contains("busy timeout")
+}
+
+#[cfg(test)]
+mod account_inflight_limit_tests {
+    use super::{
+        account_inflight_count, try_acquire_account_inflight,
+        wait_acquire_candidate_account_inflight,
+    };
+    use std::time::Duration;
+    use std::{sync::mpsc, thread};
+
+    fn queued_waiters_for(account_id: &str) -> usize {
+        let lock = super::ACCOUNT_INFLIGHT
+            .get_or_init(|| std::sync::Mutex::new(super::AccountInflightState::default()));
+        let state = crate::lock_utils::lock_recover(lock, "account_inflight_test");
+        state
+            .waiters
+            .iter()
+            .filter(|waiter| waiter.account_ids.iter().any(|id| id == account_id))
+            .count()
+    }
+
+    #[test]
+    fn account_limit_is_reserved_atomically_and_released_by_guard() {
+        let account_id = "account-inflight-strict-limit-test";
+        let first = try_acquire_account_inflight(account_id, 1).expect("first slot");
+        assert_eq!(account_inflight_count(account_id), 1);
+        assert!(try_acquire_account_inflight(account_id, 1).is_none());
+        drop(first);
+        assert_eq!(account_inflight_count(account_id), 0);
+        assert!(try_acquire_account_inflight(account_id, 1).is_some());
+    }
+
+    #[test]
+    fn zero_account_limit_preserves_unlimited_behavior() {
+        let account_id = "account-inflight-unlimited-test";
+        let first = try_acquire_account_inflight(account_id, 0).expect("first slot");
+        let second = try_acquire_account_inflight(account_id, 0).expect("second slot");
+        assert_eq!(account_inflight_count(account_id), 2);
+        drop((first, second));
+        assert_eq!(account_inflight_count(account_id), 0);
+    }
+
+    #[test]
+    fn candidate_slot_wait_prefers_the_first_idle_account() {
+        let busy_id = "account-slot-wait-busy";
+        let idle_id = "account-slot-wait-idle";
+        let busy = try_acquire_account_inflight(busy_id, 1).expect("busy slot");
+
+        let (selected, selected_guard) = wait_acquire_candidate_account_inflight(
+            &[busy_id.to_string(), idle_id.to_string()],
+            1,
+            Some(Duration::from_millis(10)),
+        )
+        .expect("idle slot");
+
+        assert_eq!(selected, idle_id);
+        drop((busy, selected_guard));
+    }
+
+    #[test]
+    fn candidate_slot_wait_times_out_when_every_account_is_busy() {
+        let account_id = "account-slot-wait-timeout";
+        let busy = try_acquire_account_inflight(account_id, 1).expect("busy slot");
+
+        let actual = wait_acquire_candidate_account_inflight(
+            &[account_id.to_string()],
+            1,
+            Some(Duration::from_millis(10)),
+        );
+
+        assert!(actual.is_none());
+        assert_eq!(queued_waiters_for(account_id), 0);
+        drop(busy);
+    }
+
+    #[test]
+    fn blocked_account_does_not_head_of_line_block_independent_account() {
+        let blocked_id = "account-slot-no-hol-blocked";
+        let idle_id = "account-slot-no-hol-idle";
+        let busy = try_acquire_account_inflight(blocked_id, 1).expect("busy slot");
+        let (ready_tx, ready_rx) = mpsc::channel();
+
+        let old_waiter = thread::spawn(move || {
+            ready_tx.send(()).expect("announce waiter");
+            let (_, guard) = wait_acquire_candidate_account_inflight(
+                &[blocked_id.to_string()],
+                1,
+                Some(Duration::from_secs(2)),
+            )
+            .expect("blocked waiter eventually gets slot");
+            drop(guard);
+        });
+        ready_rx.recv().expect("waiter started");
+        for _ in 0..100 {
+            if queued_waiters_for(blocked_id) == 1 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(queued_waiters_for(blocked_id), 1);
+
+        let started = std::time::Instant::now();
+        let (selected, idle_guard) = wait_acquire_candidate_account_inflight(
+            &[idle_id.to_string()],
+            1,
+            Some(Duration::from_millis(200)),
+        )
+        .expect("independent idle account must not wait behind blocked account");
+        assert_eq!(selected, idle_id);
+        assert!(started.elapsed() < Duration::from_millis(100));
+
+        drop(idle_guard);
+        drop(busy);
+        old_waiter.join().expect("join blocked waiter");
+        assert_eq!(account_inflight_count(blocked_id), 0);
+        assert_eq!(account_inflight_count(idle_id), 0);
+    }
+
+    #[test]
+    fn candidate_slot_wait_hands_off_in_fifo_order_without_waking_every_waiter() {
+        let account_id = "account-slot-wait-fifo";
+        let busy = try_acquire_account_inflight(account_id, 1).expect("busy slot");
+        let (tx, rx) = mpsc::channel();
+
+        let first_tx = tx.clone();
+        let first = thread::spawn(move || {
+            let (_, guard) = wait_acquire_candidate_account_inflight(
+                &[account_id.to_string()],
+                1,
+                Some(Duration::from_secs(2)),
+            )
+            .expect("first waiter slot");
+            first_tx.send((1, guard)).expect("send first grant");
+        });
+        thread::sleep(Duration::from_millis(25));
+        let second = thread::spawn(move || {
+            let (_, guard) = wait_acquire_candidate_account_inflight(
+                &[account_id.to_string()],
+                1,
+                Some(Duration::from_secs(2)),
+            )
+            .expect("second waiter slot");
+            tx.send((2, guard)).expect("send second grant");
+        });
+        thread::sleep(Duration::from_millis(25));
+
+        drop(busy);
+        let (first_order, first_guard) = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("first grant arrives");
+        assert_eq!(first_order, 1);
+        assert!(
+            rx.recv_timeout(Duration::from_millis(40)).is_err(),
+            "second waiter must remain asleep while the first owns the slot"
+        );
+
+        drop(first_guard);
+        let (second_order, second_guard) = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("second grant arrives after release");
+        assert_eq!(second_order, 2);
+        drop(second_guard);
+        first.join().expect("join first waiter");
+        second.join().expect("join second waiter");
+        assert_eq!(account_inflight_count(account_id), 0);
+    }
 }

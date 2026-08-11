@@ -229,12 +229,17 @@ fn switch_reason_for_account(
 fn thread_distribution_load(
     account_id: &str,
     account_binding_counts: &HashMap<String, usize>,
-) -> usize {
-    account_binding_counts
-        .get(account_id)
-        .copied()
-        .unwrap_or_default()
-        .saturating_add(super::account_inflight_count(account_id))
+) -> (usize, usize) {
+    // 正在执行的长流比历史线程绑定更影响新会话体验。先把新线程分给空闲账号，
+    // 只有并发数相同时才用历史绑定数做均衡，避免 `0 绑定 + 1 运行中` 与
+    // `1 绑定 + 0 运行中` 被错误视为相同负载。
+    (
+        super::account_inflight_count(account_id),
+        account_binding_counts
+            .get(account_id)
+            .copied()
+            .unwrap_or_default(),
+    )
 }
 
 fn should_apply_thread_aware_distribution(

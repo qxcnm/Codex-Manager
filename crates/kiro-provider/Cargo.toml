@@ -1,0 +1,28 @@
+[package]
+name = "codexmanager-kiro-provider"
+version.workspace = true
+edition = "2021"
+license = "MIT"
+
+[features]
+default = []
+native-tls = ["reqwest/native-tls-vendored"]
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+bytes = "1"
+chrono = { version = "0.4", features = ["serde"] }
+crc = "3"
+fastrand = "2"
+futures = "0.3"
+hex = "0.4"
+parking_lot = "0.12"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "stream", "json", "socks", "rustls-tls-webpki-roots", "rustls-tls-native-roots", "http2", "system-proxy", "charset"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+uuid = { version = "1.10", features = ["v4", "fast-rng"] }
+urlencoding = "2"

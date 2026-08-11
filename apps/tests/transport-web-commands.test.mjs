@@ -9,6 +9,7 @@ import ts from "../node_modules/typescript/lib/typescript.js";
 const appsRoot = path.resolve(import.meta.dirname, "..");
 const sourcePath = path.join(appsRoot, "src", "lib", "api", "transport-web-commands.ts");
 const modulePaths = [
+  path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "adapter-probe.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "account.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "aggregate-api.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "apikey.ts"),
@@ -16,13 +17,17 @@ const modulePaths = [
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "codex-profile.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "gateway.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "login.ts"),
+  path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "kiro.ts"),
+  path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "grok.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "misc.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "quota.ts"),
+  path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "proxy-profiles.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "shared.ts"),
 ];
 
 function rewriteImports(outputText) {
   return outputText
+    .replaceAll('./transport-web-commands/adapter-probe', './transport-web-commands/adapter-probe.js')
     .replaceAll('./transport-web-commands/account', './transport-web-commands/account.js')
     .replaceAll('./transport-web-commands/aggregate-api', './transport-web-commands/aggregate-api.js')
     .replaceAll('./transport-web-commands/apikey', './transport-web-commands/apikey.js')
@@ -30,8 +35,11 @@ function rewriteImports(outputText) {
     .replaceAll('./transport-web-commands/codex-profile', './transport-web-commands/codex-profile.js')
     .replaceAll('./transport-web-commands/gateway', './transport-web-commands/gateway.js')
     .replaceAll('./transport-web-commands/login', './transport-web-commands/login.js')
+    .replaceAll('./transport-web-commands/kiro', './transport-web-commands/kiro.js')
+    .replaceAll('./transport-web-commands/grok', './transport-web-commands/grok.js')
     .replaceAll('./transport-web-commands/misc', './transport-web-commands/misc.js')
     .replaceAll('./transport-web-commands/quota', './transport-web-commands/quota.js')
+    .replaceAll('./transport-web-commands/proxy-profiles', './transport-web-commands/proxy-profiles.js')
     .replaceAll('./transport-web-commands/shared', './transport-web-commands/shared.js')
     .replaceAll('./shared', './shared.js')
     .replaceAll('./browser-direct', './browser-direct.js')
@@ -148,6 +156,66 @@ test("createWebCommandMap 为按状态清理账号提供 Web RPC 映射", () => 
   assert.deepEqual(cleanup, {
     rpcMethod: "account/deleteByStatuses",
   });
+});
+
+test("createWebCommandMap 为 Kiro 凭据管理提供 Web RPC 映射", () => {
+  assert.deepEqual(commandMap.service_kiro_credentials_list, {
+    rpcMethod: "kiro/credentials/list",
+  });
+  assert.deepEqual(commandMap.service_kiro_credential_update_routing, {
+    rpcMethod: "kiro/credentials/updateRouting",
+  });
+  assert.deepEqual(commandMap.service_kiro_credential_refresh, {
+    rpcMethod: "kiro/credentials/refresh",
+  });
+  assert.deepEqual(commandMap.service_kiro_credential_quota, {
+    rpcMethod: "kiro/credentials/quota",
+  });
+  assert.deepEqual(commandMap.service_kiro_import_commit, {
+    rpcMethod: "kiro/import/commit",
+  });
+});
+
+test("createWebCommandMap 为 Grok 凭据管理提供独立 Web RPC 映射", () => {
+  assert.deepEqual(commandMap.service_grok_credentials_list, {
+    rpcMethod: "grok/credentials/list",
+  });
+  assert.deepEqual(commandMap.service_grok_credential_probe_models, {
+    rpcMethod: "grok/credentials/probeModels",
+  });
+  assert.deepEqual(commandMap.service_grok_credential_set_enabled, {
+    rpcMethod: "grok/credentials/setEnabled",
+  });
+  assert.deepEqual(commandMap.service_grok_credential_delete, {
+    rpcMethod: "grok/credentials/delete",
+  });
+  assert.deepEqual(commandMap.service_grok_import_preview, {
+    rpcMethod: "grok/import/preview",
+  });
+  assert.deepEqual(commandMap.service_grok_import_commit, {
+    rpcMethod: "grok/import/commit",
+  });
+});
+
+test("createWebCommandMap 为资源池后台探测任务提供 Web RPC 映射", () => {
+  assert.deepEqual(commandMap.service_adapter_probe_job_start, {
+    rpcMethod: "adapterProbe/job/start",
+  });
+  assert.deepEqual(commandMap.service_adapter_probe_job_read, {
+    rpcMethod: "adapterProbe/job/read",
+  });
+  assert.deepEqual(commandMap.service_adapter_probe_job_latest, {
+    rpcMethod: "adapterProbe/job/latest",
+  });
+  assert.deepEqual(commandMap.service_adapter_probe_job_cancel, {
+    rpcMethod: "adapterProbe/job/cancel",
+  });
+});
+
+test("createWebCommandMap 为代理出口池提供 Web RPC 映射", () => {
+  assert.deepEqual(commandMap.service_proxy_profiles_list, { rpcMethod: "proxyProfiles/list" });
+  assert.deepEqual(commandMap.service_proxy_profile_probe, { rpcMethod: "proxyProfiles/probe" });
+  assert.deepEqual(commandMap.service_proxy_profile_bind_accounts, { rpcMethod: "proxyProfiles/bindAccounts" });
 });
 
 test("createWebCommandMap 为显示主窗口提供 Web 回退", async () => {

@@ -253,6 +253,13 @@ fn looks_like_refresh_token_blocked_marker(value: &str) -> bool {
         || normalized.contains("region_restricted")
 }
 
+pub(crate) fn is_cloudflare_challenge_error_message(message: &str) -> bool {
+    let normalized = message.trim().to_ascii_lowercase();
+    normalized.contains("kind=cloudflare_challenge")
+        || normalized.contains("cloudflare 安全验证页")
+        || (normalized.contains("cloudflare") && normalized.contains("just a moment"))
+}
+
 pub(crate) fn is_region_blocked_error_message(message: &str) -> bool {
     let normalized = message.trim().to_ascii_lowercase();
     normalized.contains("unsupported_country_region_territory")
@@ -579,7 +586,8 @@ fn build_subscription_http_client() -> Client {
         .connect_timeout(USAGE_HTTP_CONNECT_TIMEOUT)
         .timeout(USAGE_HTTP_TOTAL_TIMEOUT)
         .pool_max_idle_per_host(4)
-        .pool_idle_timeout(Some(Duration::from_secs(60)));
+        .pool_idle_timeout(Some(Duration::from_secs(60)))
+        .user_agent(crate::gateway::current_codex_user_agent());
     let builder = crate::gateway::apply_async_upstream_proxy(
         builder,
         current_upstream_proxy_url().as_deref(),
@@ -1006,6 +1014,20 @@ pub(crate) fn fetch_usage_snapshot(
     run_usage_future(fetch_usage_snapshot_async(base_url, bearer, workspace_id))
 }
 
+pub(crate) fn fetch_usage_snapshot_for_account(
+    base_url: &str,
+    bearer: &str,
+    workspace_id: Option<&str>,
+    route_account_id: &str,
+) -> Result<serde_json::Value, String> {
+    run_usage_future(fetch_usage_snapshot_async_for_account(
+        base_url,
+        bearer,
+        workspace_id,
+        Some(route_account_id),
+    ))
+}
+
 /// 函数 `fetch_account_subscription`
 ///
 /// 作者: gaohongshun
@@ -1034,6 +1056,22 @@ pub(crate) fn fetch_account_subscription(
     ))
 }
 
+pub(crate) fn fetch_account_subscription_for_account(
+    base_url: &str,
+    bearer: &str,
+    subscription_account_id: &str,
+    workspace_id: Option<&str>,
+    route_account_id: &str,
+) -> Result<AccountSubscriptionSnapshot, String> {
+    run_usage_future(fetch_account_subscription_async_for_account(
+        base_url,
+        bearer,
+        subscription_account_id,
+        workspace_id,
+        Some(route_account_id),
+    ))
+}
+
 /// 函数 `fetch_usage_snapshot_async`
 ///
 /// 作者: gaohongshun
@@ -1052,13 +1090,26 @@ async fn fetch_usage_snapshot_async(
     bearer: &str,
     workspace_id: Option<&str>,
 ) -> Result<serde_json::Value, String> {
+    fetch_usage_snapshot_async_for_account(base_url, bearer, workspace_id, None).await
+}
+
+async fn fetch_usage_snapshot_async_for_account(
+    base_url: &str,
+    bearer: &str,
+    workspace_id: Option<&str>,
+    route_account_id: Option<&str>,
+) -> Result<serde_json::Value, String> {
     // 调用上游用量接口
     let url = usage_endpoint(base_url);
     let build_request = || {
-        let client = usage_http_client();
+        let client = route_account_id
+            .filter(|value| !value.trim().is_empty())
+            .map(crate::gateway::account_upstream_http_client)
+            .unwrap_or_else(usage_http_client);
         let mut req = client
             .get(&url)
-            .header("Authorization", format!("Bearer {bearer}"));
+            .header("Authorization", authorization_header_value(bearer))
+            .headers(build_usage_http_default_headers());
         let request_headers = build_usage_request_headers(workspace_id);
         if !request_headers.is_empty() {
             req = req.headers(request_headers);
@@ -1069,7 +1120,9 @@ async fn fetch_usage_snapshot_async(
         Ok(resp) => resp,
         Err(first_err) => {
             // 中文注释：代理在程序启动后才开启时，旧 client 可能沿用旧网络状态；这里自动重建并重试一次。
-            rebuild_usage_http_client();
+            if route_account_id.is_none() {
+                rebuild_usage_http_client();
+            }
             let retried = build_request().send().await;
             match retried {
                 Ok(resp) => resp,
@@ -1111,13 +1164,17 @@ async fn fetch_usage_snapshot_async(
 async fn fetch_accounts_check_response_async(
     base_url: &str,
     bearer: &str,
+    route_account_id: Option<&str>,
 ) -> Result<AccountsCheckResponse, String> {
     let url = accounts_check_endpoint(base_url);
     let build_request = || {
-        let client = subscription_http_client();
+        let client = route_account_id
+            .filter(|value| !value.trim().is_empty())
+            .map(crate::gateway::account_upstream_http_client)
+            .unwrap_or_else(subscription_http_client);
         client
             .get(&url)
-            .header("Authorization", format!("Bearer {bearer}"))
+            .header("Authorization", authorization_header_value(bearer))
             .header("Origin", "https://chatgpt.com")
             .header("Referer", "https://chatgpt.com/")
             .header("Accept", "application/json")
@@ -1125,7 +1182,9 @@ async fn fetch_accounts_check_response_async(
     let resp = match build_request().send().await {
         Ok(resp) => resp,
         Err(first_err) => {
-            rebuild_subscription_http_client();
+            if route_account_id.is_none() {
+                rebuild_subscription_http_client();
+            }
             let retried = build_request().send().await;
             match retried {
                 Ok(resp) => resp,
@@ -1190,11 +1249,22 @@ async fn fetch_account_subscription_async(
     account_id: &str,
     _workspace_id: Option<&str>,
 ) -> Result<AccountSubscriptionSnapshot, String> {
+    fetch_account_subscription_async_for_account(base_url, bearer, account_id, _workspace_id, None)
+        .await
+}
+
+async fn fetch_account_subscription_async_for_account(
+    base_url: &str,
+    bearer: &str,
+    account_id: &str,
+    _workspace_id: Option<&str>,
+    route_account_id: Option<&str>,
+) -> Result<AccountSubscriptionSnapshot, String> {
     let normalized_account_id = account_id.trim();
     if normalized_account_id.is_empty() {
         return Ok(AccountSubscriptionSnapshot::default());
     }
-    let response = fetch_accounts_check_response_async(base_url, bearer).await?;
+    let response = fetch_accounts_check_response_async(base_url, bearer, route_account_id).await?;
 
     if let Some(entry) = response.accounts.get(normalized_account_id) {
         return Ok(build_accounts_check_snapshot(entry));
@@ -1233,6 +1303,15 @@ async fn fetch_account_subscription_async(
         .unwrap_or_default())
 }
 
+fn authorization_header_value(value: &str) -> String {
+    let value = value.trim();
+    if value.starts_with("AgentAssertion ") || value.starts_with("Bearer ") {
+        value.to_string()
+    } else {
+        format!("Bearer {value}")
+    }
+}
+
 /// 函数 `refresh_access_token`
 ///
 /// 作者: gaohongshun
@@ -1250,6 +1329,17 @@ pub(crate) fn refresh_access_token(
     refresh_token: &str,
 ) -> Result<RefreshTokenResponse, String> {
     run_usage_future(refresh_access_token_async(issuer, client_id, refresh_token))
+}
+
+pub(crate) fn refresh_access_token_for_account(
+    issuer: &str,
+    client_id: &str,
+    refresh_token: &str,
+    account_id: &str,
+) -> Result<RefreshTokenResponse, String> {
+    run_usage_future(refresh_access_token_async_for_account(
+        issuer, client_id, refresh_token, Some(account_id),
+    ))
 }
 
 /// 函数 `refresh_access_token_async`
@@ -1270,10 +1360,22 @@ async fn refresh_access_token_async(
     client_id: &str,
     refresh_token: &str,
 ) -> Result<RefreshTokenResponse, String> {
+    refresh_access_token_async_for_account(issuer, client_id, refresh_token, None).await
+}
+
+async fn refresh_access_token_async_for_account(
+    issuer: &str,
+    client_id: &str,
+    refresh_token: &str,
+    route_account_id: Option<&str>,
+) -> Result<RefreshTokenResponse, String> {
     let refresh_token_url = resolve_refresh_token_url(issuer);
     let body = build_refresh_token_body(client_id, refresh_token);
     let build_request = || {
-        let client = usage_http_client();
+        let client = route_account_id
+            .filter(|value| !value.trim().is_empty())
+            .map(crate::gateway::account_upstream_http_client)
+            .unwrap_or_else(usage_http_client);
         client
             .post(refresh_token_url.clone())
             .header("Content-Type", "application/x-www-form-urlencoded")
@@ -1282,7 +1384,9 @@ async fn refresh_access_token_async(
     let resp = match build_request().send().await {
         Ok(resp) => resp,
         Err(first_err) => {
-            rebuild_usage_http_client();
+            if route_account_id.is_none() {
+                rebuild_usage_http_client();
+            }
             let retried = build_request().send().await;
             match retried {
                 Ok(resp) => resp,

@@ -47,15 +47,15 @@ test("accounts 模式管理员菜单按任务域分组并保留账号体系入�
   const sections = routes.getAllowedTopLevelRouteSections(access);
   assert.deepEqual(
     sections.map((section) => section.label),
-    ["概览", "资源接入", "平台配置", "模型路由", "用户管理", "运行监控", "系统设置"]
+    ["运行总览", "模型接入", "接口与密钥", "模型调度", "账号权限", "运行监控", "系统设置"]
   );
   assert.deepEqual(
     sections.map((section) => section.routes.map((route) => route.path)),
     [
       ["/"],
-      ["/accounts", "/aggregate-api"],
-      ["/platform-mode", "/apikeys"],
-      ["/models", "/model-groups"],
+      ["/import", "/adapters", "/accounts", "/kiro", "/grok", "/aggregate-api"],
+      ["/platform-mode", "/proxies", "/apikeys"],
+      ["/routing", "/models", "/model-groups"],
       ["/account-manager"],
       ["/logs"],
       ["/settings", "/plugins", "/author"],
@@ -67,8 +67,8 @@ test("accounts 模式管理员菜单按任务域分组并保留账号体系入�
   );
   assert.equal(routes.isTopLevelRouteAllowedForRole("/model-groups", access), true);
   assert.equal(routes.getTopLevelRouteLabel("/account-manager", access), "成员账号");
-  assert.equal(routes.getTopLevelRouteLabel("/model-groups", access), "模型组");
-  assert.equal(routes.getTopLevelRouteLabel("/platform-mode", access), "平台模式选择");
+  assert.equal(routes.getTopLevelRouteLabel("/model-groups", access), "能力分组");
+  assert.equal(routes.getTopLevelRouteLabel("/platform-mode", access), "接入方式");
 });
 
 test("none/password 单人管理员模式隐藏账号体系入口但保留单人管理入口", () => {
@@ -80,10 +80,16 @@ test("none/password 单人管理员模式隐藏账号体系入口但保留单人
         .map((route) => route.path);
       assert.deepEqual(paths, [
         "/",
+        "/import",
+        "/adapters",
         "/accounts",
+        "/kiro",
+        "/grok",
         "/aggregate-api",
         "/platform-mode",
+        "/proxies",
         "/apikeys",
+        "/routing",
         "/models",
         "/logs",
         "/settings",
@@ -111,7 +117,23 @@ test("未解析 session mode 时不会闪现账号体系专属入口", () => {
   assert.equal(paths.includes("/account-manager"), false);
   assert.equal(paths.includes("/model-groups"), false);
   assert.equal(paths.includes("/accounts"), true);
+  assert.equal(paths.includes("/adapters"), true);
   assert.equal(paths.includes("/apikeys"), true);
+});
+
+test("侧栏只显示统一模型接入中心，旧 Adapter 页面仍可访问", () => {
+  const access = { role: "admin", mode: "accounts" };
+  const resourceSection = routes
+    .getAllowedNavigationRouteSections(access)
+    .find((section) => section.id === "resources");
+
+  assert.deepEqual(
+    resourceSection.routes.map((route) => route.path),
+    ["/import", "/adapters"]
+  );
+  for (const path of ["/accounts", "/kiro", "/grok", "/aggregate-api"]) {
+    assert.equal(routes.isTopLevelRouteAllowedForRole(path, access), true);
+  }
 });
 
 test("accounts 模式成员菜单只保留自助入口", () => {
@@ -134,3 +156,6 @@ test("accounts 模式成员菜单只保留自助入口", () => {
   );
   assert.equal(routes.isTopLevelRouteAllowedForRole("/model-groups", access), false);
 });
+
+
+

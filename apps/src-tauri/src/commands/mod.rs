@@ -2,12 +2,16 @@
 
 pub mod account;
 pub mod account_manager;
+pub mod adapter_probe;
 pub mod aggregate_api;
 pub mod apikey;
 pub mod codex_profile;
 pub mod dashboard;
+pub mod grok;
+pub mod kiro;
 pub mod login;
 pub mod plugin;
+pub mod proxy_profiles;
 pub mod quota;
 mod registry;
 pub mod requestlog;

@@ -36,11 +36,11 @@ const MEMBER_ROUTE_SECTIONS = [
 ] as const;
 
 const ROUTE_SECTION_LABELS: Record<TopLevelRouteSectionId, string> = {
-  overview: "概览",
-  resources: "资源接入",
-  "platform-config": "平台配置",
-  "model-routing": "模型路由",
-  "users-keys": "用户管理",
+  overview: "运行总览",
+  resources: "模型接入",
+  "platform-config": "接口与密钥",
+  "model-routing": "模型调度",
+  "users-keys": "账号权限",
   monitoring: "运行监控",
   system: "系统设置",
   "member-overview": "我的概览",
@@ -53,41 +53,81 @@ const ROUTE_SECTION_LABELS: Record<TopLevelRouteSectionId, string> = {
 export const TOP_LEVEL_ROUTE_CONFIG = [
   {
     path: "/",
-    label: "仪表盘",
+    label: "运行总览",
     memberLabel: "我的概览",
     section: "overview",
     memberSection: "member-overview",
     roles: ["system_admin", "admin", "member"],
   },
   {
-    path: "/accounts",
-    label: "OpenAI 账号池",
+    path: "/import",
+    label: "导入凭据",
     section: "resources",
+    roles: ["system_admin", "admin"],
+  },
+  {
+    path: "/adapters",
+    label: "模型接入中心",
+    section: "resources",
+    roles: ["system_admin", "admin"],
+  },
+  {
+    path: "/accounts",
+    label: "Codex 资源池",
+    section: "resources",
+    navigation: false,
+    roles: ["system_admin", "admin"],
+  },
+  {
+    path: "/kiro",
+    label: "Kiro 资源池",
+    section: "resources",
+    navigation: false,
+    roles: ["system_admin", "admin"],
+  },
+  {
+    path: "/grok",
+    label: "Grok 资源池",
+    section: "resources",
+    navigation: false,
     roles: ["system_admin", "admin"],
   },
   {
     path: "/aggregate-api",
-    label: "聚合 API",
+    label: "第三方接口",
     section: "resources",
+    navigation: false,
     roles: ["system_admin", "admin"],
   },
   {
     path: "/platform-mode",
-    label: "平台模式选择",
+    label: "接入方式",
+    section: "platform-config",
+    roles: ["system_admin", "admin"],
+  },
+  {
+    path: "/proxies",
+    label: "代理出口",
     section: "platform-config",
     roles: ["system_admin", "admin"],
   },
   {
     path: "/apikeys",
-    label: "平台密钥",
+    label: "访问密钥",
     memberLabel: "我的密钥",
     section: "platform-config",
     memberSection: "member-keys",
     roles: ["system_admin", "admin", "member"],
   },
   {
+    path: "/routing",
+    label: "智能调度",
+    section: "model-routing",
+    roles: ["system_admin", "admin"],
+  },
+  {
     path: "/models",
-    label: "平台模型目录",
+    label: "模型目录",
     memberLabel: "可用模型",
     section: "model-routing",
     memberSection: "member-models",
@@ -95,7 +135,7 @@ export const TOP_LEVEL_ROUTE_CONFIG = [
   },
   {
     path: "/model-groups",
-    label: "模型组",
+    label: "能力分组",
     section: "model-routing",
     accountSystemOnly: true,
     roles: ["system_admin", "admin"],
@@ -109,7 +149,7 @@ export const TOP_LEVEL_ROUTE_CONFIG = [
   },
   {
     path: "/logs",
-    label: "请求日志",
+    label: "请求记录",
     memberLabel: "使用记录",
     section: "monitoring",
     memberSection: "member-usage",
@@ -125,7 +165,7 @@ export const TOP_LEVEL_ROUTE_CONFIG = [
   },
   {
     path: "/plugins",
-    label: "插件中心",
+    label: "扩展中心",
     section: "system",
     roles: ["system_admin", "admin"],
   },
@@ -244,7 +284,7 @@ export function getTopLevelRouteLabel(
 ): string {
   const normalizedPath = normalizeRoutePath(path);
   const route = TOP_LEVEL_ROUTE_CONFIG.find((item) => item.path === normalizedPath);
-  if (!route) return "CodexManager";
+  if (!route) return "OpenRuntime";
   const { role } = normalizeAccessContext(access);
   if (!isAdminTopLevelRole(role) && "memberLabel" in route) {
     return route.memberLabel;
@@ -301,9 +341,29 @@ export function getAllowedTopLevelRouteSections(
   });
 }
 
+/**
+ * 返回侧栏可见的路由分组。
+ *
+ * 访问权限与导航可见性必须分开：旧 Adapter 专属页面仍可通过兼容链接访问，
+ * 也仍能进入 keep-alive 缓存，但不再占用侧栏入口。
+ */
+export function getAllowedNavigationRouteSections(
+  access: TopLevelRouteAccess,
+  mode?: string | null,
+): TopLevelRouteSection[] {
+  return getAllowedTopLevelRouteSections(access, mode).flatMap((section) => {
+    const routes = section.routes.filter(
+      (route) => !("navigation" in route) || route.navigation !== false,
+    );
+    return routes.length > 0 ? [{ ...section, routes }] : [];
+  });
+}
+
 export function getFirstAllowedTopLevelRoutePath(
   access: TopLevelRouteAccess,
   mode?: string | null,
 ): TopLevelRoutePath {
   return getAllowedTopLevelRoutes(access, mode)[0]?.path ?? "/";
 }
+
+

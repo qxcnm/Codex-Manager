@@ -14,7 +14,7 @@ use crate::usage_account_meta::{
     clean_header_value, derive_account_meta, patch_account_meta, patch_account_meta_cached,
     resolve_workspace_id_for_account,
 };
-use crate::usage_http::{fetch_account_subscription, fetch_usage_snapshot};
+use crate::usage_http::{fetch_account_subscription_for_account, fetch_usage_snapshot_for_account};
 use crate::usage_keepalive::{is_keepalive_error_ignorable, run_gateway_keepalive_once};
 use crate::usage_scheduler::{
     parse_interval_secs, DEFAULT_GATEWAY_KEEPALIVE_FAILURE_BACKOFF_MAX_SECS,
@@ -28,6 +28,7 @@ use crate::usage_token_refresh::{refresh_and_persist_access_token, token_refresh
 
 mod batch;
 mod errors;
+mod probe_retry;
 mod queue;
 mod runner;
 mod settings;
@@ -134,7 +135,7 @@ impl UsageAvailabilityStatus {
 
 #[derive(Debug, Clone, Copy)]
 struct UsageRefreshResult {
-    _status: UsageAvailabilityStatus,
+    status: UsageAvailabilityStatus,
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +161,8 @@ use self::batch::{next_usage_poll_cursor, usage_poll_batch_indices};
 use self::errors::{
     mark_usage_unreachable_if_needed, record_usage_refresh_failure, should_retry_with_refresh,
 };
+pub(crate) use self::probe_retry::schedule_codex_fast_reprobe;
+use self::probe_retry::schedule_codex_network_reprobe;
 #[cfg(test)]
 use self::queue::clear_pending_usage_refresh_tasks_for_tests;
 pub(crate) use self::queue::enqueue_usage_refresh_with_worker;
@@ -468,6 +471,170 @@ fn load_token_refresh_issuers_for_tokens(
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn refresh_usage_for_account(account_id: &str) -> Result<(), String> {
+    refresh_usage_for_account_inner(account_id).map(|_| ())
+}
+
+pub(crate) fn probe_codex_account_availability(account_id: &str) -> Result<(), String> {
+    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    if let Err(error) = crate::gateway::probe_models_for_account(&storage, account_id) {
+        record_codex_model_probe_failure(&storage, account_id, &error);
+        return Err(error);
+    }
+    record_codex_models_verified(&storage, account_id);
+
+    // Quota is useful routing information, but a broken subscription endpoint
+    // must not overrule a successful Codex model probe. Only a confirmed
+    // exhausted quota removes the account; transient/401 usage errors remain
+    // diagnostic and the operational model probe wins.
+    match refresh_usage_for_account_inner(account_id) {
+        Ok(result) if result.status == UsageAvailabilityStatus::Unavailable => {
+            Err("quota_exhausted".to_string())
+        }
+        Ok(_) | Err(_) => {
+            record_codex_models_verified(&storage, account_id);
+            Ok(())
+        }
+    }
+}
+
+pub(crate) fn probe_codex_account_batch_admission(
+    account_id: &str,
+    request_model: Option<&str>,
+) -> Result<(), String> {
+    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    match crate::account_warmup::probe_account_responses_for_batch(account_id, request_model) {
+        Ok(()) => {
+            record_codex_responses_verified(&storage, account_id);
+            Ok(())
+        }
+        Err(error) => {
+            record_codex_admission_probe_failure(&storage, account_id, &error);
+            Err(error)
+        }
+    }
+}
+
+pub(crate) fn record_codex_admission_probe_failure(
+    storage: &Storage,
+    account_id: &str,
+    error: &str,
+) {
+    let normalized = error.to_ascii_lowercase();
+    let rate_limited = normalized.contains("status=429")
+        || normalized.contains("status: 429")
+        || normalized.contains("429 too many requests")
+        || normalized.contains("usage_limit_reached")
+        || normalized.contains("quota_exhausted");
+    let cloudflare_challenge = crate::usage_http::is_cloudflare_challenge_error_message(error);
+    let not_found = normalized.contains("status=404")
+        || normalized.contains("status: 404")
+        || normalized.contains("404 not found");
+    let auth_failed = normalized.contains("status=401")
+        || normalized.contains("unauthorized")
+        || (normalized.contains("forbidden") && !cloudflare_challenge);
+    let now = now_ts();
+    // A Codex account normally resets on a five-hour window. Until a fresh
+    // usage snapshot gives us a more precise reset, keep a confirmed 429 out
+    // of admission probes for the full window instead of retrying every few
+    // seconds. Cloudflare challenges receive the same ten-minute quarantine
+    // used by mature gateways and are not treated as account revocation.
+    let retry_after = if not_found {
+        None
+    } else if rate_limited {
+        Some(now.saturating_add(5 * 60 * 60))
+    } else if cloudflare_challenge {
+        Some(now.saturating_add(10 * 60))
+    } else if auth_failed {
+        Some(now.saturating_add(30))
+    } else {
+        Some(now.saturating_add(10 * 60))
+    };
+    let _ = storage.upsert_adapter_credential_probe_state(
+        &codexmanager_core::storage::AdapterCredentialProbeState {
+            pool_id: "codex".to_string(),
+            credential_id: account_id.to_string(),
+            status: if not_found {
+                "unavailable".to_string()
+            } else {
+                "failed".to_string()
+            },
+            error_code: Some(if not_found {
+                "codex_responses_not_found".to_string()
+            } else if rate_limited {
+                "codex_responses_rate_limited".to_string()
+            } else if cloudflare_challenge {
+                "codex_responses_cloudflare_challenge".to_string()
+            } else if auth_failed {
+                "codex_responses_unauthorized".to_string()
+            } else {
+                "codex_responses_probe_failed".to_string()
+            }),
+            checked_at: now,
+            retry_after,
+        },
+    );
+    if self::probe_retry::is_transient_reprobe_error(error) {
+        schedule_codex_network_reprobe(account_id);
+    }
+}
+
+fn record_codex_models_verified(storage: &Storage, account_id: &str) {
+    record_codex_probe_available(storage, account_id, "codex_models_verified");
+}
+
+pub(crate) const CODEX_RESPONSES_VERIFIED: &str = "codex_responses_verified";
+
+pub(crate) fn record_codex_responses_verified(storage: &Storage, account_id: &str) {
+    self::probe_retry::record_after_cancelling_fast_reprobe(account_id, || {
+        record_codex_probe_available(storage, account_id, CODEX_RESPONSES_VERIFIED);
+    });
+}
+
+fn record_codex_probe_available(storage: &Storage, account_id: &str, evidence: &str) {
+    let now = now_ts();
+    let _ = storage.upsert_adapter_credential_probe_state(
+        &codexmanager_core::storage::AdapterCredentialProbeState {
+            pool_id: "codex".to_string(),
+            credential_id: account_id.to_string(),
+            status: "available".to_string(),
+            // Keep discovery and executable admission as separate evidence.
+            // Only `codex_responses_verified` may enter a live request batch.
+            error_code: Some(evidence.to_string()),
+            checked_at: now,
+            retry_after: None,
+        },
+    );
+}
+
+fn record_codex_model_probe_failure(storage: &Storage, account_id: &str, error: &str) {
+    let normalized = error.to_ascii_lowercase();
+    let definitive_not_found = normalized.contains("status=404")
+        || normalized.contains("status: 404")
+        || normalized.contains("404 not found");
+    let now = now_ts();
+    let _ = storage.upsert_adapter_credential_probe_state(
+        &codexmanager_core::storage::AdapterCredentialProbeState {
+            pool_id: "codex".to_string(),
+            credential_id: account_id.to_string(),
+            // Model discovery is import/UI evidence only. Even a 404 here
+            // cannot permanently reject a batch candidate; the independent
+            // Responses admission probe is authoritative for execution.
+            status: "failed".to_string(),
+            error_code: Some(if definitive_not_found {
+                "codex_models_not_found".to_string()
+            } else {
+                "codex_models_probe_failed".to_string()
+            }),
+            checked_at: now,
+            retry_after: Some(now),
+        },
+    );
+    if self::probe_retry::is_transient_reprobe_error(error) {
+        schedule_codex_network_reprobe(account_id);
+    }
+}
+
+fn refresh_usage_for_account_inner(account_id: &str) -> Result<UsageRefreshResult, String> {
     // 刷新单个账号用量
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     let token = match storage
@@ -475,23 +642,50 @@ pub(crate) fn refresh_usage_for_account(account_id: &str) -> Result<(), String> 
         .map_err(|e| e.to_string())?
     {
         Some(token) => token,
-        None => return Ok(()),
+        None => return Err("account_token_not_found".to_string()),
     };
 
     let workspace_id = resolve_workspace_id_for_account(&storage, account_id);
 
     let started_at = Instant::now();
-    match refresh_usage_for_token(&storage, &token, workspace_id.as_deref(), None) {
-        Ok(_) => {}
-        Err(err) => {
-            record_usage_refresh_metrics(false, started_at);
-            record_usage_refresh_failure(&storage, &token.account_id, &err);
-            return Err(err);
-        }
-    }
+    let result =
+        match refresh_usage_for_token(&storage, &token, workspace_id.as_deref(), None, true) {
+            Ok(result) => result,
+            Err(err) => {
+                record_usage_refresh_metrics(false, started_at);
+                record_usage_refresh_failure(&storage, &token.account_id, &err);
+                return Err(err);
+            }
+        };
+    record_codex_probe_outcome(&storage, &token.account_id, result.status);
     record_usage_refresh_metrics(true, started_at);
     notify_usage_refresh_completed("single", 1, 1);
-    Ok(())
+    Ok(result)
+}
+
+fn record_codex_probe_outcome(
+    storage: &Storage,
+    account_id: &str,
+    status: UsageAvailabilityStatus,
+) {
+    let (probe_status, error_code) = match status {
+        UsageAvailabilityStatus::Available
+        | UsageAvailabilityStatus::PrimaryWindowAvailableOnly => return,
+        UsageAvailabilityStatus::Unavailable => ("unavailable", Some("quota_exhausted")),
+        UsageAvailabilityStatus::Unknown => return,
+    };
+    let now = now_ts();
+    let retry_after = (probe_status == "failed").then(|| now.saturating_add(5));
+    let _ = storage.upsert_adapter_credential_probe_state(
+        &codexmanager_core::storage::AdapterCredentialProbeState {
+            pool_id: "codex".to_string(),
+            credential_id: account_id.to_string(),
+            status: probe_status.to_string(),
+            error_code: error_code.map(str::to_string),
+            checked_at: now,
+            retry_after,
+        },
+    );
 }
 
 /// 函数 `record_usage_refresh_metrics`
@@ -532,6 +726,7 @@ fn refresh_usage_for_token(
     token: &Token,
     workspace_id: Option<&str>,
     account_cache: Option<&mut HashMap<String, Account>>,
+    refresh_subscription_metadata: bool,
 ) -> Result<UsageRefreshResult, String> {
     // 读取用量接口所需的基础配置
     let issuer =
@@ -571,7 +766,11 @@ fn refresh_usage_for_token(
     let resolved_workspace_id = clean_header_value(resolved_workspace_id);
     let resolved_subscription_account_id =
         clean_header_value(derived_chatgpt_id.or_else(|| resolved_workspace_id.clone()));
-    let bearer = current.access_token.clone();
+    let bearer = crate::account_agent_identity::build_agent_identity_authorization(
+        storage,
+        &current.account_id,
+    )?
+    .unwrap_or_else(|| current.access_token.clone());
 
     match refresh_account_snapshot(
         storage,
@@ -580,8 +779,29 @@ fn refresh_usage_for_token(
         &bearer,
         resolved_workspace_id.as_deref(),
         resolved_subscription_account_id.as_deref(),
+        refresh_subscription_metadata,
     ) {
-        Ok(status) => Ok(UsageRefreshResult { _status: status }),
+        Ok(status) => Ok(UsageRefreshResult { status }),
+        Err(err)
+            if bearer.starts_with("AgentAssertion ")
+                && (err.contains("status 401") || err.contains("status=401")) =>
+        {
+            let recovered = crate::account_agent_identity::recover_agent_identity_authorization(
+                storage,
+                &current.account_id,
+            )?
+            .ok_or_else(|| "agent identity disappeared during usage recovery".to_string())?;
+            refresh_account_snapshot(
+                storage,
+                &current.account_id,
+                &base_url,
+                &recovered,
+                resolved_workspace_id.as_deref(),
+                resolved_subscription_account_id.as_deref(),
+                refresh_subscription_metadata,
+            )
+            .map(|status| UsageRefreshResult { status })
+        }
         Err(err) if should_retry_usage_refresh_with_token(&current, &err) => {
             if current.refresh_token.trim().is_empty() {
                 log::debug!(
@@ -622,8 +842,9 @@ fn refresh_usage_for_token(
                 &bearer,
                 refreshed_workspace_id.as_deref(),
                 refreshed_subscription_account_id.as_deref(),
+                refresh_subscription_metadata,
             ) {
-                Ok(status) => Ok(UsageRefreshResult { _status: status }),
+                Ok(status) => Ok(UsageRefreshResult { status }),
                 Err(err) => {
                     mark_usage_unreachable_if_needed(storage, &current.account_id, &err);
                     Err(err)
@@ -644,25 +865,48 @@ fn refresh_account_snapshot(
     bearer: &str,
     workspace_id: Option<&str>,
     subscription_account_id: Option<&str>,
+    refresh_subscription_metadata: bool,
 ) -> Result<UsageAvailabilityStatus, String> {
-    if let Some(subscription_account_id) = subscription_account_id {
-        let subscription =
-            fetch_account_subscription(base_url, bearer, subscription_account_id, workspace_id)?;
-        storage
-            .upsert_account_subscription(
-                account_id,
-                subscription.has_subscription,
-                subscription.account_plan_type.as_deref(),
-                subscription.plan_type.as_deref(),
-                subscription.expires_at,
-                subscription.renews_at,
-            )
-            .map_err(|err| format!("store account subscription failed: {err}"))?;
-    }
-
-    let value = fetch_usage_snapshot(base_url, bearer, workspace_id)?;
+    // Usage is the authoritative routing signal. Fetch and persist it before
+    // the optional accounts/check metadata request so a Cloudflare challenge
+    // on that browser-facing endpoint cannot hide fresh quota information.
+    let value = fetch_usage_snapshot_for_account(base_url, bearer, workspace_id, account_id)?;
     let status = classify_usage_status_from_snapshot_value(&value);
     store_usage_snapshot(storage, account_id, value)?;
+
+    if refresh_subscription_metadata {
+        if let Some(subscription_account_id) = subscription_account_id {
+            match fetch_account_subscription_for_account(
+                base_url,
+                bearer,
+                subscription_account_id,
+                workspace_id,
+                account_id,
+            ) {
+                Ok(subscription) => {
+                    if let Err(err) = storage.upsert_account_subscription(
+                        account_id,
+                        subscription.has_subscription,
+                        subscription.account_plan_type.as_deref(),
+                        subscription.plan_type.as_deref(),
+                        subscription.expires_at,
+                        subscription.renews_at,
+                    ) {
+                        log::warn!(
+                            "event=account_subscription_store_failed account_id={} error={}",
+                            account_id,
+                            err
+                        );
+                    }
+                }
+                Err(err) => log::warn!(
+                    "event=account_subscription_best_effort_failed account_id={} error={}",
+                    account_id,
+                    err
+                ),
+            }
+        }
+    }
     Ok(status)
 }
 
@@ -728,6 +972,9 @@ fn classify_usage_status_from_snapshot_value(value: &serde_json::Value) -> Usage
 /// # 返回
 /// 返回函数执行结果
 fn classify_usage_status_from_error(err: &str) -> UsageAvailabilityStatus {
+    if crate::usage_http::is_cloudflare_challenge_error_message(err) {
+        return UsageAvailabilityStatus::Unknown;
+    }
     if err.starts_with("usage endpoint status ")
         || err.starts_with("usage endpoint failed: status=")
         || err.starts_with("subscription endpoint status ")

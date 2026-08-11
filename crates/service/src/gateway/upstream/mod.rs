@@ -8,6 +8,7 @@ pub(super) mod proxy_pipeline;
 pub(super) mod response;
 pub(super) mod support;
 
-pub(super) use response::{
+pub(crate) use response::{
     GatewayByteStream, GatewayByteStreamItem, GatewayStreamResponse, GatewayUpstreamResponse,
+    OpenAiResponsesPreflight, OpenAiResponsesTerminalFailureClass,
 };

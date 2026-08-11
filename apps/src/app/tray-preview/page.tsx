@@ -119,7 +119,7 @@ export default function TrayPreviewPage() {
                 </p>
               </div>
               <h1 className="mt-1 truncate text-[17px] font-semibold tracking-normal">
-                CodexManager
+                OpenRuntime
               </h1>
             </div>
             <Button

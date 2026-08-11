@@ -180,6 +180,109 @@ fn token_account_count_counts_distinct_token_accounts() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn codex_tokens_are_encrypted_at_rest_and_decrypted_on_read() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let now = now_ts();
+    storage
+        .insert_account(&sample_account("acc-encrypted", now))
+        .expect("insert account");
+    storage
+        .insert_token(&Token {
+            account_id: "acc-encrypted".into(),
+            id_token: "id-secret-sentinel".into(),
+            access_token: "access-secret-sentinel".into(),
+            refresh_token: "refresh-secret-sentinel".into(),
+            api_key_access_token: Some("api-secret-sentinel".into()),
+            last_refresh: now,
+        })
+        .expect("insert encrypted token");
+
+    let raw: (String, String, String, String) = storage
+        .conn
+        .query_row(
+            "SELECT id_token, access_token, refresh_token, api_key_access_token
+             FROM tokens WHERE account_id = ?1",
+            ["acc-encrypted"],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("read ciphertext");
+    for value in [&raw.0, &raw.1, &raw.2, &raw.3] {
+        assert!(value.starts_with("vault:v1:"));
+        assert!(!value.contains("secret-sentinel"));
+    }
+
+    let token = storage
+        .find_token_by_account_id("acc-encrypted")
+        .expect("read token")
+        .expect("token exists");
+    assert_eq!(token.id_token, "id-secret-sentinel");
+    assert_eq!(token.access_token, "access-secret-sentinel");
+    assert_eq!(token.refresh_token, "refresh-secret-sentinel");
+    assert_eq!(
+        token.api_key_access_token.as_deref(),
+        Some("api-secret-sentinel")
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn codex_token_migration_encrypts_existing_plaintext_rows() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let now = now_ts();
+    storage
+        .insert_account(&sample_account("acc-legacy-token", now))
+        .expect("insert account");
+    storage
+        .conn
+        .execute(
+            "INSERT INTO tokens (
+                account_id, id_token, access_token, refresh_token,
+                api_key_access_token, last_refresh
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            (
+                "acc-legacy-token",
+                "legacy-id",
+                "legacy-access",
+                "legacy-refresh",
+                Some("legacy-api"),
+                now,
+            ),
+        )
+        .expect("insert legacy plaintext token");
+    storage
+        .conn
+        .execute(
+            "DELETE FROM schema_migrations WHERE version = '117_encrypt_codex_tokens'",
+            [],
+        )
+        .expect("reset token encryption migration");
+
+    storage.init().expect("rerun token encryption migration");
+
+    let raw: String = storage
+        .conn
+        .query_row(
+            "SELECT refresh_token FROM tokens WHERE account_id = ?1",
+            ["acc-legacy-token"],
+            |row| row.get(0),
+        )
+        .expect("read migrated ciphertext");
+    assert!(raw.starts_with("vault:v1:"));
+    assert!(!raw.contains("legacy-refresh"));
+    assert_eq!(
+        storage
+            .find_token_by_account_id("acc-legacy-token")
+            .expect("read migrated token")
+            .expect("token exists")
+            .refresh_token,
+        "legacy-refresh"
+    );
+}
+
 #[test]
 fn list_account_token_candidates_for_accounts_filters_requested_ids() {
     let storage = Storage::open_in_memory().expect("open");

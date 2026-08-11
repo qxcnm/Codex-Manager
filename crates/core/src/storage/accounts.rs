@@ -104,6 +104,7 @@ impl Storage {
         }
 
         let tx = self.conn.unchecked_transaction()?;
+        let encrypted_token = self.encrypt_token(token)?;
         tx.execute(
             "INSERT INTO accounts (
                 id,
@@ -196,12 +197,12 @@ impl Storage {
                 api_key_access_token = excluded.api_key_access_token,
                 last_refresh = excluded.last_refresh",
             (
-                &token.account_id,
-                &token.id_token,
-                &token.access_token,
-                &token.refresh_token,
-                &token.api_key_access_token,
-                token.last_refresh,
+                &encrypted_token.account_id,
+                &encrypted_token.id_token,
+                &encrypted_token.access_token,
+                &encrypted_token.refresh_token,
+                &encrypted_token.api_key_access_token,
+                encrypted_token.last_refresh,
             ),
         )?;
         tx.commit()
@@ -644,6 +645,8 @@ impl Storage {
                 group_name: row.get(2)?,
                 sort: row.get(3)?,
                 status: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
             })
         })?;
         rows.collect()
@@ -1479,7 +1482,7 @@ impl Storage {
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query([identity])?;
         if let Some(row) = rows.next()? {
-            Ok(Some(map_gateway_candidate_row(row)?))
+            Ok(Some(map_gateway_candidate_row(self, row)?))
         } else {
             Ok(None)
         }
@@ -1812,16 +1815,34 @@ fn list_account_usage_refresh_token_targets_by_statuses_chunk(
     let mut stmt = storage.conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(params), |row| {
         let account_id: String = row.get(0)?;
+        let token_account_id: String = row.get(2)?;
         Ok((
             AccountUsageRefreshTokenTarget {
                 account_id,
                 workspace_id: row.get(1)?,
                 token: Token {
-                    account_id: row.get(2)?,
-                    id_token: row.get(3)?,
-                    access_token: row.get(4)?,
-                    refresh_token: row.get(5)?,
-                    api_key_access_token: row.get(6)?,
+                    id_token: storage.decrypt_token_field(
+                        &token_account_id,
+                        "id",
+                        &row.get::<_, String>(3)?,
+                    )?,
+                    access_token: storage.decrypt_token_field(
+                        &token_account_id,
+                        "access",
+                        &row.get::<_, String>(4)?,
+                    )?,
+                    refresh_token: storage.decrypt_token_field(
+                        &token_account_id,
+                        "refresh",
+                        &row.get::<_, String>(5)?,
+                    )?,
+                    api_key_access_token: row
+                        .get::<_, Option<String>>(6)?
+                        .map(|value| {
+                            storage.decrypt_token_field(&token_account_id, "api-key-access", &value)
+                        })
+                        .transpose()?,
+                    account_id: token_account_id,
                     last_refresh: row.get(7)?,
                 },
             },
@@ -2078,7 +2099,7 @@ fn list_gateway_candidates_filtered(
     let mut rows = stmt.query(params_from_iter(params))?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
-        out.push(map_gateway_candidate_row(row)?);
+        out.push(map_gateway_candidate_row(storage, row)?);
     }
     Ok(out)
 }
@@ -2319,13 +2340,29 @@ fn map_account_row_from_offset(row: &Row<'_>, offset: usize) -> Result<Account> 
 ///
 /// # 返回
 /// 返回函数执行结果
-fn map_token_row_from_offset(row: &Row<'_>, offset: usize) -> Result<Token> {
+fn map_token_row_from_offset(storage: &Storage, row: &Row<'_>, offset: usize) -> Result<Token> {
+    let account_id: String = row.get(offset)?;
     Ok(Token {
-        account_id: row.get(offset)?,
-        id_token: row.get(offset + 1)?,
-        access_token: row.get(offset + 2)?,
-        refresh_token: row.get(offset + 3)?,
-        api_key_access_token: row.get(offset + 4)?,
+        id_token: storage.decrypt_token_field(
+            &account_id,
+            "id",
+            &row.get::<_, String>(offset + 1)?,
+        )?,
+        access_token: storage.decrypt_token_field(
+            &account_id,
+            "access",
+            &row.get::<_, String>(offset + 2)?,
+        )?,
+        refresh_token: storage.decrypt_token_field(
+            &account_id,
+            "refresh",
+            &row.get::<_, String>(offset + 3)?,
+        )?,
+        api_key_access_token: row
+            .get::<_, Option<String>>(offset + 4)?
+            .map(|value| storage.decrypt_token_field(&account_id, "api-key-access", &value))
+            .transpose()?,
+        account_id,
         last_refresh: row.get(offset + 5)?,
     })
 }
@@ -2341,9 +2378,9 @@ fn map_token_row_from_offset(row: &Row<'_>, offset: usize) -> Result<Token> {
 ///
 /// # 返回
 /// 返回函数执行结果
-fn map_gateway_candidate_row(row: &Row<'_>) -> Result<(Account, Token)> {
+fn map_gateway_candidate_row(storage: &Storage, row: &Row<'_>) -> Result<(Account, Token)> {
     let account = map_account_row_from_offset(row, 0)?;
-    let token = map_token_row_from_offset(row, 10)?;
+    let token = map_token_row_from_offset(storage, row, 10)?;
     Ok((account, token))
 }
 

@@ -11,13 +11,17 @@ use crate::RpcActor;
 
 mod account;
 mod account_manager;
+mod adapter_probe_jobs;
 mod aggregate_api;
 mod apikey;
 mod app_settings;
 mod codex_profile;
 mod dashboard;
 mod gateway;
+mod grok;
+mod kiro;
 mod model_groups;
+mod proxy_profiles;
 mod quota;
 mod requestlog;
 mod service_config;
@@ -278,7 +282,19 @@ pub(crate) fn handle_request_with_actor(req: JsonRpcRequest, actor: RpcActor) ->
     if let Some(resp) = account_manager::try_handle(&req, &actor) {
         return JsonRpcMessage::Response(resp);
     }
+    if let Some(resp) = adapter_probe_jobs::try_handle(&req) {
+        return JsonRpcMessage::Response(resp);
+    }
     if let Some(resp) = aggregate_api::try_handle(&req) {
+        return JsonRpcMessage::Response(resp);
+    }
+    if let Some(resp) = kiro::try_handle(&req) {
+        return JsonRpcMessage::Response(resp);
+    }
+    if let Some(resp) = grok::try_handle(&req) {
+        return JsonRpcMessage::Response(resp);
+    }
+    if let Some(resp) = proxy_profiles::try_handle(&req) {
         return JsonRpcMessage::Response(resp);
     }
     if let Some(resp) = apikey::try_handle(&req, &actor) {

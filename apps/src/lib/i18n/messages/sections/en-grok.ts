@@ -1,0 +1,26 @@
+import type { MessageCatalog } from "../types";
+
+export const EN_GROK_MESSAGES: MessageCatalog = {
+  "Grok 凭据中心": "Grok Credentials",
+  "独立管理 Grok 网页账号，凭据加密保存并与其他 Provider 隔离。": "Manage Grok web accounts separately. Credentials are encrypted and isolated from other providers.",
+  "Grok 文本导入": "Grok Text Import",
+  "每行一条：account----password----SSO。预览区只显示脱敏账号，不回显密码或 SSO。": "One entry per line: account----password----SSO. The preview only shows masked accounts and never echoes passwords or SSO tokens.",
+  "安全预览": "Safe preview",
+  "脱敏账号": "Masked account",
+  "导入行为": "Import action",
+  新增: "Add",
+  更新: "Update",
+  "没有可导入的 Grok 凭据": "No importable Grok credentials",
+  "Grok 已加密凭据": "Encrypted Grok credentials",
+  "列表只返回脱敏账号和运行状态，不返回 password 或 SSO。": "The list only returns masked accounts and runtime status, never passwords or SSO tokens.",
+  "暂无 Grok 凭据": "No Grok credentials",
+  "确定删除该 Grok 凭据？此操作不可撤销。": "Delete this Grok credential? This cannot be undone.",
+  "已加密导入": "Encrypted and imported",
+  "条 Grok 凭据": "Grok credentials",
+  行: "line",
+  "Grok 登录凭据已失效，请重新导入": "The Grok sign-in credential has expired. Import it again.",
+  "Grok 风控验证未通过，请检查固定代理出口后稍后重试": "Grok anti-bot verification failed. Check the fixed proxy exit and retry later.",
+  "Grok 模型探测过于频繁，请稍后重试": "Grok model detection is rate limited. Retry later.",
+  "暂时无法确认该 Grok 账号的套餐等级，未展示未经验证的模型": "The Grok plan could not be confirmed, so unverified models remain hidden.",
+  "Grok 模型探测签名服务暂时不可用": "The Grok model detection signing service is temporarily unavailable.",
+};

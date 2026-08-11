@@ -27,8 +27,8 @@ struct CodexNpmLatestResponse {
 use super::{
     get_persisted_app_setting, normalize_optional_text, parse_bool_with_default,
     save_persisted_app_setting, save_persisted_bool_setting,
-    APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY, APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY,
-    APP_SETTING_GATEWAY_COMPACT_MODEL_FORWARD_RULES_KEY,
+    APP_SETTING_GATEWAY_ACCOUNT_BATCH_ROTATION_KEY, APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY,
+    APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY, APP_SETTING_GATEWAY_COMPACT_MODEL_FORWARD_RULES_KEY,
     APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY,
     APP_SETTING_GATEWAY_MODEL_CATALOG_AUTO_REMOTE_FETCH_KEY,
     APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY, APP_SETTING_GATEWAY_ORIGINATOR_KEY,
@@ -272,6 +272,20 @@ pub fn set_gateway_account_max_inflight(limit: usize) -> Result<usize, String> {
 /// 返回函数执行结果
 pub fn current_gateway_account_max_inflight() -> usize {
     gateway::account_max_inflight_limit()
+}
+
+pub fn set_gateway_account_batch_rotation(
+    config: gateway::AccountBatchRotationConfig,
+) -> Result<gateway::AccountBatchRotationConfig, String> {
+    let applied = gateway::set_account_batch_rotation_config(config);
+    let raw = serde_json::to_string(&applied)
+        .map_err(|err| format!("serialize account batch rotation failed: {err}"))?;
+    save_persisted_app_setting(APP_SETTING_GATEWAY_ACCOUNT_BATCH_ROTATION_KEY, Some(&raw))?;
+    Ok(applied)
+}
+
+pub fn current_gateway_account_batch_rotation() -> gateway::AccountBatchRotationConfig {
+    gateway::account_batch_rotation_config()
 }
 
 pub fn set_gateway_thread_aware_account_distribution_enabled(

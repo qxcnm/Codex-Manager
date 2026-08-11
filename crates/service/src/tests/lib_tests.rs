@@ -485,6 +485,11 @@ fn create_owned_test_api_key(user_id: &str, name: &str, model: &str) -> String {
         None,
         None,
         None,
+        vec![],
+        vec![],
+        None,
+        None,
+        None,
         None,
     )
     .expect("create api key");
@@ -1190,6 +1195,11 @@ fn member_dashboard_filters_to_current_user_keys() {
         None,
         None,
         None,
+        vec![],
+        vec![],
+        None,
+        None,
+        None,
         None,
     )
     .expect("create key one");
@@ -1202,6 +1212,11 @@ fn member_dashboard_filters_to_current_user_keys() {
         None,
         None,
         None,
+        None,
+        None,
+        None,
+        vec![],
+        vec![],
         None,
         None,
         None,
@@ -1871,7 +1886,11 @@ fn member_created_api_key_ignores_admin_only_routing_fields() {
                 "aggregateApiId": "agg-secret",
                 "upstreamBaseUrl": "https://example.invalid/v1",
                 "staticHeadersJson": "{\"x-admin\":\"secret\"}",
-                "accountPlanFilter": "pro"
+                "accountPlanFilter": "pro",
+                "allowedModels": ["smart", "kiro/claude-sonnet-4.5"],
+                "allowedPlatforms": ["kiro"],
+                "expiresAt": 2_000_000_000,
+                "concurrencyLimit": 3
             }),
         ),
         actor.clone(),
@@ -1894,6 +1913,13 @@ fn member_created_api_key_ignores_admin_only_routing_fields() {
     assert!(item["upstreamBaseUrl"].is_null());
     assert!(item["staticHeadersJson"].is_null());
     assert!(item["accountPlanFilter"].is_null());
+    assert_eq!(
+        item["allowedModels"],
+        serde_json::json!(["kiro/claude-sonnet-4.5", "smart"])
+    );
+    assert_eq!(item["allowedPlatforms"], serde_json::json!(["kiro"]));
+    assert_eq!(item["expiresAt"], 2_000_000_000_i64);
+    assert_eq!(item["concurrencyLimit"], 3);
 
     let _ = std::fs::remove_file(db_path);
 }

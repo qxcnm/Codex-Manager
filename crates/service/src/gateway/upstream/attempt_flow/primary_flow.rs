@@ -41,6 +41,19 @@ fn resolve_chatgpt_primary_bearer(token: &Token) -> Option<String> {
     }
 }
 
+fn resolve_chatgpt_primary_auth(
+    storage: &Storage,
+    account: &Account,
+    token: &Token,
+) -> Result<Option<(String, &'static str)>, String> {
+    if let Some(assertion) =
+        crate::account_agent_identity::build_agent_identity_authorization(storage, &account.id)?
+    {
+        return Ok(Some((assertion, "agent_identity")));
+    }
+    Ok(resolve_chatgpt_primary_bearer(token).map(|access| (access, "access_token")))
+}
+
 /// 函数 `run_primary_upstream_flow`
 ///
 /// 作者: gaohongshun
@@ -77,17 +90,24 @@ pub(in crate::gateway::upstream) fn run_primary_upstream_flow<F>(
 where
     F: FnMut(Option<&str>, u16, Option<&str>),
 {
-    let (auth_token, token_source) =
-        if let Some(access_token) = resolve_chatgpt_primary_bearer(token) {
-            (access_token, "access_token")
-        } else {
+    let (auth_token, token_source) = match resolve_chatgpt_primary_auth(storage, account, token) {
+        Ok(Some(resolved)) => resolved,
+        Ok(None) => {
             let err = "missing chatgpt access token";
             log_gateway_result(Some(primary_url), 401, Some(err));
             return PrimaryFlowDecision::Terminal {
                 status_code: 401,
                 message: err.to_string(),
             };
-        };
+        }
+        Err(error) => {
+            log_gateway_result(Some(primary_url), 401, Some(error.as_str()));
+            return PrimaryFlowDecision::Terminal {
+                status_code: 401,
+                message: format!("agent identity authentication failed: {error}"),
+            };
+        }
+    };
     if debug {
         log::debug!(
             "event=gateway_upstream_token_source path={} account_id={} token_source={} upstream_base={}",
