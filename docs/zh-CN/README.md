@@ -24,7 +24,7 @@
       </a>
     </td>
     <td valign="top">
-      <strong><a href="https://www.aixiamo.com/?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=sponsor_text">AIXiamo（独立 AI 订阅服务）</a></strong>：提供 <a href="https://www.aixiamo.com/articles/codex-quota-not-enough-plus-pro-api-2026?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=developer_codex_quota">ChatGPT Plus / Pro 国内充值与 Codex 额度选择</a>，也覆盖 Claude Max 5x / 20x、Google AI Pro（Gemini）和 SuperGrok；支持支付宝，无需海外银行卡，订单状态可查询。
+      <strong><a href="https://www.aixiamo.com/?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=sponsor_text">AIXiamo（独立 AI 订阅服务）</a></strong>：提供 <a href="https://www.aixiamo.com/chatgpt-plus-domestic-recharge?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=developer_plus_owner">ChatGPT Plus 国内充值</a>、<a href="https://www.aixiamo.com/chatgpt-pro?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=developer_pro_owner">ChatGPT Pro 国内充值（支付宝 / 无海外银行卡，5x / 20x）</a>与<a href="https://www.aixiamo.com/articles/codex-quota-not-enough-plus-pro-api-2026?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=developer_codex_quota">Codex 额度选择</a>，也覆盖 Claude Max 5x / 20x、Google AI Pro（Gemini）和 SuperGrok；支持支付宝，无需海外银行卡，订单状态可查询。
     </td>
   </tr>
   <tr>
