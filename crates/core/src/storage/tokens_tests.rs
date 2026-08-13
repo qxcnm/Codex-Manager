@@ -27,6 +27,107 @@ fn sample_token(account_id: &str, now: i64) -> Token {
     }
 }
 
+#[test]
+fn insert_token_encrypts_database_fields_and_reads_plaintext() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let now = now_ts();
+    let token = sample_token("acc-encrypted", now);
+
+    storage
+        .insert_account(&sample_account("acc-encrypted", now))
+        .expect("insert account");
+    storage.insert_token(&token).expect("insert token");
+
+    let stored = storage
+        .conn
+        .query_row(
+            "SELECT id_token, access_token, refresh_token, api_key_access_token
+             FROM tokens WHERE account_id = ?1",
+            ["acc-encrypted"],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .expect("read raw token row");
+
+    for value in [&stored.0, &stored.1, &stored.2, &stored.3] {
+        assert!(value.starts_with("cmenc:v1:"));
+        assert!(!value.contains("acc-encrypted"));
+    }
+
+    let loaded = storage
+        .find_token_by_account_id("acc-encrypted")
+        .expect("find token")
+        .expect("token exists");
+    assert_eq!(loaded.id_token, token.id_token);
+    assert_eq!(loaded.access_token, token.access_token);
+    assert_eq!(loaded.refresh_token, token.refresh_token);
+    assert_eq!(loaded.api_key_access_token, token.api_key_access_token);
+}
+
+#[test]
+fn init_migrates_legacy_plaintext_token_rows() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let now = now_ts();
+
+    storage
+        .insert_account(&sample_account("acc-legacy", now))
+        .expect("insert account");
+    storage
+        .conn
+        .execute(
+            "INSERT INTO tokens (
+                account_id, id_token, access_token, refresh_token, api_key_access_token, last_refresh
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            (
+                "acc-legacy",
+                "legacy-id",
+                "legacy-access",
+                "legacy-refresh",
+                "legacy-api",
+                now,
+            ),
+        )
+        .expect("insert legacy token");
+    storage
+        .conn
+        .execute(
+            "DELETE FROM schema_migrations WHERE version = '131_encrypt_account_tokens_at_rest'",
+            [],
+        )
+        .expect("reset data migration");
+    *storage.applied_migrations.borrow_mut() = None;
+
+    storage.init().expect("migrate tokens");
+
+    let raw_access: String = storage
+        .conn
+        .query_row(
+            "SELECT access_token FROM tokens WHERE account_id = 'acc-legacy'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read migrated row");
+    assert!(raw_access.starts_with("cmenc:v1:"));
+    assert!(!raw_access.contains("legacy-access"));
+
+    let loaded = storage
+        .find_token_by_account_id("acc-legacy")
+        .expect("find token")
+        .expect("token exists");
+    assert_eq!(loaded.id_token, "legacy-id");
+    assert_eq!(loaded.access_token, "legacy-access");
+    assert_eq!(loaded.refresh_token, "legacy-refresh");
+    assert_eq!(loaded.api_key_access_token.as_deref(), Some("legacy-api"));
+}
+
 fn collect_query_plan(storage: &Storage, sql: &str) -> String {
     let mut stmt = storage.conn.prepare(sql).expect("prepare explain");
     let mut rows = stmt.query([]).expect("query explain");

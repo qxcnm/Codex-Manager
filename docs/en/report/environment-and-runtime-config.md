@@ -68,6 +68,8 @@
 以下变量属于 bootstrap 配置，不能依赖启动后再补：
 
 - `CODEXMANAGER_DB_PATH`
+- `CODEXMANAGER_TOKEN_ENCRYPTION_KEY`
+- `CODEXMANAGER_TOKEN_ENCRYPTION_KEY_FILE`
 - `CODEXMANAGER_RPC_TOKEN`
 - `CODEXMANAGER_RPC_TOKEN_FILE`
 
@@ -152,9 +154,18 @@ Notes:
 ### 存储与鉴权
 
 - `CODEXMANAGER_DB_PATH`
+- `CODEXMANAGER_TOKEN_ENCRYPTION_KEY`: a Base64-encoded 32-byte master key for account tokens. Supply it only through the process environment or a secret manager; never commit it.
+- `CODEXMANAGER_TOKEN_ENCRYPTION_KEY_FILE`: path to a secret file containing either 32 raw key bytes or their Base64 encoding. This is the recommended service and Docker configuration.
 - `CODEXMANAGER_RPC_TOKEN`
 - `CODEXMANAGER_RPC_TOKEN_FILE`
 - `CODEXMANAGER_NO_SERVICE`
+
+Account `id_token`, `access_token`, `refresh_token`, and account API access-token values are stored in SQLite as AES-256-GCM ciphertext. Existing plaintext rows are migrated automatically during startup:
+
+- macOS and Windows desktop environments prefer the operating-system credential store for the master key.
+- On Linux, or if no credential store is available and no key is configured, CodexManager creates a permission-restricted `codexmanager.token-key` fallback file in the database directory.
+- Service and Docker deployments should set `CODEXMANAGER_TOKEN_ENCRYPTION_KEY_FILE` explicitly and mount the same read-only secret into every process that accesses the database.
+- Losing or replacing the master key makes existing tokens undecryptable. Back up the matching credential or secret, but do not put it in the same unprotected archive as the database.
 
 ### 更新与发布辅助
 
@@ -228,6 +239,7 @@ codexmanager-service-bundle/
 CODEXMANAGER_SERVICE_ADDR=0.0.0.0:48760
 CODEXMANAGER_WEB_ADDR=0.0.0.0:48761
 CODEXMANAGER_DB_PATH=./data/codexmanager.db
+CODEXMANAGER_TOKEN_ENCRYPTION_KEY_FILE=./secrets/account-token.key
 CODEXMANAGER_RPC_TOKEN_FILE=./data/codexmanager.rpc-token
 CODEXMANAGER_UPSTREAM_PROXY_URL=http://127.0.0.1:7890
 ```
@@ -250,6 +262,7 @@ codexmanager-service-bundle/
 补充说明：
 
 - `CODEXMANAGER_DB_PATH=./data/codexmanager.db` 这种相对路径，会按“可执行文件所在目录”解析
+- Prefer an absolute `CODEXMANAGER_TOKEN_ENCRYPTION_KEY_FILE` path. Relative key-file paths are resolved from the process working directory.
 - `CODEXMANAGER_RPC_TOKEN_FILE` 也是同样规则
 - 如果你不写 `CODEXMANAGER_DB_PATH`，Service 版默认会把数据库放到程序目录下的 `codexmanager.db`
 

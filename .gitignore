@@ -40,6 +40,8 @@
 *.db
 *.sqlite
 codexmanager.rpc-token
+*.token-key
+account-token.key
 codex resume*.txt
 .tmp_stage_ps/
 .tmp_stage_sh/

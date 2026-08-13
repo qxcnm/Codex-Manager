@@ -7,7 +7,7 @@ use super::agent_identities::delete_account_agent_identity_for_account_sql;
 use super::conversation_bindings::delete_conversation_bindings_for_account_sql;
 use super::events::delete_events_for_account_sql;
 use super::key_id_filters::{normalize_text_ids, text_id_in_clause, SQLITE_IN_CLAUSE_BATCH_SIZE};
-use super::tokens::delete_token_for_account_sql;
+use super::tokens::{decrypt_token_field, delete_token_for_account_sql};
 use super::usage::delete_usage_snapshots_for_account_sql;
 
 use super::{
@@ -98,6 +98,8 @@ impl Storage {
                 "account id and token account id do not match".to_string(),
             ));
         }
+
+        let encrypted_token = self.encrypt_account_token_for_storage(token)?;
 
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
@@ -192,12 +194,12 @@ impl Storage {
                 api_key_access_token = excluded.api_key_access_token,
                 last_refresh = excluded.last_refresh",
             (
-                &token.account_id,
-                &token.id_token,
-                &token.access_token,
-                &token.refresh_token,
-                &token.api_key_access_token,
-                token.last_refresh,
+                &encrypted_token.account_id,
+                &encrypted_token.id_token,
+                &encrypted_token.access_token,
+                &encrypted_token.refresh_token,
+                &encrypted_token.api_key_access_token,
+                encrypted_token.last_refresh,
             ),
         )?;
         if let Some(identity) = agent_identity {
@@ -1585,7 +1587,7 @@ impl Storage {
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query([identity])?;
         if let Some(row) = rows.next()? {
-            Ok(Some(map_gateway_candidate_row(row)?))
+            Ok(Some(map_gateway_candidate_row(self, row)?))
         } else {
             Ok(None)
         }
@@ -1922,14 +1924,7 @@ fn list_account_usage_refresh_token_targets_by_statuses_chunk(
             AccountUsageRefreshTokenTarget {
                 account_id,
                 workspace_id: row.get(1)?,
-                token: Token {
-                    account_id: row.get(2)?,
-                    id_token: row.get(3)?,
-                    access_token: row.get(4)?,
-                    refresh_token: row.get(5)?,
-                    api_key_access_token: row.get(6)?,
-                    last_refresh: row.get(7)?,
-                },
+                token: map_token_row_from_offset(storage, row, 2)?,
             },
             row.get(8)?,
             row.get(9)?,
@@ -2179,7 +2174,7 @@ fn list_gateway_candidates_filtered(
     let mut rows = stmt.query(params_from_iter(params))?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
-        out.push(map_gateway_candidate_row(row)?);
+        out.push(map_gateway_candidate_row(storage, row)?);
     }
     Ok(out)
 }
@@ -2420,14 +2415,30 @@ fn map_account_row_from_offset(row: &Row<'_>, offset: usize) -> Result<Account> 
 ///
 /// # 返回
 /// 返回函数执行结果
-fn map_token_row_from_offset(row: &Row<'_>, offset: usize) -> Result<Token> {
+fn map_token_row_from_offset(storage: &Storage, row: &Row<'_>, offset: usize) -> Result<Token> {
+    let account_id: String = row.get(offset)?;
     Ok(Token {
-        account_id: row.get(offset)?,
-        id_token: row.get(offset + 1)?,
-        access_token: row.get(offset + 2)?,
-        refresh_token: row.get(offset + 3)?,
-        api_key_access_token: row.get(offset + 4)?,
+        id_token: decrypt_token_field(storage, &account_id, "id_token", row.get(offset + 1)?)?,
+        access_token: decrypt_token_field(
+            storage,
+            &account_id,
+            "access_token",
+            row.get(offset + 2)?,
+        )?,
+        refresh_token: decrypt_token_field(
+            storage,
+            &account_id,
+            "refresh_token",
+            row.get(offset + 3)?,
+        )?,
+        api_key_access_token: row
+            .get::<_, Option<String>>(offset + 4)?
+            .map(|value| {
+                decrypt_token_field(storage, &account_id, "api_key_access_token", value)
+            })
+            .transpose()?,
         last_refresh: row.get(offset + 5)?,
+        account_id,
     })
 }
 
@@ -2442,9 +2453,9 @@ fn map_token_row_from_offset(row: &Row<'_>, offset: usize) -> Result<Token> {
 ///
 /// # 返回
 /// 返回函数执行结果
-fn map_gateway_candidate_row(row: &Row<'_>) -> Result<(Account, Token)> {
+fn map_gateway_candidate_row(storage: &Storage, row: &Row<'_>) -> Result<(Account, Token)> {
     let account = map_account_row_from_offset(row, 0)?;
-    let token = map_token_row_from_offset(row, 10)?;
+    let token = map_token_row_from_offset(storage, row, 10)?;
     Ok((account, token))
 }
 

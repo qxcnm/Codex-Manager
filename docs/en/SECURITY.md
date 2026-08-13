@@ -63,6 +63,9 @@ Before submitting logs, screenshots, and configurations, please desensitize the 
 
 ## Current known boundaries
 
+- Account tokens are encrypted in SQLite with AES-256-GCM. On macOS and Windows the master key prefers the operating-system credential store, and it can also be supplied through `CODEXMANAGER_TOKEN_ENCRYPTION_KEY_FILE` or `CODEXMANAGER_TOKEN_ENCRYPTION_KEY`.
+- The `codexmanager.token-key` fallback used when no credential store is available only reduces the risk of the database file being copied by itself. It does not protect against compromise of the whole data directory or logged-in OS account. Production service and Docker deployments should use a separate secret manager.
+- Existing tokens cannot be recovered if the master key is lost. Never commit the key or include it in logs or the same unprotected backup as the database.
 - The project defaults to local deployment and self-hosted usage scenarios, and does not promise fully automatic security hardening when exposed to the public network.
 - If `0.0.0.0` monitoring is enabled or Web/service is exposed to the LAN or public network, the deployer needs to bear the risk of network exposure at its own risk and cooperate with:
   - Strong password
