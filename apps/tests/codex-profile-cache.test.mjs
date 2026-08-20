@@ -103,6 +103,8 @@ test("平台模式切换透传并持久化 Codex 后台重载开关", async () =
   const tauri = await readSource("src-tauri/src/commands/codex_profile.rs");
 
   assert.match(state, /codexmanager\.platform-mode\.reload-after-switch/);
+  assert.match(state, /reloadAfterSwitchMemoryValue = false/);
+  assert.match(state, /reload-safe-default-v2/);
   assert.match(state, /reloadAfterSwitch,/);
   assert.match(sections, /切换后重载 Codex 后台/);
   assert.match(client, /reloadAfterSwitch: params\.reloadAfterSwitch/);

@@ -28,14 +28,22 @@ const RELOAD_AFTER_SWITCH_STORAGE_KEY =
   "codexmanager.platform-mode.reload-after-switch";
 const RELOAD_AFTER_SWITCH_EVENT =
   "codexmanager:platform-mode-reload-after-switch";
+const SAFE_RELOAD_DEFAULT_MIGRATION_KEY =
+  "codexmanager.platform-mode.reload-safe-default-v2";
 
-let reloadAfterSwitchMemoryValue = true;
+let reloadAfterSwitchMemoryValue = false;
 
 function getReloadAfterSwitchPreference(): boolean {
   if (typeof window === "undefined") {
     return reloadAfterSwitchMemoryValue;
   }
   try {
+    if (window.localStorage.getItem(SAFE_RELOAD_DEFAULT_MIGRATION_KEY) !== "1") {
+      // Older versions enabled process termination by default. Reset that inherited preference
+      // once; users can explicitly opt in again after the migration.
+      window.localStorage.setItem(RELOAD_AFTER_SWITCH_STORAGE_KEY, "false");
+      window.localStorage.setItem(SAFE_RELOAD_DEFAULT_MIGRATION_KEY, "1");
+    }
     const stored = window.localStorage.getItem(RELOAD_AFTER_SWITCH_STORAGE_KEY);
     if (stored === "true" || stored === "false") {
       reloadAfterSwitchMemoryValue = stored === "true";
@@ -115,7 +123,7 @@ export function usePlatformModePageState(
   const reloadAfterSwitch = useSyncExternalStore(
     subscribeToReloadAfterSwitchPreference,
     getReloadAfterSwitchPreference,
-    () => true,
+    () => false,
   );
   const browserOrigin = useSyncExternalStore(
     () => () => undefined,

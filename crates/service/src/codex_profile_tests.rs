@@ -119,7 +119,7 @@ fn sqlite_provider(dir: &Path, thread_id: &str) -> String {
 }
 
 #[test]
-fn direct_config_removes_only_managed_provider() {
+fn direct_config_uses_openai_and_keeps_secret_free_legacy_provider() {
     let input = r#"
 model_provider = "cm"
 model = "gpt-5.4"
@@ -128,6 +128,8 @@ model = "gpt-5.4"
 name = "CodexManager"
 base_url = "http://localhost:48760/v1"
 wire_api = "responses"
+experimental_bearer_token = "must-be-removed"
+custom_header = "must-also-be-removed"
 
 [model_providers.other]
 name = "Other"
@@ -138,8 +140,13 @@ base_url = "https://example.test/v1"
     let output = patch_config_for_direct(Some(input.to_string()), &managed_catalog, None)
         .expect("patch direct");
 
-    assert!(!output.contains("model_provider = \"cm\""));
-    assert!(!output.contains("[model_providers.cm]"));
+    assert!(output.contains("model_provider = \"openai\""));
+    assert!(output.contains("[model_providers.cm]"));
+    assert!(output.contains("wire_api = \"responses\""));
+    assert!(output.contains("requires_openai_auth = true"));
+    assert!(!output.contains("base_url = \"http://localhost:48760/v1\""));
+    assert!(!output.contains("experimental_bearer_token"));
+    assert!(!output.contains("custom_header"));
     assert!(output.contains("[model_providers.other]"));
     assert!(output.contains("model = \"gpt-5.4\""));
 }

@@ -353,17 +353,13 @@ pub(crate) fn apply_direct_account(
             account_id: Some(account.id.clone()),
             api_key_id: None,
             gateway_base_url: None,
-            provider_id: PROVIDER_ID.to_string(),
+            provider_id: DEFAULT_HISTORY_PROVIDER_ID.to_string(),
             previous_model_catalog_json: None,
             updated_at: now_ts(),
         },
     )?;
     persist_codex_home(&profile_dir)?;
-    status_for_profile_after_apply(
-        &profile_dir,
-        DEFAULT_HISTORY_PROVIDER_ID,
-        reload_after_switch,
-    )
+    status_for_profile_after_apply(&profile_dir, None, reload_after_switch)
 }
 
 pub(crate) fn apply_gateway(
@@ -432,7 +428,7 @@ pub(crate) fn apply_gateway(
         },
     )?;
     persist_codex_home(&profile_dir)?;
-    status_for_profile_after_apply(&profile_dir, PROVIDER_ID, reload_after_switch)
+    status_for_profile_after_apply(&profile_dir, Some(PROVIDER_ID), reload_after_switch)
 }
 
 pub(crate) fn restore(codex_home: Option<&str>) -> Result<CodexProfileStatus, String> {
@@ -814,10 +810,16 @@ fn status_for_profile_with_history_repair(
 
 fn status_for_profile_after_apply(
     profile_dir: &Path,
-    target_provider: &str,
+    history_provider: Option<&str>,
     reload_after_switch: bool,
 ) -> Result<CodexProfileStatus, String> {
-    let mut status = status_for_profile_with_history_repair(profile_dir, target_provider)?;
+    // Direct mode keeps a secret-free `cm` compatibility provider, so existing conversations do
+    // not need a synchronous full-profile history rewrite. Gateway mode still repairs history so
+    // existing conversations are routed through the managed provider.
+    let mut status = match history_provider {
+        Some(provider) => status_for_profile_with_history_repair(profile_dir, provider)?,
+        None => status_for_profile(profile_dir)?,
+    };
     status.runtime_reload = Some(if reload_after_switch {
         crate::codex_runtime::reload_codex_app_servers(profile_dir)
     } else {
@@ -1971,23 +1973,22 @@ fn patch_config_for_direct(
     previous_model_catalog_json: Option<&str>,
 ) -> Result<String, String> {
     let mut doc = parse_config(content.as_deref().unwrap_or(""))?;
-    if doc
-        .get("model_provider")
-        .and_then(Item::as_str)
-        .is_some_and(|provider| provider == PROVIDER_ID)
-    {
-        doc.as_table_mut().remove("model_provider");
+    doc.as_table_mut()
+        .insert("model_provider", toml_value(DEFAULT_HISTORY_PROVIDER_ID));
+    if doc.as_table().get("model_providers").is_none() {
+        doc.as_table_mut()
+            .insert("model_providers", Item::Table(Table::new()));
     }
-    if let Some(providers) = doc
+    let providers = doc
         .as_table_mut()
         .get_mut("model_providers")
         .and_then(Item::as_table_mut)
-    {
-        providers.remove(PROVIDER_ID);
-        if providers.is_empty() {
-            doc.as_table_mut().remove("model_providers");
-        }
-    }
+        .ok_or_else(|| "config.toml model_providers is not a table".to_string())?;
+    let mut compatibility_provider = Table::new();
+    compatibility_provider.insert("name", toml_value("OpenAI compatibility"));
+    compatibility_provider.insert("wire_api", toml_value("responses"));
+    compatibility_provider.insert("requires_openai_auth", toml_value(true));
+    providers.insert(PROVIDER_ID, Item::Table(compatibility_provider));
     let managed_catalog_path = managed_catalog_path.to_string_lossy();
     let catalog_is_managed = doc
         .get("model_catalog_json")
