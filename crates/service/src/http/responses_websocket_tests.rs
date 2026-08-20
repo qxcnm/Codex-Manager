@@ -683,6 +683,14 @@ fn inspect_ws_terminal_event_maps_incomplete_to_terminal_error() {
 }
 
 #[test]
+fn inspect_ws_terminal_event_requires_response_completed() {
+    assert!(
+        inspect_ws_terminal_event(r#"{"type":"response.done","response":{"id":"resp_done"}}"#,)
+            .is_none()
+    );
+}
+
+#[test]
 fn websocket_frame_aligns_prompt_cache_key_with_native_conversation_anchor() {
     let _guard = crate::test_env_guard();
     let context = WsRequestContext {

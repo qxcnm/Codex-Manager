@@ -1,4 +1,5 @@
 use super::*;
+use base64::Engine as _;
 
 /// 函数 `same_account_reuses_exchange_lock`
 ///
@@ -115,7 +116,7 @@ fn fallback_to_access_token_uses_runtime_access_token_when_exchange_fails() {
     assert_eq!(bearer, "runtime-access-token");
 }
 
-/// 函数 `api_key_exchange_subject_tokens_falls_back_to_imported_access_token`
+/// 函数 `api_key_exchange_subject_token_omits_access_token_without_id_token`
 ///
 /// 作者: gaohongshun
 ///
@@ -127,7 +128,7 @@ fn fallback_to_access_token_uses_runtime_access_token_when_exchange_fails() {
 /// # 返回
 /// 无
 #[test]
-fn api_key_exchange_subject_tokens_falls_back_to_imported_access_token() {
+fn api_key_exchange_subject_token_omits_access_token_without_id_token() {
     let token = Token {
         account_id: "acc-import-session".to_string(),
         id_token: String::new(),
@@ -137,13 +138,10 @@ fn api_key_exchange_subject_tokens_falls_back_to_imported_access_token() {
         last_refresh: now_ts(),
     };
 
-    assert_eq!(
-        api_key_exchange_subject_tokens(&token),
-        vec!["imported-session-access".to_string()]
-    );
+    assert_eq!(api_key_exchange_subject_token(&token), None);
 }
 
-/// 函数 `api_key_exchange_subject_tokens_prefers_access_token_before_id_token`
+/// 函数 `api_key_exchange_subject_token_uses_id_token_only`
 ///
 /// 作者: gaohongshun
 ///
@@ -155,7 +153,7 @@ fn api_key_exchange_subject_tokens_falls_back_to_imported_access_token() {
 /// # 返回
 /// 无
 #[test]
-fn api_key_exchange_subject_tokens_prefers_access_token_before_id_token() {
+fn api_key_exchange_subject_token_uses_id_token_only() {
     let token = Token {
         account_id: "acc-login".to_string(),
         id_token: "id-token".to_string(),
@@ -166,8 +164,32 @@ fn api_key_exchange_subject_tokens_prefers_access_token_before_id_token() {
     };
 
     assert_eq!(
-        api_key_exchange_subject_tokens(&token),
-        vec!["access-token".to_string(), "id-token".to_string()]
+        api_key_exchange_subject_token(&token),
+        Some("id-token".to_string())
+    );
+}
+
+#[test]
+fn api_key_exchange_client_id_prefers_id_token_claim() {
+    let jwt = |client_id: &str| {
+        let payload = serde_json::json!({"sub":"user-test","client_id": client_id}).to_string();
+        format!(
+            "header.{}.signature",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload)
+        )
+    };
+    let token = Token {
+        account_id: "acc-client-id".to_string(),
+        id_token: jwt("id-token-client"),
+        access_token: jwt("access-token-client"),
+        refresh_token: String::new(),
+        api_key_access_token: None,
+        last_refresh: now_ts(),
+    };
+
+    assert_eq!(
+        api_key_exchange_client_id(&token, "fallback-client"),
+        "id-token-client"
     );
 }
 

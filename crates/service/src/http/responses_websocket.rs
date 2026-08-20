@@ -51,6 +51,12 @@ const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE: &str = "websocket_connection_limi
 const RESPONSES_WS_REQUEST_IN_FLIGHT_CODE: &str = "response_in_flight";
 const WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE: &str =
     "Responses websocket connection limit reached (60 minutes). Create a new websocket connection to continue.";
+// A freshly handshaken socket can still be reset before its first client frame reaches the
+// upstream. Allow one additional fresh socket, but keep recovery bounded and replay-free.
+const RESPONSES_WS_MAX_PENDING_FRAME_SEND_ATTEMPTS: usize = 2;
+// A response can emit only connection preamble events before a transport reset. Reconnect the
+// lane at most twice in that state; once substantive output exists, replay is not safe.
+const RESPONSES_WS_MAX_PRE_COMPLETION_RECOVERY_ATTEMPTS: u8 = 2;
 
 #[derive(Clone)]
 struct WsRequestContext {
@@ -89,7 +95,7 @@ struct PendingWsRequestState {
     conversation_routing: Option<crate::gateway::conversation_binding::ConversationRoutingContext>,
     forwarded_upstream_event: bool,
     forwarded_non_preamble_event: bool,
-    replayed_after_upstream_disconnect: bool,
+    upstream_disconnect_recovery_attempts: u8,
     suppress_replayed_preamble: bool,
     buffered_upstream_preamble: Vec<String>,
     buffer_retry_preamble: bool,
@@ -379,7 +385,7 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
         conversation_routing: upstream.conversation_routing.clone(),
         forwarded_upstream_event: false,
         forwarded_non_preamble_event: false,
-        replayed_after_upstream_disconnect: false,
+        upstream_disconnect_recovery_attempts: 0,
         suppress_replayed_preamble: false,
         buffered_upstream_preamble: Vec::new(),
         buffer_retry_preamble: should_buffer_ws_retry_preamble(
@@ -589,7 +595,7 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
                                     conversation_routing: upstream.conversation_routing.clone(),
                                     forwarded_upstream_event: false,
                                     forwarded_non_preamble_event: false,
-                                    replayed_after_upstream_disconnect: false,
+                                    upstream_disconnect_recovery_attempts: 0,
                                     suppress_replayed_preamble: false,
                                     buffered_upstream_preamble: Vec::new(),
                                     buffer_retry_preamble,
@@ -1958,52 +1964,80 @@ async fn reconnect_upstream_for_pending_request(
     completed_responses: &CompletedWsResponseCache,
     completed_tool_calls: &CompletedWsToolCallCache,
 ) -> Result<ConnectedUpstreamWebsocket, WsSessionError> {
-    let mut replacement = connect_upstream_websocket_with_timeout(
-        context,
-        pending.prepared.model.as_deref(),
-        previous_account_id,
-    )
-    .await?;
-    let account_changed =
-        previous_account_id.is_some_and(|account_id| account_id != replacement.account_id);
-    if let Err(err) = prepare_ws_request_for_new_connection(
-        pending,
-        completed_responses,
-        completed_tool_calls,
-        account_changed,
-    ) {
-        let _ = replacement.stream.close(None).await;
-        return Err(err);
+    let mut previous_account_id = previous_account_id.map(str::to_owned);
+    let mut last_send_error = None;
+
+    for attempt in 1..=RESPONSES_WS_MAX_PENDING_FRAME_SEND_ATTEMPTS {
+        let mut replacement = connect_upstream_websocket_with_timeout(
+            context,
+            pending.prepared.model.as_deref(),
+            previous_account_id.as_deref(),
+        )
+        .await?;
+        let account_changed = previous_account_id
+            .as_deref()
+            .is_some_and(|account_id| account_id != replacement.account_id);
+        if let Err(err) = prepare_ws_request_for_new_connection(
+            pending,
+            completed_responses,
+            completed_tool_calls,
+            account_changed,
+        ) {
+            let _ = replacement.stream.close(None).await;
+            return Err(err);
+        }
+
+        pending.attempted_account_ids.clear();
+        pending
+            .attempted_account_ids
+            .insert(replacement.account_id.clone());
+        pending.log.route_strategy = Some(replacement.route_strategy.to_string());
+        pending.log.route_source = Some(replacement.route_source.to_string());
+        pending.conversation_routing = replacement.conversation_routing.clone();
+        pending.buffer_retry_preamble = should_buffer_ws_retry_preamble(
+            &replacement,
+            &pending.attempted_account_ids,
+            pending.prepared.text.as_str(),
+            pending.retried_missing_tool_call_context,
+        );
+        match replacement
+            .stream
+            .send(UpstreamMessage::Text(pending.prepared.text.clone().into()))
+            .await
+        {
+            Ok(()) => {
+                if attempt > 1 {
+                    log::info!(
+                        "event=responses_ws_reconnect_send_recovered attempt={} account_id={}",
+                        attempt,
+                        replacement.account_id,
+                    );
+                }
+                return Ok(replacement);
+            }
+            Err(err) => {
+                let account_id = replacement.account_id.clone();
+                log::warn!(
+                    "event=responses_ws_reconnect_send_failed attempt={} max_attempts={} account_id={} err={err}",
+                    attempt,
+                    RESPONSES_WS_MAX_PENDING_FRAME_SEND_ATTEMPTS,
+                    account_id,
+                );
+                let _ = replacement.stream.close(None).await;
+                last_send_error = Some(format!(
+                    "send upstream websocket frame after reconnect failed for account {account_id}: {err}"
+                ));
+                previous_account_id = Some(account_id);
+            }
+        }
     }
 
-    pending.attempted_account_ids.clear();
-    pending
-        .attempted_account_ids
-        .insert(replacement.account_id.clone());
-    pending.log.route_strategy = Some(replacement.route_strategy.to_string());
-    pending.log.route_source = Some(replacement.route_source.to_string());
-    pending.conversation_routing = replacement.conversation_routing.clone();
-    pending.buffer_retry_preamble = should_buffer_ws_retry_preamble(
-        &replacement,
-        &pending.attempted_account_ids,
-        pending.prepared.text.as_str(),
-        pending.retried_missing_tool_call_context,
-    );
-    if let Err(err) = replacement
-        .stream
-        .send(UpstreamMessage::Text(pending.prepared.text.clone().into()))
-        .await
-    {
-        let account_id = replacement.account_id.clone();
-        let _ = replacement.stream.close(None).await;
-        return Err(WsSessionError::bad_gateway_bilingual(
-            "重连后发送上游 WebSocket 帧失败",
-            format!(
-                "send upstream websocket frame after reconnect failed for account {account_id}: {err}"
-            ),
-        ));
-    }
-    Ok(replacement)
+    Err(WsSessionError::bad_gateway_bilingual(
+        "重连后发送上游 WebSocket 帧失败",
+        last_send_error.unwrap_or_else(|| {
+            "send upstream websocket frame after reconnect failed after bounded retries".to_string()
+        }),
+    ))
 }
 
 async fn retry_pending_request_after_upstream_disconnect(
@@ -2014,25 +2048,25 @@ async fn retry_pending_request_after_upstream_disconnect(
     completed_tool_calls: &CompletedWsToolCallCache,
     reason: &str,
 ) -> Result<bool, WsSessionError> {
-    if pending.forwarded_non_preamble_event || pending.replayed_after_upstream_disconnect {
+    if pending.forwarded_non_preamble_event
+        || pending.upstream_disconnect_recovery_attempts
+            >= RESPONSES_WS_MAX_PRE_COMPLETION_RECOVERY_ATTEMPTS
+    {
         return Ok(false);
     }
 
-    // Once a continuation has emitted a preamble, replaying the same request
-    // can duplicate an already accepted turn. The only exception retained for
-    // compatibility is a request without previous_response_id, where the
-    // bounded preamble replay remains deduplicated before reaching the client.
-    if pending.prepared.previous_response_id.is_some() && pending.forwarded_upstream_event {
-        return Err(WsSessionError::context_rebase_failed(
-            "上游 WebSocket 已接受增量请求，无法安全重放；请使用新的 response.create 继续",
-        ));
-    }
-
     let suppress_replayed_preamble = pending.forwarded_upstream_event;
-    pending.replayed_after_upstream_disconnect = true;
+    pending.upstream_disconnect_recovery_attempts += 1;
     pending.suppress_replayed_preamble = suppress_replayed_preamble;
     pending.buffered_upstream_preamble.clear();
     let previous_account_id = upstream.account_id.clone();
+    log::info!(
+        "event=responses_ws_pre_completion_recovery_attempt account_id={} attempt={} max_attempts={} reason={}",
+        previous_account_id,
+        pending.upstream_disconnect_recovery_attempts,
+        RESPONSES_WS_MAX_PRE_COMPLETION_RECOVERY_ATTEMPTS,
+        reason,
+    );
     let replacement = reconnect_upstream_for_pending_request(
         context,
         pending,
@@ -2075,7 +2109,7 @@ async fn wait_for_client_request_and_reconnect_upstream(
         conversation_routing: None,
         forwarded_upstream_event: false,
         forwarded_non_preamble_event: false,
-        replayed_after_upstream_disconnect: false,
+        upstream_disconnect_recovery_attempts: 0,
         suppress_replayed_preamble: false,
         buffered_upstream_preamble: Vec::new(),
         buffer_retry_preamble: false,
@@ -3470,7 +3504,7 @@ fn inspect_ws_terminal_event(text: &str) -> Option<WsTerminalEvent> {
     let is_websocket_connection_limit =
         is_websocket_connection_limit_error(error_code.as_deref(), error.as_deref());
     match event_type.as_str() {
-        "response.completed" | "response.done" => Some(WsTerminalEvent {
+        "response.completed" => Some(WsTerminalEvent {
             status_code: 200,
             usage: parse_ws_usage(&value),
             error: None,

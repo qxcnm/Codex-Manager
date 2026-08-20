@@ -507,6 +507,12 @@ fn register_agent_identity(
     let mut request_builder = client
         .post(&url)
         .timeout(AGENT_REGISTRATION_TIMEOUT)
+        // Keep the auth request on the same first-party identity path as the
+        // official Codex client.  The account bearer token alone is valid for
+        // normal Responses calls, but agent registration also relies on the
+        // Codex originator and User-Agent headers for request classification.
+        .header("originator", crate::gateway::current_wire_originator())
+        .header("User-Agent", crate::gateway::current_codex_user_agent())
         .bearer_auth(access_token)
         .json(&request);
     if is_fedramp {
@@ -671,6 +677,10 @@ fn register_agent_identity_task(
     let response = client
         .post(&url)
         .timeout(AGENT_TASK_REGISTRATION_TIMEOUT)
+        // The official Codex auth client applies the same identity headers to
+        // task registration as to runtime registration.
+        .header("originator", crate::gateway::current_wire_originator())
+        .header("User-Agent", crate::gateway::current_codex_user_agent())
         .json(&request)
         .send()
         .map_err(|err| format!("agent task registration request failed: {err}"))?;
@@ -1011,13 +1021,15 @@ mod tests {
                     .expect("registration request");
                 let path = request.url().to_string();
                 let authorization = request_header(&request, "authorization");
+                let originator = request_header(&request, "originator");
+                let user_agent = request_header(&request, "user-agent");
                 let mut body = String::new();
                 request
                     .as_reader()
                     .read_to_string(&mut body)
                     .expect("read registration request");
                 request_tx
-                    .send((path, authorization, body))
+                    .send((path, authorization, originator, user_agent, body))
                     .expect("record request");
                 request
                     .respond(
@@ -1050,10 +1062,16 @@ mod tests {
         );
         assert!(authorization.value.starts_with("AgentAssertion "));
 
-        let (registration_path, registration_auth, registration_body) = request_rx
+        let (
+            registration_path,
+            registration_auth,
+            registration_originator,
+            registration_user_agent,
+            registration_body,
+        ) = request_rx
             .recv_timeout(Duration::from_secs(5))
             .expect("receive identity registration");
-        let (task_path, task_auth, _task_body) = request_rx
+        let (task_path, task_auth, _task_originator, _task_user_agent, _task_body) = request_rx
             .recv_timeout(Duration::from_secs(5))
             .expect("receive task registration");
         server_handle.join().expect("join registration server");
@@ -1061,6 +1079,14 @@ mod tests {
         assert_eq!(
             registration_auth.as_deref(),
             Some(format!("Bearer {access_token}").as_str())
+        );
+        assert_eq!(
+            registration_originator.as_deref(),
+            Some(crate::gateway::current_wire_originator().as_str())
+        );
+        assert_eq!(
+            registration_user_agent.as_deref(),
+            Some(crate::gateway::current_codex_user_agent().as_str())
         );
         let registration_body: serde_json::Value =
             serde_json::from_str(&registration_body).expect("parse registration body");
@@ -1363,12 +1389,16 @@ mod tests {
                 .expect("registration server timeout")
                 .expect("registration request");
             let path = request.url().to_string();
+            let originator = request_header(&request, "originator");
+            let user_agent = request_header(&request, "user-agent");
             let mut body = String::new();
             request
                 .as_reader()
                 .read_to_string(&mut body)
                 .expect("read registration request");
-            request_tx.send((path, body)).expect("record request");
+            request_tx
+                .send((path, originator, user_agent, body))
+                .expect("record request");
             request
                 .respond(
                     Response::from_string(r#"{"taskId":"task-from-server"}"#)
@@ -1385,11 +1415,19 @@ mod tests {
             register_agent_identity_task(&reqwest::blocking::Client::new(), &identity, &base_url)
                 .expect("register task");
         assert_eq!(task_id, "task-from-server");
-        let (path, body) = request_rx
+        let (path, originator, user_agent, body) = request_rx
             .recv_timeout(Duration::from_secs(5))
             .expect("receive request");
         server_handle.join().expect("join server");
         assert_eq!(path, "/v1/agent/agent-runtime-1/task/register");
+        assert_eq!(
+            originator.as_deref(),
+            Some(crate::gateway::current_wire_originator().as_str())
+        );
+        assert_eq!(
+            user_agent.as_deref(),
+            Some(crate::gateway::current_codex_user_agent().as_str())
+        );
         let body: serde_json::Value = serde_json::from_str(&body).expect("parse request body");
         let timestamp = body["timestamp"].as_str().expect("timestamp");
         let signature = BASE64_STANDARD

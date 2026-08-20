@@ -807,7 +807,7 @@ fn websocket_upstream_terminal_detection_parses_json_type() {
     assert!(super::is_websocket_upstream_terminal_text(
         r#"{"type":"response.completed"}"#
     ));
-    assert!(super::is_websocket_upstream_terminal_text(
+    assert!(!super::is_websocket_upstream_terminal_text(
         r#"{"type":"response.done"}"#
     ));
     assert!(super::is_websocket_upstream_terminal_text(
@@ -991,7 +991,7 @@ fn send_websocket_upstream_request_builds_valid_handshake_and_stops_on_completed
 }
 
 #[test]
-fn send_websocket_upstream_request_does_not_cooldown_after_application_failure() {
+fn send_websocket_upstream_request_does_not_mark_recovery_completed_after_application_failure() {
     let _env_lock = crate::test_env_guard();
     let _reload_guard = RuntimeConfigReloadGuard;
     let _proxy_guard = EnvGuard::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "");
@@ -1016,6 +1016,11 @@ fn send_websocket_upstream_request_does_not_cooldown_after_application_failure()
 
     assert!(
         super::is_websocket_upstream_transport_healthy_terminal_text(
+            r#"{"type":"response.completed"}"#
+        )
+    );
+    assert!(
+        !super::is_websocket_upstream_transport_healthy_terminal_text(
             r#"{"type":"response.failed"}"#
         )
     );

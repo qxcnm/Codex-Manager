@@ -1481,11 +1481,7 @@ fn is_websocket_upstream_terminal_text(text: &str) -> bool {
             .unwrap_or_default()
             .to_ascii_lowercase()
             .as_str(),
-        "response.completed"
-            | "response.done"
-            | "response.failed"
-            | "response.incomplete"
-            | "error"
+        "response.completed" | "response.failed" | "response.incomplete" | "error"
     )
 }
 
@@ -1521,7 +1517,7 @@ fn is_websocket_upstream_connection_limit_text(text: &str) -> bool {
 }
 
 fn is_websocket_upstream_transport_healthy_terminal_text(text: &str) -> bool {
-    is_websocket_upstream_terminal_text(text) && !is_websocket_upstream_connection_limit_text(text)
+    is_websocket_upstream_completed_text(text) && !is_websocket_upstream_connection_limit_text(text)
 }
 
 fn websocket_upstream_sse_event(text: &str) -> String {
@@ -1533,7 +1529,6 @@ fn websocket_upstream_sse_event(text: &str) -> String {
     }
 }
 
-#[cfg(test)]
 fn is_websocket_upstream_completed_text(text: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(text)
         .ok()

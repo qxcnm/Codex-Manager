@@ -436,6 +436,7 @@ pub(crate) use selection::{
 };
 #[cfg(test)]
 use token_exchange::account_token_exchange_lock;
+pub(crate) use token_exchange::api_key_exchange_client_id;
 use token_exchange::resolve_openai_bearer_token;
 use upstream::proxy::proxy_validated_request;
 

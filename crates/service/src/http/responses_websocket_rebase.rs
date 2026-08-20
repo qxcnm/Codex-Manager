@@ -95,7 +95,7 @@ impl CompletedWsToolCallCache {
                     self.insert(item);
                 }
             }
-            "response.completed" | "response.done" => {
+            "response.completed" => {
                 if let Some(items) = value
                     .get("response")
                     .and_then(|response| response.get("output"))
@@ -146,7 +146,7 @@ impl CompletedWsResponseCache {
             .unwrap_or_default()
             .trim()
             .to_ascii_lowercase();
-        if !matches!(event_type.as_str(), "response.completed" | "response.done") {
+        if event_type != "response.completed" {
             return Ok(false);
         }
         let response = terminal

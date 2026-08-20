@@ -97,7 +97,12 @@ pub(crate) fn refresh_and_persist_access_token(
 
     if let Some(id_token) = refreshed.id_token {
         token.id_token = id_token.clone();
-        let exchange_client_id = token_refresh_client_id(token, refresh_client_id.as_str());
+        // The refresh grant uses the access-token client id, while the API-key
+        // exchange uses the newly issued ID token as its subject.  Keep the
+        // two client-id rules separate so an access-token audience cannot
+        // cause an ID-token exchange to be rejected.
+        let exchange_client_id =
+            crate::gateway::api_key_exchange_client_id(token, refresh_client_id.as_str());
         if let Ok(api_key) = obtain_api_key(issuer, &exchange_client_id, &id_token) {
             token.api_key_access_token = Some(api_key);
         }

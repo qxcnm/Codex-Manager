@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use codexmanager_core::auth::extract_token_exp;
+use codexmanager_core::auth::{extract_client_id_claim, extract_token_exp, DEFAULT_CLIENT_ID};
 use codexmanager_core::storage::{now_ts, Account, Storage, Token};
 
 use crate::account_status::mark_account_unavailable_for_auth_error;
@@ -139,40 +139,39 @@ fn exchange_and_persist_api_key_access_token(
     issuer: &str,
     client_id: &str,
 ) -> Result<String, String> {
-    let mut errors = Vec::new();
-    for subject_token in api_key_exchange_subject_tokens(token) {
-        match auth_tokens::obtain_api_key(issuer, client_id, &subject_token) {
-            Ok(exchanged) => {
-                token.api_key_access_token = Some(exchanged.clone());
-                let _ = storage.insert_token(token);
-                return Ok(exchanged);
-            }
-            Err(err) => errors.push(err),
+    let Some(subject_token) = api_key_exchange_subject_token(token) else {
+        return Err("id_token is unavailable for API key token exchange".to_string());
+    };
+    match auth_tokens::obtain_api_key(issuer, client_id, &subject_token) {
+        Ok(exchanged) => {
+            token.api_key_access_token = Some(exchanged.clone());
+            let _ = storage.insert_token(token);
+            Ok(exchanged)
         }
+        Err(err) => Err(err),
     }
-
-    let exchange_error = errors
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| "api key exchange subject token is missing".to_string());
-    Err(exchange_error)
 }
 
-fn api_key_exchange_subject_tokens(token: &Token) -> Vec<String> {
-    let mut subjects = Vec::new();
-    // 中文注释：直接导入 api/auth/session JSON 时通常只有 accessToken；
-    // 登录授权路径已优先缓存 api_key_access_token，缓存缺失时也先按最新 access_token 兑换。
-    push_unique_subject_token(&mut subjects, token.access_token.as_str());
-    push_unique_subject_token(&mut subjects, token.id_token.as_str());
-    subjects
+fn api_key_exchange_subject_token(token: &Token) -> Option<String> {
+    // `/oauth/token` uses the token-exchange grant and expects the OAuth ID
+    // token as its subject.  An access token is the bearer fallback for the
+    // upstream request; sending it to this endpoint produces misleading
+    // "Invalid ID token" / audience errors even when the account is usable.
+    let id_token = token.id_token.trim();
+    (!id_token.is_empty()).then(|| id_token.to_string())
 }
 
-fn push_unique_subject_token(subjects: &mut Vec<String>, candidate: &str) {
-    let value = candidate.trim();
-    if value.is_empty() || subjects.iter().any(|existing| existing == value) {
-        return;
-    }
-    subjects.push(value.to_string());
+pub(crate) fn api_key_exchange_client_id(token: &Token, fallback_client_id: &str) -> String {
+    // The exchange subject is the ID token, so prefer its client_id claim.  A
+    // separately issued access token can carry a different audience/client
+    // claim and must not override the ID-token exchange client.
+    extract_client_id_claim(&token.id_token)
+        .or_else(|| extract_client_id_claim(&token.access_token))
+        .or_else(|| {
+            let fallback = fallback_client_id.trim();
+            (!fallback.is_empty()).then(|| fallback.to_string())
+        })
+        .unwrap_or_else(|| DEFAULT_CLIENT_ID.to_string())
 }
 
 /// 函数 `fallback_to_access_token`
@@ -256,7 +255,7 @@ pub(super) fn resolve_openai_bearer_token(
     }
 
     let fallback_client_id = super::runtime_config::token_exchange_client_id();
-    let client_id = crate::usage_token_refresh::token_refresh_client_id(token, &fallback_client_id);
+    let client_id = api_key_exchange_client_id(token, &fallback_client_id);
     let issuer_env = super::runtime_config::token_exchange_default_issuer();
     let issuer = if account.issuer.trim().is_empty() {
         issuer_env
@@ -305,10 +304,7 @@ pub(super) fn resolve_openai_bearer_token(
                         let _ = storage.insert_token(token);
 
                         if !token.id_token.trim().is_empty() {
-                            let refreshed_client_id =
-                                crate::usage_token_refresh::token_refresh_client_id(
-                                    token, &client_id,
-                                );
+                            let refreshed_client_id = api_key_exchange_client_id(token, &client_id);
                             if let Ok(exchanged) = exchange_and_persist_api_key_access_token(
                                 storage,
                                 token,
