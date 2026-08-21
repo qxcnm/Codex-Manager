@@ -13,6 +13,10 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 use tokio::runtime::Builder;
+use tokio_tungstenite::accept_hdr_async_with_config;
+use tokio_tungstenite::tungstenite::extensions::compression::deflate::DeflateConfig;
+use tokio_tungstenite::tungstenite::extensions::ExtensionsConfig;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 
 type WsServerRequest = tokio_tungstenite::tungstenite::handshake::server::Request;
 type WsServerResponse = tokio_tungstenite::tungstenite::handshake::server::Response;
@@ -53,6 +57,14 @@ fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a s
         .iter()
         .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
         .map(|(_, value)| value.as_str())
+}
+
+fn mock_websocket_config() -> WebSocketConfig {
+    let mut config = WebSocketConfig::default();
+    let mut extensions = ExtensionsConfig::default();
+    extensions.permessage_deflate = Some(DeflateConfig::default());
+    config.extensions = extensions;
+    config
 }
 
 #[test]
@@ -250,7 +262,7 @@ fn spawn_mock_websocket_upstream(
             let listener =
                 tokio::net::TcpListener::from_std(listener).expect("convert websocket listener");
             let (stream, _) = listener.accept().await.expect("accept websocket client");
-            let mut websocket = tokio_tungstenite::accept_hdr_async(
+            let mut websocket = accept_hdr_async_with_config(
                 stream,
                 |request: &WsServerRequest, response: WsServerResponse| {
                     let headers = request
@@ -266,6 +278,7 @@ fn spawn_mock_websocket_upstream(
                     let _ = headers_tx.send(headers);
                     Ok(response)
                 },
+                Some(mock_websocket_config()),
             )
             .await
             .expect("accept websocket handshake");

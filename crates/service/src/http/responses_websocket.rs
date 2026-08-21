@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::extensions::compression::deflate::DeflateConfig;
+use tokio_tungstenite::tungstenite::extensions::ExtensionsConfig;
 use tokio_tungstenite::tungstenite::handshake::client::{
     Request as WsClientRequest, Response as WsClientResponse,
 };
@@ -1861,10 +1863,11 @@ fn ws_account_is_unavailable(
         .any(|(account, _)| account.id == upstream.account_id))
 }
 
-async fn connect_upstream_websocket(
+async fn connect_upstream_websocket_excluding_accounts(
     context: &WsRequestContext,
     model: Option<&str>,
     previous_account_id: Option<&str>,
+    excluded_account_ids: &HashSet<String>,
 ) -> Result<ConnectedUpstreamWebsocket, WsSessionError> {
     let storage = open_storage().ok_or_else(|| {
         WsSessionError::service_unavailable_bilingual("存储不可用", "storage unavailable")
@@ -1888,11 +1891,22 @@ async fn connect_upstream_websocket(
         .map(|(account, _)| account.id.clone())
         .collect::<HashSet<_>>();
     let conversation_routing = routed.conversation_routing.clone();
+    let has_unexcluded_candidate = routed
+        .candidates
+        .iter()
+        .any(|(account, _)| !excluded_account_ids.contains(account.id.as_str()));
+    let candidates = routed
+        .candidates
+        .into_iter()
+        .filter(|(account, _)| {
+            !has_unexcluded_candidate || !excluded_account_ids.contains(account.id.as_str())
+        })
+        .collect::<Vec<_>>();
     drop(storage);
 
     let ws_url = build_upstream_websocket_url(&context.effective_upstream_base)?;
     let mut last_error = None;
-    for (account, token) in routed.candidates {
+    for (account, token) in candidates {
         match connect_account_upstream_websocket(
             context,
             &account,
@@ -1934,11 +1948,31 @@ async fn connect_upstream_websocket_with_timeout(
     model: Option<&str>,
     previous_account_id: Option<&str>,
 ) -> Result<ConnectedUpstreamWebsocket, WsSessionError> {
+    connect_upstream_websocket_with_timeout_excluding_accounts(
+        context,
+        model,
+        previous_account_id,
+        &HashSet::new(),
+    )
+    .await
+}
+
+async fn connect_upstream_websocket_with_timeout_excluding_accounts(
+    context: &WsRequestContext,
+    model: Option<&str>,
+    previous_account_id: Option<&str>,
+    excluded_account_ids: &HashSet<String>,
+) -> Result<ConnectedUpstreamWebsocket, WsSessionError> {
     let connect_timeout =
         crate::gateway::current_upstream_connect_timeout().max(std::time::Duration::from_secs(1));
     match tokio::time::timeout(
         connect_timeout,
-        connect_upstream_websocket(context, model, previous_account_id),
+        connect_upstream_websocket_excluding_accounts(
+            context,
+            model,
+            previous_account_id,
+            excluded_account_ids,
+        ),
     )
     .await
     {
@@ -1965,13 +1999,18 @@ async fn reconnect_upstream_for_pending_request(
     completed_tool_calls: &CompletedWsToolCallCache,
 ) -> Result<ConnectedUpstreamWebsocket, WsSessionError> {
     let mut previous_account_id = previous_account_id.map(str::to_owned);
+    let mut excluded_account_ids = HashSet::new();
+    if let Some(account_id) = previous_account_id.as_deref() {
+        excluded_account_ids.insert(account_id.to_string());
+    }
     let mut last_send_error = None;
 
     for attempt in 1..=RESPONSES_WS_MAX_PENDING_FRAME_SEND_ATTEMPTS {
-        let mut replacement = connect_upstream_websocket_with_timeout(
+        let mut replacement = connect_upstream_websocket_with_timeout_excluding_accounts(
             context,
             pending.prepared.model.as_deref(),
             previous_account_id.as_deref(),
+            &excluded_account_ids,
         )
         .await?;
         let account_changed = previous_account_id
@@ -2027,6 +2066,7 @@ async fn reconnect_upstream_for_pending_request(
                 last_send_error = Some(format!(
                     "send upstream websocket frame after reconnect failed for account {account_id}: {err}"
                 ));
+                excluded_account_ids.insert(account_id.clone());
                 previous_account_id = Some(account_id);
             }
         }
@@ -2485,9 +2525,14 @@ pub(crate) async fn connect_upstream_websocket_request_detailed(
 }
 
 fn responses_ws_transport_config() -> WebSocketConfig {
-    WebSocketConfig::default()
+    let mut extensions = ExtensionsConfig::default();
+    extensions.permessage_deflate = Some(DeflateConfig::default());
+
+    let mut config = WebSocketConfig::default()
         .max_message_size(Some(RESPONSES_WS_MAX_MESSAGE_BYTES))
-        .max_frame_size(Some(RESPONSES_WS_MAX_MESSAGE_BYTES))
+        .max_frame_size(Some(RESPONSES_WS_MAX_MESSAGE_BYTES));
+    config.extensions = extensions;
+    config
 }
 
 async fn connect_websocket_proxy_tcp(ws_url: &str, proxy_url: &str) -> Result<TcpStream, String> {

@@ -20,7 +20,8 @@ axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }
 futures-util = "0.3"
 eventsource-stream = "0.2.3"
-tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.28", features = ["proxy", "rustls-tls-webpki-roots"] }
+tungstenite = { version = "0.27", features = ["deflate", "proxy"] }
 rustls = { version = "0.23", features = ["ring"] }
 url = "2"
 webbrowser = "0.8"

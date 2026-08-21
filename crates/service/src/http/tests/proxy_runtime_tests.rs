@@ -17,12 +17,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::oneshot;
-use tokio_tungstenite::accept_hdr_async;
 use tokio_tungstenite::accept_hdr_async_with_config;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+use tokio_tungstenite::tungstenite::extensions::compression::deflate::DeflateConfig;
+use tokio_tungstenite::tungstenite::extensions::ExtensionsConfig;
+use tokio_tungstenite::tungstenite::handshake::server::{Callback, Request, Response};
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -34,6 +36,32 @@ struct EnvGuard {
 static TEST_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
 const TEST_ZSTD_MAX_BODY_BYTES: usize = 256 * 1024 * 1024;
 const TEST_LARGE_RESPONSES_WS_FRAME_BYTES: usize = 17 * 1024 * 1024;
+const TEST_IMAGE_CONTEXT_RESPONSES_WS_FRAME_BYTES: usize = 34 * 1024 * 1024;
+
+fn test_upstream_ws_config() -> WebSocketConfig {
+    let mut config = WebSocketConfig::default()
+        .max_message_size(Some(
+            TEST_IMAGE_CONTEXT_RESPONSES_WS_FRAME_BYTES + 2 * 1024 * 1024,
+        ))
+        .max_frame_size(Some(
+            TEST_IMAGE_CONTEXT_RESPONSES_WS_FRAME_BYTES + 2 * 1024 * 1024,
+        ));
+    let mut extensions = ExtensionsConfig::default();
+    extensions.permessage_deflate = Some(DeflateConfig::default());
+    config.extensions = extensions;
+    config
+}
+
+async fn accept_hdr_async<S, C>(
+    stream: S,
+    callback: C,
+) -> Result<tokio_tungstenite::WebSocketStream<S>, tokio_tungstenite::tungstenite::Error>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    C: Callback + Unpin,
+{
+    accept_hdr_async_with_config(stream, callback, Some(test_upstream_ws_config())).await
+}
 
 impl EnvGuard {
     /// 函数 `set`
@@ -663,9 +691,7 @@ async fn start_mock_upstream_ws() -> (
             None::<(String, HashMap<String, String>)>,
         ));
         let captured_headers_clone = captured_headers.clone();
-        let upstream_config = WebSocketConfig::default()
-            .max_message_size(Some(TEST_LARGE_RESPONSES_WS_FRAME_BYTES * 2))
-            .max_frame_size(Some(TEST_LARGE_RESPONSES_WS_FRAME_BYTES * 2));
+        let upstream_config = test_upstream_ws_config();
         let mut websocket = accept_hdr_async_with_config(
             stream,
             move |request: &Request, response: Response| {
@@ -764,9 +790,7 @@ async fn start_mock_upstream_ws_resets_before_first_frame() -> (
             .accept()
             .await
             .expect("accept replacement initial-send-reset upstream");
-        let upstream_config = WebSocketConfig::default()
-            .max_message_size(Some(TEST_LARGE_RESPONSES_WS_FRAME_BYTES * 2))
-            .max_frame_size(Some(TEST_LARGE_RESPONSES_WS_FRAME_BYTES * 2));
+        let upstream_config = test_upstream_ws_config();
         let mut replacement = accept_hdr_async_with_config(
             replacement_stream,
             |_: &Request, response: Response| Ok(response),
@@ -816,9 +840,7 @@ async fn start_mock_upstream_ws_resets_twice_before_first_frame() -> (
         .expect("double-initial-send-reset mock upstream addr");
     let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
     let handle = tokio::spawn(async move {
-        let upstream_config = WebSocketConfig::default()
-            .max_message_size(Some(TEST_LARGE_RESPONSES_WS_FRAME_BYTES * 2))
-            .max_frame_size(Some(TEST_LARGE_RESPONSES_WS_FRAME_BYTES * 2));
+        let upstream_config = test_upstream_ws_config();
 
         for round in 1..=2 {
             let (stream, _) = listener
@@ -886,6 +908,103 @@ async fn start_mock_upstream_ws_resets_twice_before_first_frame() -> (
                 .expect("send double initial-send-reset recovery response");
         }
         let _ = replacement.next().await;
+    });
+    (addr.to_string(), event_rx, handle)
+}
+
+async fn start_mock_upstream_ws_switches_after_initial_reset() -> (
+    String,
+    tokio::sync::mpsc::UnboundedReceiver<(String, String)>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind account-switch initial-send-reset mock upstream");
+    let addr = listener
+        .local_addr()
+        .expect("account-switch initial-send-reset mock upstream addr");
+    let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let handle = tokio::spawn(async move {
+        let upstream_config = test_upstream_ws_config();
+
+        for _ in 0..3 {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept account-switch upstream");
+            let captured_account_id = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+            let captured_account_id_clone = captured_account_id.clone();
+            let mut websocket = accept_hdr_async_with_config(
+                stream,
+                move |request: &Request, response: Response| {
+                    let account_id = request
+                        .headers()
+                        .get("chatgpt-account-id")
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_string);
+                    let mut guard = captured_account_id_clone
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    *guard = account_id;
+                    Ok(response)
+                },
+                Some(upstream_config),
+            )
+            .await
+            .expect("accept account-switch websocket handshake");
+            let account_id = captured_account_id
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+                .unwrap_or_else(|| "missing-account-id".to_string());
+
+            if account_id == "workspace-failed" {
+                let raw_stream = websocket
+                    .into_inner()
+                    .into_std()
+                    .expect("convert account-switch reset stream");
+                force_tcp_reset(&raw_stream);
+                drop(raw_stream);
+                event_tx
+                    .send((account_id, String::new()))
+                    .expect("record failed account reset");
+                continue;
+            }
+
+            let text = match websocket.next().await {
+                Some(Ok(Message::Text(text))) => text.to_string(),
+                other => panic!(
+                    "expected account-switch response.create on replacement account, got {other:?}"
+                ),
+            };
+            event_tx
+                .send((account_id, text))
+                .expect("record successful replacement account frame");
+            for payload in [
+                serde_json::json!({
+                    "type": "response.created",
+                    "response": { "id": "resp_ws_account_switch" }
+                }),
+                serde_json::json!({
+                    "type": "response.completed",
+                    "response": { "id": "resp_ws_account_switch" }
+                }),
+            ] {
+                websocket
+                    .send(Message::Text(payload.to_string().into()))
+                    .await
+                    .expect("send account-switch replacement response");
+            }
+            let _ = websocket.next().await;
+            return;
+        }
+
+        event_tx
+            .send((
+                "no-replacement-account".to_string(),
+                "the failed account was reused for every bounded retry".to_string(),
+            ))
+            .expect("record missing account switch");
     });
     (addr.to_string(), event_rx, handle)
 }
@@ -2200,6 +2319,13 @@ async fn official_responses_websocket_proxies_frames_and_headers() {
         capture.headers.get("openai-beta").map(String::as_str),
         Some("responses_websockets=2026-02-06")
     );
+    assert!(
+        capture
+            .headers
+            .get("sec-websocket-extensions")
+            .is_some_and(|value| value.contains("permessage-deflate")),
+        "official-compatible upstream websocket transport must offer permessage-deflate"
+    );
     assert_eq!(capture.headers.get("version").map(String::as_str), None);
     assert_eq!(
         capture
@@ -2594,7 +2720,7 @@ async fn official_responses_websocket_accepts_large_image_context_frame() {
     let (mut client_ws, response) = connect_async(request).await.expect("websocket connects");
     assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
 
-    let image_data = "A".repeat(TEST_LARGE_RESPONSES_WS_FRAME_BYTES);
+    let image_data = "A".repeat(TEST_IMAGE_CONTEXT_RESPONSES_WS_FRAME_BYTES);
     let payload = serde_json::json!({
         "type": "response.create",
         "model": "gpt-5.6-sol",
@@ -2611,7 +2737,7 @@ async fn official_responses_websocket_accepts_large_image_context_frame() {
         }]
     })
     .to_string();
-    assert!(payload.len() > 16 * 1024 * 1024);
+    assert!(payload.len() > TEST_IMAGE_CONTEXT_RESPONSES_WS_FRAME_BYTES);
 
     client_ws
         .send(Message::Text(payload.into()))
@@ -2901,6 +3027,151 @@ async fn official_responses_websocket_retries_when_reconnected_socket_breaks_bef
         .await
         .expect("mock upstream double-reset recovery shutdown timeout")
         .expect("join double-reset recovery mock upstream");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn official_responses_websocket_switches_account_after_initial_send_reset() {
+    let _guard = crate::test_env_guard();
+    let _http_proxy = EnvGuard::clear("http_proxy");
+    let _https_proxy = EnvGuard::clear("https_proxy");
+    let _all_proxy = EnvGuard::clear("all_proxy");
+    let _upper_http_proxy = EnvGuard::clear("HTTP_PROXY");
+    let _upper_https_proxy = EnvGuard::clear("HTTPS_PROXY");
+    let _upper_all_proxy = EnvGuard::clear("ALL_PROXY");
+    let _no_proxy = EnvGuard::set("NO_PROXY", "127.0.0.1,localhost");
+    let _lower_no_proxy = EnvGuard::clear("no_proxy");
+    let db_path = new_test_db_path("codexmanager-proxy-runtime-ws-initial-send-account-switch");
+    let mut storage = init_test_storage(&db_path);
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+    let (upstream_addr, mut upstream_events, upstream_handle) =
+        start_mock_upstream_ws_switches_after_initial_reset().await;
+    insert_api_key_record(
+        &storage,
+        "platform_key_ws_initial_send_account_switch",
+        crate::apikey_profile::ROTATION_ACCOUNT,
+        Some(format!(
+            "http://{upstream_addr}/chatgpt.com/backend-api/codex"
+        )),
+    );
+    insert_account_and_token_with_id(
+        &storage,
+        "acc_ws_failed",
+        "failed-account",
+        "workspace-failed",
+        "failed-token",
+        0,
+    );
+    insert_account_and_token_with_id(
+        &storage,
+        "acc_ws_replacement",
+        "replacement-account",
+        "workspace-replacement",
+        "replacement-token",
+        1,
+    );
+    storage
+        .set_preferred_account(Some("acc_ws_failed"))
+        .expect("prefer failed account for initial websocket attempt");
+    crate::gateway::invalidate_candidate_cache();
+    tokio::task::spawn_blocking(|| {
+        crate::gateway::reload_runtime_config_from_env();
+        let _ = crate::gateway::front_proxy_max_body_bytes();
+    })
+    .await
+    .expect("reload runtime config");
+
+    let routed = crate::gateway::gateway_collect_routed_candidates_for_ws(
+        &storage,
+        "gk_proxy_runtime_ws",
+        Some("gpt-5.6-sol"),
+        None,
+        None,
+    )
+    .expect("collect account-switch websocket candidates");
+    assert_eq!(
+        routed
+            .candidates
+            .first()
+            .map(|(account, _)| account.id.as_str()),
+        Some("acc_ws_failed")
+    );
+
+    let state = ProxyState {
+        backend_base_url: "http://127.0.0.1:1".to_string(),
+        client: Client::new(),
+    };
+    let (front_addr, shutdown_tx, server_handle) = start_front_proxy_test_server(state).await;
+    let request = build_ws_request(
+        &format!("ws://{front_addr}/v1/responses"),
+        "platform_key_ws_initial_send_account_switch",
+        &[("OpenAI-Beta", "responses_websockets=2026-02-06")],
+    );
+    let (mut client_ws, response) = connect_async(request).await.expect("websocket connects");
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+
+    client_ws
+        .send(Message::Text(
+            serde_json::json!({
+                "type": "response.create",
+                "model": "gpt-5.6-sol",
+                "store": true,
+                "input": "switch accounts after the initial upstream socket resets"
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send account-switch response.create");
+
+    let mut replacement_frame = None;
+    for _ in 0..4 {
+        let event = tokio::time::timeout(Duration::from_secs(10), upstream_events.recv())
+            .await
+            .expect("account-switch upstream event timeout")
+            .expect("account-switch upstream event");
+        if event.0 == "workspace-replacement" {
+            replacement_frame = Some(event.1);
+            break;
+        }
+        assert_eq!(
+            event.0, "workspace-failed",
+            "the initial failed account may be attempted only before failover"
+        );
+        assert!(event.1.is_empty());
+    }
+    let replacement_frame = replacement_frame
+        .expect("a bounded initial-send recovery must try the next eligible account");
+    assert!(replacement_frame.contains("switch accounts after the initial upstream socket resets"));
+
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(10), client_ws.next())
+            .await
+            .expect("account-switch response timeout")
+            .expect("account-switch client event")
+            .expect("account-switch client event result");
+        match event {
+            Message::Text(text) if text.contains("\"response.completed\"") => break,
+            Message::Text(text) if text.contains("\"type\":\"error\"") => {
+                panic!("account-switch recovery error escaped to client: {text}");
+            }
+            Message::Text(_) => {}
+            other => panic!("unexpected account-switch event: {other:?}"),
+        }
+    }
+
+    let _ = client_ws.close(None).await;
+    let _ = shutdown_tx.send(());
+    tokio::time::timeout(Duration::from_secs(10), server_handle)
+        .await
+        .expect("front proxy account-switch shutdown timeout")
+        .expect("join account-switch front proxy");
+    tokio::time::timeout(Duration::from_secs(10), upstream_handle)
+        .await
+        .expect("mock upstream account-switch shutdown timeout")
+        .expect("join account-switch mock upstream");
+    storage
+        .set_preferred_account(None)
+        .expect("clear preferred account after account-switch test");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
