@@ -2044,6 +2044,8 @@ fn patch_config_for_gateway(
     if provider.get("name").is_none() {
         provider.insert("name", toml_value("CodexManager"));
     }
+    // Codex 0.149+ no longer inherits ambient auth for custom model providers.
+    provider.insert("requires_openai_auth", toml_value(true));
     provider.insert("base_url", toml_value(base_url));
     provider.insert("wire_api", toml_value("responses"));
     provider.insert("supports_websockets", toml_value(supports_websockets));
