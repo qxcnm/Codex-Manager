@@ -27,7 +27,7 @@ Responses WebSocket 由服务端工作区和 `apps/src-tauri` 独立工作区共
 
 `.github/workflows/ci.yml` 在 Pull Request 和 `main` push 上执行：
 
-- 根工作区格式检查和 `cargo test --workspace --no-fail-fast`；
+- 根工作区格式检查、`cargo check --workspace --all-targets` 和 service workspace library 测试；
 - 前端静态构建与 `codexmanager-web` 测试；
 - macOS arm64 Tauri bundle 构建；
 - 两个 Cargo 工作区的 revision/lockfile 同步检查。

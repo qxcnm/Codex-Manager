@@ -72,7 +72,8 @@ IO error: Broken pipe (os error 32)
 - 新增 `scripts/ci/check-websocket-pins.sh`，校验两个 workspace 的 manifest、lockfile 和 fork revision 同步；
 - 新增 `docs/zh-CN/WEBSOCKET_DEPENDENCY_MAINTENANCE.md`，记录 fork 的来源、升级步骤、压缩回退条件和验证要求；
 - 新增 `.github/workflows/ci.yml`：
-  - 根 workspace 格式检查与 `cargo test --workspace --no-fail-fast`；
+  - 根 workspace 格式检查与 `cargo check --workspace --all-targets`；
+  - service workspace library 串行测试，避免环境相关的集成测试长时间占用 CI；
   - 先构建 `apps/out`，再运行 `codexmanager-web` 测试；
   - macOS arm64 Tauri app bundle 构建；
   - WebSocket pinned fork 同步检查。

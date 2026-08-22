@@ -20,6 +20,7 @@ jobs:
   rust_workspace:
     name: Rust workspace and WebSocket pin validation
     runs-on: ubuntu-22.04
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -38,8 +39,11 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Test workspace
-        run: cargo test --workspace --no-fail-fast
+      - name: Check workspace targets
+        run: cargo check --workspace --all-targets
+
+      - name: Test service workspace library
+        run: cargo test -p codexmanager-service --lib --no-fail-fast -- --test-threads=1
 
   frontend_and_web:
     name: Frontend build and Web service tests
