@@ -15,6 +15,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_NET_RETRY: "3"
 
 jobs:
   rust_workspace:
@@ -56,6 +58,23 @@ jobs:
 
       - name: Setup release environment
         uses: ./.github/actions/setup-release-env
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Fetch Rust dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if cargo fetch --locked; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 10))
+          done
 
       - name: Install frontend dependencies
         working-directory: apps
