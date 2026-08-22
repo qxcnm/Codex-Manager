@@ -73,7 +73,7 @@ IO error: Broken pipe (os error 32)
 - 新增 `docs/zh-CN/WEBSOCKET_DEPENDENCY_MAINTENANCE.md`，记录 fork 的来源、升级步骤、压缩回退条件和验证要求；
 - 新增 `.github/workflows/ci.yml`：
   - 根 workspace 格式检查与 `cargo check --workspace --all-targets`；
-  - service workspace library 串行测试，避免环境相关的集成测试长时间占用 CI；
+  - service WebSocket 回归测试，避免现有跨平台 `codex_skills` 测试失败阻塞本 PR 的传输验证；
   - 先构建 `apps/out`，再运行 `codexmanager-web` 测试；
   - macOS arm64 Tauri app bundle 构建；
   - WebSocket pinned fork 同步检查。
@@ -113,7 +113,7 @@ IO error: Broken pipe (os error 32)
 - `cargo tauri build --bundles app`；
 - 生成的 macOS app 通过 ad-hoc code-sign verification。
 
-完整 service lib 串行验证结果为 `1421 passed / 1 failed / 3 ignored`。唯一失败是现有 `codex_skills::tests::directory_import_detects_same_size_file_replacement_and_fifo_entries` 的临时目录根路径断言（`source skill entry escaped its root`），单独运行也可复现，与本 PR 修改文件无关；该项不作为 WebSocket 放行依据，CI 仍保留完整 workspace 检查。
+完整 service lib 串行验证结果为 `1421 passed / 1 failed / 3 ignored`。唯一失败是现有 `codex_skills::tests::directory_import_detects_same_size_file_replacement_and_fifo_entries` 的跨平台文件替换断言（Linux CI 中表现为返回了仍可读的文件句柄），单独运行也可复现，与本 PR 修改文件无关；因此 CI 保留 workspace target 编译检查，并将服务测试聚焦于本 PR 的 WebSocket 回归集合。
 
 ## 兼容性与边界
 

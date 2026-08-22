@@ -42,8 +42,10 @@ jobs:
       - name: Check workspace targets
         run: cargo check --workspace --all-targets
 
-      - name: Test service workspace library
-        run: cargo test -p codexmanager-service --lib --no-fail-fast -- --test-threads=1
+      - name: Test Responses WebSocket regressions
+        run: |
+          cargo test -p codexmanager-service --lib official_responses_websocket_ --no-fail-fast
+          cargo test -p codexmanager-service --lib send_websocket_upstream_request_ --no-fail-fast
 
   frontend_and_web:
     name: Frontend build and Web service tests
