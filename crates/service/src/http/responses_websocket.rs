@@ -182,6 +182,19 @@ impl WsConnectError {
         body.contains(WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE)
             || body.contains(&WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE.to_ascii_lowercase())
     }
+
+    fn is_compression_negotiation_rejection(&self) -> bool {
+        let message = self.message.to_ascii_lowercase();
+        let body = String::from_utf8_lossy(&self.response_body).to_ascii_lowercase();
+        let extension_signal = message.contains("sec-websocket-extensions")
+            || message.contains("permessage-deflate")
+            || body.contains("sec-websocket-extensions")
+            || body.contains("permessage-deflate")
+            || body.contains("unsupported extension")
+            || body.contains("compression extension");
+        let rejected_handshake = matches!(self.status_code, Some(400 | 426));
+        extension_signal && (rejected_handshake || self.status_code.is_none())
+    }
 }
 
 impl fmt::Display for WsConnectError {
@@ -2505,33 +2518,68 @@ pub(crate) async fn connect_upstream_websocket_request_detailed(
     WsConnectError,
 > {
     ensure_rustls_crypto_provider();
+    let compressed_request = request.clone();
+    let first_result = connect_upstream_websocket_request_with_config(
+        compressed_request,
+        ws_url,
+        proxy_url,
+        responses_ws_transport_config(true),
+    )
+    .await;
+    match first_result {
+        Ok(result) => Ok(result),
+        Err(err) if err.is_compression_negotiation_rejection() => {
+            log::info!(
+                "event=responses_ws_compression_rejected retry=without_permessage_deflate ws_url={}",
+                ws_url
+            );
+            connect_upstream_websocket_request_with_config(
+                request,
+                ws_url,
+                proxy_url,
+                responses_ws_transport_config(false),
+            )
+            .await
+        }
+        Err(err) => Err(err),
+    }
+}
+
+async fn connect_upstream_websocket_request_with_config(
+    request: WsClientRequest,
+    ws_url: &str,
+    proxy_url: Option<&str>,
+    config: WebSocketConfig,
+) -> Result<
+    (
+        tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>,
+        WsClientResponse,
+    ),
+    WsConnectError,
+> {
     let Some(proxy_url) = proxy_url.map(str::trim).filter(|value| !value.is_empty()) else {
-        return connect_async_tls_with_config(
-            request,
-            Some(responses_ws_transport_config()),
-            false,
-            None,
-        )
-        .await
-        .map_err(WsConnectError::from_tungstenite);
+        return connect_async_tls_with_config(request, Some(config), false, None)
+            .await
+            .map_err(WsConnectError::from_tungstenite);
     };
 
     let stream = connect_websocket_proxy_tcp(ws_url, proxy_url)
         .await
         .map_err(WsConnectError::from_message)?;
-    client_async_tls_with_config(request, stream, Some(responses_ws_transport_config()), None)
+    client_async_tls_with_config(request, stream, Some(config), None)
         .await
         .map_err(WsConnectError::from_tungstenite)
 }
 
-fn responses_ws_transport_config() -> WebSocketConfig {
-    let mut extensions = ExtensionsConfig::default();
-    extensions.permessage_deflate = Some(DeflateConfig::default());
-
+fn responses_ws_transport_config(enable_permessage_deflate: bool) -> WebSocketConfig {
     let mut config = WebSocketConfig::default()
         .max_message_size(Some(RESPONSES_WS_MAX_MESSAGE_BYTES))
         .max_frame_size(Some(RESPONSES_WS_MAX_MESSAGE_BYTES));
-    config.extensions = extensions;
+    if enable_permessage_deflate {
+        let mut extensions = ExtensionsConfig::default();
+        extensions.permessage_deflate = Some(DeflateConfig::default());
+        config.extensions = extensions;
+    }
     config
 }
 

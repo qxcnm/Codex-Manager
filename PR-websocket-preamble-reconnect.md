@@ -1,117 +1,125 @@
-# fix(gateway): 修复 Responses WebSocket 大图像首帧 Broken pipe 与失败账号重复恢复
+# fix(gateway): 对齐 Responses WebSocket 压缩协商与首帧恢复
 
-## Summary
+## 摘要
 
-本 PR 在 PR #430 已有的心跳、连接上限、大图像帧和有界恢复基础上，继续修复新线程或图像上下文线程在上游 WebSocket 首帧发送阶段出现 `Broken pipe (os error 32)`，随后连续 502 并降级 HTTP 的问题。
+本 PR 在 PR #430 的心跳、连接上限、大图像帧和有界恢复基础上，继续修复 Responses WebSocket 在大上下文首帧阶段断开、失败账号重复恢复，以及部分上游拒绝压缩协商的问题。
 
-本次修复遵循官方 Responses WebSocket / Codex 客户端的传输行为：
+本次改动覆盖：
 
-- 使用官方 Codex 当前固定的 `tokio-tungstenite` / `tungstenite` fork 版本；
-- 为上游 WebSocket 启用 `permessage-deflate` 协商，降低大图像上下文单帧发送压力；
-- 首帧发送失败后的恢复仍然有界，不无限重试；
-- 如果存在其他可选账号，恢复尝试会排除已经首帧发送失败的账号，避免同一账号重复触发相同的 `Broken pipe`；
-- 只有完整收到 `response.completed` 才算 WebSocket 请求成功；恢复预算耗尽后仍保留官方客户端的 HTTP fallback。
+- 使用官方 Codex 当前固定的 `tokio-tungstenite` / `tungstenite` fork revision；
+- 默认按官方客户端协商 `permessage-deflate`，并保留 256 MiB message/frame 上限；
+- 上游明确以握手 `400`/`426` 或扩展拒绝信息拒绝压缩时，只重新建立一次不带压缩扩展的连接；
+- 首帧发送失败后的恢复排除已经失败的账号，优先尝试其他仍符合线程感知、优先级、禁用和限流过滤的账号；
+- 只有完整收到 `response.completed` 才确认 WebSocket 成功，恢复预算耗尽后继续由客户端进入 HTTP fallback；
+- 增加根 workspace、Web 测试、前端构建和 Tauri 目标构建的 CI 验证，以及 pinned fork 的维护文档。
 
-## Official behavior baseline
+## 官方行为基线
 
 实现以官方 [Responses WebSocket Mode](https://developers.openai.com/api/docs/guides/websocket-mode) 和官方 [Codex Responses WebSocket 客户端](https://github.com/openai/codex/blob/main/codex-rs/codex-api/src/endpoint/responses_websocket.rs) 为基准：
 
 - 每一轮通过一个 `response.create` 消息开始；
-- 请求体仍是 Responses create 形状，图像上下文可以作为输入的一部分发送；
-- 连接关闭、连接缓存不可用或连接达到时限后，需要建立新连接，并按上下文情况使用 `previous_response_id` 或完整输入；
-- 连接内的请求按顺序处理，当前代理路径继续使用官方顺序语义的兼容子集；
+- 图像上下文随 Responses create 请求发送；
+- WebSocket 连接在达到服务端时限、断开或不可用后重新建立；
+- 连接内的请求按顺序处理；
 - 只有 `response.completed` 才确认该轮完成；
-- WebSocket 恢复失败后由客户端按 session 级策略进入 HTTPS/SSE fallback，Manager 不强制已经回退的下游 session 重新升级 WebSocket。
+- 已经产生实质输出后不透明重放，避免重复输出或工具副作用；
+- WebSocket 恢复失败后继续使用官方客户端的 HTTPS/SSE fallback，不强制已经回退的下游 session 再次升级 WebSocket。
 
-## Problems and root causes
+## 问题与根因
 
-### 1. 大图像上下文首帧发送阶段的传输不一致
+### 1. 大图像上下文首帧发送阶段的兼容性不足
 
-Codex 会将本轮完整上下文序列化为一个 `response.create` 文本消息。包含多张内联图像时，单帧可能达到数十 MiB。此前 Manager 使用 crates.io 的 WebSocket 传输配置，没有按官方 Codex 配置启用 `permessage-deflate`，大帧更容易在上游连接刚建立后暴露为：
+包含多张内联图像时，完整 `response.create` 文本帧可能达到数十 MiB。此前传输层没有完整对齐官方 fork 和扩展协商配置，首帧发送阶段更容易出现：
 
 ```text
 IO error: Broken pipe (os error 32)
 ```
 
-这发生在响应完成前，因此下游看不到 `response.completed`，会继续执行有限恢复并最终降级 HTTP。
+此前的账号恢复逻辑已经处理了大帧发送失败，但如果上游连接策略本身拒绝 `permessage-deflate`，仍会在连接阶段失败。
 
-### 2. 首帧恢复可能重复使用同一失败账号
+### 2. 首帧失败后的恢复可能重复选择原账号
 
-此前首帧发送失败后，恢复逻辑仍可能从 conversation-bound 候选列表头部重新选择原账号。只要该账号的上游连接策略持续关闭 socket，就会得到连续相同的 `Broken pipe`，其他可选账号没有机会接收首帧。
+首帧发送失败后，conversation-bound 候选列表可能再次把原账号放在头部，导致同一失败 socket 被重复使用，其他可选账号无法接收首帧。
 
-### 3. 测试 mock 没有声明可处理扩展
+### 3. 依赖与独立 Tauri workspace 容易漂移
 
-接入官方压缩协商后，测试用 upstream 也必须显式提供 WebSocket 扩展配置；否则严格的 WebSocket handshake 会把 `Sec-WebSocket-Extensions` 当作无效请求。测试 fixture 已同步到官方协商语义。
+根 workspace 与 `apps/src-tauri` 是两个 Cargo workspace。只在其中一个 workspace 固定 fork，或只生成其中一个 lockfile，会使桌面构建和服务构建采用不同的 WebSocket 行为。
 
-## Changes
+## 修改内容
 
 ### 官方 WebSocket 传输对齐
 
-- 固定官方 Codex 使用的 `tokio-tungstenite` fork revision；
-- 固定官方 Codex 使用的 `tungstenite` fork revision；
-- 启用 `deflate` / `proxy` 相关 feature；
-- 上游 WebSocket `WebSocketConfig` 保留 256 MiB 的 message/frame 硬上限；
-- 在连接握手中启用 `permessage-deflate`，服务端支持时协商压缩，服务端不返回扩展时仍按未压缩 WebSocket 继续工作。
+- 根 workspace 与 `apps/src-tauri` 同步固定：
+  - `tokio-tungstenite` fork revision `0e5b2d73aa18dd9f0a50ee9ff199d5aef7594186`；
+  - `tungstenite` fork revision `4fffad30fe373adbdcffab9545e9e9bf4f2fc19f`。
+- 启用 `deflate` / `proxy` feature，并保持官方压缩配置；
+- message/frame 上限保持 256 MiB，不开放无限制消息；
+- 上游不返回扩展时，正常按未压缩 WebSocket 继续工作；
+- 如果上游以 `400`/`426` 或明确的 `permessage-deflate` / WebSocket 扩展拒绝信息拒绝压缩，只重新握手一次且不发送扩展；
+- 非压缩协商错误不触发该回退，避免把认证、代理和普通网关错误误判为压缩问题。
 
 ### 有界首帧恢复与账号轮换
 
-- 为恢复函数维护本轮已失败账号集合；
-- 首次恢复优先排除导致首帧发送失败的账号；
-- 每次恢复发送失败后将对应账号加入排除集合；
-- 在存在其他候选时按原有线程/会话/优先级顺序选择下一个可选账号；
-- 只有所有候选都已尝试过时，才允许在原有有界预算内再次使用候选池；
-- 不改变禁用、冷却、限流账号的候选过滤，也不覆盖线程感知账号分配策略；
+- 为本轮恢复维护已失败账号集合；
+- 首次恢复排除导致首帧发送失败的账号；
+- 每次恢复发送失败后将该账号加入排除集合；
+- 有其他候选时保持现有线程感知、会话、手动优先级、禁用、冷却和限流过滤；
+- 只有候选全部尝试过时，才在既有有限预算内复用候选池；
 - 账号切换时继续清理跨账号 session affinity，并按当前候选重建请求上下文。
 
-### 安全终态与 fallback
+### CI 与依赖维护
 
-- `response.completed` 仍是唯一成功终态；
-- `response.done`、`response.failed`、`response.incomplete`、TCP reset 和发送错误不会清除恢复状态；
-- 已转发实质模型输出、工具事件或二进制内容后不透明重放，避免重复输出或工具副作用；
-- 恢复预算耗尽后返回 502，由官方 Codex 客户端继续其 HTTP fallback；
-- 不强制同一 session 从 HTTP 再次切回 WebSocket。
+- 新增 `scripts/ci/check-websocket-pins.sh`，校验两个 workspace 的 manifest、lockfile 和 fork revision 同步；
+- 新增 `docs/zh-CN/WEBSOCKET_DEPENDENCY_MAINTENANCE.md`，记录 fork 的来源、升级步骤、压缩回退条件和验证要求；
+- 新增 `.github/workflows/ci.yml`：
+  - 根 workspace 格式检查与 `cargo test --workspace --no-fail-fast`；
+  - 先构建 `apps/out`，再运行 `codexmanager-web` 测试；
+  - macOS arm64 Tauri app bundle 构建；
+  - WebSocket pinned fork 同步检查。
 
-## Reproduction and regression coverage
+## 回归覆盖
 
-### 大图像上下文
+新增 `official_responses_websocket_retries_without_compression_after_upstream_rejection`：
 
-隔离测试构造约 34 MiB 的单个 `response.create` 文本帧，其中包含内联 `input_image` data URL：
+1. mock upstream 首次握手确认收到 `permessage-deflate`；
+2. 返回 `400 unsupported extension: permessage-deflate`；
+3. 验证第二次握手不再携带 `Sec-WebSocket-Extensions`；
+4. 验证原始 `response.create` 完整转发；
+5. 验证下游收到 `response.completed`。
 
-1. 建立下游 Responses WebSocket；
-2. 发送大图像上下文；
-3. 验证 Manager→upstream 的帧完整到达；
-4. 验证下游收到 `response.completed`；
-5. 验证同一连接的 follow-up 仍可继续。
+同时保留并继续验证：
 
-### 首帧失败后的账号轮换
+- 约 34 MiB 图像上下文单帧；
+- 首帧 socket reset 后的有界恢复；
+- 重连 socket 在发送前再次断开的恢复；
+- 首帧失败后的账号切换；
+- 前导事件阶段重放；
+- 已有实质输出后的不重放策略；
+- 连接上限、心跳、follow-up 和账号绑定语义。
 
-1. 将首个候选账号设置为握手后 reset；
-2. 验证恢复发送不重复使用该失败账号；
-3. 验证下一个候选账号收到完整 `response.create`；
-4. 验证下游收到 `response.completed`，不收到恢复错误；
-5. 验证单账号场景仍遵守原有有限重试预算。
-
-## Validation
+## 验证结果
 
 已通过：
 
-- `cargo fmt --all -- --check`
-- `git diff --check`
-- `cargo test -p codexmanager-service --lib official_responses_websocket_ --no-fail-fast` — 16 passed
-- `cargo test -p codexmanager-service --lib send_websocket_upstream_request_ --no-fail-fast` — 5 passed
-- `cargo test -p codexmanager-service --lib official_responses_websocket_accepts_large_image_context_frame --no-fail-fast` — 1 passed（约 34 MiB 图像上下文）
-- `cargo test -p codexmanager-web --no-fail-fast` — 26 passed
-- `pnpm -C apps run build:desktop` — passed
-- `cargo-tauri build --bundles app` — passed
-- 生成的 App 通过 ad-hoc code-sign verification
+- `bash scripts/ci/check-websocket-pins.sh`；
+- `cargo fmt --all -- --check`；
+- `git diff --check`；
+- `cargo test -p codexmanager-service --lib official_responses_websocket_ --no-fail-fast` — 17 passed；
+- `cargo test -p codexmanager-service --lib send_websocket_upstream_request_ --no-fail-fast` — 5 passed；
+- WebSocket 连接错误分类测试 — 5 passed；
+- `pnpm -C apps run build:desktop`；
+- `cargo test -p codexmanager-web --no-fail-fast` — 26 passed；
+- `cargo tauri build --bundles app`；
+- 生成的 macOS app 通过 ad-hoc code-sign verification。
 
-## Scope / Compatibility
+完整 service lib 串行验证结果为 `1421 passed / 1 failed / 3 ignored`。唯一失败是现有 `codex_skills::tests::directory_import_detects_same_size_file_replacement_and_fifo_entries` 的临时目录根路径断言（`source skill entry escaped its root`），单独运行也可复现，与本 PR 修改文件无关；该项不作为 WebSocket 放行依据，CI 仍保留完整 workspace 检查。
+
+## 兼容性与边界
 
 - 不改变公开 `/v1/responses` endpoint 形状；
-- 不改变 Codex 同一 session 内 HTTP fallback 的粘性；
-- 不强制已经降级 HTTP 的下游 session 重新升级 WebSocket；
-- 不在已经转发实质模型/工具内容后静默复制请求；
-- 不新增配置项，不改变账号优先级、线程感知分配或禁用/冷却过滤策略；
-- 心跳仍只发送 WebSocket 协议层 Ping，不注入 Responses JSON 事件；
-- 大帧仍使用 256 MiB 硬上限，不开放无限消息；
-- 上游确实不可用或恢复预算耗尽时，仍会按官方策略降级 HTTP。
+- 不改变同一 session 已进入 HTTP fallback 后的粘性；
+- 不强制 HTTP session 再次升级 WebSocket；
+- 不在已转发实质模型/工具内容后静默复制请求；
+- 不新增配置项，不覆盖线程感知账号分配或禁用/冷却/限流过滤；
+- 心跳仍只发送 WebSocket 协议层 Ping；
+- 上游仍不可用或恢复预算耗尽时，仍按官方策略返回失败并允许客户端降级 HTTP。

@@ -1,0 +1,94 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust_workspace:
+    name: Rust workspace and WebSocket pin validation
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check WebSocket dependency pins
+        run: bash scripts/ci/check-websocket-pins.sh
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Test workspace
+        run: cargo test --workspace --no-fail-fast
+
+  frontend_and_web:
+    name: Frontend build and Web service tests
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup release environment
+        uses: ./.github/actions/setup-release-env
+
+      - name: Install frontend dependencies
+        working-directory: apps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend static output
+        working-directory: apps
+        run: pnpm run build:desktop
+
+      - name: Test Web service
+        run: cargo test -p codexmanager-web --no-fail-fast
+
+  tauri_macos:
+    name: Tauri macOS arm64 bundle
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup release environment
+        uses: ./.github/actions/setup-release-env
+        with:
+          rust-target: aarch64-apple-darwin
+          enable-pnpm-cache: "false"
+
+      - name: Install frontend dependencies
+        working-directory: apps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend static output
+        working-directory: apps
+        run: pnpm run build:desktop
+
+      - name: Build Tauri app bundle
+        uses: ./.github/actions/build-tauri-with-retry
+        with:
+          working-directory: apps
+          tauri-cli-version: 2.10.1
+          bundles: app
+          target: aarch64-apple-darwin
+          shell-type: bash
+          max-attempts: "1"

@@ -532,6 +532,30 @@ fn websocket_connect_error_detects_connection_limit_body() {
 }
 
 #[test]
+fn websocket_connect_error_detects_compression_negotiation_rejection() {
+    let mut response = super::WsClientResponse::new(Some(
+        br#"unsupported extension: permessage-deflate"#.to_vec(),
+    ));
+    *response.status_mut() = axum::http::StatusCode::BAD_REQUEST;
+    let err = super::WsConnectError::from_tungstenite(tokio_tungstenite::tungstenite::Error::Http(
+        Box::new(response),
+    ));
+
+    assert!(err.is_compression_negotiation_rejection());
+}
+
+#[test]
+fn websocket_connect_error_does_not_treat_unrelated_bad_request_as_compression_rejection() {
+    let mut response = super::WsClientResponse::new(Some(br#"invalid response.create"#.to_vec()));
+    *response.status_mut() = axum::http::StatusCode::BAD_REQUEST;
+    let err = super::WsConnectError::from_tungstenite(tokio_tungstenite::tungstenite::Error::Http(
+        Box::new(response),
+    ));
+
+    assert!(!err.is_compression_negotiation_rejection());
+}
+
+#[test]
 fn inspect_ws_terminal_event_infers_usage_limit_status_without_explicit_status() {
     let event = inspect_ws_terminal_event(
         r#"{"type":"error","error":{"message":"You've hit your usage limit."}}"#,

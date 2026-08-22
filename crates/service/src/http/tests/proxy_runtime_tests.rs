@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::oneshot;
 use tokio_tungstenite::accept_hdr_async_with_config;
 use tokio_tungstenite::connect_async;
@@ -671,6 +671,142 @@ struct UpstreamWsCapture {
     path: String,
     headers: HashMap<String, String>,
     frames: Vec<String>,
+}
+
+#[derive(Debug)]
+struct UpstreamWsCompressionFallbackCapture {
+    first_headers: HashMap<String, String>,
+    second_headers: HashMap<String, String>,
+    frames: Vec<String>,
+}
+
+async fn read_raw_websocket_handshake_headers(
+    stream: &mut tokio::net::TcpStream,
+) -> HashMap<String, String> {
+    let mut request = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+        let count = stream
+            .read(&mut chunk)
+            .await
+            .expect("read raw websocket handshake");
+        assert!(
+            count > 0,
+            "upstream handshake ended before headers completed"
+        );
+        request.extend_from_slice(&chunk[..count]);
+        assert!(
+            request.len() <= 64 * 1024,
+            "upstream websocket handshake exceeded test limit"
+        );
+    }
+
+    String::from_utf8_lossy(&request)
+        .split("\r\n")
+        .skip(1)
+        .take_while(|line| !line.is_empty())
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            Some((name.trim().to_ascii_lowercase(), value.trim().to_string()))
+        })
+        .collect()
+}
+
+async fn start_mock_upstream_ws_rejects_compression_then_accepts() -> (
+    String,
+    oneshot::Receiver<UpstreamWsCompressionFallbackCapture>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind compression-fallback mock upstream");
+    let addr = listener
+        .local_addr()
+        .expect("compression-fallback mock upstream addr");
+    let (capture_tx, capture_rx) = oneshot::channel();
+    let handle = tokio::spawn(async move {
+        let (mut first_stream, _) = listener
+            .accept()
+            .await
+            .expect("accept compressed upstream handshake");
+        let first_headers = read_raw_websocket_handshake_headers(&mut first_stream).await;
+        let body = b"unsupported extension: permessage-deflate";
+        let response = format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            String::from_utf8_lossy(body)
+        );
+        first_stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("send compression rejection");
+        first_stream
+            .shutdown()
+            .await
+            .expect("close rejected compressed websocket");
+
+        let (second_stream, _) = listener
+            .accept()
+            .await
+            .expect("accept uncompressed upstream handshake");
+        let captured_headers = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let captured_headers_clone = captured_headers.clone();
+        let mut websocket = accept_hdr_async_with_config(
+            second_stream,
+            move |request: &Request, response: Response| {
+                let headers = request
+                    .headers()
+                    .iter()
+                    .filter_map(|(name, value)| {
+                        Some((
+                            name.as_str().to_ascii_lowercase(),
+                            value.to_str().ok()?.to_string(),
+                        ))
+                    })
+                    .collect::<HashMap<_, _>>();
+                let mut guard = captured_headers_clone
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                *guard = Some(headers);
+                Ok(response)
+            },
+            Some(test_upstream_ws_config()),
+        )
+        .await
+        .expect("accept uncompressed websocket handshake");
+
+        let frame = match websocket.next().await {
+            Some(Ok(Message::Text(text))) => text.to_string(),
+            other => panic!("expected response.create after compression fallback, got {other:?}"),
+        };
+        for payload in [
+            serde_json::json!({
+                "type": "response.created",
+                "response": { "id": "resp_ws_compression_fallback" }
+            }),
+            serde_json::json!({
+                "type": "response.completed",
+                "response": { "id": "resp_ws_compression_fallback" }
+            }),
+        ] {
+            websocket
+                .send(Message::Text(payload.to_string().into()))
+                .await
+                .expect("send compression fallback response");
+        }
+
+        let second_headers = captured_headers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+            .expect("capture uncompressed handshake");
+        let _ = capture_tx.send(UpstreamWsCompressionFallbackCapture {
+            first_headers,
+            second_headers,
+            frames: vec![frame],
+        });
+    });
+    (addr.to_string(), capture_rx, handle)
 }
 
 async fn start_mock_upstream_ws() -> (
@@ -2443,6 +2579,111 @@ async fn official_responses_websocket_proxies_frames_and_headers() {
         .await
         .expect("mock upstream shutdown timeout")
         .expect("join mock upstream");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn official_responses_websocket_retries_without_compression_after_upstream_rejection() {
+    let _guard = crate::test_env_guard();
+    let _http_proxy = EnvGuard::clear("http_proxy");
+    let _https_proxy = EnvGuard::clear("https_proxy");
+    let _all_proxy = EnvGuard::clear("all_proxy");
+    let _upper_http_proxy = EnvGuard::clear("HTTP_PROXY");
+    let _upper_https_proxy = EnvGuard::clear("HTTPS_PROXY");
+    let _upper_all_proxy = EnvGuard::clear("ALL_PROXY");
+    let _no_proxy = EnvGuard::set("NO_PROXY", "127.0.0.1,localhost");
+    let _lower_no_proxy = EnvGuard::clear("no_proxy");
+    let db_path = new_test_db_path("codexmanager-proxy-runtime-ws-compression-fallback");
+    let storage = init_test_storage(&db_path);
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+    let (upstream_addr, capture_rx, upstream_handle) =
+        start_mock_upstream_ws_rejects_compression_then_accepts().await;
+    insert_api_key_record(
+        &storage,
+        "platform_key_ws_compression_fallback",
+        crate::apikey_profile::ROTATION_ACCOUNT,
+        Some(format!(
+            "http://{upstream_addr}/chatgpt.com/backend-api/codex"
+        )),
+    );
+    insert_account_and_token(&storage);
+    tokio::task::spawn_blocking(|| {
+        crate::gateway::reload_runtime_config_from_env();
+        let _ = crate::gateway::front_proxy_max_body_bytes();
+    })
+    .await
+    .expect("reload runtime config");
+
+    let state = ProxyState {
+        backend_base_url: "http://127.0.0.1:1".to_string(),
+        client: Client::new(),
+    };
+    let (front_addr, shutdown_tx, server_handle) = start_front_proxy_test_server(state).await;
+    let request = build_ws_request(
+        &format!("ws://{front_addr}/v1/responses"),
+        "platform_key_ws_compression_fallback",
+        &[("OpenAI-Beta", "responses_websockets=2026-02-06")],
+    );
+    let (mut client_ws, response) = connect_async(request).await.expect("websocket connects");
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+
+    client_ws
+        .send(Message::Text(
+            serde_json::json!({
+                "type": "response.create",
+                "model": "gpt-5.6-sol",
+                "input": "retry without compression after an upstream rejection"
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send compression fallback response.create");
+
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), client_ws.next())
+            .await
+            .expect("compression fallback client event timeout")
+            .expect("compression fallback client event")
+            .expect("compression fallback client event result");
+        match event {
+            Message::Text(text) if text.contains("\"response.completed\"") => break,
+            Message::Text(text) if text.contains("\"type\":\"error\"") => {
+                panic!("compression fallback error escaped to client: {text}");
+            }
+            Message::Text(_) => {}
+            other => panic!("unexpected compression fallback event: {other:?}"),
+        }
+    }
+
+    let capture = tokio::time::timeout(Duration::from_secs(5), capture_rx)
+        .await
+        .expect("compression fallback capture timeout")
+        .expect("compression fallback capture result");
+    assert!(
+        capture
+            .first_headers
+            .get("sec-websocket-extensions")
+            .is_some_and(|value| value.contains("permessage-deflate")),
+        "the first upstream handshake must offer the official compression extension"
+    );
+    assert_eq!(
+        capture.second_headers.get("sec-websocket-extensions"),
+        None,
+        "a compression rejection must retry with an uncompressed handshake"
+    );
+    assert_eq!(capture.frames.len(), 1);
+    assert!(capture.frames[0].contains("retry without compression"));
+
+    let _ = client_ws.close(None).await;
+    let _ = shutdown_tx.send(());
+    tokio::time::timeout(Duration::from_secs(5), server_handle)
+        .await
+        .expect("front proxy compression fallback shutdown timeout")
+        .expect("join compression fallback front proxy");
+    tokio::time::timeout(Duration::from_secs(5), upstream_handle)
+        .await
+        .expect("compression fallback upstream shutdown timeout")
+        .expect("join compression fallback mock upstream");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
