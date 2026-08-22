@@ -191,6 +191,17 @@ fn upsert_imported_account_bundle_merges_metadata_and_token_in_one_call() {
         .expect("token exists");
     assert_eq!(found_token.access_token, "imported-access");
     assert_eq!(found_token.refresh_token, "imported-refresh");
+
+    let raw_access: String = storage
+        .conn
+        .query_row(
+            "SELECT access_token FROM tokens WHERE account_id = ?1",
+            [&updated.id],
+            |row| row.get(0),
+        )
+        .expect("read raw imported token");
+    assert!(raw_access.starts_with("cmenc:v1:"));
+    assert!(!raw_access.contains("imported-access"));
 }
 
 #[test]
