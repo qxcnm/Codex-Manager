@@ -1,9 +1,11 @@
 use super::{
-    clear_storage_cache_for_tests, clear_storage_open_count_for_tests,
-    model_catalog_v2_migration_needed, open_storage_at_path, storage_open_count_for_tests,
+    clear_storage_cache_for_tests, clear_storage_open_count_for_tests, initialize_storage,
+    model_catalog_v2_migration_needed, open_storage_at_path, preflight_model_catalog_v2,
+    storage_open_count_for_tests,
 };
 use rusqlite::Connection;
 use std::ffi::OsString;
+use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -95,6 +97,94 @@ fn pending_model_catalog_data_migration_requires_backup() {
             .expect("inspect completed catalog migrations")
     );
     let _ = std::fs::remove_file(&db_path);
+}
+
+#[test]
+fn model_catalog_preflight_allows_case_conflicting_legacy_slugs() {
+    let db_path = unique_db_path("codexmanager-model-catalog-duplicate-slugs");
+    let conn = Connection::open(&db_path).expect("open database");
+    conn.execute_batch(
+        "CREATE TABLE model_catalog_models (
+           scope TEXT NOT NULL,
+           slug TEXT NOT NULL
+         );
+         INSERT INTO model_catalog_models(scope,slug)
+         VALUES
+           ('default','Legacy-Model'),
+           ('default','legacy-model'),
+           ('account_proxy','LEGACY-MODEL');",
+    )
+    .expect("create duplicate legacy catalog fixture");
+    drop(conn);
+
+    preflight_model_catalog_v2(Path::new(&db_path))
+        .expect("case-conflicting legacy slugs are migratable");
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[test]
+fn initialize_storage_migrates_case_conflicting_legacy_slugs() {
+    let _env_lock = crate::test_env_guard();
+    let db_path = unique_db_path("codexmanager-model-catalog-duplicate-migration");
+    let conn = Connection::open(&db_path).expect("open database");
+    conn.execute_batch(
+        "CREATE TABLE model_catalog_models (
+           scope TEXT NOT NULL,
+           slug TEXT NOT NULL,
+           display_name TEXT NOT NULL,
+           source_kind TEXT NOT NULL DEFAULT 'remote',
+           user_edited INTEGER NOT NULL DEFAULT 0,
+           description TEXT,
+           default_reasoning_level TEXT,
+           visibility TEXT,
+           supported_in_api INTEGER,
+           context_window INTEGER,
+           extra_json TEXT NOT NULL DEFAULT '{}',
+           sort_index INTEGER NOT NULL DEFAULT 0,
+           updated_at INTEGER NOT NULL,
+           PRIMARY KEY (scope, slug)
+         );
+         INSERT INTO model_catalog_models(
+           scope,slug,display_name,source_kind,user_edited,description,
+           visibility,supported_in_api,extra_json,sort_index,updated_at
+         ) VALUES
+           ('default','Legacy-Model','First legacy row','custom',1,'first','list',1,'{}',0,100),
+           ('default','legacy-model','Second legacy row','custom',1,'second','list',1,'{}',1,200);",
+    )
+    .expect("create duplicate legacy catalog fixture");
+    drop(conn);
+
+    clear_storage_cache_for_tests();
+    let _db_env = EnvGuard::set("CODEXMANAGER_DB_PATH", &db_path);
+    initialize_storage().expect("migrate duplicate legacy slugs");
+
+    let storage = open_storage_at_path(&db_path).expect("open migrated storage");
+    let migrated = storage
+        .list_managed_models_v2(true)
+        .expect("list migrated models");
+    let legacy_rows = migrated
+        .iter()
+        .filter(|model| model.slug.eq_ignore_ascii_case("legacy-model"))
+        .collect::<Vec<_>>();
+    assert_eq!(legacy_rows.len(), 1);
+    assert_eq!(legacy_rows[0].slug, "Legacy-Model");
+    assert_eq!(legacy_rows[0].display_name, "First legacy row");
+    drop(storage);
+
+    clear_storage_cache_for_tests();
+    let _ = std::fs::remove_file(&db_path);
+    if let Some(parent) = Path::new(&db_path).parent() {
+        let backup_prefix = format!("{db_path}.model-catalog-v2.");
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.to_string_lossy().starts_with(&backup_prefix) {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+    }
 }
 
 /// 函数 `open_storage_reuses_cached_connection_in_same_thread`

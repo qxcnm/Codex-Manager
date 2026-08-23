@@ -631,16 +631,20 @@ fn preflight_model_catalog_v2(db_path: &Path) -> Result<(), String> {
             .query_row(
                 "SELECT COUNT(*) FROM (
                    SELECT lower(trim(slug)) FROM model_catalog_models
-                   WHERE trim(slug)<>'' GROUP BY lower(trim(slug)) HAVING COUNT(*)>1
+                   WHERE scope='default' AND trim(slug)<>''
+                   GROUP BY lower(trim(slug)) HAVING COUNT(*)>1
                  )",
                 [],
                 |row| row.get(0),
             )
             .map_err(|err| format!("preflight duplicate model slugs failed: {err}"))?;
         if duplicates > 0 {
-            return Err(format!(
-                "model catalog V2 preflight failed: {duplicates} duplicate case-insensitive slugs"
-            ));
+            // The V2 cutover reads only the default scope and deterministically keeps
+            // the first row for a case-insensitive slug collision. Do not strand a
+            // database that the migration can still open and preserve.
+            log::warn!(
+                "model catalog V2 preflight found {duplicates} duplicate case-insensitive default-scope slugs; migration will keep the first legacy row"
+            );
         }
     }
     if sqlite_table_exists(&conn, "model_price_rules")? {
