@@ -443,6 +443,7 @@ fn codex_responses_probe_uses_valid_input_text_content() {
     let body: Value = serde_json::from_str(captured.1.as_str()).expect("parse body");
     assert_eq!(body["model"], "gpt-5.6-sol");
     assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
+    assert_eq!(body["store"], false);
 }
 
 #[test]

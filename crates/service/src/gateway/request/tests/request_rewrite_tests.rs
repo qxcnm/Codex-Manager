@@ -1382,6 +1382,39 @@ fn responses_dynamic_tools_are_mapped_to_tools_for_codex_backend() {
     );
 }
 
+#[test]
+fn responses_dynamic_tools_are_mapped_for_explicit_non_codex_upstream() {
+    let _guard = crate::test_env_guard();
+    let body = json!({
+        "model": "muse-spark-1.2-contributor",
+        "input": "hello",
+        "dynamicTools": [{
+            "name": "spawn_agent",
+            "description": "start a subagent",
+            "input_schema": {
+                "type": "object",
+                "properties": {"prompt": {"type": "string"}}
+            }
+        }]
+    });
+    let out = apply_request_overrides(
+        "/v1/responses",
+        serde_json::to_vec(&body).expect("serialize request body"),
+        None,
+        None,
+        Some("https://muse.example/v1"),
+    );
+    let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
+    let tools = value
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .expect("tools array");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0]["type"], "function");
+    assert_eq!(tools[0]["name"], "spawn_agent");
+    assert!(value.get("dynamicTools").is_none());
+}
+
 /// 函数 `responses_preserves_priority_service_tier_for_codex_backend`
 ///
 /// 作者: gaohongshun

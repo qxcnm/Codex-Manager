@@ -157,6 +157,14 @@ fn rewrite_body_for_candidate_transport(
     upstream_url: &str,
 ) -> Bytes {
     let rewritten = rewrite_body_model_override(body, candidate.model_override.as_deref());
+    if !super::super::config::should_send_chatgpt_account_header(upstream_url) {
+        return Bytes::from(
+            super::super::super::apply_external_dynamic_tools_transport_rules(
+                path,
+                rewritten.to_vec(),
+            ),
+        );
+    }
     if normalize_provider_type_value(candidate.provider_type.as_str())
         == AGGREGATE_API_PROVIDER_CODEX
         && super::super::config::should_send_chatgpt_account_header(upstream_url)
@@ -1640,7 +1648,7 @@ mod bridge_tests {
     fn candidate_transport_rewrite_isolated_between_codex_and_generic_upstreams() {
         let _guard = crate::test_env_guard();
         let body = Bytes::from_static(
-            br#"{"model":"platform-model","input":"hello","stream":false,"service_tier":"fast"}"#,
+            br#"{"model":"platform-model","input":"hello","stream":false,"service_tier":"fast","dynamicTools":[{"name":"spawn_agent"}]}"#,
         );
         let mut codex = candidate("codex", 0);
         codex.model_override = Some("gpt-5.4".to_string());
@@ -1696,6 +1704,9 @@ mod bridge_tests {
         assert_eq!(generic_value["input"], "hello");
         assert_eq!(generic_value["stream"], false);
         assert_eq!(generic_value["service_tier"], "fast");
+        assert_eq!(generic_value["tools"][0]["type"], "function");
+        assert_eq!(generic_value["tools"][0]["name"], "spawn_agent");
+        assert!(generic_value.get("dynamicTools").is_none());
         assert!(generic_value.get("instructions").is_none());
         assert!(generic_value.get("store").is_none());
         assert!(generic_value.get("tool_choice").is_none());

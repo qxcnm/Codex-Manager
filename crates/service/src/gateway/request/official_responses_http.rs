@@ -423,7 +423,7 @@ fn normalize_codex_backend_service_tier(path: &str, obj: &mut Map<String, Value>
     normalize_service_tier(path, obj)
 }
 
-fn normalize_dynamic_tools_to_tools(path: &str, obj: &mut Map<String, Value>) -> bool {
+pub(crate) fn normalize_dynamic_tools_to_tools(path: &str, obj: &mut Map<String, Value>) -> bool {
     if !is_responses_path(path) {
         return false;
     }

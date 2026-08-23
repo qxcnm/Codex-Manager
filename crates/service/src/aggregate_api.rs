@@ -1275,7 +1275,8 @@ fn build_codex_probe_body(model: &str) -> serde_json::Value {
                 "text": "Who are you?"
             }]
         }],
-        "stream": true
+        "stream": true,
+        "store": false
     })
 }
 

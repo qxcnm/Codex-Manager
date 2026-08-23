@@ -165,7 +165,8 @@ pub(crate) use request_log::{
 #[cfg(test)]
 use request_rewrite::apply_request_overrides_with_service_tier_and_prompt_cache_key;
 use request_rewrite::{
-    apply_codex_candidate_transport_rules, apply_request_overrides_for_deferred_aggregate,
+    apply_codex_candidate_transport_rules, apply_external_dynamic_tools_transport_rules,
+    apply_request_overrides_for_deferred_aggregate,
     apply_request_overrides_with_service_tier_and_forced_prompt_cache_key_scope,
     apply_request_overrides_with_service_tier_and_prompt_cache_key_scope, compute_upstream_url,
 };

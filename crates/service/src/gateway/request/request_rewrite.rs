@@ -571,6 +571,22 @@ pub(super) fn apply_codex_candidate_transport_rules(path: &str, body: Vec<u8>) -
     serde_json::to_vec(&payload).unwrap_or(body)
 }
 
+pub(super) fn apply_external_dynamic_tools_transport_rules(path: &str, body: Vec<u8>) -> Vec<u8> {
+    if body.is_empty() || !responses::is_responses_path(path) {
+        return body;
+    }
+    let Ok(mut payload) = serde_json::from_slice::<Value>(&body) else {
+        return body;
+    };
+    let Some(obj) = payload.as_object_mut() else {
+        return body;
+    };
+    if !responses::normalize_dynamic_tools_to_tools(path, obj) {
+        return body;
+    }
+    serde_json::to_vec(&payload).unwrap_or(body)
+}
+
 /// 函数 `apply_request_overrides_with_prompt_cache_key_mode`
 ///
 /// 作者: gaohongshun
@@ -604,6 +620,12 @@ fn apply_request_overrides_with_prompt_cache_key_mode(
     let use_codex_responses_compat =
         should_apply_codex_responses_compat(path, upstream_base_url, resolve_default_upstream_base);
     let use_codex_compat_rewrite = allow_codex_compat_rewrite && use_codex_responses_compat;
+    // Non-official Responses providers commonly reject Codex's dynamicTools
+    // envelope. Convert it only when an explicit non-Codex upstream is known;
+    // deferred routing must keep the original body until a candidate is chosen.
+    let normalize_external_dynamic_tools = upstream_base_url.is_some()
+        && responses::is_responses_path(path)
+        && !use_codex_responses_compat;
     let chat_rules_path = chat_request_rules_path(path);
     let normalized_model = model_slug
         .map(str::trim)
@@ -623,6 +645,12 @@ fn apply_request_overrides_with_prompt_cache_key_mode(
         if let Some(obj) = payload.as_object_mut() {
             let mut changed = false;
             let mut dropped_keys = Vec::new();
+
+            if normalize_external_dynamic_tools
+                && responses::normalize_dynamic_tools_to_tools(path, obj)
+            {
+                changed = true;
+            }
 
             // Ultra 由 Codex 客户端负责多代理编排；单个上游请求必须使用 Max。
             // 客户端原始值在进入此重写前已单独采集，供请求日志展示 ultra -> max。
