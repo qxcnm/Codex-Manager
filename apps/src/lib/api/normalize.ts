@@ -1811,6 +1811,9 @@ export function normalizeAppSettings(payload: unknown): AppSettings {
       source.threadAwareAccountDistributionEnabled,
       true
     ),
+    aggregateApiProbeUserAgentMode:
+      asString(source.aggregateApiProbeUserAgentMode) || "codex",
+    aggregateApiProbeUserAgent: asString(source.aggregateApiProbeUserAgent),
     quotaGuard: normalizeQuotaGuard(source.quotaGuard ?? source.quota_guard),
     gatewayOriginator:
       asString(source.gatewayOriginator) || DEFAULT_CODEX_ORIGINATOR,

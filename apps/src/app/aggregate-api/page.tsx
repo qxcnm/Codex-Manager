@@ -12,6 +12,7 @@ import {
   PencilLine,
   Plus,
   RefreshCw,
+  Settings2,
   ShieldCheck,
   Trash2,
   Unplug,
@@ -25,6 +26,16 @@ import { ConfirmDialog } from "@/components/modals/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -53,6 +64,8 @@ import { useDesktopPageActive } from "@/hooks/useDesktopPageActive";
 import { usePageTransitionReady } from "@/hooks/usePageTransitionReady";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
 import { accountClient } from "@/lib/api/account-client";
+import { appClient } from "@/lib/api/app-client";
+import { getAppErrorMessage } from "@/lib/api/transport";
 import { aggregateApiProviderMatchesFilter } from "@/lib/aggregate-api-provider";
 import { useI18n } from "@/lib/i18n/provider";
 import { useAppStore } from "@/lib/store/useAppStore";
@@ -115,6 +128,8 @@ export default function AggregateApiPage() {
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const serviceStatus = useAppStore((state) => state.serviceStatus);
+  const appSettings = useAppStore((state) => state.appSettings);
+  const setAppSettings = useAppStore((state) => state.setAppSettings);
   const { canAccessManagementRpc } = useRuntimeCapabilities();
   const isServiceReady = canAccessManagementRpc && serviceStatus.connected;
   const isPageActive = useDesktopPageActive("/aggregate-api/");
@@ -139,6 +154,9 @@ export default function AggregateApiPage() {
   const [associationItems, setAssociationItems] = useState<AggregateApiFetchedModel[]>([]);
   const [fetchingModelsApiId, setFetchingModelsApiId] = useState<string | null>(null);
   const [associatingModels, setAssociatingModels] = useState(false);
+  const [probeSettingsOpen, setProbeSettingsOpen] = useState(false);
+  const [probeUserAgentMode, setProbeUserAgentMode] = useState("codex");
+  const [probeUserAgent, setProbeUserAgent] = useState("");
 
   const { data: aggregateApis = [], isLoading } = useQuery({
     queryKey: ["aggregate-apis"],
@@ -158,6 +176,7 @@ export default function AggregateApiPage() {
       setEditingId(null);
       setDeleteId(null);
       setRevealedSecrets({});
+      setProbeSettingsOpen(false);
     });
     return () => window.cancelAnimationFrame(frameId);
   }, [isPageActive]);
@@ -218,6 +237,29 @@ export default function AggregateApiPage() {
       await queryClient.invalidateQueries({ queryKey: ["aggregate-apis"] });
     },
   });
+
+  const probeSettingsMutation = useMutation({
+    mutationFn: () =>
+      appClient.setSettings({
+        aggregateApiProbeUserAgentMode: probeUserAgentMode,
+        aggregateApiProbeUserAgent: probeUserAgent.trim(),
+      }),
+    onSuccess: (settings) => {
+      queryClient.setQueryData(["app-settings-snapshot"], settings);
+      setAppSettings(settings);
+      setProbeSettingsOpen(false);
+      toast.success(t("连通性测试设置已更新"));
+    },
+    onError: (error: unknown) => {
+      toast.error(`${t("更新连通性测试设置失败")}: ${getAppErrorMessage(error)}`);
+    },
+  });
+
+  const openProbeSettings = () => {
+    setProbeUserAgentMode(appSettings.aggregateApiProbeUserAgentMode || "codex");
+    setProbeUserAgent(appSettings.aggregateApiProbeUserAgent || "");
+    setProbeSettingsOpen(true);
+  };
 
   const balanceMutation = useMutation({
     mutationFn: (apiId: string) => accountClient.refreshAggregateApiBalance(apiId),
@@ -363,18 +405,36 @@ export default function AggregateApiPage() {
                   {t("连通性测试只使用已配置路由对应的模型。")}
                 </p>
               </div>
-              <Select value={providerFilter} onValueChange={(value) => setProviderFilter(value || "all")}>
-                <SelectTrigger className="h-9 w-[150px]"><SelectValue /></SelectTrigger>
-                <SelectContent><SelectGroup>
-                  <SelectItem value="all">{t("全部类型")}</SelectItem>
-                  <SelectItem value="codex">Codex</SelectItem>
-                  <SelectItem value="claude">Claude</SelectItem>
-                  <SelectItem value="gemini">Gemini</SelectItem>
-                  <SelectItem value="compatible">
-                    {t("通用兼容（Codex + Claude）")}
-                  </SelectItem>
-                </SelectGroup></SelectContent>
-              </Select>
+              <div className="flex items-center gap-2">
+                <Select value={providerFilter} onValueChange={(value) => setProviderFilter(value || "all")}>
+                  <SelectTrigger className="h-9 w-[150px]"><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectGroup>
+                    <SelectItem value="all">{t("全部类型")}</SelectItem>
+                    <SelectItem value="codex">Codex</SelectItem>
+                    <SelectItem value="claude">Claude</SelectItem>
+                    <SelectItem value="gemini">Gemini</SelectItem>
+                    <SelectItem value="compatible">
+                      {t("通用兼容（Codex + Claude）")}
+                    </SelectItem>
+                  </SelectGroup></SelectContent>
+                </Select>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        aria-label={t("连通性测试设置")}
+                        onClick={openProbeSettings}
+                      />
+                    }
+                  >
+                    <Settings2 className="h-4 w-4" />
+                  </TooltipTrigger>
+                  <TooltipContent>{t("连通性测试设置")}</TooltipContent>
+                </Tooltip>
+              </div>
             </div>
           </CardHeader>
           <CardContent className="p-0">
@@ -529,6 +589,86 @@ export default function AggregateApiPage() {
         aggregateApi={editingApi}
         defaultSort={defaultCreateSort}
       />
+
+      <Dialog open={probeSettingsOpen} onOpenChange={setProbeSettingsOpen}>
+        <DialogContent className="glass-card sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>{t("连通性测试设置")}</DialogTitle>
+            <DialogDescription>
+              {t("设置 Codex 类型 route 执行连通性测试时使用的客户端标识。")}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-5 py-2">
+            <div className="grid gap-2">
+              <Label>{t("测试客户端")}</Label>
+              <Select
+                value={probeUserAgentMode}
+                onValueChange={(value) => setProbeUserAgentMode(value || "codex")}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue>
+                    {(value) =>
+                      String(value || "") === "custom"
+                        ? t("自定义 User-Agent")
+                        : t("Codex 官方客户端（默认）")
+                    }
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value="codex">{t("Codex 官方客户端（默认）")}</SelectItem>
+                    <SelectItem value="custom">{t("自定义 User-Agent")}</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {probeUserAgentMode === "codex"
+                  ? t("发送官方格式的 User-Agent、originator 和 Codex 客户端指纹请求头。")
+                  : t("仅使用指定的 User-Agent，不附加 Codex 客户端指纹。")}
+              </p>
+            </div>
+
+            {probeUserAgentMode === "custom" ? (
+              <div className="grid gap-2">
+                <Label htmlFor="aggregate-api-probe-user-agent">User-Agent</Label>
+                <Input
+                  id="aggregate-api-probe-user-agent"
+                  className="font-mono"
+                  value={probeUserAgent}
+                  maxLength={512}
+                  placeholder="Custom-Client/1.0"
+                  onChange={(event) => setProbeUserAgent(event.target.value)}
+                />
+                {!probeUserAgent.trim() ? (
+                  <p className="text-xs text-destructive">{t("请输入自定义 User-Agent")}</p>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setProbeSettingsOpen(false)}
+              disabled={probeSettingsMutation.isPending}
+            >
+              {t("取消")}
+            </Button>
+            <Button
+              type="button"
+              onClick={() => probeSettingsMutation.mutate()}
+              disabled={
+                probeSettingsMutation.isPending
+                || (probeUserAgentMode === "custom" && !probeUserAgent.trim())
+              }
+            >
+              {probeSettingsMutation.isPending ? t("保存中...") : t("保存")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AggregateApiModelAssociationModal
         open={Boolean(associationApiId)}

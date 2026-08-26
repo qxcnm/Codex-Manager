@@ -5,6 +5,9 @@ use chrono::Local;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 
+use super::super::aggregate_api::{
+    current_aggregate_api_probe_user_agent, current_aggregate_api_probe_user_agent_mode,
+};
 use super::author_links::{
     default_author_server_recommendations, default_author_sponsors, load_author_link_items,
     serialize_author_link_items,
@@ -218,6 +221,8 @@ fn current_app_settings_value_inner(
     let account_max_inflight = current_gateway_account_max_inflight();
     let thread_aware_account_distribution_enabled =
         current_gateway_thread_aware_account_distribution_enabled();
+    let aggregate_api_probe_user_agent_mode = current_aggregate_api_probe_user_agent_mode();
+    let aggregate_api_probe_user_agent = current_aggregate_api_probe_user_agent();
     let quota_guard = current_gateway_quota_guard();
     let gateway_originator = current_gateway_originator();
     let gateway_user_agent_version = current_gateway_user_agent_version();
@@ -389,6 +394,14 @@ fn current_app_settings_value_inner(
     });
     if let Some(object) = result.as_object_mut() {
         object.insert("zoomFactor".to_string(), zoom_factor.into());
+        object.insert(
+            "aggregateApiProbeUserAgentMode".to_string(),
+            aggregate_api_probe_user_agent_mode.into(),
+        );
+        object.insert(
+            "aggregateApiProbeUserAgent".to_string(),
+            aggregate_api_probe_user_agent.into(),
+        );
     }
     if let Some(object) = result.as_object_mut() {
         object.insert(

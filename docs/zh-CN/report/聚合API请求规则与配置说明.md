@@ -679,6 +679,25 @@ Gemini 模型同样在模型目录 V2 中手工新增并配置 route；管理员
 - 每个候选独立使用自己的 route `upstreamModel`，请求体不会在候选间泄漏。
 - 连接测试从引用当前聚合 API 的 enabled V2 routes 中选择具体模型，不做发现或导入。
 
+### 连通性测试客户端标识
+
+聚合 API 页面右上角的“连通性测试设置”只影响 `codex` 和 `compatible` 类型使用 Codex 协议执行的 probe，不改变真实 route 转发请求。
+
+设置通过现有 `appSettings/get`、`appSettings/set` 持久化：
+
+| API 字段 | 存储键 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `aggregateApiProbeUserAgentMode` | `aggregate_api.probe_user_agent_mode` | `codex` | `codex` 或 `custom`。 |
+| `aggregateApiProbeUserAgent` | `aggregate_api.probe_user_agent` | 空 | `custom` 模式使用的完整 User-Agent。 |
+
+`codex` 模式会模拟 Codex 官方客户端身份：
+
+- 使用当前 Gateway 配置生成官方格式的 `User-Agent` 和 `originator`。
+- 每次 probe 生成独立的 `session-id`、`thread-id` 和 `x-client-request-id`。
+- 发送与该请求锚点对应的 `x-codex-window-id`，用于满足会校验 Codex 客户端指纹的供应商。
+
+`custom` 模式只发送用户指定的 `User-Agent`，不会附加 `originator` 或 `x-codex-*` 指纹。自定义值不能为空、不能包含控制字符，最大长度为 512 bytes。
+
 ## 管理接口
 
 桌面端通过 Tauri command 调 service RPC：

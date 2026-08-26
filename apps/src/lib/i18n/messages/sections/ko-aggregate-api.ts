@@ -39,6 +39,19 @@ export const KO_AGGREGATE_API_MESSAGES: MessageCatalog = {
   上游连接: "업스트림 연결",
   "连通性测试只使用已配置路由对应的模型。":
     "연결 테스트는 설정된 라우트에 연결된 모델만 사용합니다.",
+  连通性测试设置: "연결 테스트 설정",
+  "设置 Codex 类型 route 执行连通性测试时使用的客户端标识。":
+    "Codex 유형 route 연결 테스트에 사용할 클라이언트 식별자를 설정합니다.",
+  测试客户端: "테스트 클라이언트",
+  "Codex 官方客户端（默认）": "Codex 공식 클라이언트 (기본값)",
+  "自定义 User-Agent": "사용자 지정 User-Agent",
+  "发送官方格式的 User-Agent、originator 和 Codex 客户端指纹请求头。":
+    "공식 형식의 User-Agent, originator 및 Codex 클라이언트 지문 헤더를 전송합니다.",
+  "仅使用指定的 User-Agent，不附加 Codex 客户端指纹。":
+    "지정한 User-Agent만 사용하고 Codex 클라이언트 지문은 추가하지 않습니다.",
+  "请输入自定义 User-Agent": "사용자 지정 User-Agent를 입력하세요",
+  连通性测试设置已更新: "연결 테스트 설정이 업데이트되었습니다",
+  更新连通性测试设置失败: "연결 테스트 설정 업데이트 실패",
   "通用兼容（Codex + Claude）": "호환 모드 (Codex + Claude)",
   "按请求路径原样转发 Codex 与 Claude 协议；自定义 action 会自动关闭。":
     "요청 경로를 그대로 사용해 Codex 및 Claude 프로토콜을 전달합니다. 사용자 지정 action은 자동으로 꺼집니다.",

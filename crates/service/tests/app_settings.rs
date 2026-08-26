@@ -87,6 +87,8 @@ fn reset_runtime_defaults() {
         "freeAccountMaxModel": "gpt-5.2",
         "modelForwardRules": "",
         "compactModelForwardRules": "",
+        "aggregateApiProbeUserAgentMode": "codex",
+        "aggregateApiProbeUserAgent": "",
         "quotaGuard": {
             "enabled": true,
             "primaryMinRemainingPercent": 5,
@@ -360,6 +362,34 @@ fn app_settings_roundtrip_account_manager_mode_and_bootstrap() {
         assert_eq!(status["distributionEnabled"], true);
         assert_eq!(status["appUsersConfigured"], true);
         assert_eq!(status["appUserCount"], 1);
+    });
+}
+
+#[test]
+fn app_settings_roundtrip_aggregate_api_probe_user_agent() {
+    with_temp_db(|_| {
+        let defaults = codexmanager_service::app_settings_get().expect("read default settings");
+        assert_eq!(defaults["aggregateApiProbeUserAgentMode"], "codex");
+        assert_eq!(defaults["aggregateApiProbeUserAgent"], "");
+
+        let updated = codexmanager_service::app_settings_set(Some(&json!({
+            "aggregateApiProbeUserAgentMode": "custom",
+            "aggregateApiProbeUserAgent": "Custom-Probe/3.0"
+        })))
+        .expect("save aggregate API probe settings");
+        assert_eq!(updated["aggregateApiProbeUserAgentMode"], "custom");
+        assert_eq!(updated["aggregateApiProbeUserAgent"], "Custom-Probe/3.0");
+
+        let persisted = codexmanager_service::app_settings_get().expect("read persisted settings");
+        assert_eq!(persisted["aggregateApiProbeUserAgentMode"], "custom");
+        assert_eq!(persisted["aggregateApiProbeUserAgent"], "Custom-Probe/3.0");
+
+        let err = codexmanager_service::app_settings_set(Some(&json!({
+            "aggregateApiProbeUserAgentMode": "custom",
+            "aggregateApiProbeUserAgent": ""
+        })))
+        .expect_err("custom probe user agent should be required");
+        assert!(err.contains("custom user agent is required"));
     });
 }
 

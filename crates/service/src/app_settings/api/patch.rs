@@ -2,6 +2,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 
+use super::super::aggregate_api::set_aggregate_api_probe_user_agent_settings;
 use super::author_links::{
     normalize_author_link_items, serialize_author_link_items, AuthorLinkItem,
 };
@@ -46,6 +47,8 @@ pub(super) struct AppSettingsPatch {
     compact_model_forward_rules: Option<String>,
     account_max_inflight: Option<usize>,
     thread_aware_account_distribution_enabled: Option<bool>,
+    aggregate_api_probe_user_agent_mode: Option<String>,
+    aggregate_api_probe_user_agent: Option<String>,
     gateway_originator: Option<String>,
     gateway_user_agent_version: Option<String>,
     gateway_residency_requirement: Option<String>,
@@ -157,6 +160,14 @@ pub(super) fn apply_app_settings_patch(patch: AppSettingsPatch) -> Result<(), St
     }
     if let Some(enabled) = patch.thread_aware_account_distribution_enabled {
         let _ = set_gateway_thread_aware_account_distribution_enabled(enabled)?;
+    }
+    if patch.aggregate_api_probe_user_agent_mode.is_some()
+        || patch.aggregate_api_probe_user_agent.is_some()
+    {
+        let _ = set_aggregate_api_probe_user_agent_settings(
+            patch.aggregate_api_probe_user_agent_mode.as_deref(),
+            patch.aggregate_api_probe_user_agent.as_deref(),
+        )?;
     }
     if let Some(originator) = patch.gateway_originator {
         let _ = set_gateway_originator(&originator)?;

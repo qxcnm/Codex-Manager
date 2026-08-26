@@ -39,6 +39,19 @@ export const EN_AGGREGATE_API_MESSAGES: MessageCatalog = {
   上游连接: "Upstream connections",
   "连通性测试只使用已配置路由对应的模型。":
     "Connection tests only use models referenced by configured routes.",
+  连通性测试设置: "Connection test settings",
+  "设置 Codex 类型 route 执行连通性测试时使用的客户端标识。":
+    "Configure the client identity used when testing Codex-type routes.",
+  测试客户端: "Test client",
+  "Codex 官方客户端（默认）": "Official Codex client (default)",
+  "自定义 User-Agent": "Custom User-Agent",
+  "发送官方格式的 User-Agent、originator 和 Codex 客户端指纹请求头。":
+    "Send the official User-Agent, originator, and Codex client fingerprint headers.",
+  "仅使用指定的 User-Agent，不附加 Codex 客户端指纹。":
+    "Use only the specified User-Agent without Codex client fingerprint headers.",
+  "请输入自定义 User-Agent": "Enter a custom User-Agent",
+  连通性测试设置已更新: "Connection test settings updated",
+  更新连通性测试设置失败: "Failed to update connection test settings",
   "通用兼容（Codex + Claude）": "Compatible (Codex + Claude)",
   "按请求路径原样转发 Codex 与 Claude 协议；自定义 action 会自动关闭。":
     "Forwards Codex and Claude protocols using the incoming path; custom action is disabled automatically.",

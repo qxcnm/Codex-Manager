@@ -1348,12 +1348,27 @@ fn build_gemini_probe_body() -> serde_json::Value {
 /// # 返回
 /// 返回函数执行结果
 fn add_codex_probe_headers(
-    builder: reqwest::blocking::RequestBuilder,
+    mut builder: reqwest::blocking::RequestBuilder,
 ) -> Result<reqwest::blocking::RequestBuilder, String> {
+    let mode = crate::app_settings::current_aggregate_api_probe_user_agent_mode();
+    if mode == crate::app_settings::AGGREGATE_API_PROBE_USER_AGENT_MODE_CODEX {
+        let request_id = gateway::next_trace_id();
+        builder = builder
+            .header("user-agent", gateway::current_codex_user_agent())
+            .header("originator", gateway::current_wire_originator())
+            .header("session-id", request_id.as_str())
+            .header("thread-id", request_id.as_str())
+            .header("x-client-request-id", request_id.as_str())
+            .header("x-codex-window-id", format!("{request_id}:0"));
+    } else {
+        let user_agent = crate::app_settings::current_aggregate_api_probe_user_agent();
+        if user_agent.is_empty() {
+            return Err("aggregate api probe custom user agent is required".to_string());
+        }
+        builder = builder.header("user-agent", user_agent);
+    }
     Ok(builder
         .header("accept", "application/json")
-        .header("user-agent", gateway::current_codex_user_agent())
-        .header("originator", gateway::current_wire_originator())
         .header("accept-encoding", "identity"))
 }
 

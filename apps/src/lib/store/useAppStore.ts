@@ -112,6 +112,8 @@ export const useAppStore = create<AppState>((set) => ({
     compactModelForwardRules: "",
     accountMaxInflight: 1,
     threadAwareAccountDistributionEnabled: true,
+    aggregateApiProbeUserAgentMode: "codex",
+    aggregateApiProbeUserAgent: "",
     quotaGuard: {
       enabled: true,
       primaryMinRemainingPercent: 5,

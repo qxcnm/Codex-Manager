@@ -1,3 +1,4 @@
+mod aggregate_api;
 mod api;
 mod codex_latest_sync;
 mod env_overrides;
@@ -8,6 +9,12 @@ mod shared;
 mod store;
 mod ui;
 
+#[cfg(test)]
+pub(crate) use aggregate_api::set_aggregate_api_probe_user_agent_settings;
+pub(crate) use aggregate_api::{
+    current_aggregate_api_probe_user_agent, current_aggregate_api_probe_user_agent_mode,
+    AGGREGATE_API_PROBE_USER_AGENT_MODE_CODEX,
+};
 pub use api::{
     app_settings_get, app_settings_get_with_overrides, app_settings_set, author_content_get,
 };
@@ -49,6 +56,8 @@ pub use service::{
 };
 pub(crate) use shared::{normalize_optional_text, parse_bool_with_default};
 pub use shared::{
+    APP_SETTING_AGGREGATE_API_PROBE_USER_AGENT_KEY,
+    APP_SETTING_AGGREGATE_API_PROBE_USER_AGENT_MODE_KEY,
     APP_SETTING_AUTHOR_SERVER_RECOMMENDATIONS_KEY, APP_SETTING_AUTHOR_SPONSORS_KEY,
     APP_SETTING_AUTO_START_ENABLED_KEY, APP_SETTING_CLOSE_TO_TRAY_ON_CLOSE_KEY,
     APP_SETTING_DISTRIBUTION_ENABLED_KEY, APP_SETTING_ENV_OVERRIDES_KEY,
