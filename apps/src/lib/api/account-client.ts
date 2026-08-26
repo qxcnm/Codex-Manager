@@ -46,11 +46,13 @@ import {
 import {
   AccountExportResult,
   AccountImportResult,
+  AccountTestStartResult,
   AccountWarmupResult,
   DeleteAccountsByStatusesResult,
   DeleteUnavailableFreeResult,
   readAccountExportResult,
   readAccountImportResult,
+  readAccountTestStartResult,
   readAccountWarmupResult,
   readDeleteAccountsByStatusesResult,
   readApiKeySecret,
@@ -89,6 +91,13 @@ export interface AccountExportPayload {
 export interface AccountWarmupPayload {
   accountIds?: string[];
   message?: string;
+}
+
+export interface AccountTestPayload {
+  accountId: string;
+  model?: string;
+  prompt?: string;
+  kind?: "text" | "image";
 }
 
 export interface AccountProxyLatencyTestPayload {
@@ -525,6 +534,25 @@ export const accountClient = {
           accountIds: Array.isArray(params?.accountIds) ? params.accountIds : [],
           message: params?.message || "hi",
         }),
+      ),
+    ),
+  testAccount: async (params: AccountTestPayload): Promise<AccountTestStartResult> =>
+    readAccountTestStartResult(
+      await invoke<unknown>(
+        "service_account_test_start",
+        withAddr({
+          accountId: params.accountId,
+          model: params.model ?? null,
+          prompt: params.prompt ?? null,
+          kind: params.kind ?? "text",
+        }),
+      ),
+    ),
+  cancelAccountTest: async (accountId: string): Promise<boolean> =>
+    Boolean(
+      await invoke<unknown>(
+        "service_account_test_cancel",
+        withAddr({ accountId }),
       ),
     ),
 

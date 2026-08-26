@@ -3,8 +3,8 @@ use codexmanager_core::rpc::types::{JsonRpcRequest, JsonRpcResponse};
 use crate::RpcActor;
 use crate::{
     account_cleanup, account_delete, account_delete_many, account_export, account_import,
-    account_list, account_proxy, account_update, account_warmup, auth_account, auth_login,
-    auth_tokens,
+    account_list, account_proxy, account_test, account_update, account_warmup, auth_account,
+    auth_login, auth_tokens,
 };
 
 /// 函数 `try_handle`
@@ -119,6 +119,18 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                 .unwrap_or_default();
             let message = first_string_param(req, &["message"]).unwrap_or_default();
             super::value_or_error(account_warmup::warmup_accounts(account_ids, &message))
+        }
+        "account/test" => {
+            let account_id = first_str_param(req, &["accountId", "account_id"]).unwrap_or("");
+            let model = first_str_param(req, &["model", "modelSlug", "model_slug"])
+                .map(str::to_string);
+            let prompt = first_str_param(req, &["prompt", "message"]).map(str::to_string);
+            let kind = first_str_param(req, &["kind", "testType", "test_type"]).map(str::to_string);
+            super::value_or_error(account_test::start_account_test(account_id, model, prompt, kind))
+        }
+        "account/test/cancel" => {
+            let account_id = first_str_param(req, &["accountId", "account_id"]).unwrap_or("");
+            super::value_or_error(account_test::cancel_account_test(account_id))
         }
         "account/proxy/get" => {
             let account_id = first_str_param(req, &["accountId", "account_id"]).unwrap_or("");

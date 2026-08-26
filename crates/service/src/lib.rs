@@ -47,6 +47,7 @@ pub(crate) use account::plan as account_plan;
 pub(crate) use account::proxy as account_proxy;
 pub(crate) use account::proxy_testing::presets::proxy_test_presets;
 pub(crate) use account::status as account_status;
+pub(crate) use account::test as account_test;
 pub(crate) use account::update as account_update;
 pub(crate) use account::warmup as account_warmup;
 pub(crate) use aggregate_api::{
@@ -175,6 +176,7 @@ pub use logging::init_logging;
 pub use rpc_actor::{RpcActor, ROLE_ADMIN, ROLE_MEMBER, ROLE_SYSTEM_ADMIN};
 pub use usage::tray_summary::{read_tray_usage_reset_summary, TrayUsageResetSummary};
 pub use usage_refresh::{set_usage_refresh_completed_handler, UsageRefreshCompletedEvent};
+pub use account_test::{set_account_test_event_handler, AccountTestEvent};
 
 /// 函数 `test_env_guard`
 ///

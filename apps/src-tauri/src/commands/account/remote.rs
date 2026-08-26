@@ -276,6 +276,59 @@ pub async fn service_account_warmup(
     rpc_call_in_background("account/warmup", addr, Some(params)).await
 }
 
+/// 函数 `service_account_test_start`
+///
+/// 作者: gaohongshun
+///
+/// 时间: 2026-08-26
+///
+/// # 参数
+/// - addr: 参数 addr
+/// - account_id: 参数 account_id
+/// - model: 参数 model
+/// - prompt: 参数 prompt
+/// - kind: 参数 kind
+///
+/// # 返回
+/// 返回函数执行结果
+#[tauri::command]
+pub async fn service_account_test_start(
+    addr: Option<String>,
+    account_id: String,
+    model: Option<String>,
+    prompt: Option<String>,
+    kind: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({
+        "accountId": account_id,
+        "model": model,
+        "prompt": prompt,
+        "kind": kind,
+    });
+    rpc_call_in_background("account/test", addr, Some(params)).await
+}
+
+/// 函数 `service_account_test_cancel`
+///
+/// 作者: gaohongshun
+///
+/// 时间: 2026-08-26
+///
+/// # 参数
+/// - addr: 参数 addr
+/// - account_id: 参数 account_id
+///
+/// # 返回
+/// 返回函数执行结果
+#[tauri::command]
+pub async fn service_account_test_cancel(
+    addr: Option<String>,
+    account_id: String,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({ "accountId": account_id });
+    rpc_call_in_background("account/test/cancel", addr, Some(params)).await
+}
+
 #[tauri::command]
 pub async fn service_account_proxy_get(
     addr: Option<String>,

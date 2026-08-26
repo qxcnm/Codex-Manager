@@ -473,6 +473,82 @@ pub(crate) fn mark_account_unavailable_for_refresh_token_error(
     }
 }
 
+/// 函数 `mark_account_unavailable_for_test_auth_status`
+///
+/// 作者: gaohongshun
+///
+/// 时间: 2026-08-26
+///
+/// # 参数
+/// - storage: 参数 storage
+/// - account_id: 参数 account_id
+/// - status_code: 参数 status_code
+///
+/// # 返回
+/// 返回是否已变更账号状态
+///
+/// 测试账号在真实上游请求中遇到 401/403 时，将账号标记为不可用。
+pub(crate) fn mark_account_unavailable_for_test_auth_status(
+    storage: &Storage,
+    account_id: &str,
+    status_code: u16,
+) -> bool {
+    set_account_unavailable_with_reason(storage, account_id, &format!("test_http_{status_code}"))
+}
+
+/// 函数 `mark_account_limited_for_test_rate_limit`
+///
+/// 作者: gaohongshun
+///
+/// 时间: 2026-08-26
+///
+/// # 参数
+/// - storage: 参数 storage
+/// - account_id: 参数 account_id
+///
+/// # 返回
+/// 返回是否已变更账号状态
+///
+/// 测试账号在真实上游请求中遇到 429 时，将账号标记为限流。
+pub(crate) fn mark_account_limited_for_test_rate_limit(
+    storage: &Storage,
+    account_id: &str,
+) -> bool {
+    set_account_limited_with_reason(storage, account_id, "test_rate_limited")
+}
+
+/// 函数 `restore_account_active_after_test`
+///
+/// 作者: gaohongshun
+///
+/// 时间: 2026-08-26
+///
+/// # 参数
+/// - storage: 参数 storage
+/// - account_id: 参数 account_id
+///
+/// # 返回
+/// 返回是否已变更账号状态
+///
+/// 测试成功后，仅当账号当前处于自动失败状态（unavailable/limited/banned）时恢复为 active；
+/// 手动 disabled/inactive 账号不会被自动恢复。
+pub(crate) fn restore_account_active_after_test(storage: &Storage, account_id: &str) -> bool {
+    if should_preserve_manual_account_status(storage, account_id) {
+        return false;
+    }
+    let current = storage
+        .find_account_status_by_id(account_id)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let normalized = current.trim().to_ascii_lowercase();
+    if !matches!(normalized.as_str(), "unavailable" | "limited" | "banned") {
+        return false;
+    }
+    set_account_status(storage, account_id, "active", "test_ok");
+    true
+}
+
 #[cfg(test)]
 #[path = "account_status_tests.rs"]
 mod tests;

@@ -19,6 +19,7 @@ use app_shell::{
 };
 
 const USAGE_REFRESH_COMPLETED_EVENT: &str = "usage-refresh-completed";
+const ACCOUNT_TEST_EVENT: &str = "account-test-event";
 #[cfg(target_os = "linux")]
 const AYATANA_APPINDICATOR_LOG_DOMAIN: &str = "libayatana-appindicator";
 #[cfg(target_os = "linux")]
@@ -207,6 +208,12 @@ pub fn run() {
                     usage_refresh_event_app.emit(USAGE_REFRESH_COMPLETED_EVENT, payload)
                 {
                     log::warn!("emit usage refresh completed event failed: {}", err);
+                }
+            });
+            let account_test_event_app = app.handle().clone();
+            codexmanager_service::set_account_test_event_handler(move |event| {
+                if let Err(err) = account_test_event_app.emit(ACCOUNT_TEST_EVENT, &event) {
+                    log::warn!("emit account test event failed: {}", err);
                 }
             });
             if let Err(err) = setup_tray(app.handle()) {

@@ -18,6 +18,8 @@ export function createAccountWebCommands(postWebRpc: WebRpcCaller): Record<strin
       direct: (params, options) => exportAccountsViaBrowser(postWebRpc, asRecord(params), options),
     },
     service_account_warmup: { rpcMethod: "account/warmup" },
+    service_account_test_start: { rpcMethod: "account/test" },
+    service_account_test_cancel: { rpcMethod: "account/test/cancel" },
     service_account_proxy_get: { rpcMethod: "account/proxy/get" },
     service_account_proxy_set: { rpcMethod: "account/proxy/set" },
     service_account_proxy_clear: { rpcMethod: "account/proxy/clear" },

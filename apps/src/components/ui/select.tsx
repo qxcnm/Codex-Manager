@@ -115,7 +115,9 @@ function SelectContent({
   sideOffset = 4,
   align = "center",
   alignOffset = 0,
-  alignItemWithTrigger = true,
+  // 默认向下展开（锚定触发器），而不是让选中项与触发器对齐：后者在长列表里会把整个
+  // 弹出层往上顶、盖住触发器上方的控件。
+  alignItemWithTrigger = false,
   ...props
 }: SelectPrimitive.Popup.Props &
   Pick<

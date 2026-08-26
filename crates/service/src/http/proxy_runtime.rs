@@ -437,6 +437,10 @@ fn build_front_proxy_app(state: ProxyState) -> Router {
             "/events/usage-refresh",
             get(crate::http::usage_events::handle_usage_refresh_events_http),
         )
+        .route(
+            "/events/account-test",
+            get(crate::http::account_test_events::handle_account_test_events_http),
+        )
         .route("/v1/responses", any(responses_handler))
         .route("/proxy-test-upload", post(proxy_test_upload))
         .fallback(any(proxy_handler))

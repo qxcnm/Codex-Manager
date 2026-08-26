@@ -2,6 +2,7 @@ pub mod callback_endpoint;
 pub mod gateway_endpoint;
 pub mod rpc_endpoint;
 pub mod server;
+pub(crate) mod account_test_events;
 pub(crate) mod usage_events;
 
 pub(crate) mod backend_router;

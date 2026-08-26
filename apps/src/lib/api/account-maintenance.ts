@@ -92,6 +92,12 @@ export interface AccountWarmupResult {
   results?: AccountWarmupItemResult[];
 }
 
+export interface AccountTestStartResult {
+  testId?: string;
+  started?: boolean;
+  model?: string;
+}
+
 export function readAccountImportResult(payload: unknown): AccountImportResult {
   const source = asRecord(payload);
   const hasUsageRefreshAccountIds =
@@ -186,6 +192,14 @@ export function readAccountWarmupResult(payload: unknown): AccountWarmupResult {
     succeeded: readNumberField(payload, "succeeded"),
     failed: readNumberField(payload, "failed"),
     results,
+  };
+}
+
+export function readAccountTestStartResult(payload: unknown): AccountTestStartResult {
+  return {
+    testId: readStringField(payload, "testId"),
+    started: readBooleanField(payload, "started"),
+    model: readStringField(payload, "model"),
   };
 }
 

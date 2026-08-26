@@ -1178,6 +1178,10 @@ export function useAccounts() {
       await invalidateAccountData();
       toast.success(t("账号列表已刷新"));
     },
+    // 静默刷新账号数据（不弹 toast）：测试结束后只回读最新账号状态，避免误触「用量刷新」提示。
+    refreshAccountsSilently: async () => {
+      await invalidateAccountData();
+    },
     deleteAccount: (accountId: string) => {
       if (!ensureServiceReady("删除账号")) return;
       deleteMutation.mutate(accountId);

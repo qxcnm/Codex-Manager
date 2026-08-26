@@ -5,6 +5,7 @@ pub(crate) enum BackendRoute {
     Rpc,
     AuthCallback,
     UsageRefreshEvents,
+    AccountTestEvents,
     Metrics,
     Gateway,
 }
@@ -30,6 +31,9 @@ pub(crate) fn resolve_backend_route(method: &str, path: &str) -> BackendRoute {
     if method == "GET" && path == "/events/usage-refresh" {
         return BackendRoute::UsageRefreshEvents;
     }
+    if method == "GET" && path == "/events/account-test" {
+        return BackendRoute::AccountTestEvents;
+    }
     if method == "GET" && path == "/metrics" {
         return BackendRoute::Metrics;
     }
@@ -54,6 +58,9 @@ pub(crate) fn handle_backend_request(request: Request) {
         BackendRoute::AuthCallback => crate::http::callback_endpoint::handle_callback(request),
         BackendRoute::UsageRefreshEvents => {
             crate::http::usage_events::handle_usage_refresh_events(request)
+        }
+        BackendRoute::AccountTestEvents => {
+            crate::http::account_test_events::handle_account_test_events(request)
         }
         BackendRoute::Metrics => crate::http::gateway_endpoint::handle_metrics(request),
         BackendRoute::Gateway => crate::http::gateway_endpoint::handle_gateway(request),

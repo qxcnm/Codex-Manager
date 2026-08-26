@@ -421,6 +421,10 @@ pub(crate) use runtime_config::{
     fresh_upstream_client_for_account, prepare_upstream_client_for_account,
     upstream_client_for_account,
 };
+pub(crate) use runtime_config::{
+    account_test_proxy_url_for_account, build_account_test_client_with_timeouts,
+    current_codex_image_main_model,
+};
 pub(crate) use runtime_config::{front_proxy_max_body_bytes, front_proxy_zstd_max_body_bytes};
 use runtime_config::{
     prepare_upstream_client_for_aggregate_api_candidate, request_gate_wait_timeout,

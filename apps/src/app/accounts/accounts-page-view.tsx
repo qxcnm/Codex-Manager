@@ -29,6 +29,7 @@ import {
 import { AddAccountModal } from "@/components/modals/add-account-modal";
 import { AccountResetCreditControl } from "@/components/account-reset-credit-control";
 import { ConfirmDialog } from "@/components/modals/confirm-dialog";
+import { AccountTestModal } from "@/components/modals/account-test-modal";
 import UsageModal from "@/components/modals/usage-modal";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -160,6 +161,10 @@ export interface AccountsPageViewProps {
   proxySourceDraft: AccountProxySource;
   proxyProfileIdDraft: string;
   proxyUrlDraft: string;
+  accountTestAccount: Account | null;
+  openAccountTest: (account: Account) => void;
+  handleAccountTestOpenChange: (open: boolean) => void;
+  onAccountTestFinished: (accountId: string) => void;
   selectedAccount: Account | null;
   accountEditorState: AccountEditorState | null;
   deleteDialogState: DeleteDialogState;
@@ -375,6 +380,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     importByFile,
     importByDirectory,
     refreshAccount,
+    onAccountTestFinished,
     clearPreferredAccount,
     setPreferredAccount,
     toggleAccountStatus,
@@ -547,6 +553,14 @@ export function AccountsPageView(props: AccountsPageViewProps) {
               >
                 <Network className="h-4 w-4" />
                 {t("账号代理")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="gap-2"
+                disabled={!isServiceReady}
+                onClick={() => props.openAccountTest(account)}
+              >
+                <Zap className="h-4 w-4" />
+                {t("测试账号")}
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="gap-2"
@@ -1560,6 +1574,12 @@ export function AccountsPageView(props: AccountsPageViewProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <AccountTestModal
+        account={props.accountTestAccount}
+        open={isPageActive && Boolean(props.accountTestAccount)}
+        onOpenChange={props.handleAccountTestOpenChange}
+        onFinished={onAccountTestFinished}
+      />
       <ConfirmDialog
         open={isPageActive && Boolean(deleteDialogState)}
         onOpenChange={(open) => {

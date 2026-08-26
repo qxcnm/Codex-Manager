@@ -116,6 +116,15 @@ pub(crate) fn supports_text_generation(model: &ManagedModelV2) -> bool {
     .unwrap_or(true)
 }
 
+pub(crate) fn supports_image_generation(model: &ManagedModelV2) -> bool {
+    capability(
+        model,
+        &["supports_image_generation", "supportsImageGeneration"],
+    )
+    .and_then(Value::as_bool)
+    .unwrap_or(false)
+}
+
 pub(crate) fn ensure_text_generation_model(
     storage: &codexmanager_core::storage::Storage,
     slug: Option<&str>,

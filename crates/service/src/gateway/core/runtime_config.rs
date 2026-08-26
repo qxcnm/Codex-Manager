@@ -368,6 +368,70 @@ pub(crate) fn fresh_async_upstream_client_for_account(
     }
 }
 
+/// 函数 `account_test_proxy_url_for_account`
+///
+/// 作者: gaohongshun
+///
+/// 时间: 2026-08-26
+///
+/// # 参数
+/// - account_id: 参数 account_id
+///
+/// # 返回
+/// 返回账号测试请求应使用的代理地址（显式账号代理 → 代理池 → 全局代理），
+/// 显式代理配置无效时 fail-closed。
+pub(crate) fn account_test_proxy_url_for_account(
+    account_id: &str,
+) -> Result<Option<String>, String> {
+    ensure_runtime_config_loaded();
+    match account_proxy_client_cache_entry(account_id) {
+        AccountProxyClientCacheEntry::Ready { proxy_url, .. } => return Ok(Some(proxy_url)),
+        AccountProxyClientCacheEntry::Invalid { proxy_url: _, error } => {
+            // 不回显 proxy_url：显式代理地址可能内嵌账号密码（http://user:pass@host）。
+            return Err(format!(
+                "account explicit proxy for {account_id} is invalid and fail-closed. {error}"
+            ));
+        }
+        AccountProxyClientCacheEntry::NotConfigured => {}
+    }
+    let pool = crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool");
+    if let Some(proxy_url) = pool.proxy_for_account(account_id) {
+        return Ok(Some(proxy_url.to_string()));
+    }
+    Ok(current_upstream_proxy_url())
+}
+
+/// 函数 `build_account_test_client_with_timeouts`
+///
+/// 作者: gaohongshun
+///
+/// 时间: 2026-08-26
+///
+/// # 参数
+/// - proxy_url: 参数 proxy_url
+/// - overall_timeout: 参数 overall_timeout
+///
+/// # 返回
+/// 返回带整体超时的阻塞式上游客户端，用于有界生命周期的账号测试请求。
+pub(crate) fn build_account_test_client_with_timeouts(
+    proxy_url: Option<&str>,
+    overall_timeout: Duration,
+) -> Result<Client, String> {
+    let mut builder = Client::builder()
+        .timeout(overall_timeout)
+        .connect_timeout(upstream_connect_timeout_cached())
+        .pool_max_idle_per_host(32)
+        .pool_idle_timeout(Some(Duration::from_secs(90)))
+        .tcp_keepalive(Some(Duration::from_secs(30)));
+    if let Some(proxy_url) = proxy_url.map(str::trim).filter(|value| !value.is_empty()) {
+        let proxy = Proxy::all(proxy_url).map_err(|err| format!("invalid proxy url: {err}"))?;
+        builder = builder.proxy(proxy);
+    }
+    builder
+        .build()
+        .map_err(|err| format!("build account test client failed: {err}"))
+}
+
 #[cfg(test)]
 pub(crate) fn upstream_proxy_url_for_account(account_id: &str) -> Option<String> {
     ensure_runtime_config_loaded();

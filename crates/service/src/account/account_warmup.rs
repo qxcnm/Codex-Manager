@@ -13,7 +13,7 @@ use crate::usage_token_refresh::{refresh_and_persist_access_token, token_refresh
 
 const DEFAULT_WARMUP_MESSAGE: &str = "hi";
 const FALLBACK_WARMUP_MESSAGE: &str = "你好";
-const WARMUP_UPSTREAM_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
+pub(crate) const WARMUP_UPSTREAM_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 const DEFAULT_WARMUP_MODEL: &str = "gpt-5.3-codex";
 const X_OPENAI_FEDRAMP_HEADER_NAME: &str = "x-openai-fedramp";
 
@@ -40,11 +40,11 @@ struct AccountWarmupTarget {
     token: Token,
 }
 
-struct WarmupAuthorization {
+pub(crate) struct WarmupAuthorization {
     value: String,
     task_id: Option<String>,
     is_fedramp: bool,
-    uses_agent_identity: bool,
+    pub(crate) uses_agent_identity: bool,
     account_scope_id: Option<String>,
 }
 
@@ -323,7 +323,7 @@ fn resolve_warmup_model_slug(storage: &Storage) -> String {
         .unwrap_or_else(|| DEFAULT_WARMUP_MODEL.to_string())
 }
 
-fn resolve_warmup_authorization(
+pub(crate) fn resolve_warmup_authorization(
     storage: &Storage,
     client: &Client,
     account: &Account,
@@ -606,7 +606,7 @@ fn summarize_warmup_stream_error(value: &serde_json::Value) -> String {
 #[path = "account_warmup_tests.rs"]
 mod tests;
 
-fn build_warmup_headers(
+pub(crate) fn build_warmup_headers(
     account: &Account,
     authorization: &WarmupAuthorization,
 ) -> Result<HeaderMap, String> {
@@ -664,7 +664,7 @@ fn header_value(value: &str) -> Result<HeaderValue, String> {
     HeaderValue::from_str(value).map_err(|err| format!("invalid header value: {err}"))
 }
 
-fn summarize_warmup_error(status: u16, headers: &HeaderMap, body: &str) -> String {
+pub(crate) fn summarize_warmup_error(status: u16, headers: &HeaderMap, body: &str) -> String {
     let invalid_agent_task =
         crate::agent_identity::is_agent_identity_task_invalid_response(status, body.as_bytes());
     let body_hint = if invalid_agent_task {
