@@ -8,13 +8,13 @@ use super::super::local_validation::LocalValidationResult;
 use super::executor::{
     resolve_gateway_upstream_execution_plan, GatewayUpstreamExecutorKind, GatewayUpstreamRouteKind,
 };
+use super::protocol::aggregate_api::{AggregateAttemptOutcome, AggregateFailurePolicy};
 use super::proxy_pipeline::candidate_executor::{
     execute_candidate_sequence, CandidateExecutionResult, CandidateExecutorParams,
 };
 use super::proxy_pipeline::execution_context::GatewayUpstreamExecutionContext;
 use super::proxy_pipeline::request_gate::acquire_request_gate;
 use super::proxy_pipeline::request_setup::prepare_request_setup;
-use super::protocol::aggregate_api::{AggregateAttemptOutcome, AggregateFailurePolicy};
 use super::proxy_pipeline::response_finalize::respond_terminal;
 use super::support::precheck::{prepare_candidates_for_proxy, CandidatePrecheckResult};
 
@@ -131,8 +131,7 @@ fn is_hybrid_aggregate_first_route(
 fn is_hybrid_passthrough_route(
     execution_plan: super::executor::GatewayUpstreamExecutionPlan,
 ) -> bool {
-    is_hybrid_account_first_route(execution_plan)
-        || is_hybrid_aggregate_first_route(execution_plan)
+    is_hybrid_account_first_route(execution_plan) || is_hybrid_aggregate_first_route(execution_plan)
 }
 
 fn respond_when_account_candidates_empty(

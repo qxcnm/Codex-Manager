@@ -73,7 +73,8 @@ pub(crate) fn update_api_key_model(
         let normalized_account_plan_filter = if normalized_rotation_strategy
             == crate::apikey_profile::ROTATION_ACCOUNT
             || normalized_rotation_strategy == crate::apikey_profile::ROTATION_HYBRID
-            || normalized_rotation_strategy == crate::apikey_profile::ROTATION_HYBRID_AGGREGATE_FIRST
+            || normalized_rotation_strategy
+                == crate::apikey_profile::ROTATION_HYBRID_AGGREGATE_FIRST
         {
             crate::account_plan::normalize_account_plan_filter(account_plan_filter)?
         } else {
