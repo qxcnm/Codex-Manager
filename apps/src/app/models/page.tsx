@@ -104,6 +104,7 @@ const ROTATION_STRATEGY_LABELS: Record<string, string> = {
   account_rotation: "OpenAI 账号池",
   aggregate_api_rotation: "聚合 API",
   hybrid_rotation: "混合路由",
+  hybrid_aggregate_first_rotation: "混合路由",
 };
 
 function routeStrategyLabel(

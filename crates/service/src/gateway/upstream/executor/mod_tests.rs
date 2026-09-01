@@ -43,6 +43,13 @@ fn protocol_and_rotation_map_to_execution_plan() {
         }
     );
     assert_eq!(
+        resolve_gateway_upstream_execution_plan("openai_compat", "hybrid_aggregate_first_rotation"),
+        GatewayUpstreamExecutionPlan {
+            executor_kind: GatewayUpstreamExecutorKind::CodexResponses,
+            route_kind: GatewayUpstreamRouteKind::HybridAggregateFirst,
+        }
+    );
+    assert_eq!(
         resolve_gateway_upstream_execution_plan("gemini_native", "aggregate_api_rotation"),
         GatewayUpstreamExecutionPlan {
             executor_kind: GatewayUpstreamExecutorKind::Gemini,

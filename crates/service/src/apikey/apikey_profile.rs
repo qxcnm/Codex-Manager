@@ -7,6 +7,7 @@ pub(crate) const AUTH_X_API_KEY: &str = "x_api_key";
 pub(crate) const ROTATION_ACCOUNT: &str = "account_rotation";
 pub(crate) const ROTATION_AGGREGATE_API: &str = "aggregate_api_rotation";
 pub(crate) const ROTATION_HYBRID: &str = "hybrid_rotation";
+pub(crate) const ROTATION_HYBRID_AGGREGATE_FIRST: &str = "hybrid_aggregate_first_rotation";
 
 /// 函数 `normalize_key`
 ///
@@ -174,6 +175,12 @@ pub(crate) fn normalize_rotation_strategy(value: Option<String>) -> Result<Strin
             | "mixed_rotation"
             | "混合轮转"
             | "账号优先聚合兜底" => Ok(ROTATION_HYBRID.to_string()),
+            "hybrid_aggregate_first"
+            | "hybrid_aggregate_first_rotation"
+            | "mixed_aggregate_first"
+            | "aggregate_first"
+            | "聚合优先"
+            | "聚合优先账号兜底" => Ok(ROTATION_HYBRID_AGGREGATE_FIRST.to_string()),
             other => Err(format!("unsupported rotation strategy: {other}")),
         },
         None => Ok(ROTATION_ACCOUNT.to_string()),

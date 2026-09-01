@@ -312,6 +312,12 @@ fn rotation_strategy_selects_catalog_ownership() {
         ),
         crate::codex_model_catalog::GatewayCatalogPolicy::Managed
     );
+    assert_eq!(
+        crate::codex_model_catalog::gateway_catalog_policy_for_rotation_strategy(
+            crate::apikey_profile::ROTATION_HYBRID_AGGREGATE_FIRST
+        ),
+        crate::codex_model_catalog::GatewayCatalogPolicy::Managed
+    );
 }
 
 #[test]
@@ -320,6 +326,10 @@ fn api_key_candidates_expose_route_and_catalog_ownership() {
         (crate::apikey_profile::ROTATION_ACCOUNT, "official"),
         (crate::apikey_profile::ROTATION_AGGREGATE_API, "managed"),
         (crate::apikey_profile::ROTATION_HYBRID, "managed"),
+        (
+            crate::apikey_profile::ROTATION_HYBRID_AGGREGATE_FIRST,
+            "managed",
+        ),
     ] {
         let candidate = api_key_candidate(ApiKeyCodexProfileCandidate {
             id: format!("key-{rotation_strategy}"),

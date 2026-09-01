@@ -112,6 +112,7 @@ pub(crate) fn create_api_key(
     };
     let account_plan_filter = if rotation_strategy == crate::apikey_profile::ROTATION_ACCOUNT
         || rotation_strategy == crate::apikey_profile::ROTATION_HYBRID
+        || rotation_strategy == crate::apikey_profile::ROTATION_HYBRID_AGGREGATE_FIRST
     {
         crate::account_plan::normalize_account_plan_filter(account_plan_filter)?
     } else {
@@ -119,6 +120,7 @@ pub(crate) fn create_api_key(
     };
     let account_group_filter = if rotation_strategy == crate::apikey_profile::ROTATION_ACCOUNT
         || rotation_strategy == crate::apikey_profile::ROTATION_HYBRID
+        || rotation_strategy == crate::apikey_profile::ROTATION_HYBRID_AGGREGATE_FIRST
     {
         crate::account_group::normalize_account_group_filter(account_group_filter)
     } else {

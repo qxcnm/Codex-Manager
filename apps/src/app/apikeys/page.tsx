@@ -83,6 +83,7 @@ const ROTATION_STRATEGY_LABELS: Record<string, string> = {
   account_rotation: "账号轮转",
   aggregate_api_rotation: "聚合API轮转",
   hybrid_rotation: "混合轮转（账号优先）",
+  hybrid_aggregate_first_rotation: "混合轮转（聚合优先）",
 };
 
 function userCanOwnApiKey(user: AppUser): boolean {

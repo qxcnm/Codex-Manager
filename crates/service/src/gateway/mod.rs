@@ -1062,6 +1062,7 @@ pub(crate) fn gateway_supports_official_responses_websocket(
     }
     if api_key.rotation_strategy == crate::apikey_profile::ROTATION_AGGREGATE_API
         || api_key.rotation_strategy == crate::apikey_profile::ROTATION_HYBRID
+        || api_key.rotation_strategy == crate::apikey_profile::ROTATION_HYBRID_AGGREGATE_FIRST
     {
         return false;
     }

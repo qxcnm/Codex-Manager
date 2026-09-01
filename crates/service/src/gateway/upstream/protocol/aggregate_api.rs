@@ -1026,6 +1026,24 @@ pub(crate) fn resolve_aggregate_api_rotation_candidates(
 ///
 /// # 返回
 /// 返回函数执行结果
+/// 聚合路径失败时的处理策略。
+pub(in super::super) enum AggregateFailurePolicy {
+    /// 失败时直接向客户端响应错误（默认行为）。
+    RespondError,
+    /// 失败且请求尚未消费时，把请求归还给调用方，
+    /// 由调用方继续后续路由（聚合优先混合轮转回落账号池）。
+    ReleaseRequest,
+}
+
+/// 聚合代理一次调用的最终结果。
+pub(in super::super) enum AggregateAttemptOutcome {
+    /// 请求已经响应完毕（成功桥接或已向客户端返回错误）。
+    Responded,
+    /// 请求未被消费且聚合路径失败（仅 `ReleaseRequest` 策略出现），
+    /// 调用方可继续后续路由。
+    RequestReleased { request: Request, error: String },
+}
+
 pub(in super::super) struct AggregateProxyRequest<'a> {
     pub request: Request,
     pub storage: &'a Storage,
@@ -1053,11 +1071,12 @@ pub(in super::super) struct AggregateProxyRequest<'a> {
     pub aggregate_api_candidates: Vec<AggregateApi>,
     pub request_deadline: Option<Instant>,
     pub started_at: Instant,
+    pub failure_policy: AggregateFailurePolicy,
 }
 
 pub(in super::super) fn proxy_aggregate_request(
     params: AggregateProxyRequest<'_>,
-) -> Result<(), String> {
+) -> Result<AggregateAttemptOutcome, String> {
     let AggregateProxyRequest {
         request,
         storage,
@@ -1085,6 +1104,7 @@ pub(in super::super) fn proxy_aggregate_request(
         aggregate_api_candidates,
         request_deadline,
         started_at,
+        failure_policy,
     } = params;
     let estimated_input_tokens =
         super::super::super::request_log::estimate_input_tokens_from_body(body.as_ref());
@@ -1099,9 +1119,16 @@ pub(in super::super) fn proxy_aggregate_request(
             Some(message.as_str()),
             started_at.elapsed().as_millis(),
         );
+        if matches!(failure_policy, AggregateFailurePolicy::ReleaseRequest) {
+            // 聚合优先混合轮转：无聚合候选时归还请求，由调用方回落账号池。
+            return Ok(AggregateAttemptOutcome::RequestReleased {
+                request,
+                error: message,
+            });
+        }
         let request = request;
         respond_error(request, 404, message.as_str(), Some(trace_id));
-        return Ok(());
+        return Ok(AggregateAttemptOutcome::Responded);
     }
 
     let mut request = Some(request);
@@ -1270,7 +1297,7 @@ pub(in super::super) fn proxy_aggregate_request(
                     Some(started_at.elapsed().as_millis()),
                 );
                 respond_error(request, 504, message.as_str(), Some(trace_id));
-                return Ok(());
+                return Ok(AggregateAttemptOutcome::Responded);
             }
 
             let mut url = base_upstream_url.clone();
@@ -1519,7 +1546,7 @@ pub(in super::super) fn proxy_aggregate_request(
         }
 
         if succeeded {
-            return Ok(());
+            return Ok(AggregateAttemptOutcome::Responded);
         }
 
         if candidate_idx + 1 < total_candidates {
@@ -1530,6 +1557,29 @@ pub(in super::super) fn proxy_aggregate_request(
     let message =
         last_attempt_error.unwrap_or_else(|| "aggregate api upstream response failed".to_string());
     let status_code = last_failure_status;
+    if matches!(failure_policy, AggregateFailurePolicy::ReleaseRequest) {
+        if let Some(released_request) = request.take() {
+            // 聚合优先混合轮转：聚合候选全部失败且请求尚未消费，
+            // 保留失败日志后将请求归还调用方，由其回落账号池。
+            super::super::super::record_gateway_request_outcome(
+                path,
+                status_code,
+                Some("aggregate_api"),
+            );
+            super::super::super::trace_log::log_request_final(
+                trace_id,
+                status_code,
+                Some(key_id),
+                last_attempt_url.as_deref(),
+                Some(message.as_str()),
+                started_at.elapsed().as_millis(),
+            );
+            return Ok(AggregateAttemptOutcome::RequestReleased {
+                request: released_request,
+                error: message,
+            });
+        }
+    }
     let request = request.take().ok_or_else(|| {
         "aggregate api request already consumed before failure response".to_string()
     })?;
@@ -1583,7 +1633,7 @@ pub(in super::super) fn proxy_aggregate_request(
         Some(started_at.elapsed().as_millis()),
     );
     respond_error(request, status_code, message.as_str(), Some(trace_id));
-    Ok(())
+    Ok(AggregateAttemptOutcome::Responded)
 }
 
 fn aggregate_api_secrets_by_candidate_id(
