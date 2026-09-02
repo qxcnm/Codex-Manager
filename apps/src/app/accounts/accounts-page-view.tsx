@@ -156,6 +156,7 @@ export interface AccountsPageViewProps {
   proxyDialogAccount: Account | null;
   proxySettings: AccountProxySettings | null;
   proxyProfiles: ProxyProfile[];
+  canTestAccounts: boolean;
   isProxySettingsLoading: boolean;
   proxyEnabledDraft: boolean;
   proxySourceDraft: AccountProxySource;
@@ -554,14 +555,16 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                 <Network className="h-4 w-4" />
                 {t("账号代理")}
               </DropdownMenuItem>
-              <DropdownMenuItem
-                className="gap-2"
-                disabled={!isServiceReady}
-                onClick={() => props.openAccountTest(account)}
-              >
-                <Zap className="h-4 w-4" />
-                {t("测试账号")}
-              </DropdownMenuItem>
+              {props.canTestAccounts ? (
+                <DropdownMenuItem
+                  className="gap-2"
+                  disabled={!isServiceReady}
+                  onClick={() => props.openAccountTest(account)}
+                >
+                  <Zap className="h-4 w-4" />
+                  {t("测试账号")}
+                </DropdownMenuItem>
+              ) : null}
               <DropdownMenuItem
                 className="gap-2"
                 disabled={
@@ -1574,12 +1577,14 @@ export function AccountsPageView(props: AccountsPageViewProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <AccountTestModal
-        account={props.accountTestAccount}
-        open={isPageActive && Boolean(props.accountTestAccount)}
-        onOpenChange={props.handleAccountTestOpenChange}
-        onFinished={onAccountTestFinished}
-      />
+      {props.canTestAccounts ? (
+        <AccountTestModal
+          account={props.accountTestAccount}
+          open={isPageActive && Boolean(props.accountTestAccount)}
+          onOpenChange={props.handleAccountTestOpenChange}
+          onFinished={onAccountTestFinished}
+        />
+      ) : null}
       <ConfirmDialog
         open={isPageActive && Boolean(deleteDialogState)}
         onOpenChange={(open) => {

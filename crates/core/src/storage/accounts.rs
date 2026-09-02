@@ -1280,6 +1280,30 @@ impl Storage {
         Ok((self.account_exists(account_id)?, false))
     }
 
+    /// Updates an account status only when the row still matches the state observed by the
+    /// caller. Long-running operations use this guard so a stale completion cannot overwrite a
+    /// newer manual or gateway-driven status transition.
+    pub fn update_account_status_if_context_matches(
+        &self,
+        account_id: &str,
+        expected_status: &str,
+        expected_updated_at: i64,
+        status: &str,
+    ) -> Result<bool> {
+        let updated_at = now_ts().max(expected_updated_at.saturating_add(1));
+        let updated = self.conn.execute(
+            update_account_status_if_context_matches_sql(),
+            (
+                status,
+                updated_at,
+                account_id,
+                expected_status,
+                expected_updated_at,
+            ),
+        )?;
+        Ok(updated > 0)
+    }
+
     /// 函数 `delete_account`
     ///
     /// 作者: gaohongshun

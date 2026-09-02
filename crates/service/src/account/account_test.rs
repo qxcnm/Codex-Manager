@@ -1,18 +1,21 @@
 use codexmanager_core::storage::Storage;
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
+use rand::RngCore;
 use reqwest::blocking::Client;
 use reqwest::header::HeaderMap;
 use serde::Serialize;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::io::{BufRead, BufReader};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::account_status::{
-    mark_account_limited_for_test_rate_limit, mark_account_unavailable_for_test_auth_status,
-    restore_account_active_after_test,
+    load_account_status_context, mark_account_limited_for_test_rate_limit,
+    mark_account_unavailable_for_test_auth_status, restore_account_active_after_test,
+    AccountStatusContext,
 };
 use crate::account_warmup::{
     build_warmup_headers, resolve_warmup_authorization, summarize_warmup_error, WARMUP_UPSTREAM_URL,
@@ -135,12 +138,57 @@ enum AccountTestOutcome {
 
 type AccountTestEventHandler = Arc<dyn Fn(AccountTestEvent) + Send + Sync>;
 
+#[derive(Clone)]
+struct ActiveAccountTest {
+    test_id: String,
+    cancel_flag: Arc<AtomicBool>,
+}
+
+struct AccountTestSubscriber {
+    id: u64,
+    sender: Sender<AccountTestEvent>,
+}
+
+pub(crate) struct AccountTestEventSubscription {
+    test_id: String,
+    subscriber_id: u64,
+    receiver: Receiver<AccountTestEvent>,
+}
+
+impl AccountTestEventSubscription {
+    pub(crate) fn recv_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<AccountTestEvent, crossbeam_channel::RecvTimeoutError> {
+        self.receiver.recv_timeout(timeout)
+    }
+}
+
+impl Drop for AccountTestEventSubscription {
+    fn drop(&mut self) {
+        if let Some(subscribers) = ACCOUNT_TEST_EVENT_SUBSCRIBERS.get() {
+            let mut guard =
+                crate::lock_utils::lock_recover(subscribers, "account_test_event_subscribers");
+            let remove_test_id = if let Some(entries) = guard.get_mut(&self.test_id) {
+                entries.retain(|entry| entry.id != self.subscriber_id);
+                entries.is_empty()
+            } else {
+                false
+            };
+            if remove_test_id {
+                guard.remove(&self.test_id);
+            }
+        }
+    }
+}
+
 static ACCOUNT_TEST_EVENT_HANDLER: OnceLock<Mutex<Option<AccountTestEventHandler>>> =
     OnceLock::new();
-static ACCOUNT_TEST_EVENT_SUBSCRIBERS: OnceLock<Mutex<Vec<Sender<AccountTestEvent>>>> =
-    OnceLock::new();
-static ACTIVE_ACCOUNT_TESTS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
-static ACCOUNT_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+static ACCOUNT_TEST_EVENT_SUBSCRIBERS: OnceLock<
+    Mutex<HashMap<String, Vec<AccountTestSubscriber>>>,
+> = OnceLock::new();
+static ACTIVE_ACCOUNT_TESTS: OnceLock<Mutex<HashMap<String, ActiveAccountTest>>> = OnceLock::new();
+static ACCOUNT_TEST_SUBSCRIBER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// 函数 `set_account_test_event_handler`
 ///
@@ -172,12 +220,23 @@ where
 ///
 /// # 返回
 /// 返回账号测试事件订阅通道
-pub(crate) fn subscribe_account_test_events() -> Receiver<AccountTestEvent> {
+pub(crate) fn subscribe_account_test_events(test_id: &str) -> AccountTestEventSubscription {
     let (sender, receiver) = bounded(64);
-    let subscribers = ACCOUNT_TEST_EVENT_SUBSCRIBERS.get_or_init(|| Mutex::new(Vec::new()));
+    let subscriber_id = ACCOUNT_TEST_SUBSCRIBER_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let subscribers = ACCOUNT_TEST_EVENT_SUBSCRIBERS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = crate::lock_utils::lock_recover(subscribers, "account_test_event_subscribers");
-    guard.push(sender);
-    receiver
+    guard
+        .entry(test_id.to_string())
+        .or_default()
+        .push(AccountTestSubscriber {
+            id: subscriber_id,
+            sender,
+        });
+    AccountTestEventSubscription {
+        test_id: test_id.to_string(),
+        subscriber_id,
+        receiver,
+    }
 }
 
 /// 函数 `notify_account_test_event`
@@ -202,11 +261,43 @@ pub(crate) fn notify_account_test_event(event: AccountTestEvent) {
     if let Some(subscribers) = ACCOUNT_TEST_EVENT_SUBSCRIBERS.get() {
         let mut guard =
             crate::lock_utils::lock_recover(subscribers, "account_test_event_subscribers");
-        guard.retain(|sender| match sender.try_send(event.clone()) {
-            Ok(()) | Err(TrySendError::Full(_)) => true,
-            Err(TrySendError::Disconnected(_)) => false,
-        });
+        let remove_test_id = if let Some(entries) = guard.get_mut(&event.test_id) {
+            entries.retain(|entry| match entry.sender.try_send(event.clone()) {
+                Ok(()) | Err(TrySendError::Full(_)) => true,
+                Err(TrySendError::Disconnected(_)) => false,
+            });
+            entries.is_empty()
+        } else {
+            false
+        };
+        if remove_test_id {
+            guard.remove(&event.test_id);
+        }
     }
+}
+
+pub(crate) fn normalize_account_test_id(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+fn generate_account_test_id() -> String {
+    let mut bytes = [0_u8; 24];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    let mut test_id = String::with_capacity(5 + bytes.len() * 2);
+    test_id.push_str("test-");
+    for byte in bytes {
+        write!(&mut test_id, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    test_id
 }
 
 /// 函数 `start_account_test`
@@ -243,21 +334,19 @@ pub(crate) fn start_account_test(
         .find_token_by_account_id(account_id)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| "账号缺少访问令牌".to_string())?;
+    let status_context = load_account_status_context(&storage, account_id);
     drop(account);
     drop(token);
 
     // 前端可自行生成 testId 并在订阅前持有它，从而在事件到达时就能按 testId 隔离，避免
     // 「订阅到拿到 testId」之间的竞态串流。未提供时回退到服务端自增 ID 保持向后兼容。
-    let test_id = test_id
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| {
-            format!(
-                "test-{account_id}-{}",
-                ACCOUNT_TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
-            )
-        });
-    let cancel_flag = register_active_test(account_id)?;
+    let test_id = match test_id {
+        Some(value) => {
+            normalize_account_test_id(&value).ok_or_else(|| "无效测试 ID".to_string())?
+        }
+        None => generate_account_test_id(),
+    };
+    let cancel_flag = register_active_test(account_id, &test_id)?;
 
     let test_kind = resolve_test_kind(&storage, model.as_deref(), TestKind::parse(kind.as_deref()));
     let resolved_model = resolve_model_slug(&storage, model.as_deref(), test_kind);
@@ -277,6 +366,7 @@ pub(crate) fn start_account_test(
             &thread_prompt,
             thread_kind,
             cancel_flag,
+            status_context,
         );
     });
 
@@ -298,37 +388,49 @@ pub(crate) fn start_account_test(
 ///
 /// # 返回
 /// 返回是否取消了进行中的测试
-pub(crate) fn cancel_account_test(account_id: &str) -> Result<bool, String> {
+pub(crate) fn cancel_account_test(account_id: &str, test_id: &str) -> Result<bool, String> {
     let account_id = account_id.trim();
     if account_id.is_empty() {
         return Err("缺少账号 ID".to_string());
     }
+    let test_id = normalize_account_test_id(test_id).ok_or_else(|| "无效测试 ID".to_string())?;
     let registry = ACTIVE_ACCOUNT_TESTS.get_or_init(|| Mutex::new(HashMap::new()));
     let guard = crate::lock_utils::lock_recover(registry, "account_test_active_tests");
     match guard.get(account_id) {
-        Some(flag) => {
-            flag.store(true, Ordering::Relaxed);
+        Some(active) if active.test_id == test_id => {
+            active.cancel_flag.store(true, Ordering::Relaxed);
             Ok(true)
         }
-        None => Ok(false),
+        Some(_) | None => Ok(false),
     }
 }
 
-fn register_active_test(account_id: &str) -> Result<Arc<AtomicBool>, String> {
+fn register_active_test(account_id: &str, test_id: &str) -> Result<Arc<AtomicBool>, String> {
     let registry = ACTIVE_ACCOUNT_TESTS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = crate::lock_utils::lock_recover(registry, "account_test_active_tests");
     if guard.contains_key(account_id) {
         return Err("该账号已有进行中的测试".to_string());
     }
     let flag = Arc::new(AtomicBool::new(false));
-    guard.insert(account_id.to_string(), flag.clone());
+    guard.insert(
+        account_id.to_string(),
+        ActiveAccountTest {
+            test_id: test_id.to_string(),
+            cancel_flag: flag.clone(),
+        },
+    );
     Ok(flag)
 }
 
-fn remove_active_test(account_id: &str) {
+fn remove_active_test(account_id: &str, test_id: &str) {
     if let Some(registry) = ACTIVE_ACCOUNT_TESTS.get() {
         let mut guard = crate::lock_utils::lock_recover(registry, "account_test_active_tests");
-        guard.remove(account_id);
+        if guard
+            .get(account_id)
+            .is_some_and(|active| active.test_id == test_id)
+        {
+            guard.remove(account_id);
+        }
     }
 }
 
@@ -392,29 +494,32 @@ fn run_account_test(
     prompt: &str,
     kind: TestKind,
     cancel_flag: Arc<AtomicBool>,
+    status_context: AccountStatusContext,
 ) {
     let outcome = execute_account_test(account_id, test_id, model, prompt, kind, &cancel_flag);
 
     if let Some(storage) = open_storage() {
         match &outcome {
             AccountTestOutcome::Success => {
-                let _ = restore_account_active_after_test(&storage, account_id);
+                let _ = restore_account_active_after_test(&storage, account_id, &status_context);
             }
             AccountTestOutcome::AuthError(status_code) => {
                 let _ = mark_account_unavailable_for_test_auth_status(
                     &storage,
                     account_id,
                     *status_code,
+                    &status_context,
                 );
             }
             AccountTestOutcome::RateLimited => {
-                let _ = mark_account_limited_for_test_rate_limit(&storage, account_id);
+                let _ =
+                    mark_account_limited_for_test_rate_limit(&storage, account_id, &status_context);
             }
             AccountTestOutcome::Failed(_) | AccountTestOutcome::Canceled => {}
         }
     }
 
-    remove_active_test(account_id);
+    remove_active_test(account_id, test_id);
 }
 
 fn execute_account_test(
@@ -1172,5 +1277,60 @@ mod tests {
             "output_format": "webp"
         });
         assert_eq!(image_item_to_data_uri(&webp).unwrap().1, "image/webp");
+    }
+
+    #[test]
+    fn account_test_id_validation_accepts_opaque_ascii_ids_only() {
+        assert_eq!(
+            normalize_account_test_id(" 550e8400-e29b-41d4-a716-446655440000 ").as_deref(),
+            Some("550e8400-e29b-41d4-a716-446655440000")
+        );
+        assert!(normalize_account_test_id("").is_none());
+        assert!(normalize_account_test_id("bad/id").is_none());
+        assert!(normalize_account_test_id(&"a".repeat(129)).is_none());
+    }
+
+    #[test]
+    fn server_generated_account_test_ids_are_opaque_and_unique() {
+        let first = generate_account_test_id();
+        let second = generate_account_test_id();
+        assert_eq!(first.len(), 53);
+        assert!(first.starts_with("test-"));
+        assert!(normalize_account_test_id(&first).is_some());
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn account_test_subscriptions_are_filtered_by_exact_test_id() {
+        let first_id = "subscription-filter-first";
+        let second_id = "subscription-filter-second";
+        let first = subscribe_account_test_events(first_id);
+        let second = subscribe_account_test_events(second_id);
+
+        notify_account_test_event(AccountTestEvent::new(first_id, "status"));
+
+        assert_eq!(
+            first
+                .receiver
+                .try_recv()
+                .expect("matching subscriber receives event")
+                .test_id,
+            first_id
+        );
+        assert!(second.receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn cancel_account_test_requires_matching_test_id() {
+        let account_id = "cancel-owner-account";
+        let test_id = "cancel-owner-test";
+        let cancel_flag = register_active_test(account_id, test_id).expect("register active test");
+
+        assert!(!cancel_account_test(account_id, "stale-test").expect("stale cancel result"));
+        assert!(!cancel_flag.load(Ordering::Relaxed));
+        assert!(cancel_account_test(account_id, test_id).expect("matching cancel result"));
+        assert!(cancel_flag.load(Ordering::Relaxed));
+
+        remove_active_test(account_id, test_id);
     }
 }

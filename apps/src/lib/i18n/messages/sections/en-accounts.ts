@@ -286,5 +286,27 @@ export const EN_ACCOUNTS_MESSAGES: MessageCatalog = {
   "批量{action}完成：成功{success}个":
     "Bulk {action} complete: {success} succeeded",
   "批量{action}失败: {error}": "Bulk {action} failed: {error}",
+  "测试账号": "Test account",
+  "测试类型": "Test type",
+  "选择测试类型": "Select test type",
+  "文字模型": "Text model",
+  "图片模型": "Image model",
+  "测试模型": "Test model",
+  "选择模型": "Select model",
+  "官方模型": "Official models",
+  "图片": "Image",
+  "未加载到可用模型，测试将使用后端默认模型。":
+    "No available models were loaded. The backend default model will be used.",
+  "已取消测试，可再次点击「开始测试」。":
+    "Test canceled. Click Start test to run it again.",
+  "准备就绪，点击「开始测试」发起一次真实请求。":
+    "Ready. Click Start test to send a real request.",
+  "模型：": "Model: ",
+  "测试成功": "Test succeeded",
+  "该账号为手动禁用，测试虽成功但不会被自动恢复为「可用」。":
+    "This account is manually disabled. A successful test will not automatically mark it as available.",
+  "图片预览": "Image preview",
+  "开始测试": "Start test",
+  "启动测试失败": "Failed to start test",
   "预计删除": "Estimated delete",
 };

@@ -25,10 +25,11 @@ pub(crate) struct GatewayErrorFollowUp {
     pub should_mark_default_cooldown: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AccountStatusContext {
     pub status: String,
     pub reason: Option<String>,
+    pub updated_at: Option<i64>,
 }
 
 /// 函数 `latest_status_reason`
@@ -54,13 +55,14 @@ pub(crate) fn load_account_status_context(
     storage: &Storage,
     account_id: &str,
 ) -> AccountStatusContext {
+    let account = storage.find_account_by_id(account_id).ok().flatten();
     AccountStatusContext {
-        status: storage
-            .find_account_status_by_id(account_id)
-            .ok()
-            .flatten()
+        status: account
+            .as_ref()
+            .map(|account| account.status.clone())
             .unwrap_or_default(),
         reason: latest_status_reason(storage, account_id),
+        updated_at: account.map(|account| account.updated_at),
     }
 }
 
@@ -492,8 +494,15 @@ pub(crate) fn mark_account_unavailable_for_test_auth_status(
     storage: &Storage,
     account_id: &str,
     status_code: u16,
+    context: &AccountStatusContext,
 ) -> bool {
-    set_account_unavailable_with_reason(storage, account_id, &format!("test_http_{status_code}"))
+    set_account_status_after_test_if_context_matches(
+        storage,
+        account_id,
+        "unavailable",
+        &format!("test_http_{status_code}"),
+        context,
+    )
 }
 
 /// 函数 `mark_account_limited_for_test_rate_limit`
@@ -513,8 +522,53 @@ pub(crate) fn mark_account_unavailable_for_test_auth_status(
 pub(crate) fn mark_account_limited_for_test_rate_limit(
     storage: &Storage,
     account_id: &str,
+    context: &AccountStatusContext,
 ) -> bool {
-    set_account_limited_with_reason(storage, account_id, "test_rate_limited")
+    set_account_status_after_test_if_context_matches(
+        storage,
+        account_id,
+        "limited",
+        "test_rate_limited",
+        context,
+    )
+}
+
+fn set_account_status_after_test_if_context_matches(
+    storage: &Storage,
+    account_id: &str,
+    status: &str,
+    reason: &str,
+    context: &AccountStatusContext,
+) -> bool {
+    let normalized = context.status.trim().to_ascii_lowercase();
+    if matches!(normalized.as_str(), "disabled" | "inactive" | "banned") {
+        return false;
+    }
+    if load_account_status_context(storage, account_id) != *context {
+        return false;
+    }
+    let Some(expected_updated_at) = context.updated_at else {
+        return false;
+    };
+    let changed = storage
+        .update_account_status_if_context_matches(
+            account_id,
+            &context.status,
+            expected_updated_at,
+            status,
+        )
+        .unwrap_or(false);
+    if !changed {
+        return false;
+    }
+    crate::gateway::invalidate_candidate_cache();
+    let _ = storage.insert_event(&Event {
+        account_id: Some(account_id.to_string()),
+        event_type: "account_status_update".to_string(),
+        message: format!("status={status} reason={reason}"),
+        created_at: now_ts(),
+    });
+    true
 }
 
 /// 函数 `restore_account_active_after_test`
@@ -530,23 +584,20 @@ pub(crate) fn mark_account_limited_for_test_rate_limit(
 /// # 返回
 /// 返回是否已变更账号状态
 ///
-/// 测试成功后，仅当账号当前处于自动失败状态（unavailable/limited/banned）时恢复为 active；
-/// 手动 disabled/inactive 账号不会被自动恢复。
-pub(crate) fn restore_account_active_after_test(storage: &Storage, account_id: &str) -> bool {
-    if should_preserve_manual_account_status(storage, account_id) {
+/// 测试成功后，仅当账号从测试开始至今仍处于同一个自动失败状态
+///（unavailable/limited）时恢复为 active；banned 与手动停用状态始终保留。
+pub(crate) fn restore_account_active_after_test(
+    storage: &Storage,
+    account_id: &str,
+    context: &AccountStatusContext,
+) -> bool {
+    let normalized = context.status.trim().to_ascii_lowercase();
+    if !matches!(normalized.as_str(), "unavailable" | "limited") {
         return false;
     }
-    let current = storage
-        .find_account_status_by_id(account_id)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    let normalized = current.trim().to_ascii_lowercase();
-    if !matches!(normalized.as_str(), "unavailable" | "limited" | "banned") {
-        return false;
-    }
-    set_account_status(storage, account_id, "active", "test_ok");
-    true
+    set_account_status_after_test_if_context_matches(
+        storage, account_id, "active", "test_ok", context,
+    )
 }
 
 #[cfg(test)]

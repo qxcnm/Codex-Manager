@@ -27,6 +27,7 @@ import {
   type AccountTestEventPayload,
 } from "@/lib/api/account-test-events";
 import { AccountStatusCell } from "@/app/accounts/accounts-page-helpers";
+import { useI18n } from "@/lib/i18n/provider";
 import type { ManagedModelV2 } from "@/types/model-v2";
 import type { Account } from "@/types";
 
@@ -72,10 +73,24 @@ function modelLabel(model: ManagedModelV2): string {
 }
 
 function newTestId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === "function") {
+    return cryptoApi.randomUUID();
   }
-  return `test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  if (typeof cryptoApi?.getRandomValues !== "function") {
+    throw new Error("Secure random values are unavailable");
+  }
+  const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"));
+  return [
+    hex.slice(0, 4).join(""),
+    hex.slice(4, 6).join(""),
+    hex.slice(6, 8).join(""),
+    hex.slice(8, 10).join(""),
+    hex.slice(10).join(""),
+  ].join("-");
 }
 
 export function AccountTestModal({
@@ -84,6 +99,7 @@ export function AccountTestModal({
   onOpenChange,
   onFinished,
 }: AccountTestModalProps) {
+  const { t } = useI18n();
   const [phase, setPhase] = useState<Phase>("idle");
   const [state, setState] = useState<Accumulated>({ text: "", images: [] });
   const [models, setModels] = useState<ManagedModelV2[]>([]);
@@ -170,7 +186,7 @@ export function AccountTestModal({
       case "error":
         setState((prev) => ({
           ...prev,
-          error: payload.error ?? "测试失败",
+          error: payload.error ?? t("测试失败"),
         }));
         setPhase("done");
         finishedRef.current = true;
@@ -179,7 +195,7 @@ export function AccountTestModal({
         }
         break;
     }
-  }, []);
+  }, [t]);
 
   const startTest = useCallback(async () => {
     const id = accountIdRef.current;
@@ -189,7 +205,16 @@ export function AccountTestModal({
     unlistenRef.current?.();
     unlistenRef.current = null;
     // 订阅前先持有本次测试的 testId，事件到达时即可按 testId 隔离，避免并发测试串流。
-    const testId = newTestId();
+    let testId: string;
+    try {
+      testId = newTestId();
+    } catch {
+      setState({ text: "", images: [], error: t("启动测试失败") });
+      setCanceled(false);
+      finishedRef.current = true;
+      setPhase("done");
+      return;
+    }
     testIdRef.current = testId;
     finishedRef.current = false;
     setState({ text: "", images: [] });
@@ -197,7 +222,7 @@ export function AccountTestModal({
     setPhase("running");
 
     try {
-      const unlisten = await listenAccountTestEvent(handleEvent);
+      const unlisten = await listenAccountTestEvent(testId, handleEvent);
       unlistenRef.current = unlisten;
       const result = await accountClient.testAccount({
         accountId: id,
@@ -211,7 +236,10 @@ export function AccountTestModal({
       unlistenRef.current = null;
       setState((prev) => ({
         ...prev,
-        error: err instanceof Error ? err.message : "启动测试失败",
+        error:
+          err instanceof Error && err.message.trim()
+            ? err.message
+            : t("启动测试失败"),
       }));
       finishedRef.current = true;
       setPhase("done");
@@ -219,12 +247,13 @@ export function AccountTestModal({
         onFinishedRef.current?.(accountIdRef.current);
       }
     }
-  }, [handleEvent, selectedModel, testKind]);
+  }, [handleEvent, selectedModel, t, testKind]);
 
   const cancelTest = useCallback(() => {
     const id = accountIdRef.current;
-    if (id) {
-      void accountClient.cancelAccountTest(id).catch(() => {});
+    const testId = testIdRef.current;
+    if (id && testId) {
+      void accountClient.cancelAccountTest(id, testId).catch(() => {});
     }
     unlistenRef.current?.();
     unlistenRef.current = null;
@@ -239,8 +268,9 @@ export function AccountTestModal({
     (nextOpen: boolean) => {
       if (!nextOpen && phaseRef.current === "running") {
         const id = accountIdRef.current;
-        if (id) {
-          void accountClient.cancelAccountTest(id).catch(() => {});
+        const testId = testIdRef.current;
+        if (id && testId) {
+          void accountClient.cancelAccountTest(id, testId).catch(() => {});
         }
       }
       onOpenChange(nextOpen);
@@ -297,7 +327,7 @@ export function AccountTestModal({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="glass-card max-h-[calc(100vh-2rem)] overflow-hidden sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>测试账号</DialogTitle>
+          <DialogTitle>{t("测试账号")}</DialogTitle>
           <DialogDescription>
             {account?.name || account?.label || accountId}
           </DialogDescription>
@@ -312,7 +342,7 @@ export function AccountTestModal({
 
           <div className="grid gap-1.5">
             <label htmlFor="account-test-kind" className="text-xs text-muted-foreground">
-              测试类型
+              {t("测试类型")}
             </label>
             <Select value={testKind} onValueChange={handleTestKindChange}>
               <SelectTrigger
@@ -320,21 +350,21 @@ export function AccountTestModal({
                 disabled={phase === "running"}
                 className="w-full"
               >
-                <SelectValue placeholder="选择测试类型">
+                <SelectValue placeholder={t("选择测试类型")}>
                   {(value) => {
                     const v = value == null ? "" : String(value);
                     return v === "image"
-                      ? "图片模型"
+                      ? t("图片模型")
                       : v === "text"
-                        ? "文字模型"
-                        : "选择测试类型";
+                        ? t("文字模型")
+                        : t("选择测试类型");
                   }}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent alignItemWithTrigger={false}>
                 <SelectGroup>
-                  <SelectItem value="text">文字模型</SelectItem>
-                  <SelectItem value="image">图片模型</SelectItem>
+                  <SelectItem value="text">{t("文字模型")}</SelectItem>
+                  <SelectItem value="image">{t("图片模型")}</SelectItem>
                 </SelectGroup>
               </SelectContent>
             </Select>
@@ -342,7 +372,7 @@ export function AccountTestModal({
 
           <div className="grid gap-1.5">
             <label htmlFor="account-test-model" className="text-xs text-muted-foreground">
-              测试模型
+              {t("测试模型")}
             </label>
             <Select
               value={selectedModel}
@@ -362,33 +392,33 @@ export function AccountTestModal({
                 disabled={phase === "running"}
                 className="w-full"
               >
-                <SelectValue placeholder="选择模型">
+                <SelectValue placeholder={t("选择模型")}>
                   {(value) => {
                     const valueStr = value == null ? "" : String(value);
                     const model = models.find((item) => item.slug === valueStr);
-                    return model ? modelLabel(model) : "选择模型";
+                    return model ? modelLabel(model) : t("选择模型");
                   }}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent alignItemWithTrigger={false}>
                 {builtinModels.length > 0 ? (
                   <SelectGroup>
-                    <SelectLabel>官方模型</SelectLabel>
+                    <SelectLabel>{t("官方模型")}</SelectLabel>
                     {builtinModels.map((model) => (
                       <SelectItem key={model.slug} value={model.slug}>
                         {modelLabel(model)}
-                        {isImageModel(model) ? "（图片）" : ""}
+                        {isImageModel(model) ? ` (${t("图片")})` : ""}
                       </SelectItem>
                     ))}
                   </SelectGroup>
                 ) : null}
                 {customModels.length > 0 ? (
                   <SelectGroup>
-                    <SelectLabel>自定义模型</SelectLabel>
+                    <SelectLabel>{t("自定义模型")}</SelectLabel>
                     {customModels.map((model) => (
                       <SelectItem key={model.slug} value={model.slug}>
                         {modelLabel(model)}
-                        {isImageModel(model) ? "（图片）" : ""}
+                        {isImageModel(model) ? ` (${t("图片")})` : ""}
                       </SelectItem>
                     ))}
                   </SelectGroup>
@@ -397,7 +427,7 @@ export function AccountTestModal({
             </Select>
             {models.length === 0 ? (
               <span className="text-xs text-muted-foreground">
-                未加载到可用模型，测试将使用后端默认模型。
+                {t("未加载到可用模型，测试将使用后端默认模型。")}
               </span>
             ) : null}
           </div>
@@ -410,21 +440,23 @@ export function AccountTestModal({
               <div className="flex items-center gap-2 text-gray-500">
                 <span>
                   {canceled
-                    ? "已取消测试，可再次点击「开始测试」。"
-                    : "准备就绪，点击「开始测试」发起一次真实请求。"}
+                    ? t("已取消测试，可再次点击「开始测试」。")
+                    : t("准备就绪，点击「开始测试」发起一次真实请求。")}
                 </span>
               </div>
             ) : (
               <>
                 {state.model ? (
-                  <div className="mb-1 text-gray-500">模型：{state.model}</div>
+                  <div className="mb-1 text-gray-500">
+                    {t("模型：")}{state.model}
+                  </div>
                 ) : null}
                 {status ? (
                   <div className="mb-2 flex items-center gap-2 text-yellow-400">
                     {phase === "running" ? (
                       <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
                     ) : null}
-                    <span>{status}</span>
+                    <span>{t(status)}</span>
                   </div>
                 ) : null}
                 {text ? (
@@ -447,11 +479,11 @@ export function AccountTestModal({
                       ) : (
                         <XCircle className="h-4 w-4 shrink-0" />
                       )}
-                      <span>{success ? "测试成功" : error || "测试失败"}</span>
+                      <span>{success ? t("测试成功") : error || t("测试失败")}</span>
                     </div>
                     {success && isManuallyDisabled(account) ? (
                       <div className="mt-1 text-xs text-amber-400">
-                        该账号为手动禁用，测试虽成功但不会被自动恢复为「可用」。
+                        {t("该账号为手动禁用，测试虽成功但不会被自动恢复为「可用」。")}
                       </div>
                     ) : null}
                   </>
@@ -463,7 +495,7 @@ export function AccountTestModal({
           {images.length > 0 ? (
             <div className="grid gap-2">
               <span className="text-xs font-medium text-muted-foreground">
-                图片预览
+                {t("图片预览")}
               </span>
               <div className="grid grid-cols-2 gap-2">
                 {images.map((image, index) => (
@@ -483,17 +515,17 @@ export function AccountTestModal({
         <DialogFooter className="px-6 pb-6">
           {phase === "running" ? (
             <Button type="button" variant="outline" onClick={cancelTest}>
-              取消
+              {t("取消")}
             </Button>
           ) : null}
           {phase === "done" ? (
             <Button type="button" onClick={startTest}>
-              重试
+              {t("重试")}
             </Button>
           ) : null}
           {phase === "idle" ? (
             <Button type="button" onClick={startTest}>
-              开始测试
+              {t("开始测试")}
             </Button>
           ) : null}
           <Button
@@ -501,7 +533,7 @@ export function AccountTestModal({
             variant="ghost"
             onClick={() => handleOpenChange(false)}
           >
-            关闭
+            {t("关闭")}
           </Button>
         </DialogFooter>
       </DialogContent>

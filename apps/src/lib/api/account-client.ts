@@ -550,11 +550,11 @@ export const accountClient = {
         }),
       ),
     ),
-  cancelAccountTest: async (accountId: string): Promise<boolean> =>
+  cancelAccountTest: async (accountId: string, testId: string): Promise<boolean> =>
     Boolean(
       await invoke<unknown>(
         "service_account_test_cancel",
-        withAddr({ accountId }),
+        withAddr({ accountId, testId }),
       ),
     ),
 

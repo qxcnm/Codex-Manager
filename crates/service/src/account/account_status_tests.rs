@@ -1,6 +1,8 @@
 use super::{
-    analyze_gateway_error, classify_account_availability_signal,
-    mark_account_unavailable_for_gateway_error, AccountAvailabilitySignal, GatewayErrorKind,
+    analyze_gateway_error, classify_account_availability_signal, load_account_status_context,
+    mark_account_limited_for_test_rate_limit, mark_account_unavailable_for_gateway_error,
+    mark_account_unavailable_for_test_auth_status, restore_account_active_after_test,
+    AccountAvailabilitySignal, GatewayErrorKind,
 };
 use codexmanager_core::storage::{now_ts, Account, Storage, UsageSnapshotRecord};
 
@@ -206,5 +208,92 @@ fn gateway_usage_limit_error_marks_account_limited_when_snapshot_exhausted() {
     assert_eq!(
         reasons.get("acc-usage-exhausted").map(String::as_str),
         Some("usage_limit_exhausted")
+    );
+}
+
+#[test]
+fn stale_account_test_outcomes_do_not_overwrite_newer_banned_status() {
+    let _guard = crate::test_env_guard();
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    let now = now_ts();
+    let account_id = "acc-stale-account-test";
+    storage
+        .insert_account(&Account {
+            id: account_id.to_string(),
+            label: "stale-account-test".to_string(),
+            issuer: "issuer".to_string(),
+            chatgpt_account_id: None,
+            workspace_id: None,
+            group_name: None,
+            sort: 0,
+            status: "unavailable".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("insert account");
+    let start_context = load_account_status_context(&storage, account_id);
+
+    storage
+        .update_account_status(account_id, "banned")
+        .expect("ban account while test is running");
+
+    assert!(!restore_account_active_after_test(
+        &storage,
+        account_id,
+        &start_context
+    ));
+    assert!(!mark_account_unavailable_for_test_auth_status(
+        &storage,
+        account_id,
+        401,
+        &start_context
+    ));
+    assert!(!mark_account_limited_for_test_rate_limit(
+        &storage,
+        account_id,
+        &start_context
+    ));
+    assert_eq!(
+        storage
+            .find_account_status_by_id(account_id)
+            .expect("read account status")
+            .as_deref(),
+        Some("banned")
+    );
+}
+
+#[test]
+fn account_test_success_never_restores_an_existing_banned_status() {
+    let _guard = crate::test_env_guard();
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    let now = now_ts();
+    let account_id = "acc-banned-before-test";
+    storage
+        .insert_account(&Account {
+            id: account_id.to_string(),
+            label: "banned-before-test".to_string(),
+            issuer: "issuer".to_string(),
+            chatgpt_account_id: None,
+            workspace_id: None,
+            group_name: None,
+            sort: 0,
+            status: "banned".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("insert account");
+    let context = load_account_status_context(&storage, account_id);
+
+    assert!(!restore_account_active_after_test(
+        &storage, account_id, &context
+    ));
+    assert_eq!(
+        storage
+            .find_account_status_by_id(account_id)
+            .expect("read account status")
+            .as_deref(),
+        Some("banned")
     );
 }

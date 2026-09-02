@@ -3,6 +3,11 @@
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useAccounts } from "@/hooks/useAccounts";
+import {
+  isAdminRole,
+  resolveSessionRole,
+  useAppSession,
+} from "@/hooks/useAppSession";
 import { useDesktopPageActive } from "@/hooks/useDesktopPageActive";
 import { usePageTransitionReady } from "@/hooks/usePageTransitionReady";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
@@ -65,6 +70,10 @@ export default function AccountsPage() {
   const { t } = useI18n();
   const { isDesktopRuntime, canUseBrowserDownloadExport } =
     useRuntimeCapabilities();
+  const { data: session, isLoading: isSessionLoading } = useAppSession();
+  const role = resolveSessionRole(session, isSessionLoading, isDesktopRuntime);
+  const canTestAccounts =
+    isDesktopRuntime || (!isSessionLoading && isAdminRole(role));
   const {
     accounts,
     planTypes,
@@ -571,6 +580,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
   };
 
   const openAccountTest = (account: Account) => {
+    if (!canTestAccounts) return;
     setAccountTestAccountId(account.id);
     setAccountTestAccountSnapshot(account);
   };
@@ -907,6 +917,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
       proxyDialogAccount={proxyDialogAccount}
       proxySettings={proxySettings}
       proxyProfiles={proxyProfiles}
+      canTestAccounts={canTestAccounts}
       accountTestAccount={accountTestAccount}
       isProxySettingsLoading={isProxySettingsLoading}
       proxyEnabledDraft={proxyEnabledDraft}

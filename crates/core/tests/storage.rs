@@ -1361,6 +1361,66 @@ fn storage_updates_account_status_only_when_changed() {
     assert_eq!(loaded.status, "inactive");
 }
 
+#[test]
+fn storage_updates_account_status_only_when_observed_context_still_matches() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init schema");
+    let observed_updated_at = 1_700_000_000;
+    storage
+        .insert_account(&Account {
+            id: "acc-context-cas".to_string(),
+            label: "context cas".to_string(),
+            issuer: "https://auth.openai.com".to_string(),
+            chatgpt_account_id: Some("acct_context_cas".to_string()),
+            workspace_id: None,
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: observed_updated_at,
+            updated_at: observed_updated_at,
+        })
+        .expect("insert account");
+
+    assert!(storage
+        .update_account_status_if_context_matches(
+            "acc-context-cas",
+            "active",
+            observed_updated_at,
+            "inactive",
+        )
+        .expect("matching context update"));
+    let changed = storage
+        .find_account_by_id("acc-context-cas")
+        .expect("find account")
+        .expect("account exists");
+    assert_eq!(changed.status, "inactive");
+    assert!(changed.updated_at > observed_updated_at);
+
+    assert!(!storage
+        .update_account_status_if_context_matches(
+            "acc-context-cas",
+            "active",
+            observed_updated_at,
+            "banned",
+        )
+        .expect("stale status update"));
+    assert!(!storage
+        .update_account_status_if_context_matches(
+            "acc-context-cas",
+            "inactive",
+            observed_updated_at,
+            "banned",
+        )
+        .expect("stale timestamp update"));
+    assert_eq!(
+        storage
+            .find_account_status_by_id("acc-context-cas")
+            .expect("read final status")
+            .as_deref(),
+        Some("inactive")
+    );
+}
+
 /// 函数 `storage_gateway_candidates_exclude_unavailable_or_missing_token_accounts`
 ///
 /// 作者: gaohongshun

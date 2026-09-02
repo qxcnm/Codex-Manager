@@ -97,6 +97,12 @@ pub(super) fn update_account_status_if_changed_sql() -> &'static str {
     "UPDATE accounts SET status = ?1, updated_at = ?2 WHERE id = ?3 AND status != ?1"
 }
 
+pub(super) fn update_account_status_if_context_matches_sql() -> &'static str {
+    "UPDATE accounts
+     SET status = ?1, updated_at = ?2
+     WHERE id = ?3 AND status = ?4 AND updated_at = ?5"
+}
+
 pub(super) fn delete_account_by_id_sql() -> &'static str {
     "DELETE FROM accounts WHERE id = ?1"
 }

@@ -439,8 +439,38 @@ pub(super) async fn usage_refresh_events(State(state): State<Arc<AppState>>) -> 
     out
 }
 
-pub(super) async fn account_test_events(State(state): State<Arc<AppState>>) -> Response {
-    let target_url = format!("http://{}/events/account-test", state.service_addr.trim());
+fn account_test_events_target_url(service_addr: &str, uri: &axum::http::Uri) -> String {
+    let mut target_url = format!("http://{}/events/account-test", service_addr.trim());
+    if let Some(query) = uri.query().filter(|query| !query.is_empty()) {
+        target_url.push('?');
+        target_url.push_str(query);
+    }
+    target_url
+}
+
+fn account_test_events_role_allowed(web_auth_mode: &str, role: Option<&str>) -> bool {
+    web_auth_mode != "accounts"
+        || matches!(
+            role,
+            Some(codexmanager_service::ROLE_ADMIN | codexmanager_service::ROLE_SYSTEM_ADMIN)
+        )
+}
+
+pub(super) async fn account_test_events(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    uri: axum::http::Uri,
+) -> Response {
+    let web_auth_mode = codexmanager_service::current_web_auth_mode();
+    let session = auth::current_app_session_from_headers(&headers);
+    if !account_test_events_role_allowed(
+        &web_auth_mode,
+        session.as_ref().map(|session| session.user.role.as_str()),
+    ) {
+        return (StatusCode::FORBIDDEN, "{}").into_response();
+    }
+
+    let target_url = account_test_events_target_url(&state.service_addr, &uri);
     let resp = state
         .client
         .get(&target_url)

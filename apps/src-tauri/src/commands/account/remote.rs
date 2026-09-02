@@ -326,8 +326,12 @@ pub async fn service_account_test_start(
 pub async fn service_account_test_cancel(
     addr: Option<String>,
     account_id: String,
+    test_id: String,
 ) -> Result<serde_json::Value, String> {
-    let params = serde_json::json!({ "accountId": account_id });
+    let params = serde_json::json!({
+        "accountId": account_id,
+        "testId": test_id,
+    });
     rpc_call_in_background("account/test/cancel", addr, Some(params)).await
 }
 

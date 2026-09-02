@@ -3,11 +3,12 @@ use std::io::{self, Read};
 use std::time::Duration;
 
 use axum::body::{Body, Bytes};
+use axum::extract::RawQuery;
 use axum::http::{
     HeaderMap as AxumHeaderMap, HeaderValue as AxumHeaderValue, StatusCode as AxumStatusCode,
 };
 use axum::response::{IntoResponse, Response as AxumResponse};
-use crossbeam_channel::{Receiver, RecvTimeoutError};
+use crossbeam_channel::RecvTimeoutError;
 use futures_util::stream;
 use tiny_http::{Header, Request, Response, StatusCode};
 
@@ -53,9 +54,22 @@ fn account_test_sse_frame(event: &crate::account_test::AccountTestEvent) -> Vec<
     .into_bytes()
 }
 
+fn account_test_id_from_query(query: Option<&str>) -> Option<String> {
+    let mut values = query
+        .into_iter()
+        .flat_map(|query| url::form_urlencoded::parse(query.as_bytes()))
+        .filter(|(key, _)| key == "testId")
+        .map(|(_, value)| value.into_owned());
+    let value = values.next()?;
+    if values.next().is_some() {
+        return None;
+    }
+    crate::account_test::normalize_account_test_id(&value)
+}
+
 fn next_account_test_event_chunk(
-    receiver: Receiver<crate::account_test::AccountTestEvent>,
-) -> Option<(Receiver<crate::account_test::AccountTestEvent>, Vec<u8>)> {
+    receiver: crate::account_test::AccountTestEventSubscription,
+) -> Option<(crate::account_test::AccountTestEventSubscription, Vec<u8>)> {
     let chunk = match receiver.recv_timeout(KEEPALIVE_INTERVAL) {
         Ok(event) => account_test_sse_frame(&event),
         Err(RecvTimeoutError::Timeout) => b": keep-alive\n\n".to_vec(),
@@ -65,14 +79,14 @@ fn next_account_test_event_chunk(
 }
 
 struct AccountTestEventStream {
-    receiver: Receiver<crate::account_test::AccountTestEvent>,
+    receiver: crate::account_test::AccountTestEventSubscription,
     pending: Vec<u8>,
     pending_offset: usize,
     opened: bool,
 }
 
 impl AccountTestEventStream {
-    fn new(receiver: Receiver<crate::account_test::AccountTestEvent>) -> Self {
+    fn new(receiver: crate::account_test::AccountTestEventSubscription) -> Self {
         Self {
             receiver,
             pending: Vec::new(),
@@ -127,7 +141,12 @@ pub(crate) fn handle_account_test_events(request: Request) {
         return;
     }
 
-    let receiver = crate::account_test::subscribe_account_test_events();
+    let test_id = account_test_id_from_query(request.url().split_once('?').map(|(_, query)| query));
+    let Some(test_id) = test_id else {
+        let _ = request.respond(Response::from_string("{}").with_status_code(400));
+        return;
+    };
+    let receiver = crate::account_test::subscribe_account_test_events(&test_id);
     let headers = vec![
         response_header("Content-Type", "text/event-stream"),
         response_header("Cache-Control", "no-cache"),
@@ -144,12 +163,18 @@ pub(crate) fn handle_account_test_events(request: Request) {
     let _ = request.respond(response);
 }
 
-pub(crate) async fn handle_account_test_events_http(headers: AxumHeaderMap) -> AxumResponse {
+pub(crate) async fn handle_account_test_events_http(
+    headers: AxumHeaderMap,
+    RawQuery(query): RawQuery,
+) -> AxumResponse {
     if !axum_rpc_token_valid(&headers) {
         return (AxumStatusCode::UNAUTHORIZED, "{}").into_response();
     }
 
-    let receiver = crate::account_test::subscribe_account_test_events();
+    let Some(test_id) = account_test_id_from_query(query.as_deref()) else {
+        return (AxumStatusCode::BAD_REQUEST, "{}").into_response();
+    };
+    let receiver = crate::account_test::subscribe_account_test_events(&test_id);
     let event_stream = stream::unfold((receiver, false), |(receiver, opened)| async move {
         if !opened {
             return Some((
@@ -178,4 +203,25 @@ pub(crate) async fn handle_account_test_events_http(headers: AxumHeaderMap) -> A
         .headers_mut()
         .insert("x-accel-buffering", AxumHeaderValue::from_static("no"));
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::account_test_id_from_query;
+
+    #[test]
+    fn account_test_event_query_requires_one_valid_test_id() {
+        assert_eq!(
+            account_test_id_from_query(Some(
+                "other=value&testId=550e8400-e29b-41d4-a716-446655440000"
+            ))
+            .as_deref(),
+            Some("550e8400-e29b-41d4-a716-446655440000")
+        );
+        assert!(account_test_id_from_query(None).is_none());
+        assert!(account_test_id_from_query(Some("other=value")).is_none());
+        assert!(account_test_id_from_query(Some("testId=%20%20")).is_none());
+        assert!(account_test_id_from_query(Some("testId=bad%2Fid")).is_none());
+        assert!(account_test_id_from_query(Some("testId=one&testId=two")).is_none());
+    }
 }

@@ -121,19 +121,31 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
             super::value_or_error(account_warmup::warmup_accounts(account_ids, &message))
         }
         "account/test" => {
-            let account_id = first_str_param(req, &["accountId", "account_id"]).unwrap_or("");
-            let model =
-                first_str_param(req, &["model", "modelSlug", "model_slug"]).map(str::to_string);
-            let prompt = first_str_param(req, &["prompt", "message"]).map(str::to_string);
-            let kind = first_str_param(req, &["kind", "testType", "test_type"]).map(str::to_string);
-            let test_id = first_str_param(req, &["testId", "test_id"]).map(str::to_string);
-            super::value_or_error(account_test::start_account_test(
-                account_id, model, prompt, kind, test_id,
-            ))
+            if !actor.is_admin() {
+                super::value_or_error::<account_test::AccountTestStartResult>(Err(
+                    super::permission_denied("account/test"),
+                ))
+            } else {
+                let account_id = first_str_param(req, &["accountId", "account_id"]).unwrap_or("");
+                let model =
+                    first_str_param(req, &["model", "modelSlug", "model_slug"]).map(str::to_string);
+                let prompt = first_str_param(req, &["prompt", "message"]).map(str::to_string);
+                let kind =
+                    first_str_param(req, &["kind", "testType", "test_type"]).map(str::to_string);
+                let test_id = first_str_param(req, &["testId", "test_id"]).map(str::to_string);
+                super::value_or_error(account_test::start_account_test(
+                    account_id, model, prompt, kind, test_id,
+                ))
+            }
         }
         "account/test/cancel" => {
-            let account_id = first_str_param(req, &["accountId", "account_id"]).unwrap_or("");
-            super::value_or_error(account_test::cancel_account_test(account_id))
+            if !actor.is_admin() {
+                super::value_or_error::<bool>(Err(super::permission_denied("account/test/cancel")))
+            } else {
+                let account_id = first_str_param(req, &["accountId", "account_id"]).unwrap_or("");
+                let test_id = first_str_param(req, &["testId", "test_id"]).unwrap_or("");
+                super::value_or_error(account_test::cancel_account_test(account_id, test_id))
+            }
         }
         "account/proxy/get" => {
             let account_id = first_str_param(req, &["accountId", "account_id"]).unwrap_or("");
@@ -574,5 +586,24 @@ mod tests {
             error_message(&response),
             "permission_denied: account/update groupName"
         );
+    }
+
+    #[test]
+    fn member_cannot_start_or_cancel_account_tests() {
+        let actor = RpcActor::from_parts(Some(crate::ROLE_MEMBER), Some("member-a"));
+        for method in ["account/test", "account/test/cancel"] {
+            let response = try_handle(
+                &rpc_request(
+                    method,
+                    serde_json::json!({ "accountId": "acc-a", "testId": "test-a" }),
+                ),
+                &actor,
+            )
+            .expect("response");
+            assert_eq!(
+                error_message(&response),
+                format!("permission_denied: {method}")
+            );
+        }
     }
 }

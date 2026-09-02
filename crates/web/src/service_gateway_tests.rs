@@ -1,4 +1,5 @@
 use super::{
+    account_test_events_role_allowed, account_test_events_target_url,
     format_upstream_error_message, gateway_proxy_max_body_bytes, gateway_proxy_target_url,
     service_probe_client, should_skip_gateway_request_header, should_skip_gateway_response_header,
     tcp_probe, ENV_GATEWAY_PROXY_MAX_BODY_BYTES,
@@ -188,7 +189,10 @@ async fn account_test_events_proxies_sse_stream_from_service() {
         missing_ui_html: std::sync::Arc::new(String::new()),
     });
 
-    let response = super::account_test_events(State(state)).await;
+    let uri: Uri = "/api/events/account-test?testId=t1"
+        .parse()
+        .expect("valid account test URI");
+    let response = super::account_test_events(State(state), HeaderMap::new(), uri).await;
 
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     assert_eq!(
@@ -207,4 +211,31 @@ async fn account_test_events_proxies_sse_stream_from_service() {
         "unexpected body: {text}"
     );
     assert!(text.contains("t1"), "unexpected body: {text}");
+}
+
+#[test]
+fn account_test_events_require_admin_in_accounts_mode() {
+    assert!(account_test_events_role_allowed("none", None));
+    assert!(account_test_events_role_allowed("password", None));
+    assert!(account_test_events_role_allowed("accounts", Some("admin")));
+    assert!(account_test_events_role_allowed(
+        "accounts",
+        Some("system_admin")
+    ));
+    assert!(!account_test_events_role_allowed(
+        "accounts",
+        Some("member")
+    ));
+    assert!(!account_test_events_role_allowed("accounts", None));
+}
+
+#[test]
+fn account_test_events_target_preserves_test_id_query() {
+    let uri: Uri = "/api/events/account-test?testId=550e8400-e29b-41d4-a716-446655440000"
+        .parse()
+        .expect("valid URI");
+    assert_eq!(
+        account_test_events_target_url("127.0.0.1:48760", &uri),
+        "http://127.0.0.1:48760/events/account-test?testId=550e8400-e29b-41d4-a716-446655440000"
+    );
 }
