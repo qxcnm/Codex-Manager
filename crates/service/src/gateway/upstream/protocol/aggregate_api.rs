@@ -1110,6 +1110,13 @@ pub(in super::super) fn proxy_aggregate_request(
         super::super::super::request_log::estimate_input_tokens_from_body(body.as_ref());
     if aggregate_api_candidates.is_empty() {
         let message = "aggregate api not found".to_string();
+        if matches!(failure_policy, AggregateFailurePolicy::ReleaseRequest) {
+            // 聚合优先混合轮转：无聚合候选时归还请求，由调用方回落账号池。
+            return Ok(AggregateAttemptOutcome::RequestReleased {
+                request,
+                error: message,
+            });
+        }
         super::super::super::record_gateway_request_outcome(path, 404, Some("aggregate_api"));
         super::super::super::trace_log::log_request_final(
             trace_id,
@@ -1119,13 +1126,6 @@ pub(in super::super) fn proxy_aggregate_request(
             Some(message.as_str()),
             started_at.elapsed().as_millis(),
         );
-        if matches!(failure_policy, AggregateFailurePolicy::ReleaseRequest) {
-            // 聚合优先混合轮转：无聚合候选时归还请求，由调用方回落账号池。
-            return Ok(AggregateAttemptOutcome::RequestReleased {
-                request,
-                error: message,
-            });
-        }
         let request = request;
         respond_error(request, 404, message.as_str(), Some(trace_id));
         return Ok(AggregateAttemptOutcome::Responded);
@@ -1560,20 +1560,8 @@ pub(in super::super) fn proxy_aggregate_request(
     if matches!(failure_policy, AggregateFailurePolicy::ReleaseRequest) {
         if let Some(released_request) = request.take() {
             // 聚合优先混合轮转：聚合候选全部失败且请求尚未消费，
-            // 保留失败日志后将请求归还调用方，由其回落账号池。
-            super::super::super::record_gateway_request_outcome(
-                path,
-                status_code,
-                Some("aggregate_api"),
-            );
-            super::super::super::trace_log::log_request_final(
-                trace_id,
-                status_code,
-                Some(key_id),
-                last_attempt_url.as_deref(),
-                Some(message.as_str()),
-                started_at.elapsed().as_millis(),
-            );
+            // 将请求归还调用方，由其回落账号池。这里不能提前记录请求终态，
+            // 否则账号兜底完成后会重复计数并覆盖同一 trace 的最终结果。
             return Ok(AggregateAttemptOutcome::RequestReleased {
                 request: released_request,
                 error: message,

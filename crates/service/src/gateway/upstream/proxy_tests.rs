@@ -2,7 +2,8 @@ use super::{
     exhausted_gateway_error_for_log, has_enabled_aggregate_api_route,
     has_enabled_default_account_pool_route, hybrid_route_error_message, provider_upstream_hint,
     request_deadline_for_path, resolve_aggregate_candidates_for_route, resolve_upstream_is_stream,
-    respond_when_account_candidates_empty, should_fallback_to_aggregate_after_account_exhaustion,
+    respond_when_account_candidates_empty, should_fallback_to_account_after_aggregate_exhaustion,
+    should_fallback_to_aggregate_after_account_exhaustion,
     should_try_provider_executor_aggregate_route, validate_model_route,
 };
 use crate::gateway::upstream::executor::{
@@ -423,6 +424,41 @@ fn hybrid_dual_route_keeps_account_first_and_aggregate_fallback() {
     assert!(should_fallback_to_aggregate_after_account_exhaustion(
         hybrid,
         Some(&dual_route),
+    ));
+}
+
+#[test]
+fn hybrid_aggregate_first_fallback_requires_default_account_pool_route() {
+    let hybrid = execution_plan(GatewayUpstreamRouteKind::HybridAggregateFirst);
+    let aggregate_only = model_with_routes(&[("aggregate_api", "agg-test")]);
+    let account_only = model_with_routes(&[("account_pool", "default")]);
+    let dual_route =
+        model_with_routes(&[("account_pool", "default"), ("aggregate_api", "agg-test")]);
+    let non_default_pool =
+        model_with_routes(&[("account_pool", "secondary"), ("aggregate_api", "agg-test")]);
+
+    assert!(should_try_provider_executor_aggregate_route(
+        hybrid,
+        Some(&aggregate_only),
+    ));
+    assert!(!should_fallback_to_account_after_aggregate_exhaustion(
+        hybrid,
+        Some(&aggregate_only),
+    ));
+    assert!(!should_try_provider_executor_aggregate_route(
+        hybrid,
+        Some(&account_only),
+    ));
+    assert!(should_fallback_to_account_after_aggregate_exhaustion(
+        hybrid,
+        Some(&dual_route),
+    ));
+    assert!(!should_fallback_to_account_after_aggregate_exhaustion(
+        hybrid,
+        Some(&non_default_pool),
+    ));
+    assert!(should_fallback_to_account_after_aggregate_exhaustion(
+        hybrid, None,
     ));
 }
 

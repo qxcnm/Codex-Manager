@@ -127,6 +127,14 @@ fn is_hybrid_aggregate_first_route(
     )
 }
 
+fn should_fallback_to_account_after_aggregate_exhaustion(
+    execution_plan: super::executor::GatewayUpstreamExecutionPlan,
+    configured_model: Option<&ManagedModelV2>,
+) -> bool {
+    is_hybrid_aggregate_first_route(execution_plan)
+        && configured_model.is_none_or(has_enabled_default_account_pool_route)
+}
+
 /// 混合轮转（无论账号优先还是聚合优先）直连聚合时使用透传路径与透传请求体。
 fn is_hybrid_passthrough_route(
     execution_plan: super::executor::GatewayUpstreamExecutionPlan,
@@ -817,7 +825,11 @@ pub(in super::super) fn proxy_validated_request(
         } else {
             (path.as_str(), &body)
         };
-        let aggregate_failure_policy = if is_hybrid_aggregate_first_route(execution_plan) {
+        let fallback_to_account = should_fallback_to_account_after_aggregate_exhaustion(
+            execution_plan,
+            configured_model.as_ref(),
+        );
+        let aggregate_failure_policy = if fallback_to_account {
             AggregateFailurePolicy::ReleaseRequest
         } else {
             AggregateFailurePolicy::RespondError
@@ -873,7 +885,7 @@ pub(in super::super) fn proxy_validated_request(
                 }
             }
             Err(err) => {
-                if is_hybrid_aggregate_first_route(execution_plan) {
+                if fallback_to_account {
                     // 聚合优先混合轮转：聚合候选解析失败，回落账号池。
                     log::debug!(
                         "event=gateway_hybrid_aggregate_first_fallback_to_account trace_id={} err={}",
