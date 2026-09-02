@@ -140,3 +140,71 @@ async fn rpc_proxy_rejects_body_over_the_bounded_upload_limit() {
 
     assert_eq!(response.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE);
 }
+
+/// 在独立线程里起一个最小 HTTP 服务，返回固定 SSE 响应后关闭连接，供代理测试当上游用。
+fn spawn_mock_sse_upstream(body: &'static str) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+    let addr = listener.local_addr().expect("mock upstream addr");
+    std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        let (mut socket, _) = listener.accept().expect("accept mock request");
+        let mut buf = [0u8; 4096];
+        let mut total = 0;
+        loop {
+            let n = socket.read(&mut buf[total..]).expect("read mock request");
+            if n == 0 {
+                break;
+            }
+            total += n;
+            if buf[..total].windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{body}"
+        );
+        let _ = socket.write_all(response.as_bytes());
+        let _ = socket.shutdown(std::net::Shutdown::Both);
+    });
+    addr.to_string()
+}
+
+#[tokio::test]
+async fn account_test_events_proxies_sse_stream_from_service() {
+    let upstream =
+        spawn_mock_sse_upstream("event: account-test-event\ndata: {\"testId\":\"t1\"}\n\n");
+    let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+    let state = std::sync::Arc::new(crate::AppState {
+        client: reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        service_rpc_url: "http://127.0.0.1:1/rpc".to_string(),
+        service_addr: upstream,
+        rpc_token: "test-token".to_string(),
+        web_auth_session_key: "test-session".to_string(),
+        shutdown_tx,
+        spawned_service: std::sync::Arc::new(tokio::sync::Mutex::new(false)),
+        missing_ui_html: std::sync::Arc::new(String::new()),
+    });
+
+    let response = super::account_test_events(State(state)).await;
+
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("account-test-event"),
+        "unexpected body: {text}"
+    );
+    assert!(text.contains("t1"), "unexpected body: {text}");
+}

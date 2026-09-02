@@ -102,6 +102,7 @@ pub(crate) use usage::scheduler as usage_scheduler;
 pub(crate) use usage::snapshot_store as usage_snapshot_store;
 pub(crate) use usage::token_refresh as usage_token_refresh;
 
+pub use account_test::{set_account_test_event_handler, AccountTestEvent};
 pub use app_settings::{
     app_settings_get, app_settings_get_with_overrides, app_settings_set, author_content_get,
     bind_all_interfaces_enabled, bind_all_interfaces_enabled_for_mode,
@@ -176,7 +177,6 @@ pub use logging::init_logging;
 pub use rpc_actor::{RpcActor, ROLE_ADMIN, ROLE_MEMBER, ROLE_SYSTEM_ADMIN};
 pub use usage::tray_summary::{read_tray_usage_reset_summary, TrayUsageResetSummary};
 pub use usage_refresh::{set_usage_refresh_completed_handler, UsageRefreshCompletedEvent};
-pub use account_test::{set_account_test_event_handler, AccountTestEvent};
 
 /// 函数 `test_env_guard`
 ///

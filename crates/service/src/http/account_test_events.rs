@@ -55,10 +55,7 @@ fn account_test_sse_frame(event: &crate::account_test::AccountTestEvent) -> Vec<
 
 fn next_account_test_event_chunk(
     receiver: Receiver<crate::account_test::AccountTestEvent>,
-) -> Option<(
-    Receiver<crate::account_test::AccountTestEvent>,
-    Vec<u8>,
-)> {
+) -> Option<(Receiver<crate::account_test::AccountTestEvent>, Vec<u8>)> {
     let chunk = match receiver.recv_timeout(KEEPALIVE_INTERVAL) {
         Ok(event) => account_test_sse_frame(&event),
         Err(RecvTimeoutError::Timeout) => b": keep-alive\n\n".to_vec(),

@@ -439,6 +439,41 @@ pub(super) async fn usage_refresh_events(State(state): State<Arc<AppState>>) -> 
     out
 }
 
+pub(super) async fn account_test_events(State(state): State<Arc<AppState>>) -> Response {
+    let target_url = format!("http://{}/events/account-test", state.service_addr.trim());
+    let resp = state
+        .client
+        .get(&target_url)
+        .header("accept", "text/event-stream")
+        .header("x-codexmanager-rpc-token", &state.rpc_token)
+        .send()
+        .await;
+    let resp = match resp {
+        Ok(value) => value,
+        Err(err) => {
+            let msg = format_upstream_error_message(state.service_addr.as_str(), &err);
+            return (StatusCode::BAD_GATEWAY, msg).into_response();
+        }
+    };
+
+    let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let mut out = Response::new(Body::from_stream(resp.bytes_stream()));
+    *out.status_mut() = status;
+    out.headers_mut().insert(
+        "content-type",
+        axum::http::HeaderValue::from_static("text/event-stream"),
+    );
+    out.headers_mut().insert(
+        "cache-control",
+        axum::http::HeaderValue::from_static("no-cache"),
+    );
+    out.headers_mut().insert(
+        "x-accel-buffering",
+        axum::http::HeaderValue::from_static("no"),
+    );
+    out
+}
+
 const DEFAULT_GATEWAY_PROXY_MAX_BODY_BYTES: usize = 0;
 const ENV_GATEWAY_PROXY_MAX_BODY_BYTES: &str = "CODEXMANAGER_GATEWAY_PROXY_MAX_BODY_BYTES";
 

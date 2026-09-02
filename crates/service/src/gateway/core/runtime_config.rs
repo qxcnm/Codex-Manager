@@ -386,7 +386,10 @@ pub(crate) fn account_test_proxy_url_for_account(
     ensure_runtime_config_loaded();
     match account_proxy_client_cache_entry(account_id) {
         AccountProxyClientCacheEntry::Ready { proxy_url, .. } => return Ok(Some(proxy_url)),
-        AccountProxyClientCacheEntry::Invalid { proxy_url: _, error } => {
+        AccountProxyClientCacheEntry::Invalid {
+            proxy_url: _,
+            error,
+        } => {
             // 不回显 proxy_url：显式代理地址可能内嵌账号密码（http://user:pass@host）。
             return Err(format!(
                 "account explicit proxy for {account_id} is invalid and fail-closed. {error}"

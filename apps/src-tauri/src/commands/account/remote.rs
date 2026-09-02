@@ -298,12 +298,14 @@ pub async fn service_account_test_start(
     model: Option<String>,
     prompt: Option<String>,
     kind: Option<String>,
+    test_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let params = serde_json::json!({
         "accountId": account_id,
         "model": model,
         "prompt": prompt,
         "kind": kind,
+        "testId": test_id,
     });
     rpc_call_in_background("account/test", addr, Some(params)).await
 }

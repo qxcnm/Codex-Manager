@@ -524,6 +524,10 @@ async fn async_main() {
             "/api/events/usage-refresh",
             get(service_gateway::usage_refresh_events),
         )
+        .route(
+            "/api/events/account-test",
+            get(service_gateway::account_test_events),
+        )
         .route("/__quit", get(service_gateway::quit));
 
     let disk_ok = ensure_index_file(&index);

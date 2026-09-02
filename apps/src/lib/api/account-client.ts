@@ -98,6 +98,7 @@ export interface AccountTestPayload {
   model?: string;
   prompt?: string;
   kind?: "text" | "image";
+  testId?: string;
 }
 
 export interface AccountProxyLatencyTestPayload {
@@ -545,6 +546,7 @@ export const accountClient = {
           model: params.model ?? null,
           prompt: params.prompt ?? null,
           kind: params.kind ?? "text",
+          testId: params.testId ?? null,
         }),
       ),
     ),

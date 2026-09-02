@@ -227,6 +227,7 @@ pub(crate) fn start_account_test(
     model: Option<String>,
     prompt: Option<String>,
     kind: Option<String>,
+    test_id: Option<String>,
 ) -> Result<AccountTestStartResult, String> {
     let account_id = account_id.trim();
     if account_id.is_empty() {
@@ -245,7 +246,17 @@ pub(crate) fn start_account_test(
     drop(account);
     drop(token);
 
-    let test_id = format!("test-{account_id}-{}", ACCOUNT_TEST_COUNTER.fetch_add(1, Ordering::Relaxed));
+    // 前端可自行生成 testId 并在订阅前持有它，从而在事件到达时就能按 testId 隔离，避免
+    // 「订阅到拿到 testId」之间的竞态串流。未提供时回退到服务端自增 ID 保持向后兼容。
+    let test_id = test_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            format!(
+                "test-{account_id}-{}",
+                ACCOUNT_TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+            )
+        });
     let cancel_flag = register_active_test(account_id)?;
 
     let test_kind = resolve_test_kind(&storage, model.as_deref(), TestKind::parse(kind.as_deref()));
@@ -414,9 +425,7 @@ fn execute_account_test(
     kind: TestKind,
     cancel_flag: &Arc<AtomicBool>,
 ) -> AccountTestOutcome {
-    notify_account_test_event(
-        AccountTestEvent::new(test_id, "test_start").with_model(model),
-    );
+    notify_account_test_event(AccountTestEvent::new(test_id, "test_start").with_model(model));
     notify_account_test_event(
         AccountTestEvent::new(test_id, "status").with_status("正在连接上游…"),
     );
@@ -470,14 +479,13 @@ fn execute_account_test(
         token.refresh_token.clone(),
         token.id_token.clone(),
     ];
-    let authorization =
-        match resolve_warmup_authorization(&storage, &client, &account, &token) {
-            Ok(authorization) => authorization,
-            Err(err) => {
-                emit_redacted_error(test_id, &err, &secrets);
-                return AccountTestOutcome::Failed(redact(&err, &secrets));
-            }
-        };
+    let authorization = match resolve_warmup_authorization(&storage, &client, &account, &token) {
+        Ok(authorization) => authorization,
+        Err(err) => {
+            emit_redacted_error(test_id, &err, &secrets);
+            return AccountTestOutcome::Failed(redact(&err, &secrets));
+        }
+    };
     let headers = match build_warmup_headers(&account, &authorization) {
         Ok(headers) => headers,
         Err(err) => {
@@ -501,9 +509,25 @@ fn execute_account_test(
     drop(storage);
 
     if kind.is_image() {
-        execute_image_test(&client, &headers, test_id, model, prompt, cancel_flag, &secrets)
+        execute_image_test(
+            &client,
+            &headers,
+            test_id,
+            model,
+            prompt,
+            cancel_flag,
+            &secrets,
+        )
     } else {
-        execute_text_test(&client, &headers, test_id, model, prompt, cancel_flag, &secrets)
+        execute_text_test(
+            &client,
+            &headers,
+            test_id,
+            model,
+            prompt,
+            cancel_flag,
+            &secrets,
+        )
     }
 }
 
@@ -570,9 +594,7 @@ fn execute_text_test(
         return classify_http_outcome(status.as_u16(), &message);
     }
 
-    notify_account_test_event(
-        AccountTestEvent::new(test_id, "status").with_status("已连接上游"),
-    );
+    notify_account_test_event(AccountTestEvent::new(test_id, "status").with_status("已连接上游"));
 
     let mut reader = BufReader::new(response);
     let mut line = String::new();
@@ -668,9 +690,7 @@ fn process_text_sse_event(
             }
             None
         }
-        Some("response.completed") | Some("response.done") => {
-            Some(AccountTestOutcome::Success)
-        }
+        Some("response.completed") | Some("response.done") => Some(AccountTestOutcome::Success),
         Some("error") => {
             let message = extract_stream_error_message(&value);
             Some(AccountTestOutcome::Failed(message))
@@ -782,9 +802,7 @@ fn execute_image_test(
         return classify_http_outcome(status.as_u16(), &message);
     }
 
-    notify_account_test_event(
-        AccountTestEvent::new(test_id, "status").with_status("已连接上游"),
-    );
+    notify_account_test_event(AccountTestEvent::new(test_id, "status").with_status("已连接上游"));
 
     let mut reader = BufReader::new(response);
     let mut line = String::new();
@@ -939,7 +957,10 @@ fn image_item_to_data_uri(item: &serde_json::Value) -> Option<(String, String)> 
     if item.get("type").and_then(serde_json::Value::as_str) != Some("image_generation_call") {
         return None;
     }
-    let base64_data = item.get("result").and_then(serde_json::Value::as_str)?.trim();
+    let base64_data = item
+        .get("result")
+        .and_then(serde_json::Value::as_str)?
+        .trim();
     if base64_data.is_empty() {
         return None;
     }
@@ -1104,7 +1125,10 @@ mod tests {
             resolve_test_kind(&storage, Some("external-model"), TestKind::Text),
             TestKind::Text
         );
-        assert_eq!(resolve_test_kind(&storage, None, TestKind::Text), TestKind::Text);
+        assert_eq!(
+            resolve_test_kind(&storage, None, TestKind::Text),
+            TestKind::Text
+        );
     }
 
     #[test]

@@ -71,6 +71,13 @@ function modelLabel(model: ManagedModelV2): string {
   return name || model.slug;
 }
 
+function newTestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 export function AccountTestModal({
   account,
   open,
@@ -181,7 +188,9 @@ export function AccountTestModal({
     }
     unlistenRef.current?.();
     unlistenRef.current = null;
-    testIdRef.current = null;
+    // 订阅前先持有本次测试的 testId，事件到达时即可按 testId 隔离，避免并发测试串流。
+    const testId = newTestId();
+    testIdRef.current = testId;
     finishedRef.current = false;
     setState({ text: "", images: [] });
     setCanceled(false);
@@ -194,8 +203,8 @@ export function AccountTestModal({
         accountId: id,
         model: selectedModel ?? undefined,
         kind: testKind,
+        testId,
       });
-      testIdRef.current = result.testId ?? null;
       setState((prev) => ({ ...prev, model: result.model ?? prev.model }));
     } catch (err) {
       unlistenRef.current?.();
@@ -322,7 +331,7 @@ export function AccountTestModal({
                   }}
                 </SelectValue>
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent alignItemWithTrigger={false}>
                 <SelectGroup>
                   <SelectItem value="text">文字模型</SelectItem>
                   <SelectItem value="image">图片模型</SelectItem>
@@ -361,7 +370,7 @@ export function AccountTestModal({
                   }}
                 </SelectValue>
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent alignItemWithTrigger={false}>
                 {builtinModels.length > 0 ? (
                   <SelectGroup>
                     <SelectLabel>官方模型</SelectLabel>

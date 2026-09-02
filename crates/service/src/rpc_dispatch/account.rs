@@ -122,11 +122,14 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
         }
         "account/test" => {
             let account_id = first_str_param(req, &["accountId", "account_id"]).unwrap_or("");
-            let model = first_str_param(req, &["model", "modelSlug", "model_slug"])
-                .map(str::to_string);
+            let model =
+                first_str_param(req, &["model", "modelSlug", "model_slug"]).map(str::to_string);
             let prompt = first_str_param(req, &["prompt", "message"]).map(str::to_string);
             let kind = first_str_param(req, &["kind", "testType", "test_type"]).map(str::to_string);
-            super::value_or_error(account_test::start_account_test(account_id, model, prompt, kind))
+            let test_id = first_str_param(req, &["testId", "test_id"]).map(str::to_string);
+            super::value_or_error(account_test::start_account_test(
+                account_id, model, prompt, kind, test_id,
+            ))
         }
         "account/test/cancel" => {
             let account_id = first_str_param(req, &["accountId", "account_id"]).unwrap_or("");
