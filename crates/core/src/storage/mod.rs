@@ -35,6 +35,7 @@ mod request_log_query;
 mod request_logs;
 mod request_token_stats;
 mod settings;
+mod token_crypto;
 mod tokens;
 mod usage;
 
@@ -46,6 +47,10 @@ pub use model_catalog_v2::{
     ManagedModelV2Upsert, ModelCatalogV2Stats, ModelFastPolicyV2, ModelPriceV2, ModelRouteV2,
 };
 pub use proxy_profiles::derive_proxy_profile_url_metadata;
+
+pub fn default_token_encryption_key_file_path(database_path: impl AsRef<Path>) -> std::path::PathBuf {
+    token_crypto::default_key_file_path(database_path.as_ref())
+}
 
 #[derive(Debug, Clone)]
 pub struct Account {
@@ -1620,6 +1625,7 @@ pub struct ModelCatalogStorageSnapshot {
 pub struct Storage {
     conn: Connection,
     applied_migrations: RefCell<Option<HashSet<String>>>,
+    token_cipher: token_crypto::TokenCipher,
 }
 
 impl Storage {
@@ -1654,11 +1660,15 @@ impl Storage {
     /// # 返回
     /// 返回函数执行结果
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
         let conn = Connection::open(path)?;
         Self::configure_file_connection(&conn)?;
+        let token_cipher = token_crypto::TokenCipher::for_database(path, &conn)
+            .map_err(token_crypto::to_sql_error)?;
         Ok(Self {
             conn,
             applied_migrations: RefCell::new(None),
+            token_cipher,
         })
     }
 
@@ -1676,9 +1686,12 @@ impl Storage {
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         Self::configure_connection(&conn)?;
+        let token_cipher =
+            token_crypto::TokenCipher::ephemeral().map_err(token_crypto::to_sql_error)?;
         Ok(Self {
             conn,
             applied_migrations: RefCell::new(None),
+            token_cipher,
         })
     }
 
@@ -2274,6 +2287,9 @@ impl Storage {
             "130_accounts_subject_identity",
             include_str!("../../migrations/130_accounts_subject_identity.sql"),
         )?;
+        self.apply_compat_migration("131_encrypt_account_tokens_at_rest", |storage| {
+            storage.encrypt_plaintext_account_tokens()
+        })?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_api_key_account_group_filter_column()?;
         self.ensure_aggregate_apis_table()?;

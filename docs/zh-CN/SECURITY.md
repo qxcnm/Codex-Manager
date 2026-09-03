@@ -63,6 +63,9 @@ CodexManager 当前仍在快速迭代，但会尽量处理合理范围内的安�
 
 ## 当前已知边界
 
+- 账号令牌在 SQLite 中使用 AES-256-GCM 加密；macOS / Windows 的主密钥优先存放在操作系统凭据库，也可通过 `CODEXMANAGER_TOKEN_ENCRYPTION_KEY_FILE` 或 `CODEXMANAGER_TOKEN_ENCRYPTION_KEY` 注入。
+- 凭据库不可用时创建的 `codexmanager.token-key` 文件只能降低“数据库文件单独泄露”的风险，不能抵御整个数据目录或已登录操作系统账户被攻破。生产 service / Docker 应使用独立 secret 管理。
+- 主密钥丢失后无法恢复已有令牌。不要把主密钥提交到仓库、日志或与数据库相同的不受保护备份中。
 - 项目默认面向本地部署与自托管使用场景，不承诺公网暴露下的全自动安全加固。
 - 如果启用 `0.0.0.0` 监听或将 Web / service 暴露到局域网或公网，部署者需要自行承担网络暴露风险，并配合：
   - 强密码

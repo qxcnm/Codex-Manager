@@ -3,6 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use codexmanager_core::storage::default_token_encryption_key_file_path;
+
 const PRIMARY_APP_IDENTIFIER: &str = "com.codexmanager.desktop";
 const QA_APP_IDENTIFIER: &str = "com.codexmanager.desktop.qa";
 
@@ -86,6 +88,7 @@ pub(super) fn maybe_migrate_legacy_db(current_db: &Path) {
 /// # 返回
 /// 返回函数执行结果
 fn copy_db_snapshot(source: &Path, target: &Path) -> Result<(), String> {
+    copy_fallback_token_key(source, target)?;
     remove_db_sidecars(target);
     if target.is_file() {
         fs::remove_file(target).map_err(|err| {
@@ -124,6 +127,31 @@ fn copy_db_snapshot(source: &Path, target: &Path) -> Result<(), String> {
                 target.display()
             )
         })?;
+    Ok(())
+}
+
+fn copy_fallback_token_key(source_db: &Path, target_db: &Path) -> Result<(), String> {
+    let source_key = default_token_encryption_key_file_path(source_db);
+    let target_key = default_token_encryption_key_file_path(target_db);
+    if source_key == target_key || !source_key.is_file() {
+        return Ok(());
+    }
+
+    if let Some(parent) = target_key.parent() {
+        fs::create_dir_all(parent).map_err(|err| {
+            format!(
+                "create token key target directory {} failed: {err}",
+                parent.display()
+            )
+        })?;
+    }
+    fs::copy(&source_key, &target_key).map_err(|err| {
+        format!(
+            "copy account token key {} -> {} failed: {err}",
+            source_key.display(),
+            target_key.display()
+        )
+    })?;
     Ok(())
 }
 
@@ -343,7 +371,7 @@ mod tests {
         create_pre_migration_backup, maybe_migrate_legacy_db, profile_db_candidates,
         PRIMARY_APP_IDENTIFIER, QA_APP_IDENTIFIER,
     };
-    use codexmanager_core::storage::{now_ts, Account, Storage};
+    use codexmanager_core::storage::{now_ts, Account, Storage, Token};
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -394,6 +422,16 @@ mod tests {
                 updated_at: now_ts(),
             })
             .expect("insert account");
+        storage
+            .insert_token(&Token {
+                account_id: "acc-1".to_string(),
+                id_token: "id-token".to_string(),
+                access_token: "access-token".to_string(),
+                refresh_token: "refresh-token".to_string(),
+                api_key_access_token: Some("api-key-access-token".to_string()),
+                last_refresh: now_ts(),
+            })
+            .expect("insert token");
         storage
     }
 
@@ -459,6 +497,14 @@ mod tests {
         let migrated = Storage::open(&qa_db).expect("open migrated qa storage");
         migrated.init().expect("init migrated qa storage");
         assert_eq!(migrated.account_count().expect("count accounts"), 1);
+        assert_eq!(
+            migrated
+                .find_token_by_account_id("acc-1")
+                .expect("find migrated token")
+                .expect("migrated token")
+                .access_token,
+            "access-token"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -498,6 +544,14 @@ mod tests {
 
         let backup_storage = Storage::open(&backup_path).expect("open backup");
         assert_eq!(backup_storage.account_count().expect("count accounts"), 1);
+        assert_eq!(
+            backup_storage
+                .find_token_by_account_id("acc-1")
+                .expect("find backup token")
+                .expect("backup token")
+                .refresh_token,
+            "refresh-token"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }
