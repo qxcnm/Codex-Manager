@@ -155,8 +155,8 @@ fn tray_usage_reset_labels(
     secondary_resets_at: Option<i64>,
 ) -> (String, String) {
     (
-        format!("5小时重置：{}", format_tray_reset_time(secondary_resets_at)),
-        format!("7天重置：{}", format_tray_reset_time(primary_resets_at)),
+        format!("5小时重置：{}", format_tray_reset_time(primary_resets_at)),
+        format!("7天重置：{}", format_tray_reset_time(secondary_resets_at)),
     )
 }
 
