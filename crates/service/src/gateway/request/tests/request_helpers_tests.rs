@@ -1,6 +1,7 @@
 use super::{
-    parse_request_metadata, parse_request_metadata_from_value, validate_text_input_limit_for_path,
-    validate_text_input_limit_for_value, MAX_TEXT_INPUT_CHARS,
+    max_text_input_chars, parse_request_metadata, parse_request_metadata_from_value,
+    validate_text_input_limit_for_path, validate_text_input_limit_for_value,
+    DEFAULT_MAX_TEXT_INPUT_CHARS,
 };
 
 #[test]
@@ -60,15 +61,15 @@ fn responses_text_limit_allows_small_payloads() {
 #[test]
 fn responses_text_limit_rejects_oversized_payloads() {
     let body = serde_json::json!({
-        "input": "x".repeat(MAX_TEXT_INPUT_CHARS + 1),
+        "input": "x".repeat(DEFAULT_MAX_TEXT_INPUT_CHARS + 1),
     });
     let body = serde_json::to_vec(&body).expect("serialize body");
 
     let err = validate_text_input_limit_for_path("/v1/responses", &body)
         .expect_err("oversized body should be rejected");
 
-    assert_eq!(err.max_chars, MAX_TEXT_INPUT_CHARS);
-    assert_eq!(err.actual_chars, MAX_TEXT_INPUT_CHARS + 1);
+    assert_eq!(err.max_chars, DEFAULT_MAX_TEXT_INPUT_CHARS);
+    assert_eq!(err.actual_chars, DEFAULT_MAX_TEXT_INPUT_CHARS + 1);
     assert!(err
         .message()
         .contains("Input exceeds the maximum length of 1048576 characters."));
@@ -77,20 +78,20 @@ fn responses_text_limit_rejects_oversized_payloads() {
 #[test]
 fn responses_text_limit_can_validate_preparsed_value() {
     let value = serde_json::json!({
-        "input": "x".repeat(MAX_TEXT_INPUT_CHARS + 1),
+        "input": "x".repeat(DEFAULT_MAX_TEXT_INPUT_CHARS + 1),
     });
 
     let err = validate_text_input_limit_for_value("/v1/responses", &value)
         .expect_err("oversized body should be rejected");
 
-    assert_eq!(err.max_chars, MAX_TEXT_INPUT_CHARS);
-    assert_eq!(err.actual_chars, MAX_TEXT_INPUT_CHARS + 1);
+    assert_eq!(err.max_chars, DEFAULT_MAX_TEXT_INPUT_CHARS);
+    assert_eq!(err.actual_chars, DEFAULT_MAX_TEXT_INPUT_CHARS + 1);
 }
 
 #[test]
 fn chat_completions_text_limit_counts_message_content_and_instructions() {
-    let first = "x".repeat(MAX_TEXT_INPUT_CHARS / 2);
-    let second = "y".repeat(MAX_TEXT_INPUT_CHARS / 2 + 1);
+    let first = "x".repeat(DEFAULT_MAX_TEXT_INPUT_CHARS / 2);
+    let second = "y".repeat(DEFAULT_MAX_TEXT_INPUT_CHARS / 2 + 1);
     let body = serde_json::json!({
         "instructions": first,
         "messages": [
@@ -107,13 +108,13 @@ fn chat_completions_text_limit_counts_message_content_and_instructions() {
     let err = validate_text_input_limit_for_path("/v1/chat/completions", &body)
         .expect_err("combined text length should be rejected");
 
-    assert_eq!(err.actual_chars, MAX_TEXT_INPUT_CHARS + 1);
+    assert_eq!(err.actual_chars, DEFAULT_MAX_TEXT_INPUT_CHARS + 1);
 }
 
 #[test]
 fn non_inference_path_skips_text_limit_validation() {
     let body = serde_json::json!({
-        "input": "x".repeat(MAX_TEXT_INPUT_CHARS + 100),
+        "input": "x".repeat(DEFAULT_MAX_TEXT_INPUT_CHARS + 100),
     });
     let body = serde_json::to_vec(&body).expect("serialize body");
 
@@ -125,11 +126,42 @@ fn non_inference_path_skips_text_limit_validation() {
 #[test]
 fn legacy_completions_path_no_longer_participates_in_text_limit_validation() {
     let body = serde_json::json!({
-        "prompt": "x".repeat(MAX_TEXT_INPUT_CHARS + 100),
+        "prompt": "x".repeat(DEFAULT_MAX_TEXT_INPUT_CHARS + 100),
     });
     let body = serde_json::to_vec(&body).expect("serialize body");
 
     let result = validate_text_input_limit_for_path("/v1/completions", &body);
 
     assert!(result.is_ok());
+}
+
+/// 函数 `max_text_input_chars_honours_env_override`
+///
+/// 作者: gaohongshun
+///
+/// 时间: 2026-10-02
+///
+/// # 参数
+/// 无
+///
+/// # 返回
+/// 无
+#[test]
+fn max_text_input_chars_honours_env_override() {
+    let _guard = crate::test_env_guard();
+    let name = "CODEXMANAGER_MAX_TEXT_INPUT_CHARS";
+    std::env::remove_var(name);
+    assert_eq!(max_text_input_chars(), DEFAULT_MAX_TEXT_INPUT_CHARS);
+    std::env::set_var(name, "2097152");
+    assert_eq!(max_text_input_chars(), 2_097_152);
+    assert!(validate_text_input_limit_for_value(
+        "/v1/chat/completions",
+        &serde_json::json!({ "messages": [ { "role": "user", "content": "x".repeat(DEFAULT_MAX_TEXT_INPUT_CHARS + 1) } ] })
+    )
+    .is_ok(), "a payload above the default but below the override must pass");
+    std::env::set_var(name, "0");
+    assert_eq!(max_text_input_chars(), DEFAULT_MAX_TEXT_INPUT_CHARS);
+    std::env::set_var(name, "not-a-number");
+    assert_eq!(max_text_input_chars(), DEFAULT_MAX_TEXT_INPUT_CHARS);
+    std::env::remove_var(name);
 }

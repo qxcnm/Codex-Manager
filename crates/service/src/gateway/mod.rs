@@ -222,8 +222,9 @@ use protocol_adapter::{
 pub(super) use request_helpers::parse_request_metadata;
 pub(super) use request_helpers::{
     inspect_service_tier_value, is_html_content_type, is_upstream_challenge_response,
-    normalize_models_path, parse_request_json_value, parse_request_metadata_from_value,
-    validate_text_input_limit_for_path, validate_text_input_limit_for_value,
+    max_text_input_chars, normalize_models_path, parse_request_json_value,
+    parse_request_metadata_from_value, validate_text_input_limit_for_path,
+    validate_text_input_limit_for_value, DEFAULT_MAX_TEXT_INPUT_CHARS,
 };
 #[cfg(test)]
 use request_helpers::{should_drop_incoming_header, should_drop_incoming_header_for_failover};
