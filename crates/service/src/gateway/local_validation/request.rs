@@ -532,6 +532,48 @@ fn chat_content_to_responses_parts(
     }
 }
 
+/// Chat completions permits tool message content to be a plain string or an
+/// array of content parts, while the Responses API `function_call_output`
+/// expects a string `output`. Flatten array content (string parts joined with
+/// newlines, image parts as placeholders) so compliant chat clients are not
+/// rejected upstream with `output[0].type` errors.
+fn chat_tool_content_to_output_string(content: &serde_json::Value) -> serde_json::Value {
+    match content {
+        serde_json::Value::String(_) => content.clone(),
+        serde_json::Value::Array(parts) => {
+            let text = parts
+                .iter()
+                .filter_map(chat_tool_output_part_text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            serde_json::Value::String(text)
+        }
+        serde_json::Value::Null => serde_json::Value::String(String::new()),
+        other => serde_json::Value::String(other.to_string()),
+    }
+}
+
+fn chat_tool_output_part_text(part: &serde_json::Value) -> Option<String> {
+    match part {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Object(obj) => {
+            let kind = obj
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("text");
+            match kind {
+                "text" | "input_text" | "output_text" => obj
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                "image_url" => Some("[image]".to_string()),
+                _ => None,
+            }
+        }
+        other => Some(other.to_string()),
+    }
+}
+
 fn chat_tool_to_responses_tool(tool: &serde_json::Value) -> Option<serde_json::Value> {
     let obj = tool.as_object()?;
     if obj.get("type").and_then(serde_json::Value::as_str) != Some("function") {
@@ -693,7 +735,7 @@ fn adapt_openai_chat_completions_body_to_responses(body: Vec<u8>) -> Result<Vec<
             if role == "tool" {
                 let output = message_obj
                     .get("content")
-                    .cloned()
+                    .map(chat_tool_content_to_output_string)
                     .unwrap_or_else(|| serde_json::Value::String(String::new()));
                 input.push(serde_json::json!({
                     "type": "function_call_output",
