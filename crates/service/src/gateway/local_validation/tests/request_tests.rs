@@ -1809,7 +1809,10 @@ fn openai_chat_tool_message_array_content_flattens_to_string_output() {
         .find(|item| item.get("type").and_then(Value::as_str) == Some("function_call_output"))
         .expect("function_call_output item");
     // 数组形式的 tool content 必须拍平为字符串，否则上游会拒绝 output[0].type='text'。
-    assert_eq!(tool_output.get("output"), Some(&Value::String("sunny\n18C".to_string())));
+    assert_eq!(
+        tool_output.get("output"),
+        Some(&Value::String("sunny\n18C".to_string()))
+    );
 }
 
 #[test]
