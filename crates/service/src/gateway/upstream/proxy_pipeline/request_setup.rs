@@ -62,6 +62,33 @@ pub(in super::super) fn prepare_request_setup(
             candidates,
             route_conversation_source,
         );
+    // 资格过滤先于粘性选择（BUG-2026-0930-01）：若绑定账户已知不支持本次请求的模型，
+    // 则放弃该绑定，让候选过滤接管；绑定对其它模型仍然有效。
+    if let Some(routing) = conversation_routing.as_mut() {
+        let unsupported_bound_account = routing
+            .existing_binding
+            .as_ref()
+            .map(|binding| binding.account_id.clone())
+            .filter(|account_id| {
+                model_for_log
+                    .map(str::trim)
+                    .filter(|model| !model.is_empty())
+                    .is_some_and(|model| {
+                        crate::account::model_support::is_unsupported(account_id, model)
+                    })
+            });
+        if let Some(account_id) = unsupported_bound_account {
+            log::warn!(
+                "event=gateway_conversation_binding_skipped_model_unsupported trace_id={} account_id={} model={}",
+                trace_id,
+                account_id,
+                model_for_log.unwrap_or("-")
+            );
+            routing.existing_binding = None;
+            routing.binding_selected = false;
+            routing.bound_account_selectable = false;
+        }
+    }
     let account_binding_counts = if super::super::super::thread_aware_account_distribution_enabled()
         && conversation_routing.as_ref().is_some_and(|routing| {
             routing.existing_binding.is_none() && routing.source.allows_initial_binding_create()

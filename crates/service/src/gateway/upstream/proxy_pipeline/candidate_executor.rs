@@ -541,6 +541,15 @@ pub(in super::super) async fn execute_candidate_sequence(
                 status_code,
                 message,
             } => {
+                // 上游明确告知“该账户不支持该模型”时记住 (账户, 模型)，
+                // 供后续请求在选账户前过滤（BUG-2026-0930-01）。
+                if status_code == 400 {
+                    let _ = crate::account::model_support::note_account_model_unsupported(
+                        &account.id,
+                        attempt_model_for_log,
+                        &message,
+                    );
+                }
                 if should_failover_terminal_gateway_error(
                     context,
                     &account.id,
@@ -714,6 +723,38 @@ pub(in super::super) async fn execute_candidate_sequence(
                             Some(attempted_account_ids.as_slice()),
                         );
                     }
+                    StreamPreflightOutcome::ModelUnsupported(message) => {
+                        // 精确拒绝：只记住 (账户, 模型)，不把整个账户罚成冷却。
+                        let _ = crate::account::model_support::note_account_model_unsupported(
+                            &account.id,
+                            attempt_model_for_log,
+                            &message,
+                        );
+                        if context.has_more_candidates(idx) {
+                            attempt_trace.last_attempt_error = Some(message);
+                            record_failover_attempt(
+                                &mut attempt_trace,
+                                &mut last_attempt_url,
+                                &mut last_attempt_error,
+                            );
+                            continue;
+                        }
+                        let request = request.take().ok_or_else(|| {
+                            "request already consumed before model unsupported response".to_string()
+                        })?;
+                        return respond_terminal_attempt(
+                            request,
+                            context,
+                            &account.id,
+                            attempt_trace.last_attempt_url.as_deref(),
+                            400,
+                            message,
+                            trace_id,
+                            started_at,
+                            attempt_model_for_log,
+                            Some(attempted_account_ids.as_slice()),
+                        );
+                    }
                     StreamPreflightOutcome::StatusFailover {
                         status_code,
                         message,
@@ -771,6 +812,12 @@ pub(in super::super) async fn execute_candidate_sequence(
                 let guard = inflight_guard.take().ok_or_else(|| {
                     "inflight guard already consumed before upstream response".to_string()
                 })?;
+                // 成功即证明该账户对该模型可用，清掉可能存在的短期记忆。
+                if resp.status().is_success() {
+                    if let Some(model) = attempt_model_for_log {
+                        crate::account::model_support::clear_unsupported(&account.id, model);
+                    }
+                }
                 let response_status = resp.status().as_u16();
                 match finalize_upstream_response(
                     request,

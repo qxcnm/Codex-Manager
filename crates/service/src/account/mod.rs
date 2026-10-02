@@ -15,6 +15,8 @@ pub(crate) mod group;
 pub(crate) mod import;
 #[path = "account_list.rs"]
 pub(crate) mod list;
+#[path = "account_model_support.rs"]
+pub(crate) mod model_support;
 #[path = "account_models.rs"]
 pub(crate) mod models;
 #[path = "account_plan.rs"]

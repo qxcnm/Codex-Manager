@@ -30,6 +30,7 @@ pub(in super::super) enum StreamPreflightOutcome {
     Failover(String),
     StatusFailover { status_code: u16, message: String },
     RetryUsageNotice(String),
+    ModelUnsupported(String),
     TransportFailover(String),
 }
 
@@ -361,6 +362,38 @@ async fn preflight_stream_response_with_timeouts(
     wall_clock_timeout: Option<Duration>,
 ) -> StreamPreflightOutcome {
     let status_code = response.status().as_u16();
+    // “该账户不支持该模型”是一类精确、可记忆的拒绝：不论是否还有候选，都要先读正文分类，
+    // 否则 (a) 会被当成普通 non-200 汇总而丢失模型维度，(b) 最后一个候选时学不到。
+    // 详见 BUG-2026-0930-01。
+    if status_code == 400 {
+        return match response.into_buffered_async().await {
+            Ok((body, response)) => {
+                let text = crate::account::model_support::bound_message(
+                    &String::from_utf8_lossy(body.as_ref()),
+                );
+                if crate::account::model_support::looks_like_account_model_unsupported(&text) {
+                    StreamPreflightOutcome::ModelUnsupported(text)
+                } else if has_more_candidates {
+                    StreamPreflightOutcome::StatusFailover {
+                        status_code,
+                        message: summarize_non_200_status_failover(
+                            status_code,
+                            Some(body.as_ref()),
+                        ),
+                    }
+                } else {
+                    // 未命中该模式且无更多候选：保持旧行为，原样把（已缓冲的）响应交给下游。
+                    StreamPreflightOutcome::Ready(response)
+                }
+            }
+            Err(err) => StreamPreflightOutcome::StatusFailover {
+                status_code,
+                message: format!(
+                    "upstream non-200 status={status_code}; read response body failed: {err}"
+                ),
+            },
+        };
+    }
     if has_more_candidates && !(200..=299).contains(&status_code) {
         if should_prefetch_actionable_error_body(status_code) {
             return match response.into_buffered_async().await {
