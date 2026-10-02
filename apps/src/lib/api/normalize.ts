@@ -1614,6 +1614,17 @@ export function normalizeRequestLogListWithSummaryResult(
   };
 }
 
+export function normalizeRequestLogDetail(payload: unknown): RequestLogDetail {
+  const source = asObject(payload);
+  return {
+    traceId: asString(source.traceId ?? source.trace_id),
+    payload: asString(source.payload),
+    payloadBytes: asInteger(source.payloadBytes ?? source.payload_bytes, 0, 0),
+    payloadTruncated: (source.payloadTruncated ?? source.payload_truncated) === true,
+    createdAt: asInteger(source.createdAt ?? source.created_at, 0, 0),
+  };
+}
+
 /**
  * 函数 `normalizeRequestLogFilterSummary`
  *

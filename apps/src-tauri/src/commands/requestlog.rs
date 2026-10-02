@@ -103,6 +103,17 @@ pub async fn service_requestlog_summary(
     rpc_call_in_background("requestlog/summary", addr, Some(params)).await
 }
 
+#[tauri::command]
+pub async fn service_requestlog_detail(
+    addr: Option<String>,
+    trace_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({
+        "traceId": trace_id,
+    });
+    rpc_call_in_background("requestlog/detail", addr, Some(params)).await
+}
+
 /// 函数 `service_requestlog_today_summary`
 ///
 /// 作者: gaohongshun

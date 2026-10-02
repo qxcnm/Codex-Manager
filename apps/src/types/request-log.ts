@@ -75,3 +75,11 @@ export interface RequestLogTodaySummary {
   todayTokens: number;
   estimatedCost: number;
 }
+
+export interface RequestLogDetail {
+  traceId: string;
+  payload: string;
+  payloadBytes: number;
+  payloadTruncated: boolean;
+  createdAt: number;
+}

@@ -808,6 +808,18 @@ pub struct CodexSkillRepositoryCatalogSnapshot {
     pub skills: Vec<CodexSkillRepositorySkillRecord>,
 }
 
+/// Sanitized request payload preview attached to a gateway trace for the
+/// request log detail view. `payload_bytes` records the original body size
+/// before the ingest-time size cap was applied.
+#[derive(Debug, Clone, Default)]
+pub struct RequestLogPayload {
+    pub trace_id: String,
+    pub payload: String,
+    pub payload_bytes: i64,
+    pub payload_truncated: bool,
+    pub created_at: i64,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RequestLog {
     pub trace_id: Option<String>,

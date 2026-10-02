@@ -1,4 +1,6 @@
-use codexmanager_core::rpc::types::{JsonRpcRequest, JsonRpcResponse, RequestLogListParams};
+use codexmanager_core::rpc::types::{
+    JsonRpcRequest, JsonRpcResponse, RequestLogDetailParams, RequestLogListParams,
+};
 use codexmanager_core::storage::Storage;
 
 use crate::storage_helpers::StorageHandle;
@@ -114,6 +116,28 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                     let (storage, key_ids) = member_requestlog_scope(actor)?;
                     requestlog_list::read_request_log_page_for_key_ids_with_storage(
                         &storage, params, &key_ids,
+                    )
+                }
+            }))
+        }
+        "requestlog/detail" => {
+            let params = req
+                .params
+                .clone()
+                .map(serde_json::from_value::<RequestLogDetailParams>)
+                .transpose()
+                .map_err(|err| format!("invalid requestlog/detail params: {err}"));
+            super::value_or_error(params.and_then(|params| {
+                if actor.is_admin() {
+                    let storage = crate::storage_helpers::open_storage()
+                        .ok_or_else(|| "open storage failed".to_string())?;
+                    crate::requestlog::detail::read_request_log_detail(&storage, &params, None)
+                } else {
+                    let (storage, key_ids) = member_requestlog_scope(actor)?;
+                    crate::requestlog::detail::read_request_log_detail(
+                        &storage,
+                        &params,
+                        Some(key_ids.as_slice()),
                     )
                 }
             }))

@@ -39,7 +39,7 @@ import {
   fromDateTimeLocalValue,
 } from "./page-helpers";
 import { buildSummaryPlaceholder } from "./page-cells";
-import { AccountListResult, ApiKey, RequestLogListWithSummaryResult, StartupSnapshot } from "@/types";
+import { AccountListResult, ApiKey, RequestLog, RequestLogListWithSummaryResult, StartupSnapshot } from "@/types";
 
 const LOG_SEARCH_DEBOUNCE_MS = 300;
 const LOG_REFRESH_ACTIVE_MS = 5_000;
@@ -83,6 +83,7 @@ function LogsPageContent() {
   const [pageSize, setPageSize] = useState("10");
   const [page, setPage] = useState(1);
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+  const [detailLog, setDetailLog] = useState<RequestLog | null>(null);
   const pageSizeNumber = Number(pageSize) || 10;
   const startTs = useMemo(
     () => fromDateTimeLocalValue(startTimeInput),
@@ -483,6 +484,14 @@ function LogsPageContent() {
           onConfirm={() => clearMutation.mutate()}
         />
       ) : null}
+      <RequestDetailModal
+        open={detailLog !== null}
+        onOpenChange={(open) => {
+          if (!open) setDetailLog(null);
+        }}
+        log={detailLog}
+        serviceAddr={serviceAddr}
+      />
     </div>
   );
 }

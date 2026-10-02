@@ -255,6 +255,7 @@ const MEMBER_METHOD_ALLOWLIST: &[&str] = &[
     "apikey/usageStats",
     "appSettings/get",
     "dashboard/memberSummary",
+    "requestlog/detail",
     "requestlog/list",
     "requestlog/list_with_summary",
     "requestlog/summary",

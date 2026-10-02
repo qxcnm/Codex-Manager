@@ -1569,6 +1569,22 @@ pub struct RequestLogListParams {
     pub end_ts: Option<i64>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RequestLogDetailParams {
+    pub trace_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestLogDetailResult {
+    pub trace_id: String,
+    pub payload: String,
+    pub payload_bytes: i64,
+    pub payload_truncated: bool,
+    pub created_at: i64,
+}
+
 impl Default for RequestLogListParams {
     /// 函数 `default`
     ///

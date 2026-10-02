@@ -767,6 +767,7 @@ pub(in super::super) async fn proxy_validated_request(
         protocol_type.as_str(),
     );
     super::super::trace_log::log_request_body_preview(trace_id.as_str(), body.as_ref());
+    super::super::store_request_log_payload(&storage, trace_id.as_str(), body.as_ref());
     if protocol_type == crate::apikey_profile::PROTOCOL_GEMINI_NATIVE {
         super::super::trace_log::log_gemini_request_diagnostics(
             trace_id.as_str(),

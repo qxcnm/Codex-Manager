@@ -496,6 +496,7 @@ pub(crate) use request_entry::handle_gateway_request_async;
 use request_gate::request_gate_lock;
 #[cfg(test)]
 use request_gate::RequestGateAcquireError;
+pub(crate) use request_log::store_request_log_payload;
 pub(crate) use request_log::write_request_log;
 use route_hint::{apply_route_strategy, apply_route_strategy_with_source};
 use route_quality::record_route_quality;

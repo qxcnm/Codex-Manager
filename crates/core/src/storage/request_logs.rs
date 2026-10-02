@@ -1,11 +1,12 @@
-use rusqlite::{params, params_from_iter, types::Value, Result, Row};
+use rusqlite::{params, params_from_iter, types::Value, OptionalExtension, Result, Row};
 
 use super::key_id_filters::KeyIdSqlFilter;
 use super::request_log_filters::{
     account_join_clause, build_request_log_filters, token_stats_join_clause, RequestLogSqlFilters,
 };
 use super::{
-    now_ts, RequestLog, RequestLogQuerySummary, RequestLogTodaySummary, RequestTokenStat, Storage,
+    now_ts, RequestLog, RequestLogPayload, RequestLogQuerySummary, RequestLogTodaySummary,
+    RequestTokenStat, Storage,
 };
 
 const DEFAULT_REQUEST_LOG_RETENTION_DAYS: i64 = 14;
@@ -222,6 +223,73 @@ impl Storage {
     ///
     /// # 返回
     /// 返回函数执行结果
+    /// Upsert a sanitized request payload preview for a gateway trace.
+    /// Payloads are pure diagnostics: a missing `request_log_payloads` table
+    /// (pre-migration database) or a write failure must never break the
+    /// request hot path, so callers treat errors as best-effort.
+    pub fn insert_request_log_payload(&self, payload: &RequestLogPayload) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO request_log_payloads (
+                trace_id, payload, payload_bytes, payload_truncated, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(trace_id) DO UPDATE SET
+                payload=excluded.payload,
+                payload_bytes=excluded.payload_bytes,
+                payload_truncated=excluded.payload_truncated,
+                created_at=excluded.created_at",
+            params![
+                payload.trace_id,
+                payload.payload,
+                payload.payload_bytes,
+                payload.payload_truncated,
+                payload.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Load the stored payload preview for a trace. Returns `None` when the
+    /// table has not been created yet or no preview was captured.
+    pub fn find_request_log_payload_by_trace_id(
+        &self,
+        trace_id: &str,
+    ) -> Result<Option<RequestLogPayload>> {
+        if !self.has_table("request_log_payloads")? {
+            return Ok(None);
+        }
+        self.conn
+            .query_row(
+                "SELECT trace_id, payload, payload_bytes, payload_truncated, created_at
+                 FROM request_log_payloads WHERE trace_id = ?1",
+                [trace_id],
+                |row| {
+                    Ok(RequestLogPayload {
+                        trace_id: row.get(0)?,
+                        payload: row.get(1)?,
+                        payload_bytes: row.get(2)?,
+                        payload_truncated: row.get(3)?,
+                        created_at: row.get(4)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    /// Resolve the owning API key of a logged request for member-scope
+    /// authorization. `Ok(None)` means no log row exists for the trace.
+    pub fn find_request_log_key_id_by_trace_id(
+        &self,
+        trace_id: &str,
+    ) -> Result<Option<Option<String>>> {
+        self.conn
+            .query_row(
+                "SELECT key_id FROM request_logs WHERE trace_id = ?1 ORDER BY id DESC LIMIT 1",
+                [trace_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+    }
+
     pub fn insert_request_log_with_token_stat(
         &self,
         log: &RequestLog,
@@ -602,6 +670,7 @@ impl Storage {
         } else {
             self.conn.execute("DELETE FROM request_logs", [])?
         };
+        self.clear_request_log_payloads()?;
         if rolled_up.saturating_add(affected_logs) > 0 {
             let _ = self
                 .conn
@@ -610,11 +679,27 @@ impl Storage {
         Ok(())
     }
 
+    /// Remove every stored request payload preview. Payloads are plain
+    /// diagnostics without billing semantics, so clearing never preserves
+    /// rows the way billed request logs are hidden instead of deleted.
+    pub fn clear_request_log_payloads(&self) -> Result<usize> {
+        if !self.has_table("request_log_payloads")? {
+            return Ok(0);
+        }
+        self.conn.execute("DELETE FROM request_log_payloads", [])
+    }
+
     pub fn prune_request_logs_before(&self, cutoff_ts: i64) -> Result<usize> {
         if cutoff_ts <= 0 {
             return Ok(0);
         }
         self.rollup_request_token_stats_before(cutoff_ts)?;
+        if self.has_table("request_log_payloads")? {
+            self.conn.execute(
+                "DELETE FROM request_log_payloads WHERE created_at < ?1",
+                [cutoff_ts],
+            )?;
+        }
         if self.has_table("request_charge_snapshots")? {
             let hidden_logs = self
                 .conn

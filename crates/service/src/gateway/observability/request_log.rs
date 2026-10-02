@@ -1,9 +1,15 @@
-use codexmanager_core::storage::{now_ts, RequestLog, RequestTokenStat, Storage};
+use codexmanager_core::storage::{now_ts, RequestLog, RequestLogPayload, RequestTokenStat, Storage};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 const API_KEY_LAST_USED_TOUCH_MIN_INTERVAL_SECS: i64 = 60;
 static API_KEY_LAST_USED_TOUCH_CACHE: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
+
+/// Size cap for stored request payload previews. Bodies larger than this are
+/// stored as a truncated preview so a single diagnostic row stays cheap.
+const REQUEST_LOG_PAYLOAD_MAX_BYTES: usize = 16 * 1024;
+const REQUEST_LOG_PAYLOAD_REDACTED_PLACEHOLDER: &str = "[REDACTED]";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct RequestLogUsage {
@@ -270,6 +276,126 @@ fn response_adapter_label(value: super::ResponseAdapter) -> &'static str {
 ///
 /// # 返回
 /// 无
+/// Capture a sanitized, size-capped preview of the upstream request body for
+/// the request log detail view. Sanitization happens on the write path so the
+/// stored row never contains credential-like values. Failures are logged and
+/// swallowed: payload previews are pure diagnostics and must never break the
+/// gateway hot path.
+pub(crate) fn store_request_log_payload(storage: &Storage, trace_id: &str, body: &[u8]) {
+    let trace_id = trace_id.trim();
+    if trace_id.is_empty() {
+        return;
+    }
+    let payload_bytes = body.len() as i64;
+    let sanitized = sanitize_request_payload(body);
+    let (payload, truncated) = truncate_utf8_payload(&sanitized, REQUEST_LOG_PAYLOAD_MAX_BYTES);
+    let record = RequestLogPayload {
+        trace_id: trace_id.to_string(),
+        payload,
+        payload_bytes,
+        payload_truncated: truncated,
+        created_at: now_ts(),
+    };
+    if let Err(err) = crate::requestlog::seaorm::insert_payload(storage, &record) {
+        log::warn!(
+            "event=request_log_payload_insert_failed trace_id={} err={}",
+            trace_id,
+            err
+        );
+    }
+}
+
+/// Redact credential-like JSON keys and keep everything else intact. When the
+/// body is not valid UTF-8 JSON the raw text is stored as-is: the payload is
+/// already size-capped and only surfaced to administrators or the owning
+/// member, and unknown shapes must stay inspectable for diagnostics.
+fn sanitize_request_payload(body: &[u8]) -> String {
+    let Ok(text) = std::str::from_utf8(body) else {
+        return "<non-utf8 body omitted>".to_string();
+    };
+    match serde_json::from_str::<Value>(text) {
+        Ok(Value::Object(map)) => {
+            let mut sanitized = serde_json::Map::new();
+            for (key, value) in map {
+                let sanitized_value = redact_sensitive_value(&key, value);
+                sanitized.insert(key, sanitized_value);
+            }
+            serde_json::to_string(&Value::Object(sanitized))
+                .unwrap_or_else(|_| "<unserializable body omitted>".to_string())
+        }
+        _ => text.to_string(),
+    }
+}
+
+fn redact_sensitive_value(key: &str, value: Value) -> Value {
+    if payload_key_is_sensitive(key) {
+        return Value::String(REQUEST_LOG_PAYLOAD_REDACTED_PLACEHOLDER.to_string());
+    }
+    match value {
+        Value::Object(map) => {
+            let mut sanitized = serde_json::Map::new();
+            for (child_key, child_value) in map {
+                let sanitized_value = redact_sensitive_value(&child_key, child_value);
+                sanitized.insert(child_key, sanitized_value);
+            }
+            Value::Object(sanitized)
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(|item| redact_sensitive_value("", item))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+/// Key names are normalized (lowercase, separators stripped) so variants like
+/// `api_key`, `apiKey` and `API-KEY` share one decision.
+fn payload_key_is_sensitive(key: &str) -> bool {
+    let normalized: String = key
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect();
+    matches!(
+        normalized.as_str(),
+        "authorization"
+            | "proxyauthorization"
+            | "apikey"
+            | "xapikey"
+            | "token"
+            | "accesstoken"
+            | "refreshtoken"
+            | "idtoken"
+            | "password"
+            | "clientsecret"
+            | "secret"
+            | "credential"
+            | "credentials"
+            | "cookie"
+            | "privatekey"
+            | "sessionkey"
+    ) || normalized.ends_with("apikey")
+        || normalized.ends_with("secret")
+        || normalized.ends_with("password")
+        || normalized.ends_with("token")
+}
+
+/// Cap the stored preview at `max_bytes` without splitting a multi-byte UTF-8
+/// character. Truncated previews may cut JSON structures in half; the detail
+/// view renders them as plain text with a truncation marker.
+fn truncate_utf8_payload(text: &str, max_bytes: usize) -> (String, bool) {
+    if text.len() <= max_bytes {
+        return (text.to_string(), false);
+    }
+    let mut boundary = max_bytes;
+    while boundary > 0 && !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    (text[..boundary].to_string(), true)
+}
+
 pub(crate) fn write_request_log(
     storage: &Storage,
     trace_context: RequestLogTraceContext<'_>,

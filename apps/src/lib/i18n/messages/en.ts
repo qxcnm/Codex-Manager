@@ -642,6 +642,15 @@ export const EN_MESSAGES: MessageCatalog = {
   "4xx / 5xx 或显式错误": "4xx / 5xx or explicit errors",
   请求明细: "Request details",
   "请求明细 按": "Request details by",
+  请求内容: "Request payload",
+  查看请求内容: "View request payload",
+  原始大小: "Original size",
+  "敏感凭据在写入时已脱敏；请求内容为发往上游的实际请求体。":
+    "Sensitive credentials are redacted at ingest time; the payload shows the request body actually sent upstream.",
+  "请求内容超出存储上限，仅保留前 16 KB 预览。":
+    "The request payload exceeds the storage cap; only the first 16 KB preview is kept.",
+  "未找到该请求的内容记录；日志可能产生于旧版本，或已被清理。":
+    "No payload record found for this request; the log may predate this feature or have been cleared.",
   展示: "display",
   "类型 / 方法 / 路径": "Type / Method / Path",
   "账号 / 密钥": "Account / Key",

@@ -67,6 +67,20 @@ pub(crate) fn insert_log(storage: &Storage, log: &RequestLog) -> rusqlite::Resul
     insert_with_usage(storage, log, &stat).map(|(id, _)| id)
 }
 
+/// Persist a sanitized request payload preview. Payload previews live in the
+/// local SQLite diagnostics store only; remote SeaORM deployments skip the
+/// preview until a remote table exists, and the detail RPC reports the
+/// limitation explicitly.
+pub(crate) fn insert_payload(
+    storage: &Storage,
+    payload: &codexmanager_core::storage::RequestLogPayload,
+) -> rusqlite::Result<()> {
+    if !seaorm_enabled() {
+        return storage.insert_request_log_payload(payload);
+    }
+    Ok(())
+}
+
 pub(crate) fn insert_with_usage(
     storage: &Storage,
     log: &RequestLog,
