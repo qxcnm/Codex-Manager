@@ -275,6 +275,35 @@ pub fn current_gateway_thread_aware_account_distribution_enabled() -> bool {
     gateway::thread_aware_account_distribution_enabled()
 }
 
+/// Mask credential-like keys in captured request payloads (default on).
+pub fn set_gateway_request_log_payload_redaction_enabled(enabled: bool) -> Result<bool, String> {
+    let applied = gateway::set_request_log_payload_redaction_enabled(enabled);
+    save_persisted_bool_setting(
+        super::shared::APP_SETTING_GATEWAY_REQUEST_LOG_PAYLOAD_REDACTION_ENABLED_KEY,
+        applied,
+    )?;
+    Ok(applied)
+}
+
+pub fn current_gateway_request_log_payload_redaction_enabled() -> bool {
+    gateway::request_log_payload_redaction_enabled()
+}
+
+/// Keep only a 16 KB preview of captured request payloads (default on).
+/// When off, full bodies are stored with conversation-level de-duplication.
+pub fn set_gateway_request_log_payload_preview_enabled(enabled: bool) -> Result<bool, String> {
+    let applied = gateway::set_request_log_payload_preview_enabled(enabled);
+    save_persisted_bool_setting(
+        super::shared::APP_SETTING_GATEWAY_REQUEST_LOG_PAYLOAD_PREVIEW_ENABLED_KEY,
+        applied,
+    )?;
+    Ok(applied)
+}
+
+pub fn current_gateway_request_log_payload_preview_enabled() -> bool {
+    gateway::request_log_payload_preview_enabled()
+}
+
 pub(crate) fn set_gateway_quota_guard(
     input: QuotaGuardInput,
 ) -> Result<gateway::QuotaGuardConfig, String> {

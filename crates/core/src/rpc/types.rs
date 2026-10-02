@@ -1573,16 +1573,61 @@ pub struct RequestLogListParams {
 #[serde(rename_all = "camelCase", default)]
 pub struct RequestLogDetailParams {
     pub trace_id: String,
+    /// Capture stage to read (`client` or `upstream`). Empty or missing means
+    /// "the body actually forwarded upstream when available, otherwise the
+    /// body as received from the client".
+    pub stage: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// Request payload of one gateway trace.
+///
+/// `storage_mode` is `preview` (16 KB capped text in `payload`) or `full`
+/// (untruncated body rebuilt from `fields` + `items`, where every entry is a
+/// JSON text and `list_field` names the array the items belong to).
+/// `context` is filled for `previous_response_id` continuations: earlier
+/// requests of the same conversation, oldest first.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct RequestLogDetailResult {
     pub trace_id: String,
+    /// Capture stage of the returned body.
+    pub stage: String,
+    /// Capture stages available for this trace, e.g. `["client"]` or
+    /// `["client", "upstream"]`.
+    pub stages: Vec<String>,
+    pub storage_mode: String,
     pub payload: String,
     pub payload_bytes: i64,
     pub payload_truncated: bool,
+    pub redacted: bool,
     pub created_at: i64,
+    pub body_kind: Option<String>,
+    pub list_field: Option<String>,
+    pub complete: bool,
+    pub fields: Vec<RequestLogDetailField>,
+    pub items: Vec<String>,
+    pub inherited_item_count: i64,
+    pub parent_trace_id: Option<String>,
+    pub previous_response_id: Option<String>,
+    pub context: Vec<RequestLogDetailContextSegment>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RequestLogDetailField {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RequestLogDetailContextSegment {
+    pub trace_id: String,
+    pub created_at: i64,
+    pub previous_response_id: Option<String>,
+    pub list_field: Option<String>,
+    pub complete: bool,
+    pub items: Vec<String>,
 }
 
 impl Default for RequestLogListParams {

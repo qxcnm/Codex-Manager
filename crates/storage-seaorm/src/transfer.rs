@@ -238,7 +238,9 @@ pub async fn export_sqlite(
     let db = sea_orm::Database::connect(options).await?;
     let tx = db.begin().await?;
     let tables = tx.query_all(Statement::from_string(DbBackend::Sqlite,
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name <> 'app_domain_locks' ORDER BY name".to_owned())).await?;
+        // request_log_payload* tables hold local-only diagnostics (request
+        // body captures) that have no remote schema, so they are not exported.
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name <> 'app_domain_locks' AND name NOT LIKE 'request_log_payload%' ORDER BY name".to_owned())).await?;
     let mut writer = BufWriter::new(
         OpenOptions::new()
             .write(true)

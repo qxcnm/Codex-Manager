@@ -731,7 +731,7 @@ pub(in super::super) async fn proxy_validated_request(
         request_method,
         key_id,
         platform_key_hash,
-        local_conversation_id: _local_conversation_id,
+        local_conversation_id,
         route_conversation_id,
         route_conversation_source,
         conversation_binding,
@@ -767,7 +767,18 @@ pub(in super::super) async fn proxy_validated_request(
         protocol_type.as_str(),
     );
     super::super::trace_log::log_request_body_preview(trace_id.as_str(), body.as_ref());
-    super::super::store_request_log_payload(&storage, trace_id.as_str(), body.as_ref());
+    super::super::store_request_log_payload(
+        &storage,
+        trace_id.as_str(),
+        super::super::PAYLOAD_STAGE_UPSTREAM,
+        &body,
+        Some(super::super::request_log_payload_conversation_key(
+            key_id.as_str(),
+            route_conversation_id
+                .as_deref()
+                .or(local_conversation_id.as_deref()),
+        )),
+    );
     if protocol_type == crate::apikey_profile::PROTOCOL_GEMINI_NATIVE {
         super::super::trace_log::log_gemini_request_diagnostics(
             trace_id.as_str(),

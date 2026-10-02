@@ -108,6 +108,8 @@ export const useAppStore = create<AppState>((set) => ({
     compactModelForwardRules: "",
     accountMaxInflight: 1,
     threadAwareAccountDistributionEnabled: true,
+    requestLogPayloadRedactionEnabled: true,
+    requestLogPayloadPreviewEnabled: true,
     quotaGuard: {
       enabled: true,
       primaryMinRemainingPercent: 5,

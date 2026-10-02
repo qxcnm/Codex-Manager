@@ -35,6 +35,7 @@ mod proxy_profiles;
 mod proxy_tests;
 mod quota_pools;
 mod request_log_filters;
+mod request_log_payload_store;
 pub mod request_log_query;
 mod request_logs;
 mod request_token_stats;
@@ -55,6 +56,10 @@ pub use model_catalog_v2::{
     ModelFastPolicyV2, ModelPriceV2, ModelRouteV2,
 };
 pub use proxy_profiles::derive_proxy_profile_url_metadata;
+pub use request_log_payload_store::{
+    RequestLogPayloadFull, RequestLogPayloadManifest, RequestLogPayloadManifestInput,
+    RequestLogPayloadManifestWrite, RequestLogPayloadParentHint, RequestLogPayloadPart,
+};
 pub use reset_credit_operations::{
     ResetCreditOperation, ResetCreditOperationClaim, ResetCreditOperationStatus,
     ResetCreditOperationUpdate,
@@ -808,17 +813,31 @@ pub struct CodexSkillRepositoryCatalogSnapshot {
     pub skills: Vec<CodexSkillRepositorySkillRecord>,
 }
 
-/// Sanitized request payload preview attached to a gateway trace for the
-/// request log detail view. `payload_bytes` records the original body size
-/// before the ingest-time size cap was applied.
+/// Request payload preview attached to a gateway trace for the request log
+/// detail view (preview storage mode). `payload_bytes` records the original
+/// body size before the ingest-time size cap was applied; `redacted` records
+/// whether credential-like keys were masked before storing.
+///
+/// `stage` is [`PAYLOAD_STAGE_CLIENT`] (body as received) or
+/// [`PAYLOAD_STAGE_UPSTREAM`] (body actually forwarded upstream);
+/// `body_hash` identifies the stored text so the upstream row can be skipped
+/// when the gateway did not rewrite the body.
 #[derive(Debug, Clone, Default)]
 pub struct RequestLogPayload {
     pub trace_id: String,
+    pub stage: String,
     pub payload: String,
     pub payload_bytes: i64,
     pub payload_truncated: bool,
+    pub redacted: bool,
+    pub body_hash: String,
     pub created_at: i64,
 }
+
+/// Body as received from the client.
+pub const PAYLOAD_STAGE_CLIENT: &str = "client";
+/// Body actually sent upstream after local rewriting.
+pub const PAYLOAD_STAGE_UPSTREAM: &str = "upstream";
 
 #[derive(Debug, Clone, Default)]
 pub struct RequestLog {
@@ -2333,6 +2352,14 @@ impl Storage {
         )?;
         self.apply_model_catalog_revision9_migration()?;
         self.apply_model_catalog_revision10_migration()?;
+        self.apply_sql_migration(
+            "139_request_log_payloads",
+            include_str!("../../migrations/139_request_log_payloads.sql"),
+        )?;
+        self.apply_sql_migration(
+            "140_request_log_payload_store",
+            include_str!("../../migrations/140_request_log_payload_store.sql"),
+        )?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_api_key_account_group_filter_column()?;
         self.ensure_aggregate_apis_table()?;

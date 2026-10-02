@@ -651,6 +651,40 @@ export const EN_MESSAGES: MessageCatalog = {
     "The request payload exceeds the storage cap; only the first 16 KB preview is kept.",
   "未找到该请求的内容记录；日志可能产生于旧版本，或已被清理。":
     "No payload record found for this request; the log may predate this feature or have been cleared.",
+  请求体: "Request body",
+  沿用: "Shared from previous request",
+  全部展开: "Expand all",
+  全部收起: "Collapse all",
+  存储方式: "Storage",
+  完整存储: "Full payload",
+  "16 KB 预览": "16 KB preview",
+  复制完整请求: "Copy full request",
+  已复制完整请求内容: "Full request copied",
+  请求内容脱敏: "Redact request payloads",
+  "开启后，请求日志里保存的请求内容会把密钥、Token、密码等凭据字段替换为 [REDACTED]；关闭后按原样保存，不做任何脱敏。仅影响之后的新请求。":
+    "When enabled, credential-like fields (keys, tokens, passwords) in stored request payloads are replaced with [REDACTED]; when disabled the payload is stored exactly as sent. Applies to new requests only.",
+  "请求内容仅保留 16 KB 预览": "Keep only a 16 KB payload preview",
+  "开启后每个请求只保存前 16 KB，超出部分截断；关闭后完整保存请求内容，同一会话的历史消息只存一份，按需拼回完整请求。仅影响之后的新请求。":
+    "When enabled only the first 16 KB of each request body is stored; when disabled the full body is stored, repeated conversation history is kept once and rebuilt on demand. Applies to new requests only.",
+  "上文请求 {trace}（{count} 条）": "Earlier request {trace} ({count} items)",
+  "上一轮模型输出（{id}）不在请求日志中，以下为本次请求新增内容":
+    "The previous model output ({id}) is not part of the request log; the entries below are what this request added.",
+  "本请求通过 previous_response_id（{id}）续接上文，但未找到同会话的上一请求记录":
+    "This request continues a conversation via previous_response_id ({id}), but no earlier request of the same conversation was found.",
+  "顶层字段（{count}）": "Top-level fields ({count})",
+  "{field}（{count} 条，前 {shared} 条与上一请求相同）":
+    "{field} ({count} items, the first {shared} are shared with the previous request)",
+  "{field}（{count} 条）": "{field} ({count} items)",
+  请求体来源: "Body source",
+  客户端原始: "Client",
+  发往上游: "Upstream",
+  "凭据字段已脱敏；": "Credential fields are redacted; ",
+  "未脱敏，可能包含凭据；": "Not redacted, may contain credentials; ",
+  "内容为发往上游的实际请求体。": "the content is the request body actually sent upstream.",
+  "内容为客户端原始请求体。":
+    "the content is the request body exactly as it was received from the client.",
+  "该请求依赖的上一请求记录已被清理，部分消息无法还原。":
+    "The previous request this one depends on has been cleared, so part of the conversation cannot be rebuilt.",
   展示: "display",
   "类型 / 方法 / 路径": "Type / Method / Path",
   "账号 / 密钥": "Account / Key",

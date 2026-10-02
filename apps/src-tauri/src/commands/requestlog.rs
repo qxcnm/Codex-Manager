@@ -107,9 +107,11 @@ pub async fn service_requestlog_summary(
 pub async fn service_requestlog_detail(
     addr: Option<String>,
     trace_id: Option<String>,
+    stage: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let params = serde_json::json!({
         "traceId": trace_id,
+        "stage": stage,
     });
     rpc_call_in_background("requestlog/detail", addr, Some(params)).await
 }

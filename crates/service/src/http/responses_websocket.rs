@@ -3354,6 +3354,19 @@ fn begin_ws_request_log(
     route_source: &'static str,
 ) -> PendingWsRequestLog {
     let trace_id = crate::gateway::next_trace_id();
+    // Capture the client frame so WebSocket requests also expose their body
+    // in the request log detail view.
+    if let Some(storage) = open_storage() {
+        crate::gateway::store_client_request_log_payload(
+            &storage,
+            trace_id.as_str(),
+            &bytes::Bytes::from(prepared.text.clone()),
+            Some(crate::gateway::request_log_payload_conversation_key(
+                context.api_key.id.as_str(),
+                context.incoming_headers.session_id(),
+            )),
+        );
+    }
     let effective_protocol_type = crate::apikey_profile::resolve_gateway_protocol_type(
         context.api_key.protocol_type.as_str(),
         RESPONSES_ENDPOINT,

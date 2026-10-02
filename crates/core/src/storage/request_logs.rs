@@ -223,25 +223,31 @@ impl Storage {
     ///
     /// # 返回
     /// 返回函数执行结果
-    /// Upsert a sanitized request payload preview for a gateway trace.
+    /// Upsert a request payload preview for a gateway trace and stage.
     /// Payloads are pure diagnostics: a missing `request_log_payloads` table
     /// (pre-migration database) or a write failure must never break the
     /// request hot path, so callers treat errors as best-effort.
     pub fn insert_request_log_payload(&self, payload: &RequestLogPayload) -> Result<()> {
         self.conn.execute(
             "INSERT INTO request_log_payloads (
-                trace_id, payload, payload_bytes, payload_truncated, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(trace_id) DO UPDATE SET
+                trace_id, stage, payload, payload_bytes, payload_truncated, redacted,
+                body_hash, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(trace_id, stage) DO UPDATE SET
                 payload=excluded.payload,
                 payload_bytes=excluded.payload_bytes,
                 payload_truncated=excluded.payload_truncated,
+                redacted=excluded.redacted,
+                body_hash=excluded.body_hash,
                 created_at=excluded.created_at",
             params![
                 payload.trace_id,
+                payload.stage,
                 payload.payload,
                 payload.payload_bytes,
                 payload.payload_truncated,
+                payload.redacted,
+                payload.body_hash,
                 payload.created_at,
             ],
         )?;
@@ -253,24 +259,61 @@ impl Storage {
     pub fn find_request_log_payload_by_trace_id(
         &self,
         trace_id: &str,
+        stage: &str,
     ) -> Result<Option<RequestLogPayload>> {
         if !self.has_table("request_log_payloads")? {
             return Ok(None);
         }
         self.conn
             .query_row(
-                "SELECT trace_id, payload, payload_bytes, payload_truncated, created_at
-                 FROM request_log_payloads WHERE trace_id = ?1",
-                [trace_id],
+                "SELECT trace_id, stage, payload, payload_bytes, payload_truncated, redacted,
+                        body_hash, created_at
+                 FROM request_log_payloads WHERE trace_id = ?1 AND stage = ?2",
+                (trace_id, stage),
                 |row| {
                     Ok(RequestLogPayload {
                         trace_id: row.get(0)?,
-                        payload: row.get(1)?,
-                        payload_bytes: row.get(2)?,
-                        payload_truncated: row.get(3)?,
-                        created_at: row.get(4)?,
+                        stage: row.get(1)?,
+                        payload: row.get(2)?,
+                        payload_bytes: row.get(3)?,
+                        payload_truncated: row.get(4)?,
+                        redacted: row.get(5)?,
+                        body_hash: row.get(6)?,
+                        created_at: row.get(7)?,
                     })
                 },
+            )
+            .optional()
+    }
+
+    /// Stages that have a stored preview for this trace, in capture order
+    /// (client before upstream).
+    pub fn list_request_log_payload_stages(&self, trace_id: &str) -> Result<Vec<String>> {
+        if !self.has_table("request_log_payloads")? {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT stage FROM request_log_payloads WHERE trace_id = ?1 ORDER BY stage ASC",
+        )?;
+        let rows = stmt.query_map([trace_id], |row| row.get::<_, String>(0))?;
+        rows.collect()
+    }
+
+    /// Stored body hash of one stage, used to skip the upstream capture when
+    /// the gateway forwarded the client body unchanged.
+    pub fn find_request_log_payload_body_hash(
+        &self,
+        trace_id: &str,
+        stage: &str,
+    ) -> Result<Option<String>> {
+        if !self.has_table("request_log_payloads")? {
+            return Ok(None);
+        }
+        self.conn
+            .query_row(
+                "SELECT body_hash FROM request_log_payloads WHERE trace_id = ?1 AND stage = ?2",
+                (trace_id, stage),
+                |row| row.get::<_, String>(0),
             )
             .optional()
     }
@@ -683,10 +726,12 @@ impl Storage {
     /// diagnostics without billing semantics, so clearing never preserves
     /// rows the way billed request logs are hidden instead of deleted.
     pub fn clear_request_log_payloads(&self) -> Result<usize> {
-        if !self.has_table("request_log_payloads")? {
-            return Ok(0);
+        let mut removed = self.clear_request_log_payload_store()?;
+        if self.has_table("request_log_payloads")? {
+            removed =
+                removed.saturating_add(self.conn.execute("DELETE FROM request_log_payloads", [])?);
         }
-        self.conn.execute("DELETE FROM request_log_payloads", [])
+        Ok(removed)
     }
 
     pub fn prune_request_logs_before(&self, cutoff_ts: i64) -> Result<usize> {
@@ -700,6 +745,7 @@ impl Storage {
                 [cutoff_ts],
             )?;
         }
+        self.prune_request_log_payload_store_before(cutoff_ts)?;
         if self.has_table("request_charge_snapshots")? {
             let hidden_logs = self
                 .conn

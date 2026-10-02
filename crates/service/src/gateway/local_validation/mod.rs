@@ -113,6 +113,19 @@ pub(super) fn prepare_local_request(
     let storage = auth::open_storage_or_error()?;
     let api_key = auth::load_active_api_key(&storage, &platform_key, request.url(), debug)?;
 
+    // Capture the body exactly as received for the request log detail view.
+    // Runs for every authenticated request, including ones that never reach
+    // the upstream (validation rejects, local responses, aggregate failures).
+    super::store_client_request_log_payload(
+        &storage,
+        trace_id.as_str(),
+        &Bytes::from(body.clone()),
+        Some(super::request_log_payload_conversation_key(
+            api_key.id.as_str(),
+            incoming_headers.session_id(),
+        )),
+    );
+
     request::build_local_validation_result(
         request,
         trace_id,

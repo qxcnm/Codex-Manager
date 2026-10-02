@@ -27,6 +27,7 @@ import {
 import {
   BackgroundTaskSettings,
   RequestLogDetail,
+  RequestLogDetailStage,
   RequestLogFilterSummary,
   RequestLogListResult,
   RequestLogListWithSummaryResult,
@@ -176,13 +177,14 @@ export const serviceClient = {
     return normalizeRequestLogListWithSummaryResult(result);
   },
   async requestLogDetail(
-    params: { traceId: string; addr?: string | null },
+    params: { traceId: string; stage?: RequestLogDetailStage | null; addr?: string | null },
     options?: RequestOptions,
   ): Promise<RequestLogDetail> {
     const result = await invoke<unknown>(
       "service_requestlog_detail",
       withAddr({
         traceId: params.traceId,
+        ...(params.stage ? { stage: params.stage } : {}),
         ...(params.addr === undefined ? {} : { addr: params.addr || null }),
       }),
       options
