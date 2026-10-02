@@ -1,4 +1,6 @@
-use codexmanager_core::storage::{now_ts, RequestLog, RequestLogPayload, RequestTokenStat, Storage};
+use codexmanager_core::storage::{
+    now_ts, RequestLog, RequestLogPayload, RequestTokenStat, Storage,
+};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};

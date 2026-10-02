@@ -31,6 +31,7 @@ import { useAppStore } from "@/lib/store/useAppStore";
 import { DASHBOARD_ADMIN_USAGE_QUERY_KEY } from "@/hooks/useDashboardAdminUsageSummary";
 import { MEMBER_DASHBOARD_SUMMARY_QUERY_KEY } from "@/hooks/useMemberDashboardSummary";
 import { RequestLogsTabContent } from "./page-sections";
+import { RequestDetailModal } from "./request-detail-modal";
 import {
   buildFixedTimePreset,
   LogsPageSkeleton,
@@ -452,6 +453,7 @@ function LogsPageContent() {
           });
         }}
         onOpenClearConfirm={() => setClearConfirmOpen(true)}
+        onOpenDetail={setDetailLog}
         onApplyTimePreset={applyTimePreset}
         onStartTimeChange={(value) => {
           setTimePreset("custom");
