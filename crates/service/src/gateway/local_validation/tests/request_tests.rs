@@ -1800,7 +1800,10 @@ fn openai_chat_tool_message_array_content_flattens_to_string_output() {
     .expect("adapt chat body");
     let payload: Value = serde_json::from_slice(&adapted).expect("json body");
 
-    let input = payload.get("input").and_then(Value::as_array).expect("input array");
+    let input = payload
+        .get("input")
+        .and_then(Value::as_array)
+        .expect("input array");
     let tool_output = input
         .iter()
         .find(|item| item.get("type").and_then(Value::as_str) == Some("function_call_output"))
@@ -1833,12 +1836,18 @@ fn openai_chat_tool_message_string_content_keeps_string_output() {
     .expect("adapt chat body");
     let payload: Value = serde_json::from_slice(&adapted).expect("json body");
 
-    let input = payload.get("input").and_then(Value::as_array).expect("input array");
+    let input = payload
+        .get("input")
+        .and_then(Value::as_array)
+        .expect("input array");
     let tool_output = input
         .iter()
         .find(|item| item.get("type").and_then(Value::as_str) == Some("function_call_output"))
         .expect("function_call_output item");
-    assert_eq!(tool_output.get("output"), Some(&Value::String("sunny".to_string())));
+    assert_eq!(
+        tool_output.get("output"),
+        Some(&Value::String("sunny".to_string()))
+    );
 }
 
 #[test]
@@ -1862,7 +1871,10 @@ fn openai_chat_tool_message_mixed_content_uses_image_placeholder() {
     .expect("adapt chat body");
     let payload: Value = serde_json::from_slice(&adapted).expect("json body");
 
-    let input = payload.get("input").and_then(Value::as_array).expect("input array");
+    let input = payload
+        .get("input")
+        .and_then(Value::as_array)
+        .expect("input array");
     let tool_output = input
         .iter()
         .find(|item| item.get("type").and_then(Value::as_str) == Some("function_call_output"))
