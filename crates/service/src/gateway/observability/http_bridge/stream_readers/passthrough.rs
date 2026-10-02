@@ -156,6 +156,30 @@ impl PassthroughSseUsageReader {
     ///
     /// # 返回
     /// 返回函数执行结果
+    /// 上游流在没有终止事件的情况下结束时，向下游显式传递错误。
+    /// 同一帧同时携带 Responses 形状（type/code/message）与 chat 形状（error 对象），
+    /// 使两类客户端都能解析出真实原因，而不是只看到“流结束但没有结束标记”。
+    fn stream_error_chunk(&mut self, code: &str, message: String) -> Vec<u8> {
+        if let Ok(mut collector) = self.usage_collector.lock() {
+            collector
+                .terminal_error
+                .get_or_insert_with(|| message.clone());
+        }
+        self.finished = true;
+        let payload = serde_json::json!({
+            "type": "error",
+            "code": code,
+            "message": message,
+            "error": {
+                "type": "upstream_error",
+                "code": code,
+                "message": message,
+                "param": null
+            }
+        });
+        format!("data: {}\n\n", payload).into_bytes()
+    }
+
     async fn next_chunk(&mut self) -> std::io::Result<Vec<u8>> {
         loop {
             match self
@@ -171,36 +195,41 @@ impl PassthroughSseUsageReader {
                     return Ok(frame.concat().into_bytes());
                 }
                 Ok(UpstreamSseFramePumpItem::Eof) => {
-                    if let Ok(mut collector) = self.usage_collector.lock() {
-                        if !collector.saw_terminal {
-                            let hint = collector.upstream_error_hint.clone();
-                            collector.terminal_error.get_or_insert_with(|| {
-                                upstream_hint_or_stream_incomplete_message(hint.as_deref())
-                            });
-                        }
+                    let terminal_seen = self
+                        .usage_collector
+                        .lock()
+                        .map(|collector| collector.saw_terminal)
+                        .unwrap_or(false);
+                    if terminal_seen {
+                        self.finished = true;
+                        return Ok(Vec::new());
                     }
-                    self.finished = true;
-                    return Ok(Vec::new());
+                    let hint = self
+                        .usage_collector
+                        .lock()
+                        .ok()
+                        .and_then(|collector| collector.upstream_error_hint.clone());
+                    return Ok(self.stream_error_chunk(
+                        "upstream_stream_incomplete",
+                        upstream_hint_or_stream_incomplete_message(hint.as_deref()),
+                    ));
                 }
                 Ok(UpstreamSseFramePumpItem::Error(err)) => {
                     self.last_upstream_activity = Instant::now();
-                    if let Ok(mut collector) = self.usage_collector.lock() {
-                        collector
-                            .terminal_error
-                            .get_or_insert_with(|| classify_upstream_stream_read_error(&err));
-                    }
-                    self.finished = true;
-                    return Ok(Vec::new());
+                    let classified = classify_upstream_stream_read_error(&err);
+                    let message = if err.trim().is_empty() || classified == err {
+                        classified
+                    } else {
+                        format!("{classified}: {err}")
+                    };
+                    return Ok(self.stream_error_chunk("upstream_stream_read_error", message));
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                     if stream_idle_timed_out(self.last_upstream_activity) {
-                        if let Ok(mut collector) = self.usage_collector.lock() {
-                            collector
-                                .terminal_error
-                                .get_or_insert_with(stream_idle_timeout_message);
-                        }
-                        self.finished = true;
-                        return Ok(Vec::new());
+                        return Ok(self.stream_error_chunk(
+                            "upstream_stream_idle_timeout",
+                            stream_idle_timeout_message(),
+                        ));
                     }
                     if should_emit_keepalive_after_first_frame(self.saw_upstream_frame) {
                         return Ok(self.keepalive_frame.bytes().to_vec());
@@ -208,14 +237,15 @@ impl PassthroughSseUsageReader {
                     continue;
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    if let Ok(mut collector) = self.usage_collector.lock() {
-                        let hint = collector.upstream_error_hint.clone();
-                        collector.terminal_error.get_or_insert_with(|| {
-                            hint.unwrap_or_else(stream_reader_disconnected_message)
-                        });
-                    }
-                    self.finished = true;
-                    return Ok(Vec::new());
+                    let hint = self
+                        .usage_collector
+                        .lock()
+                        .ok()
+                        .and_then(|collector| collector.upstream_error_hint.clone());
+                    return Ok(self.stream_error_chunk(
+                        "upstream_stream_disconnected",
+                        hint.unwrap_or_else(stream_reader_disconnected_message),
+                    ));
                 }
             }
         }
@@ -274,3 +304,7 @@ fn extract_usage_limit_from_sse_data(lines: &[String]) -> Option<String> {
 #[cfg(test)]
 #[path = "passthrough_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "passthrough_repair_tests.rs"]
+mod repair_tests;
