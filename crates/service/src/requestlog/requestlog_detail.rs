@@ -27,7 +27,7 @@ pub(crate) fn read_request_log_detail(
         let log_key_id = storage
             .find_request_log_key_id_by_trace_id(trace_id)
             .map_err(|err| format!("read request log owner failed: {err}"))?;
-        let owned = log_key_id.is_some_and(|key_id| {
+        let owned = log_key_id.flatten().is_some_and(|key_id| {
             allowed_key_ids
                 .iter()
                 .any(|allowed| allowed.eq_ignore_ascii_case(key_id.trim()))

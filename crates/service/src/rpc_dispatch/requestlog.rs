@@ -126,6 +126,7 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                 .clone()
                 .map(serde_json::from_value::<RequestLogDetailParams>)
                 .transpose()
+                .map(Option::unwrap_or_default)
                 .map_err(|err| format!("invalid requestlog/detail params: {err}"));
             super::value_or_error(params.and_then(|params| {
                 if actor.is_admin() {

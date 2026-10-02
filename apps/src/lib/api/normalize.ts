@@ -38,6 +38,7 @@ import {
   PluginRunLogSummary,
   PluginTaskSummary,
   RequestLog,
+  RequestLogDetail,
   RequestLogFilterSummary,
   RequestLogListResult,
   RequestLogListWithSummaryResult,
