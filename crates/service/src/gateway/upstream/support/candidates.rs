@@ -10,6 +10,52 @@ pub(in super::super) enum CandidateSkipReason {
     Inflight,
 }
 
+/// 过滤“已知该账户不支持该模型”的候选（BUG-2026-0930-01）。
+///
+/// 记忆只在收到该类上游精确拒绝后写入，并带 TTL；若所有候选都被标记，则保留
+/// 原列表，让上游给出精确原因（避免把可诊断的 400 换成笼统的“无可用账户”）。
+fn drop_known_unsupported_model_candidates(
+    candidates: &mut Vec<(Account, Token)>,
+    request_model: Option<&str>,
+) {
+    log::debug!(
+        "event=gateway_candidate_filter_entry model={:?} count={} order={:?}",
+        request_model,
+        candidates.len(),
+        candidates
+            .iter()
+            .map(|(account, _)| account.id.chars().take(12).collect::<String>())
+            .take(4)
+            .collect::<Vec<_>>()
+    );
+    let Some(model) = request_model.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    if candidates.is_empty() {
+        return;
+    }
+    let drop_positions = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, (account, _))| {
+            crate::account::model_support::is_unsupported(account.id.as_str(), model)
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if drop_positions.is_empty() || drop_positions.len() == candidates.len() {
+        return;
+    }
+    log::debug!(
+        "event=gateway_candidate_model_filter model={} before={} dropped={}",
+        model,
+        candidates.len(),
+        drop_positions.len()
+    );
+    for index in drop_positions.into_iter().rev() {
+        candidates.remove(index);
+    }
+}
+
 /// 函数 `prepare_gateway_candidates`
 ///
 /// 作者: gaohongshun
@@ -45,10 +91,12 @@ pub(crate) fn prepare_gateway_candidates(
         && !exclude_free_accounts
         && !reserve_model
     {
-        return super::super::super::collect_gateway_candidates_with_low_quota_mode(
+        let mut candidates = super::super::super::collect_gateway_candidates_with_low_quota_mode(
             storage,
             low_quota_mode,
-        );
+        )?;
+        drop_known_unsupported_model_candidates(&mut candidates, request_model);
+        return Ok(candidates);
     }
 
     let mut authorized_candidates = if reserve_model {
@@ -109,14 +157,17 @@ pub(crate) fn prepare_gateway_candidates(
         .map(|(account, _)| account.id)
         .collect::<Vec<_>>();
     // 中文注释：保持账号原始顺序（按账户排序字段）作为候选顺序，失败时再依次切下一个。
-    if reserve_model {
-        return collect_luna_reserve_candidates(storage, &authorized_account_ids, &snapshots);
-    }
-    super::super::super::collect_gateway_candidates_for_account_ids_with_low_quota_mode(
-        storage,
-        &authorized_account_ids,
-        low_quota_mode,
-    )
+    let mut candidates = if reserve_model {
+        collect_luna_reserve_candidates(storage, &authorized_account_ids, &snapshots)?
+    } else {
+        super::super::super::collect_gateway_candidates_for_account_ids_with_low_quota_mode(
+            storage,
+            &authorized_account_ids,
+            low_quota_mode,
+        )?
+    };
+    drop_known_unsupported_model_candidates(&mut candidates, request_model);
+    Ok(candidates)
 }
 
 fn collect_luna_reserve_candidates(
