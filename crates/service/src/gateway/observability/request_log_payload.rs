@@ -12,7 +12,7 @@
 //!   only add their new tail.
 //!
 //! Splitting, hashing and the database write run on a dedicated writer
-//! thread; the gateway hot path only enqueues a cheap job.
+//! thread; the gateway snapshots the clear generation before enqueueing.
 
 use base64::Engine;
 use bytes::Bytes;
@@ -153,7 +153,8 @@ pub(crate) fn request_log_payload_conversation_key(
 }
 
 /// Hot-path entry: capture a request body for the given stage.
-/// Never blocks on the database and never fails the request.
+/// Reads only the clear generation here; splitting, hashing and writes run in
+/// the worker. A capture failure never fails the upstream request.
 pub(crate) fn store_request_log_payload(
     storage: &Storage,
     trace_id: &str,
