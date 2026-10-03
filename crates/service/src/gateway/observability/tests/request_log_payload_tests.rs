@@ -287,6 +287,45 @@ fn full_mode_stores_untruncated_body_and_shares_conversation_prefix() {
 }
 
 #[test]
+fn actual_upstream_attempt_inherits_authenticated_client_session() {
+    let storage = storage();
+    let mut cache = ParentCache::default();
+    let mut client = stage_job(
+        "trc_session",
+        br#"{"input":[{"role":"user","content":"hello"}]}"#,
+        false,
+        false,
+        PAYLOAD_STAGE_CLIENT,
+    );
+    client.conversation_key = Some("gk_test|session_A".to_string());
+    persist_request_log_payload_with_cache(&storage, client, &mut cache);
+    let mut upstream = stage_job(
+        "trc_session",
+        br#"{"input":[{"role":"user","content":"hello"}],"model":"different"}"#,
+        false,
+        false,
+        PAYLOAD_STAGE_UPSTREAM,
+    );
+    upstream.conversation_key = Some("gk_test|~".to_string());
+    upstream.attempt = Some(OutboundAttemptCapture {
+        method: "POST".to_string(),
+        url: "http://127.0.0.1/v1/responses".to_string(),
+        transport: "http".to_string(),
+        content_encoding: None,
+        wire_body: upstream.body.clone(),
+    });
+    persist_request_log_payload_with_cache(&storage, upstream, &mut cache);
+    let stored = storage
+        .find_request_log_payload_manifest("trc_session", PAYLOAD_STAGE_UPSTREAM)
+        .expect("upstream manifest")
+        .expect("rewritten body stored");
+    assert_eq!(
+        stored.conversation_key.as_deref(),
+        Some("gk_test|session_A")
+    );
+}
+
+#[test]
 fn cached_parent_is_not_reused_after_retention_pruning() {
     let storage = storage();
     let mut cache = ParentCache::default();

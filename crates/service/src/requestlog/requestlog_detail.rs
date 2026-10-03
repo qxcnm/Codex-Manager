@@ -245,13 +245,17 @@ fn load_previous_response_context(
         };
         // A concrete conversation ID must not cross to a different concrete
         // session, even when a response ID happens to match.
-        if let (Some(current), Some(parent)) = (
+        match (
             cursor.conversation_key.as_deref(),
             previous.manifest.conversation_key.as_deref(),
         ) {
-            if !current.ends_with("|~") && !parent.ends_with("|~") && current != parent {
+            (Some(current), Some(parent))
+                if current != parent && (!current.ends_with("|~") || !parent.ends_with("|~")) =>
+            {
                 break;
             }
+            (None, Some(_)) | (Some(_), None) => break,
+            _ => {}
         }
         let continues = previous.manifest.previous_response_id.is_some();
         segments.push(RequestLogDetailContextSegment {

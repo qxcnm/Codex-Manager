@@ -85,6 +85,7 @@ struct WsRequestContext {
 #[derive(Clone)]
 struct PreparedClientFrame {
     text: String,
+    raw_text: String,
     input: Value,
     client_model: Option<String>,
     model: Option<String>,
@@ -510,7 +511,7 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
     };
 
     if let Err(err) = validate_ws_api_key_for_new_request(&context).await {
-        record_rejected_ws_request(&context, &err);
+        record_rejected_ws_request(&context, &err, None);
         send_ws_error_and_close(&mut socket, err, context.prefer_raw_errors).await;
         return;
     }
@@ -519,7 +520,7 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
         match rewrite_client_frame_with_model_fast_policy(first_text.as_str(), &context).await {
             Ok(prepared) => prepared,
             Err(err) => {
-                record_rejected_ws_request(&context, &err);
+                record_rejected_ws_request(&context, &err, Some(first_text.as_str()));
                 send_ws_error_and_close(&mut socket, err, context.prefer_raw_errors).await;
                 return;
             }
@@ -580,6 +581,12 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
     };
 
     let mut completed_responses = CompletedWsResponseCache::default();
+    capture_native_ws_upstream_attempt(
+        &context,
+        &first_pending.log,
+        &upstream,
+        first_pending.prepared.text.as_str(),
+    );
     if let Err(err) = upstream
         .stream
         .send(UpstreamMessage::Text(
@@ -730,7 +737,7 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
                                     continue;
                                 }
                                 if let Err(err) = validate_ws_api_key_for_new_request(&context).await {
-                                    record_rejected_ws_request(&context, &err);
+                                    record_rejected_ws_request(&context, &err, None);
                                     send_ws_error_and_close(
                                         &mut socket,
                                         err,
@@ -743,7 +750,7 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
                                 let prepared = match apply_model_fast_policy(prepared).await {
                                     Ok(prepared) => prepared,
                                     Err(err) => {
-                                        record_rejected_ws_request(&context, &err);
+                                        record_rejected_ws_request(&context, &err, Some(text.as_str()));
                                         send_ws_error_and_close(
                                             &mut socket,
                                             err,
@@ -877,9 +884,16 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
                                             break;
                                         }
                                     }
-                                } else if let Err(send_err) = upstream.stream.send(
-                                    UpstreamMessage::Text(current_pending.prepared.text.clone().into()),
-                                ).await {
+                                } else {
+                                    capture_native_ws_upstream_attempt(
+                                        &context,
+                                        &current_pending.log,
+                                        &upstream,
+                                        current_pending.prepared.text.as_str(),
+                                    );
+                                    if let Err(send_err) = upstream.stream.send(
+                                        UpstreamMessage::Text(current_pending.prepared.text.clone().into()),
+                                    ).await {
                                     let previous_account_id = upstream.account_id.clone();
                                     log::warn!(
                                         "event=responses_ws_upstream_stale_send account_id={} err={send_err}",
@@ -922,6 +936,7 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
                                             break;
                                         }
                                     }
+                                }
                                 }
                                 pending_request = Some(current_pending);
                             }
@@ -1755,6 +1770,7 @@ fn rewrite_client_frame(
     text: &str,
     context: &WsRequestContext,
 ) -> Result<PreparedClientFrame, WsSessionError> {
+    let raw_text = text.to_string();
     let mut payload = serde_json::from_str::<Value>(text).map_err(|err| {
         WsSessionError::bad_request_bilingual(
             "WebSocket JSON 载荷无效",
@@ -1914,6 +1930,7 @@ fn rewrite_client_frame(
 
     Ok(PreparedClientFrame {
         text,
+        raw_text,
         input: request.input,
         client_model: client_model_for_log,
         model: Some(request.model),
@@ -2413,6 +2430,12 @@ async fn reconnect_upstream_for_pending_request(
             pending.prepared.text.as_str(),
             pending.retried_missing_tool_call_context,
         );
+        capture_native_ws_upstream_attempt(
+            context,
+            &pending.log,
+            &replacement,
+            pending.prepared.text.as_str(),
+        );
         match replacement
             .stream
             .send(UpstreamMessage::Text(pending.prepared.text.clone().into()))
@@ -2513,7 +2536,7 @@ async fn wait_for_client_request_and_reconnect_upstream(
     let prepared = match rewrite_client_frame_with_model_fast_policy(text.as_str(), context).await {
         Ok(prepared) => prepared,
         Err(err) => {
-            record_rejected_ws_request(context, &err);
+            record_rejected_ws_request(context, &err, Some(text.as_str()));
             return Err(err);
         }
     };
@@ -3352,6 +3375,26 @@ fn build_upstream_websocket_request(
     Ok(request)
 }
 
+fn capture_native_ws_upstream_attempt(
+    context: &WsRequestContext,
+    pending: &PendingWsRequestLog,
+    upstream: &ConnectedUpstreamWebsocket,
+    text: &str,
+) {
+    crate::gateway::capture_outbound_payload(
+        crate::gateway::OutboundPayloadContext {
+            trace_id: pending.trace_id.as_str(),
+            key_id: context.api_key.id.as_str(),
+        },
+        "WS",
+        upstream.upstream_url.as_str(),
+        "websocket",
+        &[],
+        &bytes::Bytes::copy_from_slice(text.as_bytes()),
+        None,
+    );
+}
+
 fn begin_ws_request_log(
     context: &WsRequestContext,
     prepared: &PreparedClientFrame,
@@ -3365,7 +3408,7 @@ fn begin_ws_request_log(
         crate::gateway::store_client_request_log_payload(
             &storage,
             trace_id.as_str(),
-            &bytes::Bytes::from(prepared.text.clone()),
+            &bytes::Bytes::from(prepared.raw_text.clone()),
             Some(crate::gateway::request_log_payload_conversation_key(
                 context.api_key.id.as_str(),
                 context.incoming_headers.session_id(),
@@ -3418,8 +3461,23 @@ fn begin_ws_request_log(
     }
 }
 
-fn record_rejected_ws_request(context: &WsRequestContext, err: &WsSessionError) {
+fn record_rejected_ws_request(
+    context: &WsRequestContext,
+    err: &WsSessionError,
+    authenticated_text: Option<&str>,
+) {
     let trace_id = crate::gateway::next_trace_id();
+    if let (Some(text), Some(storage)) = (authenticated_text, open_storage()) {
+        crate::gateway::store_client_request_log_payload(
+            &storage,
+            trace_id.as_str(),
+            &bytes::Bytes::copy_from_slice(text.as_bytes()),
+            Some(crate::gateway::request_log_payload_conversation_key(
+                context.api_key.id.as_str(),
+                context.incoming_headers.session_id(),
+            )),
+        );
+    }
     let effective_protocol_type = crate::apikey_profile::resolve_gateway_protocol_type(
         context.api_key.protocol_type.as_str(),
         RESPONSES_ENDPOINT,
@@ -3854,6 +3912,7 @@ async fn try_retry_ws_request_after_terminal(
     }
     let retry_text = retry_text.unwrap_or_else(|| pending.prepared.text.clone());
     let retry_input = ws_request_input_from_text(retry_text.as_str())?;
+    capture_native_ws_upstream_attempt(context, &pending.log, upstream, retry_text.as_str());
     match upstream
         .stream
         .send(UpstreamMessage::Text(retry_text.clone().into()))

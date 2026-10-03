@@ -425,7 +425,21 @@ pub(crate) fn persist_request_log_payload_with_cache(
         return;
     }
 
-    let input = split_request_payload(&job);
+    let mut input = split_request_payload(&job);
+    if job.stage.starts_with(PAYLOAD_STAGE_UPSTREAM) {
+        match storage.find_request_log_payload_manifest(&job.trace_id, PAYLOAD_STAGE_CLIENT) {
+            Ok(Some(client)) => input.conversation_key = client.conversation_key,
+            Ok(None) if job.attempt.is_some() => input.conversation_key = None,
+            Ok(None) => {}
+            Err(err) => {
+                log::warn!(
+                    "event=request_log_payload_client_context_read_failed trace_id={} err={err}",
+                    job.trace_id
+                );
+                input.conversation_key = None;
+            }
+        }
+    }
     let cache_key = input
         .conversation_key
         .as_ref()
