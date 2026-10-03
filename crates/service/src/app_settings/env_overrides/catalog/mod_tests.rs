@@ -82,4 +82,32 @@ fn catalog_marks_request_semantic_env_overrides_as_high_risk() {
             .and_then(|value| value.as_str()),
         Some(ENV_OVERRIDE_EFFECT_SCOPE_REQUEST_SEMANTIC)
     );
+
+    let text_limit = catalog
+        .iter()
+        .find(|item| {
+            item.get("key").and_then(|value| value.as_str())
+                == Some("CODEXMANAGER_MAX_TEXT_INPUT_CHARS")
+        })
+        .expect("text input limit catalog item");
+    assert_eq!(
+        text_limit
+            .get("defaultValue")
+            .and_then(|value| value.as_str()),
+        Some("1048576")
+    );
+    assert_eq!(
+        text_limit.get("applyMode").and_then(|value| value.as_str()),
+        Some("runtime")
+    );
+    assert_eq!(
+        text_limit.get("riskLevel").and_then(|value| value.as_str()),
+        Some("high")
+    );
+    assert_eq!(
+        text_limit
+            .get("effectScope")
+            .and_then(|value| value.as_str()),
+        Some(ENV_OVERRIDE_EFFECT_SCOPE_REQUEST_SEMANTIC)
+    );
 }
