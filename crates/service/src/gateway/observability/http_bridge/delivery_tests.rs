@@ -17,6 +17,27 @@ use serde_json::json;
 use std::io::{Read, Write};
 use tiny_http::HTTPVersion;
 
+#[test]
+fn non_stream_json_only_links_real_completed_responses_id() {
+    let mut usage = super::UpstreamResponseUsage::default();
+    merge_usage_from_body_without_output_text(
+        &mut usage,
+        br#"{"object":"response","id":"resp_direct_ok","status":"completed"}"#,
+    );
+    assert_eq!(usage.response_id.as_deref(), Some("resp_direct_ok"));
+    merge_usage_from_body_without_output_text(
+        &mut usage,
+        br#"{"object":"response","id":"resp_proxy","status":"completed"}"#,
+    );
+    assert_eq!(usage.response_id.as_deref(), Some("resp_direct_ok"));
+    let mut failed = super::UpstreamResponseUsage::default();
+    merge_usage_from_body_without_output_text(
+        &mut failed,
+        br#"{"object":"response","id":"resp_failed","status":"failed"}"#,
+    );
+    assert!(failed.response_id.is_none());
+}
+
 struct ChunkedTestReader {
     chunks: Vec<&'static [u8]>,
     index: usize,

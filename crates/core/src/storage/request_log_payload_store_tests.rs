@@ -195,32 +195,192 @@ fn pruning_a_parent_rebases_children_and_collects_unused_blobs() {
     assert_eq!(count(&storage, "request_log_payload_blobs"), 0);
 }
 
+fn seed_log(storage: &Storage, trace_id: &str, key_id: &str) {
+    storage
+        .insert_request_log_with_token_stat(
+            &super::super::RequestLog {
+                trace_id: Some(trace_id.to_string()),
+                key_id: Some(key_id.to_string()),
+                request_path: "/v1/responses".to_string(),
+                method: "POST".to_string(),
+                created_at: super::super::now_ts(),
+                ..Default::default()
+            },
+            &super::super::RequestTokenStat::default(),
+        )
+        .expect("insert request log");
+}
+
 #[test]
-fn predecessor_lookup_and_clear() {
+fn response_id_link_never_uses_temporal_proximity_or_other_keys() {
     let storage = storage();
+    seed_log(&storage, "a-root", "gk_shared");
+    seed_log(&storage, "b-unrelated", "gk_shared");
+    seed_log(&storage, "a-cont", "gk_shared");
     storage
-        .insert_request_log_payload_manifest(&manifest("trc_1", 100, &["u1"]), None)
-        .expect("insert first");
-    let mut follow_up = manifest("trc_2", 101, &["u2"]);
-    follow_up.previous_response_id = Some("resp_1".to_string());
+        .record_request_log_response_id("gk_shared", "resp_from_a_root", "a-root")
+        .expect("record A response");
     storage
-        .insert_request_log_payload_manifest(&follow_up, None)
-        .expect("insert follow-up");
-
-    let current = storage
-        .find_request_log_payload_manifest("trc_2", "upstream")
-        .expect("read")
-        .expect("exists");
-    assert_eq!(current.previous_response_id.as_deref(), Some("resp_1"));
-    let predecessor = storage
-        .find_request_log_payload_predecessor(&current)
-        .expect("lookup")
-        .expect("predecessor exists");
-    assert_eq!(predecessor.trace_id, "trc_1");
-
+        .record_request_log_response_id("gk_shared", "resp_from_b", "b-unrelated")
+        .expect("record B response");
+    assert_eq!(
+        storage
+            .find_request_log_trace_for_response_id("gk_shared", "resp_from_a_root")
+            .unwrap(),
+        Some("a-root".to_string())
+    );
+    assert_eq!(
+        storage
+            .find_request_log_trace_for_response_id("gk_other", "resp_from_a_root")
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        storage
+            .find_request_log_trace_for_response_id("gk_shared", "resp_unknown")
+            .unwrap(),
+        None
+    );
+    // Even a guessed ID cannot be attached to a log belonging to another key.
+    storage
+        .record_request_log_response_id("gk_other", "resp_fake", "a-root")
+        .unwrap();
+    assert_eq!(
+        storage
+            .find_request_log_trace_for_response_id("gk_other", "resp_fake")
+            .unwrap(),
+        None
+    );
     storage.clear_request_log_payloads().expect("clear");
-    assert_eq!(count(&storage, "request_log_payload_manifests"), 0);
+    assert_eq!(count(&storage, "request_log_response_links"), 0);
+}
+
+#[test]
+fn clear_generation_and_retention_reject_stale_jobs_atomically() {
+    let storage = storage();
+    let before = storage
+        .request_log_payload_generation()
+        .expect("read generation");
+    let created = super::super::now_ts();
+    let mut full = manifest("trc_old", created, &["secret"]);
+    full.created_at = created;
+    let preview = super::super::RequestLogPayload {
+        trace_id: "trc_old".to_string(),
+        stage: PAYLOAD_STAGE_CLIENT.to_string(),
+        payload: "secret".to_string(),
+        payload_bytes: 6,
+        payload_truncated: false,
+        redacted: false,
+        body_hash: "hash-old".to_string(),
+        created_at: created,
+    };
+    storage.clear_request_logs().expect("clear");
+    assert!(!storage
+        .insert_request_log_payload_if_current(&preview, before)
+        .unwrap());
+    assert!(
+        !storage
+            .insert_request_log_payload_manifest_if_current(&full, None, before)
+            .unwrap()
+            .inserted
+    );
     assert_eq!(count(&storage, "request_log_payload_blobs"), 0);
+    let current = storage.request_log_payload_generation().unwrap();
+    assert!(storage
+        .insert_request_log_payload_if_current(&preview, current)
+        .unwrap());
+    assert!(
+        storage
+            .insert_request_log_payload_manifest_if_current(&full, None, current)
+            .unwrap()
+            .inserted
+    );
+    storage
+        .prune_request_logs_before(created + 1)
+        .expect("prune");
+    assert!(!storage
+        .insert_request_log_payload_if_current(&preview, current)
+        .unwrap());
+    assert!(
+        !storage
+            .insert_request_log_payload_manifest_if_current(&full, None, current)
+            .unwrap()
+            .inserted
+    );
+    assert_eq!(count(&storage, "request_log_payload_blobs"), 0);
+    assert_eq!(count(&storage, "request_log_payload_manifests"), 0);
+}
+
+#[test]
+fn request_payload_migrations_are_idempotent_and_keep_clear_generation() {
+    let storage = storage();
+    storage.clear_request_logs().expect("advance generation");
+    let generation = storage.request_log_payload_generation().unwrap();
+    assert_eq!(generation, 1);
+    storage
+        .init()
+        .expect("reapply migrations on existing database");
+    assert_eq!(
+        storage.request_log_payload_generation().unwrap(),
+        generation
+    );
+    assert_eq!(count(&storage, "request_log_upstream_attempts"), 0);
+    assert_eq!(count(&storage, "request_log_response_links"), 0);
+}
+
+#[test]
+fn attempt_metadata_uses_same_clear_and_retention_barriers() {
+    let storage = storage();
+    let created = super::super::now_ts();
+    let generation = storage.request_log_payload_generation().unwrap();
+    let attempt = RequestLogUpstreamAttempt {
+        trace_id: "trc_attempt".to_string(),
+        stage: "upstream:00000000000000000002".to_string(),
+        method: "POST".to_string(),
+        url: "http://127.0.0.1/v1/responses".to_string(),
+        transport: "http".to_string(),
+        content_encoding: None,
+        wire_sha256: "sample-hash".to_string(),
+        identical_to_client: false,
+        created_at: created,
+    };
+    assert!(storage
+        .record_request_log_upstream_attempt_if_current(&attempt, generation)
+        .unwrap());
+    assert_eq!(
+        storage
+            .list_request_log_upstream_attempt_stages("trc_attempt")
+            .unwrap(),
+        vec![attempt.stage.clone()]
+    );
+    assert_eq!(
+        storage
+            .find_request_log_upstream_attempt("trc_attempt", &attempt.stage)
+            .unwrap()
+            .unwrap()
+            .wire_sha256,
+        "sample-hash"
+    );
+    storage.clear_request_logs().unwrap();
+    assert!(storage
+        .list_request_log_upstream_attempt_stages("trc_attempt")
+        .unwrap()
+        .is_empty());
+    assert!(!storage
+        .record_request_log_upstream_attempt_if_current(&attempt, generation)
+        .unwrap());
+    let new_generation = storage.request_log_payload_generation().unwrap();
+    assert!(storage
+        .record_request_log_upstream_attempt_if_current(&attempt, new_generation)
+        .unwrap());
+    storage.prune_request_logs_before(created + 1).unwrap();
+    assert!(storage
+        .list_request_log_upstream_attempt_stages("trc_attempt")
+        .unwrap()
+        .is_empty());
+    assert!(!storage
+        .record_request_log_upstream_attempt_if_current(&attempt, new_generation)
+        .unwrap());
 }
 
 #[test]

@@ -18,12 +18,14 @@ use base64::Engine;
 use bytes::Bytes;
 use codexmanager_core::storage::{
     now_ts, RequestLogPayload, RequestLogPayloadManifestInput, RequestLogPayloadParentHint,
-    RequestLogPayloadPart, Storage, PAYLOAD_STAGE_CLIENT, PAYLOAD_STAGE_UPSTREAM,
+    RequestLogPayloadPart, RequestLogUpstreamAttempt, Storage, PAYLOAD_STAGE_CLIENT,
+    PAYLOAD_STAGE_UPSTREAM,
 };
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 /// Size cap of a stored preview when the preview mode is enabled.
 pub(crate) const REQUEST_LOG_PAYLOAD_PREVIEW_MAX_BYTES: usize = 16 * 1024;
@@ -41,6 +43,49 @@ const WRITER_QUEUE_CAPACITY: usize = 64;
 
 static REDACTION_ENABLED: AtomicBool = AtomicBool::new(true);
 static PREVIEW_ENABLED: AtomicBool = AtomicBool::new(true);
+static NEXT_ATTEMPT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static ATTEMPT_STAGES: OnceLock<Mutex<AttemptStages>> = OnceLock::new();
+const ATTEMPT_STAGES_CACHE_CAPACITY: usize = 65_536;
+
+#[derive(Default)]
+struct AttemptStages {
+    counts: HashMap<String, usize>,
+    order: VecDeque<String>,
+}
+
+fn stage_for_outbound_attempt(trace_id: &str) -> String {
+    let state = ATTEMPT_STAGES.get_or_init(|| Mutex::new(AttemptStages::default()));
+    let Ok(mut state) = state.lock() else {
+        return format!(
+            "upstream:{:020}",
+            NEXT_ATTEMPT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        );
+    };
+    let first = match state.counts.get_mut(trace_id) {
+        Some(count) => {
+            *count += 1;
+            false
+        }
+        None => {
+            state.counts.insert(trace_id.to_string(), 1);
+            state.order.push_back(trace_id.to_string());
+            if state.order.len() > ATTEMPT_STAGES_CACHE_CAPACITY {
+                if let Some(expired) = state.order.pop_front() {
+                    state.counts.remove(&expired);
+                }
+            }
+            true
+        }
+    };
+    if first {
+        PAYLOAD_STAGE_UPSTREAM.to_string()
+    } else {
+        format!(
+            "upstream:{:020}",
+            NEXT_ATTEMPT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        )
+    }
+}
 
 pub(crate) fn request_log_payload_redaction_enabled() -> bool {
     REDACTION_ENABLED.load(Ordering::Relaxed)
@@ -60,6 +105,21 @@ pub(crate) fn set_request_log_payload_preview_enabled(enabled: bool) -> bool {
     enabled
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OutboundPayloadContext<'a> {
+    pub trace_id: &'a str,
+    pub key_id: &'a str,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct OutboundAttemptCapture {
+    pub method: String,
+    pub url: String,
+    pub transport: String,
+    pub content_encoding: Option<String>,
+    pub wire_body: Bytes,
+}
+
 /// One captured request body plus the switches in effect when it was sent.
 #[derive(Debug, Clone)]
 pub(crate) struct RequestLogPayloadJob {
@@ -72,6 +132,9 @@ pub(crate) struct RequestLogPayloadJob {
     pub redact: bool,
     pub preview: bool,
     pub created_at: i64,
+    /// Snapshot taken before enqueue, checked against SQLite at commit time.
+    pub generation: i64,
+    pub attempt: Option<OutboundAttemptCapture>,
 }
 
 /// Build the conversation key used to find the parent request whose items
@@ -97,19 +160,29 @@ pub(crate) fn store_request_log_payload(
     stage: &str,
     body: &Bytes,
     conversation_key: Option<String>,
+    attempt: Option<OutboundAttemptCapture>,
 ) {
     let trace_id = trace_id.trim();
     if trace_id.is_empty() || crate::storage_helpers::seaorm_enabled() {
         return;
     }
+    let generation = match storage.request_log_payload_generation() {
+        Ok(generation) => generation,
+        Err(err) => {
+            log::warn!("event=request_log_payload_generation_failed trace_id={trace_id} err={err}");
+            return;
+        }
+    };
     let job = RequestLogPayloadJob {
         trace_id: trace_id.to_string(),
+        generation,
         stage: stage.to_string(),
         body: body.clone(),
         conversation_key,
         redact: request_log_payload_redaction_enabled(),
         preview: request_log_payload_preview_enabled(),
         created_at: now_ts(),
+        attempt,
     };
     #[cfg(test)]
     {
@@ -138,6 +211,52 @@ pub(crate) fn store_client_request_log_payload(
         PAYLOAD_STAGE_CLIENT,
         body,
         conversation_key,
+        None,
+    );
+}
+
+/// Called immediately before a transport submits the body, once per actual
+/// HTTP or WebSocket send (including retries). No stage is created for a
+/// rejected candidate that never reaches this call.
+pub(crate) fn capture_outbound_payload(
+    scope: OutboundPayloadContext<'_>,
+    method: &str,
+    target_url: &str,
+    transport: &str,
+    headers: &[(String, String)],
+    wire_body: &Bytes,
+    logical_body: Option<&Bytes>,
+) {
+    let Some(storage) = crate::storage_helpers::open_storage() else {
+        return;
+    };
+    let stage = stage_for_outbound_attempt(scope.trace_id);
+    let content_encoding = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-encoding"))
+        .map(|(_, value)| value.clone());
+    let safe_url = reqwest::Url::parse(target_url)
+        .map(|mut url| {
+            url.set_query(None);
+            url.set_fragment(None);
+            let _ = url.set_username("");
+            let _ = url.set_password(None);
+            url.to_string()
+        })
+        .unwrap_or_else(|_| "<invalid upstream URL>".to_string());
+    store_request_log_payload(
+        &storage,
+        scope.trace_id,
+        &stage,
+        logical_body.unwrap_or(wire_body),
+        Some(request_log_payload_conversation_key(scope.key_id, None)),
+        Some(OutboundAttemptCapture {
+            method: method.to_string(),
+            url: safe_url,
+            transport: transport.to_string(),
+            content_encoding,
+            wire_body: wire_body.clone(),
+        }),
     );
 }
 
@@ -150,14 +269,10 @@ fn bytes_hash(bytes: &[u8]) -> String {
     hash
 }
 
-fn text_hash(text: &str) -> String {
-    bytes_hash(text.as_bytes())
-}
-
 /// True when this is an upstream capture whose body was already stored as the
 /// client capture, i.e. the gateway forwarded the request unchanged.
 fn upstream_matches_client(storage: &Storage, job: &RequestLogPayloadJob, hash: &str) -> bool {
-    if job.stage != PAYLOAD_STAGE_UPSTREAM || hash.is_empty() {
+    if !job.stage.starts_with(PAYLOAD_STAGE_UPSTREAM) || hash.is_empty() {
         return false;
     }
     matches!(
@@ -181,19 +296,7 @@ fn payload_writer() -> &'static PayloadWriter {
         let (tx, rx) = std::sync::mpsc::sync_channel::<RequestLogPayloadJob>(WRITER_QUEUE_CAPACITY);
         let spawned = std::thread::Builder::new()
             .name("request-log-payload-writer".to_string())
-            .spawn(move || {
-                let mut cache = ParentCache::default();
-                for job in rx {
-                    let Some(storage) = crate::storage_helpers::open_storage() else {
-                        log::warn!(
-                            "event=request_log_payload_storage_unavailable trace_id={}",
-                            job.trace_id
-                        );
-                        continue;
-                    };
-                    persist_request_log_payload_with_cache(&storage, job, &mut cache);
-                }
-            });
+            .spawn(move || run_payload_writer(rx, crate::storage_helpers::open_storage, || {}));
         if let Err(err) = spawned {
             log::warn!("event=request_log_payload_writer_spawn_failed err={err}");
         }
@@ -202,6 +305,29 @@ fn payload_writer() -> &'static PayloadWriter {
             dropped: std::sync::atomic::AtomicU64::new(0),
         }
     })
+}
+
+fn run_payload_writer<F, S, H>(
+    rx: std::sync::mpsc::Receiver<RequestLogPayloadJob>,
+    mut open: F,
+    mut before_write: H,
+) where
+    F: FnMut() -> Option<S>,
+    S: std::ops::Deref<Target = Storage>,
+    H: FnMut(),
+{
+    let mut cache = ParentCache::default();
+    for job in rx {
+        before_write();
+        let Some(storage) = open() else {
+            log::warn!(
+                "event=request_log_payload_storage_unavailable trace_id={}",
+                job.trace_id
+            );
+            continue;
+        };
+        persist_request_log_payload_with_cache(&storage, job, &mut cache);
+    }
 }
 
 #[cfg(not(test))]
@@ -271,8 +397,9 @@ pub(crate) fn persist_request_log_payload_with_cache(
         let text = preview_payload_text(&job.body, job.redact);
         let (payload, truncated) =
             truncate_utf8_payload(&text, REQUEST_LOG_PAYLOAD_PREVIEW_MAX_BYTES);
-        let hash = text_hash(payload.as_str());
+        let hash = bytes_hash(&job.body);
         if upstream_matches_client(storage, &job, hash.as_str()) {
+            persist_attempt_metadata(storage, &job, true);
             return;
         }
         let record = RequestLogPayload {
@@ -285,12 +412,14 @@ pub(crate) fn persist_request_log_payload_with_cache(
             body_hash: hash,
             created_at: job.created_at,
         };
-        if let Err(err) = storage.insert_request_log_payload(&record) {
-            log::warn!(
+        match storage.insert_request_log_payload_if_current(&record, job.generation) {
+            Ok(true) => persist_attempt_metadata(storage, &job, false),
+            Ok(false) => {}
+            Err(err) => log::warn!(
                 "event=request_log_payload_insert_failed trace_id={} err={}",
                 job.trace_id,
                 err
-            );
+            ),
         }
         return;
     }
@@ -302,8 +431,15 @@ pub(crate) fn persist_request_log_payload_with_cache(
         .zip(input.list_field.as_ref())
         .map(|(conversation, field)| format!("{conversation}#{field}#{}", job.stage));
     let hint = cache_key.as_deref().and_then(|key| cache.get(key)).cloned();
-    match storage.insert_request_log_payload_manifest(&input, hint.as_ref()) {
+    match storage.insert_request_log_payload_manifest_if_current(
+        &input,
+        hint.as_ref(),
+        job.generation,
+    ) {
         Ok(write) => {
+            if write.inserted || write.identical_to_client {
+                persist_attempt_metadata(storage, &job, write.identical_to_client);
+            }
             if write.inserted {
                 if let Some(key) = cache_key {
                     cache.put(
@@ -324,6 +460,35 @@ pub(crate) fn persist_request_log_payload_with_cache(
                 err
             );
         }
+    }
+}
+
+fn persist_attempt_metadata(
+    storage: &Storage,
+    job: &RequestLogPayloadJob,
+    identical_to_client: bool,
+) {
+    let Some(attempt) = job.attempt.as_ref() else {
+        return;
+    };
+    let record = RequestLogUpstreamAttempt {
+        trace_id: job.trace_id.clone(),
+        stage: job.stage.clone(),
+        method: attempt.method.clone(),
+        url: attempt.url.clone(),
+        transport: attempt.transport.clone(),
+        content_encoding: attempt.content_encoding.clone(),
+        wire_sha256: bytes_hash(&attempt.wire_body),
+        identical_to_client,
+        created_at: job.created_at,
+    };
+    if let Err(err) =
+        storage.record_request_log_upstream_attempt_if_current(&record, job.generation)
+    {
+        log::warn!(
+            "event=request_log_attempt_insert_failed trace_id={} err={err}",
+            job.trace_id
+        );
     }
 }
 
@@ -426,9 +591,9 @@ pub(crate) fn sanitize_request_payload(body: &[u8]) -> String {
         return "<non-utf8 body omitted>".to_string();
     };
     match serde_json::from_str::<Value>(text) {
-        Ok(Value::Object(map)) => serde_json::to_string(&Value::Object(redact_object(map)))
+        Ok(value) => serde_json::to_string(&redact_sensitive_value("", value))
             .unwrap_or_else(|_| "<unserializable body omitted>".to_string()),
-        _ => text.to_string(),
+        Err(_) => text.to_string(),
     }
 }
 

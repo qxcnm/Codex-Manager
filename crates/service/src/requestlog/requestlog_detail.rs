@@ -1,6 +1,6 @@
 use codexmanager_core::rpc::types::{
-    RequestLogDetailContextSegment, RequestLogDetailField, RequestLogDetailParams,
-    RequestLogDetailResult,
+    RequestLogAttemptDetail, RequestLogDetailContextSegment, RequestLogDetailField,
+    RequestLogDetailParams, RequestLogDetailResult,
 };
 use codexmanager_core::storage::{RequestLogPayloadFull, Storage};
 
@@ -30,11 +30,12 @@ pub(crate) fn read_request_log_detail(
     if trace_id.is_empty() {
         return Err("trace_id must not be empty".to_string());
     }
+    let log_key_id = storage
+        .find_request_log_key_id_by_trace_id(trace_id)
+        .map_err(|err| format!("read request log owner failed: {err}"))?
+        .ok_or_else(|| "request log detail not found".to_string())?;
     if let Some(allowed_key_ids) = allowed_key_ids {
-        let log_key_id = storage
-            .find_request_log_key_id_by_trace_id(trace_id)
-            .map_err(|err| format!("read request log owner failed: {err}"))?;
-        let owned = log_key_id.flatten().is_some_and(|key_id| {
+        let owned = log_key_id.as_ref().is_some_and(|key_id| {
             allowed_key_ids
                 .iter()
                 .any(|allowed| allowed.eq_ignore_ascii_case(key_id.trim()))
@@ -45,34 +46,63 @@ pub(crate) fn read_request_log_detail(
     }
 
     let stages = available_request_log_payload_stages(storage, trace_id)?;
-    let finalize = |result: RequestLogDetailResult| RequestLogDetailResult {
-        stages: stages.clone(),
-        ..result
-    };
     for stage in candidate_stages(&stages, params.stage.as_deref()) {
-        let full = storage
-            .load_request_log_payload_full(trace_id, stage.as_str())
-            .map_err(|err| format!("read request log payload failed: {err}"))?;
-        if let Some(full) = full {
-            let context = load_previous_response_context(storage, &full)?;
-            return Ok(finalize(full_detail(full, context)));
-        }
-        let payload = storage
-            .find_request_log_payload_by_trace_id(trace_id, stage.as_str())
-            .map_err(|err| format!("read request log payload failed: {err}"))?;
-        if let Some(payload) = payload {
-            return Ok(finalize(RequestLogDetailResult {
-                trace_id: payload.trace_id,
-                stage: payload.stage,
-                storage_mode: "preview".to_string(),
-                payload: payload.payload,
-                payload_bytes: payload.payload_bytes,
-                payload_truncated: payload.payload_truncated,
-                redacted: payload.redacted,
-                created_at: payload.created_at,
-                complete: !payload.payload_truncated,
-                ..Default::default()
-            }));
+        let attempt = storage
+            .find_request_log_upstream_attempt(trace_id, stage.as_str())
+            .map_err(|err| format!("read request log attempt failed: {err}"))?;
+        let attempt_meta = attempt.as_ref().map(|attempt| RequestLogAttemptDetail {
+            method: attempt.method.clone(),
+            url: attempt.url.clone(),
+            transport: attempt.transport.clone(),
+            content_encoding: attempt.content_encoding.clone(),
+            wire_sha256: attempt.wire_sha256.clone(),
+            identical_to_client: attempt.identical_to_client,
+        });
+        // When the outbound body is identical to the client body it has no
+        // duplicate payload row, but it still has its own attempt metadata.
+        let lookup_stages = if attempt
+            .as_ref()
+            .is_some_and(|attempt| attempt.identical_to_client)
+        {
+            vec![
+                stage.as_str(),
+                codexmanager_core::storage::PAYLOAD_STAGE_CLIENT,
+            ]
+        } else {
+            vec![stage.as_str()]
+        };
+        for lookup_stage in lookup_stages {
+            let full = storage
+                .load_request_log_payload_full(trace_id, lookup_stage)
+                .map_err(|err| format!("read request log payload failed: {err}"))?;
+            if let Some(full) = full {
+                let context =
+                    load_previous_response_context(storage, &full, log_key_id.as_deref())?;
+                let mut result = full_detail(full, context);
+                result.stage = stage.clone();
+                result.stages = stages.clone();
+                result.attempt = attempt_meta.clone();
+                return Ok(result);
+            }
+            let payload = storage
+                .find_request_log_payload_by_trace_id(trace_id, lookup_stage)
+                .map_err(|err| format!("read request log payload failed: {err}"))?;
+            if let Some(payload) = payload {
+                return Ok(RequestLogDetailResult {
+                    trace_id: payload.trace_id,
+                    stage: stage.clone(),
+                    stages: stages.clone(),
+                    attempt: attempt_meta.clone(),
+                    storage_mode: "preview".to_string(),
+                    payload: payload.payload,
+                    payload_bytes: payload.payload_bytes,
+                    payload_truncated: payload.payload_truncated,
+                    redacted: payload.redacted,
+                    created_at: payload.created_at,
+                    complete: !payload.payload_truncated,
+                    ..Default::default()
+                });
+            }
         }
     }
     Err("request log detail not found".to_string())
@@ -94,6 +124,14 @@ fn available_request_log_payload_stages(
             stages.push(stage);
         }
     }
+    for stage in storage
+        .list_request_log_upstream_attempt_stages(trace_id)
+        .map_err(|err| format!("read request log attempt stages failed: {err}"))?
+    {
+        if !stages.contains(&stage) {
+            stages.push(stage);
+        }
+    }
     stages.sort();
     Ok(stages)
 }
@@ -105,18 +143,13 @@ fn candidate_stages(stages: &[String], requested: Option<&str>) -> Vec<String> {
     if let Some(requested) = requested.map(str::trim).filter(|value| !value.is_empty()) {
         return vec![requested.to_string()];
     }
-    let mut candidates = Vec::with_capacity(stages.len());
-    for preferred in [
-        codexmanager_core::storage::PAYLOAD_STAGE_UPSTREAM,
-        codexmanager_core::storage::PAYLOAD_STAGE_CLIENT,
-    ] {
-        if stages.iter().any(|stage| stage == preferred) {
-            candidates.push(preferred.to_string());
-        }
-    }
-    if candidates.is_empty() {
-        candidates.push(codexmanager_core::storage::PAYLOAD_STAGE_CLIENT.to_string());
-    }
+    let mut candidates: Vec<String> = stages
+        .iter()
+        .rev()
+        .filter(|stage| stage.starts_with(codexmanager_core::storage::PAYLOAD_STAGE_UPSTREAM))
+        .cloned()
+        .collect();
+    candidates.push(codexmanager_core::storage::PAYLOAD_STAGE_CLIENT.to_string());
     candidates
 }
 
@@ -129,6 +162,7 @@ fn full_detail(
         trace_id: manifest.trace_id,
         stage: manifest.stage.clone(),
         stages: Vec::new(),
+        attempt: None,
         storage_mode: "full".to_string(),
         payload: String::new(),
         payload_bytes: manifest.payload_bytes,
@@ -160,25 +194,65 @@ fn full_detail(
 fn load_previous_response_context(
     storage: &Storage,
     full: &RequestLogPayloadFull,
+    key_id: Option<&str>,
 ) -> Result<Vec<RequestLogDetailContextSegment>, String> {
     let mut segments = Vec::new();
-    if full.manifest.previous_response_id.is_none() {
+    let Some(key_id) = key_id else {
         return Ok(segments);
-    }
+    };
     let mut cursor = full.manifest.clone();
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(cursor.trace_id.clone());
     for _ in 0..MAX_CONTEXT_SEGMENTS {
-        let predecessor = storage
-            .find_request_log_payload_predecessor(&cursor)
+        let Some(response_id) = cursor.previous_response_id.as_deref() else {
+            break;
+        };
+        let predecessor_trace = storage
+            .find_request_log_trace_for_response_id(key_id, response_id)
             .map_err(|err| format!("read request log context failed: {err}"))?;
-        let Some(predecessor) = predecessor else {
+        let Some(predecessor_trace) = predecessor_trace else {
             break;
         };
-        let Some(previous) = storage
-            .load_request_log_payload_full(&predecessor.trace_id, cursor.stage.as_str())
-            .map_err(|err| format!("read request log context failed: {err}"))?
-        else {
+        if !seen.insert(predecessor_trace.clone()) {
+            break;
+        }
+        let previous_stages = if cursor
+            .stage
+            .starts_with(codexmanager_core::storage::PAYLOAD_STAGE_UPSTREAM)
+        {
+            let mut stages = storage
+                .list_request_log_upstream_attempt_stages(&predecessor_trace)
+                .map_err(|err| format!("read request log context failed: {err}"))?;
+            stages.sort();
+            stages.reverse();
+            stages.push(codexmanager_core::storage::PAYLOAD_STAGE_UPSTREAM.to_string());
+            stages.push(codexmanager_core::storage::PAYLOAD_STAGE_CLIENT.to_string());
+            stages
+        } else {
+            vec![codexmanager_core::storage::PAYLOAD_STAGE_CLIENT.to_string()]
+        };
+        let mut previous = None;
+        for stage in previous_stages {
+            previous = storage
+                .load_request_log_payload_full(&predecessor_trace, stage.as_str())
+                .map_err(|err| format!("read request log context failed: {err}"))?;
+            if previous.is_some() {
+                break;
+            }
+        }
+        let Some(previous) = previous else {
             break;
         };
+        // A concrete conversation ID must not cross to a different concrete
+        // session, even when a response ID happens to match.
+        if let (Some(current), Some(parent)) = (
+            cursor.conversation_key.as_deref(),
+            previous.manifest.conversation_key.as_deref(),
+        ) {
+            if !current.ends_with("|~") && !parent.ends_with("|~") && current != parent {
+                break;
+            }
+        }
         let continues = previous.manifest.previous_response_id.is_some();
         segments.push(RequestLogDetailContextSegment {
             trace_id: previous.manifest.trace_id.clone(),
@@ -328,9 +402,18 @@ mod tests {
     #[test]
     fn previous_response_id_continuation_stitches_conversation_context() {
         let storage = storage();
+        for trace_id in ["trc_root", "trc_cont_1", "trc_cont_2"] {
+            seed_trace(&storage, trace_id, Some("gk_admin"));
+        }
         seed_manifest(&storage, "trc_root", 100, None, &["\"u1\""]);
         seed_manifest(&storage, "trc_cont_1", 101, Some("resp_1"), &["\"u2\""]);
         seed_manifest(&storage, "trc_cont_2", 102, Some("resp_2"), &["\"u3\""]);
+        storage
+            .record_request_log_response_id("gk_admin", "resp_1", "trc_root")
+            .unwrap();
+        storage
+            .record_request_log_response_id("gk_admin", "resp_2", "trc_cont_1")
+            .unwrap();
         let detail = read_request_log_detail(&storage, &params("trc_cont_2"), None)
             .expect("continuation detail succeeds");
         assert_eq!(detail.previous_response_id.as_deref(), Some("resp_2"));
@@ -342,6 +425,126 @@ mod tests {
         assert_eq!(traces, vec!["trc_root", "trc_cont_1"]);
         assert_eq!(detail.context[0].items, vec!["\"u1\""]);
         assert_eq!(detail.items, vec!["\"u3\""]);
+    }
+
+    #[test]
+    fn continuation_ignores_more_recent_unrelated_trace() {
+        let storage = storage();
+        for trace in ["a_root", "b_unrelated", "a_continue"] {
+            seed_trace(&storage, trace, Some("gk_admin"));
+        }
+        seed_manifest(&storage, "a_root", 100, None, &["\"A\""]);
+        seed_manifest(&storage, "b_unrelated", 101, None, &["\"B\""]);
+        seed_manifest(
+            &storage,
+            "a_continue",
+            102,
+            Some("resp_from_a"),
+            &["\"A-next\""],
+        );
+        storage
+            .record_request_log_response_id("gk_admin", "resp_from_a", "a_root")
+            .unwrap();
+        storage
+            .record_request_log_response_id("gk_admin", "resp_from_b", "b_unrelated")
+            .unwrap();
+        let detail = read_request_log_detail(&storage, &params("a_continue"), None).unwrap();
+        assert_eq!(detail.context.len(), 1);
+        assert_eq!(detail.context[0].trace_id, "a_root");
+        assert_eq!(detail.context[0].items, vec!["\"A\""]);
+
+        // Unknown response IDs have no guessed predecessor, even though B
+        // happens to be the nearest row for this key.
+        seed_trace(&storage, "unknown", Some("gk_admin"));
+        seed_manifest(&storage, "unknown", 103, Some("resp_unknown"), &["\"new\""]);
+        assert!(read_request_log_detail(&storage, &params("unknown"), None)
+            .unwrap()
+            .context
+            .is_empty());
+    }
+
+    #[test]
+    fn response_link_does_not_cross_concrete_sessions() {
+        let storage = storage();
+        seed_trace(&storage, "trc_session_a", Some("gk_admin"));
+        seed_trace(&storage, "trc_session_b", Some("gk_admin"));
+        seed_manifest(&storage, "trc_session_a", 100, None, &["\"session A\""]);
+        storage
+            .record_request_log_response_id("gk_admin", "resp_from_session_a", "trc_session_a")
+            .unwrap();
+        let mut current = RequestLogPayloadManifestInput {
+            trace_id: "trc_session_b".to_string(),
+            stage: codexmanager_core::storage::PAYLOAD_STAGE_UPSTREAM.to_string(),
+            body_hash: "hash-session-b".to_string(),
+            body_kind: "json_list".to_string(),
+            list_field: Some("input".to_string()),
+            conversation_key: Some("gk_admin|different-session".to_string()),
+            previous_response_id: Some("resp_from_session_a".to_string()),
+            payload_bytes: 42,
+            redacted: false,
+            created_at: 101,
+            fields: Vec::new(),
+            items: vec![part("\"session B\"")],
+        };
+        storage
+            .insert_request_log_payload_manifest(&current, None)
+            .unwrap();
+        assert!(
+            read_request_log_detail(&storage, &params("trc_session_b"), None)
+                .unwrap()
+                .context
+                .is_empty()
+        );
+        current.trace_id = "trc_session_other_key".to_string();
+        current.conversation_key = Some("gk_other|different-session".to_string());
+        seed_trace(&storage, &current.trace_id, Some("gk_other"));
+        storage
+            .insert_request_log_payload_manifest(&current, None)
+            .unwrap();
+        assert!(
+            read_request_log_detail(&storage, &params("trc_session_other_key"), None)
+                .unwrap()
+                .context
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn detail_defaults_to_last_attempt_and_only_reuses_verified_client_body() {
+        use codexmanager_core::storage::RequestLogUpstreamAttempt;
+        let storage = storage();
+        seed_trace(&storage, "trc_attempts", Some("gk_admin"));
+        seed_payload(&storage, "trc_attempts");
+        let old_stage = "upstream";
+        let latest_stage = "upstream:00000000000000000002";
+        for (stage, identical) in [(old_stage, false), (latest_stage, true)] {
+            let record = RequestLogUpstreamAttempt {
+                trace_id: "trc_attempts".into(),
+                stage: stage.into(),
+                method: "POST".into(),
+                url: "http://127.0.0.1/v1/responses".into(),
+                transport: "http".into(),
+                content_encoding: None,
+                wire_sha256: "mock-wire-hash".into(),
+                identical_to_client: identical,
+                created_at: codexmanager_core::storage::now_ts(),
+            };
+            storage
+                .record_request_log_upstream_attempt_if_current(&record, 0)
+                .unwrap();
+        }
+        let detail = read_request_log_detail(&storage, &params("trc_attempts"), None).unwrap();
+        assert_eq!(detail.stage, latest_stage);
+        assert_eq!(detail.payload, "{\"model\":\"gpt-6-astra\"}");
+        assert!(detail.attempt.as_ref().unwrap().identical_to_client);
+        assert_eq!(detail.stages.len(), 3);
+        let not_same = read_request_log_detail(
+            &storage,
+            &params_with_stage("trc_attempts", old_stage),
+            None,
+        )
+        .expect_err("unverified upstream body must not be represented by client body");
+        assert_eq!(not_same, "request log detail not found");
     }
 
     #[test]

@@ -488,7 +488,6 @@ fn decode_base64_header_value(input: &[u8]) -> Option<Vec<u8>> {
 
     Some(output)
 }
-pub(crate) use codexmanager_core::storage::{PAYLOAD_STAGE_CLIENT, PAYLOAD_STAGE_UPSTREAM};
 pub(super) use incoming_headers::IncomingHeaderSnapshot;
 use local_count_tokens::maybe_respond_local_count_tokens;
 use local_models::maybe_respond_local_models;
@@ -501,10 +500,10 @@ use request_gate::request_gate_lock;
 use request_gate::RequestGateAcquireError;
 pub(crate) use request_log::write_request_log;
 pub(crate) use request_log_payload::{
-    request_log_payload_conversation_key, request_log_payload_preview_enabled,
-    request_log_payload_redaction_enabled, set_request_log_payload_preview_enabled,
-    set_request_log_payload_redaction_enabled, store_client_request_log_payload,
-    store_request_log_payload,
+    capture_outbound_payload, request_log_payload_conversation_key,
+    request_log_payload_preview_enabled, request_log_payload_redaction_enabled,
+    set_request_log_payload_preview_enabled, set_request_log_payload_redaction_enabled,
+    store_client_request_log_payload, OutboundPayloadContext,
 };
 use route_hint::{apply_route_strategy, apply_route_strategy_with_source};
 use route_quality::record_route_quality;

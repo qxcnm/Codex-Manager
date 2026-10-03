@@ -26,6 +26,92 @@ fn stage_job(
         redact,
         preview,
         created_at: 1_700_000_000,
+        generation: 0,
+        attempt: None,
+    }
+}
+
+#[test]
+fn paused_real_writer_cannot_restore_cleared_payloads() {
+    use codexmanager_core::rpc::types::RequestLogDetailParams;
+    use codexmanager_core::storage::{RequestLog, RequestTokenStat};
+    use std::sync::mpsc::sync_channel;
+    use std::time::Duration;
+
+    for preview in [true, false] {
+        let storage = storage();
+        let trace_id = if preview {
+            "trc_stale_preview"
+        } else {
+            "trc_stale_full"
+        };
+        storage
+            .insert_request_log_with_token_stat(
+                &RequestLog {
+                    trace_id: Some(trace_id.to_string()),
+                    key_id: Some("gk_test".to_string()),
+                    request_path: "/v1/responses".to_string(),
+                    method: "POST".to_string(),
+                    created_at: now_ts(),
+                    ..Default::default()
+                },
+                &RequestTokenStat::default(),
+            )
+            .expect("seed log");
+        let (tx, rx) = sync_channel(2);
+        let (ready_tx, ready_rx) = sync_channel(0);
+        let (release_tx, release_rx) = sync_channel(0);
+        let writer_storage = storage.shared_handle();
+        let writer = std::thread::spawn(move || {
+            run_payload_writer(
+                rx,
+                || Some(Box::new(writer_storage.shared_handle())),
+                || {
+                    ready_tx.send(()).expect("report pause");
+                    release_rx.recv().expect("resume writer");
+                },
+            );
+        });
+        let mut queued = stage_job(
+            trace_id,
+            br#"{"input":[{"role":"user","content":"before clear"}]}"#,
+            false,
+            preview,
+            PAYLOAD_STAGE_CLIENT,
+        );
+        queued.created_at = now_ts();
+        queued.generation = storage.request_log_payload_generation().unwrap();
+        tx.send(queued).unwrap();
+        ready_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("writer paused");
+        storage
+            .clear_request_logs()
+            .expect("clear while job is paused");
+        release_tx.send(()).unwrap();
+        drop(tx);
+        writer.join().expect("writer finished");
+        assert!(storage
+            .find_request_log_payload_by_trace_id(trace_id, PAYLOAD_STAGE_CLIENT)
+            .unwrap()
+            .is_none());
+        assert!(storage
+            .find_request_log_payload_manifest(trace_id, PAYLOAD_STAGE_CLIENT)
+            .unwrap()
+            .is_none());
+        assert_eq!(storage.request_log_payload_generation().unwrap(), 1);
+        assert_eq!(
+            crate::requestlog::detail::read_request_log_detail(
+                &storage,
+                &RequestLogDetailParams {
+                    trace_id: trace_id.to_string(),
+                    stage: None
+                },
+                None,
+            )
+            .expect_err("cleared trace not visible"),
+            "request log detail not found"
+        );
     }
 }
 
@@ -40,6 +126,26 @@ fn payload_sanitizer_redacts_credential_like_keys() {
     assert_eq!(parsed["nested"]["client_secret"], "[REDACTED]");
     assert_eq!(parsed["nested"]["max_tokens"], 128);
     assert_eq!(parsed["refreshToken"], "[REDACTED]");
+}
+
+#[test]
+fn preview_redacts_root_array_before_rejected_request_can_be_logged() {
+    let storage = storage();
+    let body = br#"[{"api_key":"sk-dummy-secret","nested":{"password":"dummy-password"}}]"#;
+    persist_request_log_payload(
+        &storage,
+        stage_job("trc_rejected_array", body, true, true, PAYLOAD_STAGE_CLIENT),
+    );
+    let stored = storage
+        .find_request_log_payload_by_trace_id("trc_rejected_array", PAYLOAD_STAGE_CLIENT)
+        .expect("load preview")
+        .expect("capture before request validation");
+    let parsed: Value = serde_json::from_str(&stored.payload).expect("valid array");
+    assert_eq!(parsed[0]["api_key"], "[REDACTED]");
+    assert_eq!(parsed[0]["nested"]["password"], "[REDACTED]");
+    assert!(!stored.payload.contains("sk-dummy-secret"));
+    assert!(!stored.payload.contains("dummy-password"));
+    assert!(stored.redacted);
 }
 
 #[test]
@@ -178,6 +284,39 @@ fn full_mode_stores_untruncated_body_and_shares_conversation_prefix() {
         .find(|(name, _)| name == "api_key")
         .map(|(_, value)| value.as_str());
     assert_eq!(api_key, Some("\"sk-secret\""));
+}
+
+#[test]
+fn cached_parent_is_not_reused_after_retention_pruning() {
+    let storage = storage();
+    let mut cache = ParentCache::default();
+    let mut earlier = job(
+        "trc_earlier",
+        br#"{"input":[{"role":"user","content":"old"}]}"#,
+        false,
+        false,
+    );
+    let cutoff = now_ts() - 30;
+    earlier.created_at = cutoff - 1;
+    persist_request_log_payload_with_cache(&storage, earlier, &mut cache);
+    storage
+        .prune_request_logs_before(cutoff)
+        .expect("retention prune");
+    let mut later = job(
+        "trc_later",
+        br#"{"input":[{"role":"user","content":"old"},{"role":"user","content":"new"}]}"#,
+        false,
+        false,
+    );
+    later.created_at = cutoff + 1;
+    persist_request_log_payload_with_cache(&storage, later, &mut cache);
+    let full = storage
+        .load_request_log_payload_full("trc_later", PAYLOAD_STAGE_UPSTREAM)
+        .expect("read payload")
+        .expect("later request kept");
+    assert!(full.complete);
+    assert!(full.manifest.parent_trace_id.is_none());
+    assert_eq!(full.items.len(), 2);
 }
 
 #[test]

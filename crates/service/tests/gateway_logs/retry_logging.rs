@@ -142,6 +142,41 @@ fn gateway_stateless_retry_strips_encrypted_content_on_invalid_encrypted_content
         second_body.get("encrypted_content").is_none(),
         "stateless retry must drop org-scoped encrypted_content field"
     );
+    let trace_id = storage
+        .list_request_logs(Some("key:=gk_retry_strip_encrypted_content"), 10)
+        .expect("list request logs")
+        .into_iter()
+        .find_map(|log| log.trace_id)
+        .expect("retry trace id");
+    let attempts = wait_for_upstream_attempts(&storage, &trace_id, 2);
+    assert_eq!(attempts.len(), 2);
+    for (index, (attempt, mock_body)) in
+        attempts.iter().zip([&first.body, &second.body]).enumerate()
+    {
+        assert_eq!(
+            attempt.wire_sha256,
+            format!("{:x}", Sha256::digest(mock_body)),
+            "attempt {} wire bytes",
+            index + 1
+        );
+        let payload_stage = if attempt.identical_to_client {
+            codexmanager_core::storage::PAYLOAD_STAGE_CLIENT
+        } else {
+            attempt.stage.as_str()
+        };
+        let captured = storage
+            .find_request_log_payload_by_trace_id(&trace_id, payload_stage)
+            .expect("read retry payload")
+            .expect("retry payload persisted");
+        let actual = serde_json::from_str::<serde_json::Value>(&captured.payload).unwrap();
+        let expected = serde_json::from_slice::<serde_json::Value>(mock_body).unwrap();
+        assert_eq!(
+            actual,
+            expected,
+            "attempt {} body differs from mock upstream",
+            index + 1
+        );
+    }
 }
 
 /// 函数 `gateway_request_log_keeps_only_final_result_for_multi_attempt_flow`

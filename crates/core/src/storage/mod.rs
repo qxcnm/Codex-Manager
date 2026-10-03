@@ -59,6 +59,7 @@ pub use proxy_profiles::derive_proxy_profile_url_metadata;
 pub use request_log_payload_store::{
     RequestLogPayloadFull, RequestLogPayloadManifest, RequestLogPayloadManifestInput,
     RequestLogPayloadManifestWrite, RequestLogPayloadParentHint, RequestLogPayloadPart,
+    RequestLogUpstreamAttempt,
 };
 pub use reset_credit_operations::{
     ResetCreditOperation, ResetCreditOperationClaim, ResetCreditOperationStatus,
@@ -2359,6 +2360,10 @@ impl Storage {
         self.apply_sql_migration(
             "140_request_log_payload_store",
             include_str!("../../migrations/140_request_log_payload_store.sql"),
+        )?;
+        self.apply_sql_migration(
+            "141_request_log_response_links",
+            include_str!("../../migrations/141_request_log_response_links.sql"),
         )?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_api_key_account_group_filter_column()?;

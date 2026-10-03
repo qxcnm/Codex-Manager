@@ -232,6 +232,7 @@ struct WebsocketTarget {
 
 struct PendingWsRequestLog {
     trace_id: String,
+    completed_response_id: Option<String>,
     route_strategy: Option<String>,
     route_source: Option<String>,
     client_model: Option<String>,
@@ -1201,6 +1202,10 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
 
                             if let Some(mut pending) = pending_request.take() {
                                 if terminal.status_code == 200 {
+                                    pending.log.completed_response_id = serde_json::from_str::<Value>(&text)
+                                        .ok()
+                                        .and_then(|event| event.get("response")?.get("id")?.as_str().map(str::to_string))
+                                        .filter(|id| id.starts_with("resp_") && id != "resp_proxy");
                                     cache_completed_ws_response(
                                         &mut completed_responses,
                                         &pending.prepared,
@@ -3393,6 +3398,7 @@ fn begin_ws_request_log(
     );
     PendingWsRequestLog {
         trace_id,
+        completed_response_id: None,
         route_strategy: Some(route_strategy.to_string()),
         route_source: Some(route_source.to_string()),
         client_model: prepared.client_model.clone(),
@@ -3609,6 +3615,20 @@ fn finalize_ws_request_log(
         error.as_deref(),
         Some(pending.started_at.elapsed().as_millis()),
     );
+    if status_code == 200 {
+        if let Some(response_id) = pending.completed_response_id.as_deref() {
+            if let Err(err) = storage.record_request_log_response_id(
+                context.api_key.id.as_str(),
+                response_id,
+                pending.trace_id.as_str(),
+            ) {
+                log::warn!(
+                    "event=request_log_response_id_insert_failed trace_id={} err={err}",
+                    pending.trace_id
+                );
+            }
+        }
+    }
     crate::gateway::log_request_final(
         pending.trace_id.as_str(),
         status_code,

@@ -336,6 +336,7 @@ pub(super) async fn handle_openai_fallback_branch<F>(
     status: reqwest::StatusCode,
     upstream_content_type: Option<&HeaderValue>,
     has_more_candidates: bool,
+    capture: Option<super::super::super::OutboundPayloadContext<'_>>,
     mut log_gateway_result: F,
 ) -> FallbackBranchResult
 where
@@ -380,6 +381,7 @@ where
         token,
         strip_session_affinity,
         debug,
+        capture,
     )
     .await
     {

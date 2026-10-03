@@ -528,6 +528,18 @@ pub(super) fn merge_usage_from_body_without_output_text(
         return;
     };
     let mut parsed_usage = parse_usage_from_json(&value);
+    if value.get("object").and_then(Value::as_str) == Some("response")
+        && value
+            .get("status")
+            .and_then(Value::as_str)
+            .is_none_or(|status| status == "completed")
+    {
+        parsed_usage.response_id = value
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| id.starts_with("resp_") && *id != "resp_proxy")
+            .map(str::to_string);
+    }
     parsed_usage.output_text = None;
     merge_usage(usage, parsed_usage);
 }

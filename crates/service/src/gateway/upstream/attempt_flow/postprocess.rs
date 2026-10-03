@@ -775,6 +775,7 @@ where
             status,
             upstream_content_type,
             has_more_candidates,
+            current_request_ctx.capture,
             &mut log_gateway_result,
         )
         .await

@@ -1630,7 +1630,11 @@ function asOptionalText(value: unknown): string | null {
 }
 
 function normalizeRequestLogDetailStage(value: unknown): RequestLogDetailStage {
-  return asString(value) === "client" ? "client" : "upstream";
+  const stage = asString(value);
+  if (stage === "client" || stage === "upstream" || /^upstream:\d{20}$/.test(stage)) {
+    return stage as RequestLogDetailStage;
+  }
+  return "client";
 }
 
 export function normalizeRequestLogDetail(payload: unknown): RequestLogDetail {
@@ -1642,6 +1646,17 @@ export function normalizeRequestLogDetail(payload: unknown): RequestLogDetail {
     stages: asArray(source.stages)
       .map((item) => normalizeRequestLogDetailStage(item))
       .filter((stage, index, list) => list.indexOf(stage) === index),
+    attempt: source.attempt == null ? null : (() => {
+      const attempt = asObject(source.attempt);
+      return {
+        method: asString(attempt.method),
+        url: asString(attempt.url),
+        transport: asString(attempt.transport),
+        contentEncoding: asOptionalText(attempt.contentEncoding ?? attempt.content_encoding),
+        wireSha256: asString(attempt.wireSha256 ?? attempt.wire_sha256),
+        identicalToClient: asBoolean(attempt.identicalToClient ?? attempt.identical_to_client),
+      };
+    })(),
     storageMode: storageMode === "full" ? "full" : "preview",
     payload: asRawText(source.payload),
     payloadBytes: asInteger(source.payloadBytes ?? source.payload_bytes, 0, 0),

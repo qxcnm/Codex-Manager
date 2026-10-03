@@ -93,7 +93,16 @@ export interface RequestLogDetailContextSegment {
   items: string[];
 }
 
-export type RequestLogDetailStage = "client" | "upstream";
+export type RequestLogDetailStage = "client" | "upstream" | `upstream:${string}`;
+
+export interface RequestLogAttemptDetail {
+  method: string;
+  url: string;
+  transport: string;
+  contentEncoding: string | null;
+  wireSha256: string;
+  identicalToClient: boolean;
+}
 
 export interface RequestLogDetail {
   traceId: string;
@@ -101,6 +110,7 @@ export interface RequestLogDetail {
   stage: RequestLogDetailStage;
   /** Capture stages stored for this trace, e.g. ["client"] or ["client", "upstream"]. */
   stages: RequestLogDetailStage[];
+  attempt: RequestLogAttemptDetail | null;
   /** preview: 16 KB capped text in `payload`; full: rebuilt from fields + items. */
   storageMode: RequestLogDetailStorageMode;
   payload: string;

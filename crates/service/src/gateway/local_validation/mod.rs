@@ -52,6 +52,8 @@ pub(super) struct LocalValidationResult {
 pub(super) struct LocalValidationError {
     pub(super) status_code: u16,
     pub(super) message: String,
+    /// Populated only after an API key has been authenticated.
+    pub(super) key_id: Option<String>,
 }
 
 impl LocalValidationError {
@@ -70,6 +72,7 @@ impl LocalValidationError {
         Self {
             status_code,
             message: message.into(),
+            key_id: None,
         }
     }
 }
@@ -126,6 +129,7 @@ pub(super) fn prepare_local_request(
         )),
     );
 
+    let key_id = api_key.id.clone();
     request::build_local_validation_result(
         request,
         trace_id,
@@ -134,4 +138,8 @@ pub(super) fn prepare_local_request(
         body,
         api_key,
     )
+    .map_err(|mut error| {
+        error.key_id = Some(key_id);
+        error
+    })
 }

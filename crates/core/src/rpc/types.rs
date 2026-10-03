@@ -1595,6 +1595,10 @@ pub struct RequestLogDetailResult {
     /// Capture stages available for this trace, e.g. `["client"]` or
     /// `["client", "upstream"]`.
     pub stages: Vec<String>,
+    /// Present for outbound attempts. `wire_sha256` is the hash of the
+    /// transmitted bytes; when compressed, the payload view is the decoded
+    /// logical JSON and `content_encoding` states the wire encoding.
+    pub attempt: Option<RequestLogAttemptDetail>,
     pub storage_mode: String,
     pub payload: String,
     pub payload_bytes: i64,
@@ -1610,6 +1614,17 @@ pub struct RequestLogDetailResult {
     pub parent_trace_id: Option<String>,
     pub previous_response_id: Option<String>,
     pub context: Vec<RequestLogDetailContextSegment>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RequestLogAttemptDetail {
+    pub method: String,
+    pub url: String,
+    pub transport: String,
+    pub content_encoding: Option<String>,
+    pub wire_sha256: String,
+    pub identical_to_client: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

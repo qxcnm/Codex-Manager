@@ -145,6 +145,7 @@ pub(in super::super) struct UpstreamRequestContext<'a> {
     pub(in super::super) request_path: &'a str,
     pub(in super::super) protocol_type: &'a str,
     pub(in super::super) is_fedramp: bool,
+    pub(in super::super) capture: Option<super::super::super::OutboundPayloadContext<'a>>,
 }
 
 impl<'a> UpstreamRequestContext<'a> {
@@ -164,7 +165,16 @@ impl<'a> UpstreamRequestContext<'a> {
             request_path: request.url(),
             protocol_type,
             is_fedramp: false,
+            capture: None,
         }
+    }
+
+    pub(in super::super) fn with_capture(
+        mut self,
+        capture: super::super::super::OutboundPayloadContext<'a>,
+    ) -> Self {
+        self.capture = Some(capture);
+        self
     }
 
     pub(in super::super) fn with_fedramp(mut self, is_fedramp: bool) -> Self {
@@ -717,6 +727,7 @@ pub(in crate::gateway) fn send_async_stream_request(
     ))
 }
 
+#[cfg(test)]
 pub(in crate::gateway) async fn send_stream_request(
     client: &reqwest::Client,
     method: &reqwest::Method,
@@ -727,6 +738,36 @@ pub(in crate::gateway) async fn send_stream_request(
     request_body: &Bytes,
     is_stream: bool,
 ) -> Result<super::super::GatewayStreamResponse, AsyncStreamRequestError> {
+    send_stream_request_with_capture(
+        client,
+        method,
+        target_url,
+        request_path,
+        request_deadline,
+        request_headers,
+        request_body,
+        is_stream,
+        None,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::gateway) async fn send_stream_request_with_capture(
+    client: &reqwest::Client,
+    method: &reqwest::Method,
+    target_url: &str,
+    request_path: &str,
+    request_deadline: Option<Instant>,
+    request_headers: &[(String, String)],
+    request_body: &Bytes,
+    is_stream: bool,
+    capture: Option<super::super::super::OutboundPayloadContext<'_>>,
+    logical_body: Option<&Bytes>,
+) -> Result<super::super::GatewayStreamResponse, AsyncStreamRequestError> {
+    let logical_body = logical_body.cloned();
+    let capture = capture.map(|scope| (scope.trace_id.to_string(), scope.key_id.to_string()));
     let client = client.clone();
     let method = method.clone();
     let target_url = target_url.to_string();
@@ -740,6 +781,17 @@ pub(in crate::gateway) async fn send_stream_request(
     // drops the cancellation sender and cancels the network task too.
     let body = super::super::GatewayByteStream::from_receiver_with_cancel(body_rx, Some(cancel_tx));
     runtime::spawn_http_worker(async move {
+        if let Some((trace_id, key_id)) = capture.as_ref() {
+            super::super::super::capture_outbound_payload(
+                super::super::super::OutboundPayloadContext { trace_id, key_id },
+                method.as_str(),
+                target_url.as_str(),
+                "http",
+                &request_headers,
+                &request_body,
+                logical_body.as_ref(),
+            );
+        }
         let mut builder = client.request(method, target_url);
         let send_timeout =
             super::super::support::deadline::send_timeout(request_deadline, is_stream);
@@ -1210,12 +1262,13 @@ async fn send_upstream_request_with_compression_override(
         // Always pass the *uncompressed* body and headers to the WebSocket path.
         // chatgpt.com's WebSocket endpoint expects a JSON (UTF-8) body; a
         // zstd/gzip-compressed body would fail UTF-8 validation and fall back.
-        match send_websocket_upstream_request(
+        match send_websocket_upstream_request_with_capture(
             target_url,
             account.id.as_str(),
             request_deadline,
             upstream_headers_uncompressed.as_slice(),
             &body_for_transport,
+            request_ctx.capture,
         )
         .await
         {
@@ -1256,7 +1309,7 @@ async fn send_upstream_request_with_compression_override(
     let result = if let Some(r) = ws_early_result {
         Ok(r)
     } else {
-        match send_stream_request(
+        match send_stream_request_with_capture(
             client,
             method,
             target_url,
@@ -1265,6 +1318,8 @@ async fn send_upstream_request_with_compression_override(
             upstream_headers.as_slice(),
             &body_for_request,
             is_stream,
+            request_ctx.capture,
+            Some(&body_for_transport),
         )
         .await
         {
@@ -1289,7 +1344,7 @@ async fn send_upstream_request_with_compression_override(
                         target_url,
                         first_err
                     );
-                    match send_stream_request(
+                    match send_stream_request_with_capture(
                         &fresh_async,
                         method,
                         target_url,
@@ -1298,6 +1353,8 @@ async fn send_upstream_request_with_compression_override(
                         upstream_headers_uncompressed.as_slice(),
                         &body_for_transport,
                         is_stream,
+                        request_ctx.capture,
+                        None,
                     )
                     .await
                     {
@@ -1323,7 +1380,7 @@ async fn send_upstream_request_with_compression_override(
                         }
                     }
                 } else {
-                    match send_stream_request(
+                    match send_stream_request_with_capture(
                         &fresh_async,
                         method,
                         target_url,
@@ -1332,6 +1389,8 @@ async fn send_upstream_request_with_compression_override(
                         upstream_headers.as_slice(),
                         &body_for_request,
                         is_stream,
+                        request_ctx.capture,
+                        Some(&body_for_transport),
                     )
                     .await
                     {
@@ -1533,6 +1592,7 @@ fn websocket_upstream_request_text_from_http_body(
         .map_err(|err| format!("serialize WebSocket response.create payload failed: {err}"))
 }
 
+#[cfg(test)]
 async fn send_websocket_upstream_request(
     target_url: &str,
     account_id: &str,
@@ -1540,7 +1600,27 @@ async fn send_websocket_upstream_request(
     request_headers: &[(String, String)],
     request_body: &Bytes,
 ) -> Result<super::super::GatewayStreamResponse, String> {
+    send_websocket_upstream_request_with_capture(
+        target_url,
+        account_id,
+        request_deadline,
+        request_headers,
+        request_body,
+        None,
+    )
+    .await
+}
+
+async fn send_websocket_upstream_request_with_capture(
+    target_url: &str,
+    account_id: &str,
+    request_deadline: Option<Instant>,
+    request_headers: &[(String, String)],
+    request_body: &Bytes,
+    capture: Option<super::super::super::OutboundPayloadContext<'_>>,
+) -> Result<super::super::GatewayStreamResponse, String> {
     let body_text = websocket_upstream_request_text_from_http_body(request_body)?;
+    let capture = capture.map(|scope| (scope.trace_id.to_string(), scope.key_id.to_string()));
 
     let ws_url = if target_url.starts_with("https://") {
         format!("wss://{}", &target_url["https://".len()..])
@@ -1602,8 +1682,20 @@ async fn send_websocket_upstream_request(
                         tokio::time::Instant::now() + WEBSOCKET_UPSTREAM_HEARTBEAT_INTERVAL,
                         WEBSOCKET_UPSTREAM_HEARTBEAT_INTERVAL,
                     );
-                    // body_text was pre-validated as UTF-8 before this task was spawned.
+                    // body_text is the final WebSocket response.create frame.
                     if let Some(text) = body_text {
+                        if let Some((trace_id, key_id)) = capture.as_ref() {
+                            let sent_body = Bytes::from(text.clone());
+                            super::super::super::capture_outbound_payload(
+                                super::super::super::OutboundPayloadContext { trace_id, key_id },
+                                "WS",
+                                ws_url.as_str(),
+                                "websocket",
+                                &request_headers,
+                                &sent_body,
+                                None,
+                            );
+                        }
                         let send_result = tokio::select! {
                             _ = &mut cancel_rx => return,
                             result = ws_stream.send(Message::Text(text.into())) => result,

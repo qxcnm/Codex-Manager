@@ -254,6 +254,23 @@ impl Storage {
         Ok(())
     }
 
+    /// Insert only if the job predates neither the last clear nor retention
+    /// pruning. A single write transaction makes check+write atomic with
+    /// clear/prune from another SQLite connection.
+    pub fn insert_request_log_payload_if_current(
+        &self,
+        payload: &RequestLogPayload,
+        generation: i64,
+    ) -> Result<bool> {
+        let tx = self.conn.unchecked_transaction()?;
+        if !self.request_log_payload_job_is_current(generation, payload.created_at)? {
+            return Ok(false);
+        }
+        self.insert_request_log_payload(payload)?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     /// Load the stored payload preview for a trace. Returns `None` when the
     /// table has not been created yet or no preview was captured.
     pub fn find_request_log_payload_by_trace_id(
@@ -326,7 +343,7 @@ impl Storage {
     ) -> Result<Option<Option<String>>> {
         self.conn
             .query_row(
-                "SELECT key_id FROM request_logs WHERE trace_id = ?1 ORDER BY id DESC LIMIT 1",
+                "SELECT key_id FROM request_logs WHERE trace_id = ?1 AND cleared_at IS NULL ORDER BY id DESC LIMIT 1",
                 [trace_id],
                 |row| row.get::<_, Option<String>>(0),
             )
@@ -700,6 +717,7 @@ impl Storage {
     pub fn clear_request_logs(&self) -> Result<()> {
         // 中文注释：先把状态计数写入 hourly rollup，再移除可浏览请求明细，避免清日志后仪表盘成功率丢失。
         let rolled_up = self.rollup_all_request_token_stats()?;
+        let tx = self.conn.unchecked_transaction()?;
         // Migration 062 runs before the V2 charge snapshot table is created. Keep that
         // fresh/legacy migration path valid while preserving immutable billed logs once
         // the V2 schema exists.
@@ -714,6 +732,7 @@ impl Storage {
             self.conn.execute("DELETE FROM request_logs", [])?
         };
         self.clear_request_log_payloads()?;
+        tx.commit()?;
         if rolled_up.saturating_add(affected_logs) > 0 {
             let _ = self
                 .conn
@@ -726,7 +745,21 @@ impl Storage {
     /// diagnostics without billing semantics, so clearing never preserves
     /// rows the way billed request logs are hidden instead of deleted.
     pub fn clear_request_log_payloads(&self) -> Result<usize> {
-        let mut removed = self.clear_request_log_payload_store()?;
+        if self.has_table("request_log_payload_state")? {
+            self.conn.execute(
+                "UPDATE request_log_payload_state SET generation = generation + 1 WHERE id = 1",
+                [],
+            )?;
+        }
+        if self.has_table("request_log_response_links")? {
+            self.conn
+                .execute("DELETE FROM request_log_response_links", [])?;
+        }
+        if self.has_table("request_log_upstream_attempts")? {
+            self.conn
+                .execute("DELETE FROM request_log_upstream_attempts", [])?;
+        }
+        let mut removed = self.clear_request_log_payload_store_in_transaction()?;
         if self.has_table("request_log_payloads")? {
             removed =
                 removed.saturating_add(self.conn.execute("DELETE FROM request_log_payloads", [])?);
@@ -739,27 +772,49 @@ impl Storage {
             return Ok(0);
         }
         self.rollup_request_token_stats_before(cutoff_ts)?;
+        let tx = self.conn.unchecked_transaction()?;
+        if self.has_table("request_log_payload_state")? {
+            self.conn.execute(
+                "UPDATE request_log_payload_state
+                 SET retention_cutoff = MAX(retention_cutoff, ?1) WHERE id = 1",
+                [cutoff_ts],
+            )?;
+        }
         if self.has_table("request_log_payloads")? {
             self.conn.execute(
                 "DELETE FROM request_log_payloads WHERE created_at < ?1",
                 [cutoff_ts],
             )?;
         }
-        self.prune_request_log_payload_store_before(cutoff_ts)?;
-        if self.has_table("request_charge_snapshots")? {
+        self.prune_request_log_payload_store_in_transaction(cutoff_ts)?;
+        if self.has_table("request_log_response_links")? {
+            self.conn.execute(
+                "DELETE FROM request_log_response_links WHERE created_at < ?1",
+                [cutoff_ts],
+            )?;
+        }
+        if self.has_table("request_log_upstream_attempts")? {
+            self.conn.execute(
+                "DELETE FROM request_log_upstream_attempts WHERE created_at < ?1",
+                [cutoff_ts],
+            )?;
+        }
+        let removed = if self.has_table("request_charge_snapshots")? {
             let hidden_logs = self
                 .conn
                 .execute(hide_billed_request_logs_before_sql(), [cutoff_ts, now_ts()])?;
             let deleted_logs = self
                 .conn
                 .execute(prune_request_logs_before_sql(), [cutoff_ts])?;
-            Ok(hidden_logs.saturating_add(deleted_logs))
+            hidden_logs.saturating_add(deleted_logs)
         } else {
             self.conn.execute(
                 "DELETE FROM request_logs WHERE created_at < ?1",
                 [cutoff_ts],
-            )
-        }
+            )?
+        };
+        tx.commit()?;
+        Ok(removed)
     }
 
     pub fn prune_request_logs_by_retention(&self, now: i64) -> Result<usize> {

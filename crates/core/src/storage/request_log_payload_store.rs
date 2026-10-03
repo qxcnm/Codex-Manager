@@ -17,6 +17,21 @@ const ITEM_INSERT_CHUNK: usize = 300;
 const ID_LOOKUP_CHUNK: usize = 400;
 const MAX_PARENT_CHAIN_DEPTH: usize = 100_000;
 
+/// Transport metadata of an actual outbound request attempt. The URL must
+/// be stripped of credentials, query and fragment before calling Storage.
+#[derive(Debug, Clone, Default)]
+pub struct RequestLogUpstreamAttempt {
+    pub trace_id: String,
+    pub stage: String,
+    pub method: String,
+    pub url: String,
+    pub transport: String,
+    pub content_encoding: Option<String>,
+    pub wire_sha256: String,
+    pub identical_to_client: bool,
+    pub created_at: i64,
+}
+
 /// One content-addressed fragment of a request body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestLogPayloadPart {
@@ -130,6 +145,34 @@ impl Storage {
         self.has_table("request_log_payload_manifests")
     }
 
+    /// Snapshot the clear generation before enqueueing an asynchronous job.
+    pub fn request_log_payload_generation(&self) -> Result<i64> {
+        if !self.has_table("request_log_payload_state")? {
+            return Ok(0);
+        }
+        self.conn.query_row(
+            "SELECT generation FROM request_log_payload_state WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+    }
+
+    pub(super) fn request_log_payload_job_is_current(
+        &self,
+        generation: i64,
+        created_at: i64,
+    ) -> Result<bool> {
+        if !self.has_table("request_log_payload_state")? {
+            return Ok(generation == 0);
+        }
+        self.conn.query_row(
+            "SELECT generation = ?1 AND retention_cutoff <= ?2
+             FROM request_log_payload_state WHERE id = 1",
+            (generation, created_at),
+            |row| row.get(0),
+        )
+    }
+
     /// Persist a split request body. Re-inserting an existing trace is a
     /// no-op (`inserted == false`).
     pub fn insert_request_log_payload_manifest(
@@ -137,12 +180,30 @@ impl Storage {
         input: &RequestLogPayloadManifestInput,
         parent_hint: Option<&RequestLogPayloadParentHint>,
     ) -> Result<RequestLogPayloadManifestWrite> {
+        self.insert_request_log_payload_manifest_guarded(input, parent_hint, None)
+    }
+
+    pub fn insert_request_log_payload_manifest_if_current(
+        &self,
+        input: &RequestLogPayloadManifestInput,
+        parent_hint: Option<&RequestLogPayloadParentHint>,
+        generation: i64,
+    ) -> Result<RequestLogPayloadManifestWrite> {
+        self.insert_request_log_payload_manifest_guarded(input, parent_hint, Some(generation))
+    }
+
+    fn insert_request_log_payload_manifest_guarded(
+        &self,
+        input: &RequestLogPayloadManifestInput,
+        parent_hint: Option<&RequestLogPayloadParentHint>,
+        generation: Option<i64>,
+    ) -> Result<RequestLogPayloadManifestWrite> {
         if !self.has_request_log_payload_store()? {
             return Ok(RequestLogPayloadManifestWrite::default());
         }
         // The upstream capture is redundant when the gateway forwarded the
         // client body unchanged.
-        if input.stage == PAYLOAD_STAGE_UPSTREAM && !input.body_hash.is_empty() {
+        if input.stage.starts_with(PAYLOAD_STAGE_UPSTREAM) && !input.body_hash.is_empty() {
             let client_hash = self.find_request_log_payload_manifest_body_hash(
                 &input.trace_id,
                 PAYLOAD_STAGE_CLIENT,
@@ -155,6 +216,11 @@ impl Storage {
             }
         }
         let tx = self.conn.unchecked_transaction()?;
+        if let Some(generation) = generation {
+            if !self.request_log_payload_job_is_current(generation, input.created_at)? {
+                return Ok(RequestLogPayloadManifestWrite::default());
+            }
+        }
         let exists = self
             .conn
             .query_row(
@@ -485,6 +551,82 @@ impl Storage {
             .optional()
     }
 
+    /// Record one actual outbound attempt after its capture job was accepted.
+    /// The same transaction protects against clear/prune racing with the
+    /// metadata write. A prior client capture is sufficient when both bodies
+    /// were identical and the upstream stage did not need its own payload.
+    pub fn record_request_log_upstream_attempt_if_current(
+        &self,
+        attempt: &RequestLogUpstreamAttempt,
+        generation: i64,
+    ) -> Result<bool> {
+        let tx = self.conn.unchecked_transaction()?;
+        if !self.request_log_payload_job_is_current(generation, attempt.created_at)? {
+            return Ok(false);
+        }
+        self.conn.execute(
+            "INSERT OR IGNORE INTO request_log_upstream_attempts
+                 (trace_id, stage, method, url, transport, content_encoding,
+                  wire_sha256, identical_to_client, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            (
+                attempt.trace_id.as_str(),
+                attempt.stage.as_str(),
+                attempt.method.as_str(),
+                attempt.url.as_str(),
+                attempt.transport.as_str(),
+                attempt.content_encoding.as_deref(),
+                attempt.wire_sha256.as_str(),
+                attempt.identical_to_client,
+                attempt.created_at,
+            ),
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    pub fn list_request_log_upstream_attempt_stages(&self, trace_id: &str) -> Result<Vec<String>> {
+        if !self.has_table("request_log_upstream_attempts")? {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT stage FROM request_log_upstream_attempts WHERE trace_id = ?1 ORDER BY stage",
+        )?;
+        stmt.query_map([trace_id], |row| row.get::<_, String>(0))?
+            .collect()
+    }
+
+    pub fn find_request_log_upstream_attempt(
+        &self,
+        trace_id: &str,
+        stage: &str,
+    ) -> Result<Option<RequestLogUpstreamAttempt>> {
+        if !self.has_table("request_log_upstream_attempts")? {
+            return Ok(None);
+        }
+        self.conn
+            .query_row(
+                "SELECT trace_id, stage, method, url, transport, content_encoding,
+                    wire_sha256, identical_to_client, created_at
+             FROM request_log_upstream_attempts WHERE trace_id = ?1 AND stage = ?2",
+                (trace_id, stage),
+                |row| {
+                    Ok(RequestLogUpstreamAttempt {
+                        trace_id: row.get(0)?,
+                        stage: row.get(1)?,
+                        method: row.get(2)?,
+                        url: row.get(3)?,
+                        transport: row.get(4)?,
+                        content_encoding: row.get(5)?,
+                        wire_sha256: row.get(6)?,
+                        identical_to_client: row.get(7)?,
+                        created_at: row.get(8)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
     /// Capture stages with a stored manifest for this trace (alphabetical).
     pub fn list_request_log_payload_manifest_stages(&self, trace_id: &str) -> Result<Vec<String>> {
         if !self.has_request_log_payload_store()? {
@@ -517,32 +659,50 @@ impl Storage {
             .optional()
     }
 
-    /// Latest manifest of the same conversation written before `manifest`.
-    /// Used to stitch `previous_response_id` continuations back together.
-    pub fn find_request_log_payload_predecessor(
+    /// Associate a real, completed upstream Responses ID with its request.
+    /// Only a log row already owned by this key can be linked. Never replace
+    /// an existing association: ambiguous or reused IDs must not leak data.
+    pub fn record_request_log_response_id(
         &self,
-        manifest: &RequestLogPayloadManifest,
-    ) -> Result<Option<RequestLogPayloadManifest>> {
-        let Some(conversation_key) = manifest.conversation_key.as_deref() else {
+        key_id: &str,
+        response_id: &str,
+        trace_id: &str,
+    ) -> Result<()> {
+        if !self.has_table("request_log_response_links")?
+            || !response_id.starts_with("resp_")
+            || response_id == "resp_proxy"
+        {
+            return Ok(());
+        }
+        self.conn.execute(
+            "INSERT OR IGNORE INTO request_log_response_links (key_id, response_id, trace_id, created_at)
+             SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (
+                 SELECT 1 FROM request_logs WHERE trace_id = ?3 AND key_id = ?1
+                   AND cleared_at IS NULL)",
+            (key_id, response_id, trace_id, super::now_ts()),
+        )?;
+        Ok(())
+    }
+
+    /// Only return a predecessor if the completed response belongs to the
+    /// same authenticated key AND its request log still exists. No temporal
+    /// proximity fallback is permitted, especially for key_id|~ sessions.
+    pub fn find_request_log_trace_for_response_id(
+        &self,
+        key_id: &str,
+        response_id: &str,
+    ) -> Result<Option<String>> {
+        if !self.has_table("request_log_response_links")? {
             return Ok(None);
-        };
+        }
         self.conn
             .query_row(
-                &format!(
-                    "SELECT {MANIFEST_COLUMNS} FROM request_log_payload_manifests
-                     WHERE conversation_key = ?1 AND stage = ?2 AND trace_id <> ?3
-                       AND (created_at < ?4 OR (created_at = ?4 AND rowid < (
-                           SELECT rowid FROM request_log_payload_manifests
-                           WHERE trace_id = ?3 AND stage = ?2)))
-                     ORDER BY created_at DESC, rowid DESC LIMIT 1"
-                ),
-                (
-                    conversation_key,
-                    manifest.stage.as_str(),
-                    manifest.trace_id.as_str(),
-                    manifest.created_at,
-                ),
-                manifest_from_row,
+                "SELECT l.trace_id FROM request_log_response_links l
+             JOIN request_logs r ON r.trace_id = l.trace_id AND r.key_id = l.key_id
+             WHERE l.key_id = ?1 AND l.response_id = ?2
+               AND r.cleared_at IS NULL LIMIT 1",
+                (key_id, response_id),
+                |row| row.get(0),
             )
             .optional()
     }
@@ -654,10 +814,16 @@ impl Storage {
 
     /// Remove every full payload manifest and blob.
     pub fn clear_request_log_payload_store(&self) -> Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        let removed = self.clear_request_log_payload_store_in_transaction()?;
+        tx.commit()?;
+        Ok(removed)
+    }
+
+    pub(super) fn clear_request_log_payload_store_in_transaction(&self) -> Result<usize> {
         if !self.has_request_log_payload_store()? {
             return Ok(0);
         }
-        let tx = self.conn.unchecked_transaction()?;
         self.conn
             .execute("DELETE FROM request_log_payload_manifest_items", [])?;
         self.conn
@@ -667,7 +833,6 @@ impl Storage {
             .execute("DELETE FROM request_log_payload_manifests", [])?;
         self.conn
             .execute("DELETE FROM request_log_payload_blobs", [])?;
-        tx.commit()?;
         Ok(removed)
     }
 
@@ -675,6 +840,16 @@ impl Storage {
     /// parent is deleted are materialized first; unreferenced blobs are
     /// garbage-collected afterwards.
     pub fn prune_request_log_payload_store_before(&self, cutoff_ts: i64) -> Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        let removed = self.prune_request_log_payload_store_in_transaction(cutoff_ts)?;
+        tx.commit()?;
+        Ok(removed)
+    }
+
+    pub(super) fn prune_request_log_payload_store_in_transaction(
+        &self,
+        cutoff_ts: i64,
+    ) -> Result<usize> {
         if cutoff_ts <= 0 || !self.has_request_log_payload_store()? {
             return Ok(0);
         }
@@ -686,7 +861,6 @@ impl Storage {
         if doomed == 0 {
             return Ok(0);
         }
-        let tx = self.conn.unchecked_transaction()?;
         let mut stmt = self.conn.prepare(
             "SELECT m.trace_id, m.stage, m.item_count FROM request_log_payload_manifests m
              WHERE m.created_at >= ?1 AND EXISTS (
@@ -728,7 +902,6 @@ impl Storage {
             [cutoff_ts],
         )?;
         self.gc_request_log_payload_blobs()?;
-        tx.commit()?;
         Ok(removed)
     }
 }

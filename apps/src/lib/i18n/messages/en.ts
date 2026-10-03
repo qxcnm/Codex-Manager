@@ -660,6 +660,11 @@ export const EN_MESSAGES: MessageCatalog = {
   "16 KB 预览": "16 KB preview",
   复制完整请求: "Copy full request",
   已复制完整请求内容: "Full request copied",
+  "上游尝试 {number}": "Upstream attempt {number}",
+  "传输字节 SHA-256": "Wire bytes SHA-256",
+  传输编码: "Content encoding",
+  "请求体展示为解码后内容；上方摘要对应实际发送的压缩字节。":
+    "The payload shown is decoded; the checksum above is for the compressed bytes actually sent.",
   请求内容脱敏: "Redact request payloads",
   "开启后，请求日志里保存的请求内容会把密钥、Token、密码等凭据字段替换为 [REDACTED]；关闭后按原样保存，不做任何脱敏。仅影响之后的新请求。":
     "When enabled, credential-like fields (keys, tokens, passwords) in stored request payloads are replaced with [REDACTED]; when disabled the payload is stored exactly as sent. Applies to new requests only.",

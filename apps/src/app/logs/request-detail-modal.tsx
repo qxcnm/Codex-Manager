@@ -449,31 +449,30 @@ export function RequestDetailModal({
           {detail ? (
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
               {detail.stages.length > 1 ? (
-                <div className="flex items-center gap-1">
+                <div className="flex flex-wrap items-center gap-1">
                   <span className="opacity-70">{t("请求体来源")}</span>
-                  <Button
-                    type="button"
-                    variant={detail.stage === "client" ? "secondary" : "ghost"}
-                    size="sm"
-                    className="h-6 px-2 text-[11px]"
-                    onClick={() => setStage("client")}
-                  >
-                    {t("客户端原始")}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant={detail.stage === "upstream" ? "secondary" : "ghost"}
-                    size="sm"
-                    className="h-6 px-2 text-[11px]"
-                    onClick={() => setStage("upstream")}
-                  >
-                    {t("发往上游")}
-                  </Button>
+                  {detail.stages.map((captureStage) => (
+                    <Button
+                      key={captureStage}
+                      type="button"
+                      variant={detail.stage === captureStage ? "secondary" : "ghost"}
+                      size="sm"
+                      className="h-6 px-2 text-[11px]"
+                      onClick={() => setStage(captureStage)}
+                    >
+                      {captureStage === "client"
+                        ? t("客户端原始")
+                        : t("上游尝试 {number}", {
+                            number: detail.stages.filter((item) => item !== "client")
+                              .indexOf(captureStage) + 1,
+                          })}
+                    </Button>
+                  ))}
                 </div>
               ) : null}
               <span>
                 {detail.redacted ? t("凭据字段已脱敏；") : t("未脱敏，可能包含凭据；")}
-                {detail.stage === "upstream"
+                {detail.stage.startsWith("upstream")
                   ? t("内容为发往上游的实际请求体。")
                   : t("内容为客户端原始请求体。")}
               </span>
@@ -487,6 +486,22 @@ export function RequestDetailModal({
                 <Copy className="size-3" />
                 {t("复制完整请求")}
               </Button>
+            </div>
+          ) : null}
+          {detail?.attempt ? (
+            <div className="rounded-md border bg-muted/30 px-3 py-2 font-mono text-[11px] break-all">
+              <div>{detail.attempt.method} {detail.attempt.url} · {detail.attempt.transport}</div>
+              <div className="mt-1 text-muted-foreground">
+                {t("传输字节 SHA-256")}: {detail.attempt.wireSha256}
+                {detail.attempt.contentEncoding
+                  ? ` · ${t("传输编码")}: ${detail.attempt.contentEncoding}`
+                  : ""}
+              </div>
+              {detail.attempt.contentEncoding ? (
+                <div className="mt-1 text-muted-foreground">
+                  {t("请求体展示为解码后内容；上方摘要对应实际发送的压缩字节。")}
+                </div>
+              ) : null}
             </div>
           ) : null}
           {isLoading ? (
@@ -508,7 +523,7 @@ export function RequestDetailModal({
                   {t("该请求依赖的上一请求记录已被清理，部分消息无法还原。")}
                 </div>
               ) : null}
-              <DetailEntries key={detail.traceId} detail={detail} t={t} />
+              <DetailEntries key={`${detail.traceId}-${detail.stage}`} detail={detail} t={t} />
             </>
           ) : (
             <div className="rounded-md border px-3 py-6 text-center text-xs text-muted-foreground">
