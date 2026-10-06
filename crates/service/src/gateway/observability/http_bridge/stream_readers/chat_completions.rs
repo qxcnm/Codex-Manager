@@ -1,12 +1,12 @@
 use super::{
     chat_image_payload, classify_upstream_stream_read_error, collect_image_generation_data_urls,
     collect_output_text_from_event_fields, collect_response_output_text,
-    collect_response_reasoning_summary_text, inspect_sse_frame_for_protocol, mark_first_response_ms,
-    merge_usage, should_emit_keepalive_after_first_frame, stream_idle_timed_out,
-    stream_idle_timeout_message, stream_reader_disconnected_message, stream_wait_timeout,
-    upstream_hint_or_stream_incomplete_message, Arc, Cursor, Mutex, PassthroughSseCollector,
-    PassthroughSseProtocol, Read, SseKeepAliveFrame, SseTerminal, UpstreamSseFramePump,
-    UpstreamSseFramePumpItem,
+    collect_response_reasoning_summary_text, inspect_sse_frame_for_protocol,
+    mark_first_response_ms, merge_usage, should_emit_keepalive_after_first_frame,
+    stream_idle_timed_out, stream_idle_timeout_message, stream_reader_disconnected_message,
+    stream_wait_timeout, upstream_hint_or_stream_incomplete_message, Arc, Cursor, Mutex,
+    PassthroughSseCollector, PassthroughSseProtocol, Read, SseKeepAliveFrame, SseTerminal,
+    UpstreamSseFramePump, UpstreamSseFramePumpItem,
 };
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -464,7 +464,10 @@ impl ChatCompletionsFromResponsesSseReader {
         let response_status = value.pointer("/response/status").and_then(Value::as_str);
         if inspected_error.is_some()
             || upstream_error.is_some()
-            || matches!(response_status, Some("failed" | "incomplete" | "cancelled" | "canceled"))
+            || matches!(
+                response_status,
+                Some("failed" | "incomplete" | "cancelled" | "canceled")
+            )
         {
             let incomplete = event_type.as_deref() == Some("response.incomplete")
                 || response_status == Some("incomplete");
