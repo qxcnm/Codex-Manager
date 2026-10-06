@@ -63,6 +63,9 @@ jobs:
           cargo test -p codexmanager-service --test gateway_logs hybrid_routing:: -- --test-threads=1
           cargo test -p codexmanager-service --test gateway_logs gateway_stateless_retry_strips_encrypted_content_on_invalid_encrypted_content -- --test-threads=1
 
+      - name: Test SQLite shim
+        run: cargo test -p rusqlite
+
   frontend_and_web:
     name: Frontend build and Web service tests
     runs-on: ubuntu-22.04
