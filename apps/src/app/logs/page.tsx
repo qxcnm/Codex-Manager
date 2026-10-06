@@ -243,7 +243,11 @@ function LogsPageContent() {
         queryClient.invalidateQueries({ queryKey: MEMBER_DASHBOARD_SUMMARY_QUERY_KEY }),
         queryClient.invalidateQueries({ queryKey: ["startup-snapshot"] }),
       ]);
-      toast.success(t("日志已清空"));
+      toast.success(t("日志已清空"), {
+        description: t(
+          "磁盘空间不会立即变小，可在“设置 → 网关 → 数据库空间”中查看并回收。",
+        ),
+      });
     },
     onError: (error: unknown) => {
       toast.error(error instanceof Error ? error.message : String(error));

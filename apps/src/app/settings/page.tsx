@@ -77,6 +77,7 @@ import {
 } from "@/app/settings/components/general-tab-cards";
 import { GeneralBasicsCard } from "@/app/settings/components/general-basics-card";
 import { DesktopDiagnosticsCard } from "@/app/settings/components/desktop-diagnostics-card";
+import { StorageSpaceCard } from "@/app/settings/components/storage-space-card";
 import { TasksTabContent } from "@/app/settings/components/tasks-tab-content";
 import {
   CUSTOM_WORKER_MODE_VALUE,
@@ -1477,6 +1478,9 @@ function AdminSettingsPage() {
             upstreamProxyBypassDraft={upstreamProxyBypassDraft}
             setUpstreamProxyBypassDraft={setUpstreamProxyBypassDraft}
           />
+          {canAccessManagementRpc ? (
+            <StorageSpaceCard t={t} active={isPageActive} />
+          ) : null}
         </TabsContent>
 
         <TabsContent value="tasks" className="space-y-4">

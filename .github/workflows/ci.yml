@@ -44,6 +44,11 @@ jobs:
       - name: Check workspace targets
         run: cargo check --workspace --all-targets
 
+      - name: Test SQLite storage maintenance
+        run: |
+          cargo test -p codexmanager-core --no-fail-fast
+          cargo test -p codexmanager-service --lib storage::maintenance -- --test-threads=1
+
       - name: Test Responses WebSocket regressions
         run: |
           cargo test -p codexmanager-service --lib official_responses_websocket_ --no-fail-fast

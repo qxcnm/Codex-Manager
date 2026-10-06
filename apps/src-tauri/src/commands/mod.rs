@@ -14,6 +14,7 @@ pub mod plugin;
 pub mod quota;
 mod registry;
 pub mod requestlog;
+pub mod storage_space;
 pub mod service;
 pub mod settings;
 pub mod shared;

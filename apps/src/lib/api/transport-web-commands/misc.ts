@@ -13,6 +13,8 @@ export function createMiscWebCommands(): Record<string, WebCommandDescriptor> {
     service_requestlog_summary: { rpcMethod: "requestlog/summary" },
     service_requestlog_clear: { rpcMethod: "requestlog/clear" },
     service_requestlog_today_summary: { rpcMethod: "requestlog/today_summary" },
+    service_storage_space_usage: { rpcMethod: "storage/spaceUsage" },
+    service_storage_reclaim: { rpcMethod: "storage/reclaim" },
     service_plugin_catalog_list: { rpcMethod: "plugin/catalog/list" },
     service_plugin_catalog_refresh: { rpcMethod: "plugin/catalog/refresh" },
     service_plugin_install: { rpcMethod: "plugin/install" },

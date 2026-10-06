@@ -125,6 +125,7 @@ pub fn start_server(addr: &str) -> std::io::Result<()> {
     crate::storage_helpers::initialize_storage()
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
     crate::sync_runtime_settings_from_storage();
+    crate::storage_maintenance::ensure_storage_maintenance();
     reconcile_active_gateway_profile_after_startup();
     crate::app_settings::ensure_codex_latest_version_sync();
     crate::usage_refresh::ensure_usage_polling();

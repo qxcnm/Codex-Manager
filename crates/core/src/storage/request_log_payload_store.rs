@@ -16,6 +16,15 @@ const BLOB_INSERT_CHUNK: usize = 200;
 const ITEM_INSERT_CHUNK: usize = 300;
 const ID_LOOKUP_CHUNK: usize = 400;
 const MAX_PARENT_CHAIN_DEPTH: usize = 100_000;
+/// Manifests a clear or retention purge is deleting in batches must never
+/// become the parent of a new manifest, nor be shown to readers.
+fn live_manifest_sql(alias: &str) -> String {
+    super::request_log_payload_purge::live_payload_row_sql("request_log_payload_manifests", alias)
+}
+
+fn live_attempt_sql(alias: &str) -> String {
+    super::request_log_payload_purge::live_payload_row_sql("request_log_upstream_attempts", alias)
+}
 
 /// Transport metadata of an actual outbound request attempt. The URL must
 /// be stripped of credentials, query and fragment before calling Storage.
@@ -413,8 +422,12 @@ impl Storage {
             let hint_alive = self
                 .conn
                 .query_row(
-                    "SELECT 1 FROM request_log_payload_manifests
-                     WHERE trace_id = ?1 AND stage = ?2 AND list_field = ?3",
+                    &format!(
+                        "SELECT 1 FROM request_log_payload_manifests m
+                         WHERE m.trace_id = ?1 AND m.stage = ?2 AND m.list_field = ?3
+                           AND {}",
+                        live_manifest_sql("m")
+                    ),
                     (hint.trace_id.as_str(), input.stage.as_str(), list_field),
                     |_| Ok(()),
                 )
@@ -435,10 +448,13 @@ impl Storage {
         let candidate = self
             .conn
             .query_row(
-                "SELECT trace_id, item_count FROM request_log_payload_manifests
-                 WHERE conversation_key = ?1 AND stage = ?2 AND list_field = ?3
-                   AND trace_id <> ?4
-                 ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                &format!(
+                    "SELECT m.trace_id, m.item_count FROM request_log_payload_manifests m
+                     WHERE m.conversation_key = ?1 AND m.stage = ?2 AND m.list_field = ?3
+                       AND m.trace_id <> ?4 AND {}
+                     ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1",
+                    live_manifest_sql("m")
+                ),
                 (
                     conversation_key,
                     input.stage.as_str(),
@@ -542,8 +558,9 @@ impl Storage {
         self.conn
             .query_row(
                 &format!(
-                    "SELECT {MANIFEST_COLUMNS} FROM request_log_payload_manifests
-                     WHERE trace_id = ?1 AND stage = ?2"
+                    "SELECT {MANIFEST_COLUMNS} FROM request_log_payload_manifests m
+                     WHERE trace_id = ?1 AND stage = ?2 AND {}",
+                    live_manifest_sql("m")
                 ),
                 (trace_id, stage),
                 manifest_from_row,
@@ -589,9 +606,11 @@ impl Storage {
         if !self.has_table("request_log_upstream_attempts")? {
             return Ok(Vec::new());
         }
-        let mut stmt = self.conn.prepare(
-            "SELECT stage FROM request_log_upstream_attempts WHERE trace_id = ?1 ORDER BY stage",
-        )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT a.stage FROM request_log_upstream_attempts a
+             WHERE a.trace_id = ?1 AND {} ORDER BY a.stage",
+            live_attempt_sql("a")
+        ))?;
         stmt.query_map([trace_id], |row| row.get::<_, String>(0))?
             .collect()
     }
@@ -606,9 +625,13 @@ impl Storage {
         }
         self.conn
             .query_row(
-                "SELECT trace_id, stage, method, url, transport, content_encoding,
-                    wire_sha256, identical_to_client, created_at
-             FROM request_log_upstream_attempts WHERE trace_id = ?1 AND stage = ?2",
+                &format!(
+                    "SELECT trace_id, stage, method, url, transport, content_encoding,
+                        wire_sha256, identical_to_client, created_at
+                     FROM request_log_upstream_attempts a
+                     WHERE trace_id = ?1 AND stage = ?2 AND {}",
+                    live_attempt_sql("a")
+                ),
                 (trace_id, stage),
                 |row| {
                     Ok(RequestLogUpstreamAttempt {
@@ -632,9 +655,11 @@ impl Storage {
         if !self.has_request_log_payload_store()? {
             return Ok(Vec::new());
         }
-        let mut stmt = self.conn.prepare(
-            "SELECT stage FROM request_log_payload_manifests WHERE trace_id = ?1 ORDER BY stage ASC",
-        )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT m.stage FROM request_log_payload_manifests m
+             WHERE m.trace_id = ?1 AND {} ORDER BY m.stage ASC",
+            live_manifest_sql("m")
+        ))?;
         let rows = stmt.query_map([trace_id], |row| row.get::<_, String>(0))?;
         rows.collect()
     }
@@ -651,8 +676,11 @@ impl Storage {
         }
         self.conn
             .query_row(
-                "SELECT body_hash FROM request_log_payload_manifests
-                 WHERE trace_id = ?1 AND stage = ?2",
+                &format!(
+                    "SELECT m.body_hash FROM request_log_payload_manifests m
+                     WHERE m.trace_id = ?1 AND m.stage = ?2 AND {}",
+                    live_manifest_sql("m")
+                ),
                 (trace_id, stage),
                 |row| row.get::<_, String>(0),
             )
@@ -776,7 +804,7 @@ impl Storage {
 
     /// Turn a manifest into a root that owns all of its items, so its parent
     /// can be deleted.
-    fn materialize_request_log_payload_manifest(
+    pub(super) fn materialize_request_log_payload_manifest(
         &self,
         trace_id: &str,
         stage: &str,
