@@ -28,7 +28,10 @@ fn drop_known_unsupported_model_candidates(
             .take(4)
             .collect::<Vec<_>>()
     );
-    let Some(model) = request_model.map(str::trim).filter(|value| !value.is_empty()) else {
+    let Some(model) = request_model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
         return;
     };
     if candidates.is_empty() {

@@ -368,9 +368,9 @@ async fn preflight_stream_response_with_timeouts(
     if status_code == 400 {
         return match response.into_buffered_async().await {
             Ok((body, response)) => {
-                let text = crate::account::model_support::bound_message(
-                    &String::from_utf8_lossy(body.as_ref()),
-                );
+                let text = crate::account::model_support::bound_message(&String::from_utf8_lossy(
+                    body.as_ref(),
+                ));
                 if crate::account::model_support::looks_like_account_model_unsupported(&text) {
                     StreamPreflightOutcome::ModelUnsupported(text)
                 } else if has_more_candidates {
