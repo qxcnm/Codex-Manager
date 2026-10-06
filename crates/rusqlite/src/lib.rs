@@ -82,10 +82,7 @@ impl Connection {
         let rt = sqlite_runtime()?;
         let options = sqlite_options_for_path(&path)?;
         let pool = block_on_runtime(&rt, async {
-            SqlitePoolOptions::new()
-                .max_connections(1)
-                .connect_with(options)
-                .await
+            single_handle_pool_options().connect_with(options).await
         })?;
         Ok(Self {
             rt,
@@ -99,8 +96,7 @@ impl Connection {
     pub fn open_in_memory() -> Result<Self> {
         let rt = sqlite_runtime()?;
         let pool = block_on_runtime(&rt, async {
-            SqlitePoolOptions::new()
-                .max_connections(1)
+            single_handle_pool_options()
                 .connect_with(
                     SqliteConnectOptions::from_str("sqlite::memory:")?
                         .create_if_missing(true)
@@ -343,6 +339,18 @@ where
     } else {
         rt.block_on(future)
     }
+}
+
+/// One `Connection` maps to exactly one physical SQLite handle for its whole
+/// life, like a real `sqlite3*`. SQLx's default 30 min max lifetime and
+/// 10 min idle timeout would silently swap the handle, dropping
+/// connection-scoped state (`last_insert_rowid`, `busy_timeout`,
+/// `temp_store`, `journal_size_limit`, ...) and wiping in-memory databases.
+fn single_handle_pool_options() -> SqlitePoolOptions {
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .max_lifetime(None)
+        .idle_timeout(None)
 }
 
 fn sqlite_options_for_path(path: &Path) -> Result<SqliteConnectOptions> {
@@ -1216,6 +1224,98 @@ mod transaction_tests {
             .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
             .expect("count rolled back rows");
         assert_eq!(count, 0);
+    }
+}
+
+#[cfg(test)]
+mod single_handle_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn assert_never_recycled(connection: &Connection) {
+        let options = connection.pool.options();
+        assert_eq!(options.get_max_connections(), 1);
+        assert_eq!(options.get_max_lifetime(), None);
+        assert_eq!(options.get_idle_timeout(), None);
+    }
+
+    fn pragma(connection: &Connection, name: &str) -> i64 {
+        connection
+            .query_row(&format!("PRAGMA {name}"), [], |row| row.get(0))
+            .expect("read pragma")
+    }
+
+    /// Exercise acquire/release of the pooled handle through every route.
+    fn churn(connection: &Connection) {
+        for round in 0..20 {
+            connection
+                .execute("INSERT INTO entries(value) VALUES (?1)", [round])
+                .expect("pool insert");
+            let _: i64 = connection
+                .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
+                .expect("pool read");
+            connection
+                .execute_batch("UPDATE entries SET value = value; SELECT 1;")
+                .expect("pool batch");
+            let tx = connection.unchecked_transaction().expect("begin");
+            tx.execute("UPDATE entries SET value = value + 0", [])
+                .expect("tx update");
+            if round % 2 == 0 {
+                tx.commit().expect("commit");
+            }
+        }
+    }
+
+    #[test]
+    fn pools_never_recycle_their_single_handle() {
+        assert_never_recycled(&Connection::open_in_memory().expect("open memory"));
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "codexmanager-rusqlite-pool-{}-{nonce}.db",
+            std::process::id()
+        ));
+        assert_never_recycled(&Connection::open(&path).expect("open file"));
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
+
+    #[test]
+    fn in_memory_data_survives_repeated_acquire_and_release() {
+        let connection = Connection::open_in_memory().expect("open memory");
+        connection
+            .execute_batch("CREATE TABLE entries(id INTEGER PRIMARY KEY, value INTEGER NOT NULL);")
+            .expect("create table");
+        churn(&connection);
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
+            .expect("count rows");
+        assert_eq!(count, 20);
+    }
+
+    #[test]
+    fn connection_scoped_pragmas_persist_across_calls() {
+        let connection = Connection::open_in_memory().expect("open memory");
+        // Mirrors codexmanager-core `Storage::configure_connection`.
+        connection
+            .busy_timeout(Duration::from_millis(3000))
+            .expect("busy timeout");
+        connection
+            .execute_batch(
+                "PRAGMA temp_store=MEMORY; PRAGMA foreign_keys=ON; PRAGMA journal_size_limit=67108864;",
+            )
+            .expect("configure pragmas");
+        connection
+            .execute_batch("CREATE TABLE entries(id INTEGER PRIMARY KEY, value INTEGER NOT NULL);")
+            .expect("create table");
+        churn(&connection);
+        assert_eq!(pragma(&connection, "busy_timeout"), 3000);
+        assert_eq!(pragma(&connection, "temp_store"), 2);
+        assert_eq!(pragma(&connection, "foreign_keys"), 1);
+        assert_eq!(pragma(&connection, "journal_size_limit"), 67_108_864);
     }
 }
 
