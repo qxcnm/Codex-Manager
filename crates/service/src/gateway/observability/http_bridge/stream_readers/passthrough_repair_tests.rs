@@ -41,7 +41,10 @@ fn repair_passthrough_eof_emits_error_without_terminal_event() {
 struct BrokenReader;
 impl Read for BrokenReader {
     fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
-        Err(io::Error::new(io::ErrorKind::ConnectionReset, "synthetic connection reset"))
+        Err(io::Error::new(
+            io::ErrorKind::ConnectionReset,
+            "synthetic connection reset",
+        ))
     }
 }
 
@@ -59,7 +62,10 @@ fn repair_passthrough_read_error_reaches_downstream() {
     reader.read_to_string(&mut body).unwrap();
     let frame = error_frame(&body);
     assert_eq!(frame["code"], "upstream_stream_read_error");
-    assert!(frame["error"]["message"].as_str().unwrap().contains("synthetic connection reset"));
+    assert!(frame["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("synthetic connection reset"));
 }
 
 #[test]
