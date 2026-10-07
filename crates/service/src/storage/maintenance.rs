@@ -408,14 +408,27 @@ fn ensure_rebuild_disk_space(usage: &DatabaseSpaceUsage) -> Result<(), String> {
     Ok(())
 }
 
+/// Resolve the deepest existing ancestor of `path` and keep the components
+/// below it that do not exist yet (for example a database file that has not
+/// been created), so a missing path is never mistaken for its parent.
 fn normalized_components(path: &Path) -> Vec<String> {
-    let resolved = std::fs::canonicalize(path)
-        .or_else(|_| {
-            path.parent()
-                .map(std::fs::canonicalize)
-                .unwrap_or_else(|| Ok(path.to_path_buf()))
-        })
-        .unwrap_or_else(|_| path.to_path_buf());
+    let mut base = path;
+    let mut missing = Vec::new();
+    let resolved = loop {
+        if let Ok(resolved) = std::fs::canonicalize(base) {
+            break missing
+                .iter()
+                .rev()
+                .fold(resolved, |resolved, name| resolved.join(name));
+        }
+        match (base.parent(), base.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name);
+                base = parent;
+            }
+            _ => break path.to_path_buf(),
+        }
+    };
     resolved
         .components()
         .filter_map(|component| match component {

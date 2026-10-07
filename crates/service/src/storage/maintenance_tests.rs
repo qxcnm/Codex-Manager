@@ -49,9 +49,15 @@ fn disk_lookup_picks_the_longest_matching_mount() {
     ];
     let inside = temp.join("codexmanager-missing-file.db");
     assert_eq!(disk_for_path(&mounts, &inside).map(|(_, a)| a), Some(20));
+    // A mount point that does not exist must not collapse onto `/`.
     assert_eq!(
         disk_for_path(&mounts, Path::new("/")).map(|(_, a)| a),
         Some(10)
+    );
+    // Missing components below a missing directory are kept.
+    assert_eq!(
+        disk_for_path(&mounts, Path::new("/definitely-not-a-mount/sub/a.db")).map(|(_, a)| a),
+        Some(30)
     );
 }
 
