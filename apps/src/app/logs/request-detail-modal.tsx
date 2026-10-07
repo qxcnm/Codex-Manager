@@ -18,6 +18,10 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import type { RequestLog, RequestLogDetail, RequestLogDetailStage } from "@/types";
 import type { TranslateFn } from "./page-helpers";
+import {
+  buildPayloadQueueStatsQueryKey,
+  REQUEST_LOG_PAYLOAD_TRACE_DROP_REASON_LABELS,
+} from "./payload-drop-notice";
 
 const RAW_BODY_FIELD = "$body";
 const SUMMARY_MAX_CHARS = 160;
@@ -363,11 +367,14 @@ export function RequestDetailModal({
   onOpenChange,
   log,
   serviceAddr,
+  canInspectPayloadQueue = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   log: RequestLog | null;
   serviceAddr: string | null;
+  /** Admins can ask the write queue whether this trace's content was dropped. */
+  canInspectPayloadQueue?: boolean;
 }) {
   const { t } = useI18n();
   const traceId = log?.traceId?.trim() || "";
@@ -390,6 +397,21 @@ export function RequestDetailModal({
     retry: 1,
     gcTime: 60_000,
   });
+
+  const { data: payloadQueueStats } = useQuery({
+    queryKey: buildPayloadQueueStatsQueryKey(serviceAddr, traceId),
+    queryFn: ({ signal }) =>
+      serviceClient.getRequestLogPayloadQueueStats(
+        { traceId, addr: serviceAddr },
+        { signal }
+      ),
+    enabled:
+      canInspectPayloadQueue && open && traceId.length > 0 && !isLoading && !detail,
+    retry: false,
+    staleTime: 30_000,
+    gcTime: 60_000,
+  });
+  const dropReason = !detail ? payloadQueueStats?.traceDropReason ?? null : null;
 
   const copyFullRequest = useCallback(async () => {
     if (!detail) return;
@@ -525,6 +547,12 @@ export function RequestDetailModal({
               ) : null}
               <DetailEntries key={`${detail.traceId}-${detail.stage}`} detail={detail} t={t} />
             </>
+          ) : dropReason ? (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-6 text-center text-xs text-amber-700 dark:text-amber-400">
+              {t("此请求内容因{reason}未记录", {
+                reason: t(REQUEST_LOG_PAYLOAD_TRACE_DROP_REASON_LABELS[dropReason]),
+              })}
+            </div>
           ) : (
             <div className="rounded-md border px-3 py-6 text-center text-xs text-muted-foreground">
               {t("未找到该请求的内容记录；日志可能产生于旧版本，或已被清理。")}

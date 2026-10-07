@@ -32,6 +32,7 @@ import { DASHBOARD_ADMIN_USAGE_QUERY_KEY } from "@/hooks/useDashboardAdminUsageS
 import { MEMBER_DASHBOARD_SUMMARY_QUERY_KEY } from "@/hooks/useMemberDashboardSummary";
 import { RequestLogsTabContent } from "./page-sections";
 import { RequestDetailModal } from "./request-detail-modal";
+import { RequestPayloadDropNotice } from "./payload-drop-notice";
 import {
   buildFixedTimePreset,
   LogsPageSkeleton,
@@ -420,6 +421,12 @@ function LogsPageContent() {
 
   return (
     <div className="animate-in space-y-3 fade-in duration-500">
+      {isAdminMode ? (
+        <RequestPayloadDropNotice
+          serviceAddr={serviceAddr}
+          enabled={isPageActive && serviceStatus.connected}
+        />
+      ) : null}
       <RequestLogsTabContent
         t={t}
         isDirectAccountMode={isDirectAccountMode}
@@ -497,6 +504,7 @@ function LogsPageContent() {
         }}
         log={detailLog}
         serviceAddr={serviceAddr}
+        canInspectPayloadQueue={isAdminMode}
       />
     </div>
   );

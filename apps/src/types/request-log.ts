@@ -131,3 +131,33 @@ export interface RequestLogDetail {
   /** Earlier requests of the conversation for previous_response_id continuations, oldest first. */
   context: RequestLogDetailContextSegment[];
 }
+
+/** Why a captured request body was not recorded. */
+export type RequestLogPayloadDropReason =
+  | "disk_full"
+  | "disk_slow"
+  | "io_error"
+  | "writer_unavailable"
+  | "spill_locked";
+
+/** Why a specific trace has no stored content (recent traces only). */
+export type RequestLogPayloadTraceDropReason =
+  | RequestLogPayloadDropReason
+  /** Rejected at write time: captured before a log clear or past retention. */
+  | "stale_generation";
+
+/** Admin diagnostics of the request payload write queue. */
+export interface RequestLogPayloadQueueStats {
+  budgetBytes: number;
+  queuedBytes: number;
+  spillPendingBytes: number;
+  spillDiskBytes: number;
+  spilling: boolean;
+  spillAvailable: boolean;
+  spillBlockedReason: RequestLogPayloadDropReason | null;
+  spilledTotal: number;
+  droppedTotal: number;
+  droppedByReason: Partial<Record<RequestLogPayloadDropReason, number>>;
+  /** Set when the requested trace is in the recent dropped set. */
+  traceDropReason: RequestLogPayloadTraceDropReason | null;
+}
