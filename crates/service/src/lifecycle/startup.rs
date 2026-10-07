@@ -62,6 +62,9 @@ pub fn start_one_shot_server() -> std::io::Result<ServerHandle> {
     crate::gateway::reload_runtime_config_from_env();
     crate::storage_helpers::initialize_storage()
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+    // Before the gateway accepts traffic: payload clear-generation mirror,
+    // queue budget, spill directory and replay of leftover spill segments.
+    crate::gateway::initialize_request_log_payload_pipeline();
     crate::sync_runtime_settings_from_storage();
     reconcile_active_gateway_profile_after_startup();
     // Integration tests use exactly the production Axum router, including its
@@ -124,6 +127,9 @@ pub fn start_server(addr: &str) -> std::io::Result<()> {
     crate::gateway::reload_runtime_config_from_env();
     crate::storage_helpers::initialize_storage()
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+    // Before the gateway accepts traffic: payload clear-generation mirror,
+    // queue budget, spill directory and replay of leftover spill segments.
+    crate::gateway::initialize_request_log_payload_pipeline();
     crate::sync_runtime_settings_from_storage();
     crate::storage_maintenance::ensure_storage_maintenance();
     reconcile_active_gateway_profile_after_startup();

@@ -283,7 +283,14 @@ pub(crate) async fn handle(
             "plugin/disable" => crate::plugin::injected::set_enabled(storage.as_ref(), req, false)
                 .await
                 .map(as_json),
-            "requestlog/clear" => storage.clear_request_logs().await.map(|_| ok_result()),
+            "requestlog/clear" => {
+                // Keep the in-memory payload clear generation and the spill
+                // files in sync with the database clear.
+                let token = crate::gateway::begin_request_log_payload_clear();
+                let result = storage.clear_request_logs().await;
+                crate::gateway::finish_request_log_payload_clear(token, result.is_ok());
+                result.map(|_| ok_result())
+            }
             "modelGroups/list" => groups::list(storage.as_ref()).await.map(as_json),
             "modelGroups/save" => groups::save(storage.as_ref(), params(req)?)
                 .await

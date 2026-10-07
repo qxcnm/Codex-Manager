@@ -27,6 +27,8 @@ fn stage_job(
         preview,
         created_at: 1_700_000_000,
         generation: 0,
+        clear_epoch: 0,
+        boot_id: 0,
         attempt: None,
     }
 }

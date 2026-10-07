@@ -85,7 +85,9 @@ struct WsRequestContext {
 #[derive(Clone)]
 struct PreparedClientFrame {
     text: String,
-    raw_text: String,
+    /// Client frame exactly as received (request log capture; one copy,
+    /// counted in the payload queue budget).
+    raw_body: bytes::Bytes,
     input: Value,
     client_model: Option<String>,
     model: Option<String>,
@@ -581,7 +583,7 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
     };
 
     let mut completed_responses = CompletedWsResponseCache::default();
-    capture_native_ws_upstream_attempt(
+    let first_frame = capture_native_ws_upstream_attempt(
         &context,
         &first_pending.log,
         &upstream,
@@ -589,9 +591,7 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
     );
     if let Err(err) = upstream
         .stream
-        .send(UpstreamMessage::Text(
-            first_pending.prepared.text.clone().into(),
-        ))
+        .send(UpstreamMessage::Text(first_frame))
         .await
     {
         let previous_account_id = upstream.account_id.clone();
@@ -885,14 +885,14 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
                                         }
                                     }
                                 } else {
-                                    capture_native_ws_upstream_attempt(
+                                    let current_frame = capture_native_ws_upstream_attempt(
                                         &context,
                                         &current_pending.log,
                                         &upstream,
                                         current_pending.prepared.text.as_str(),
                                     );
                                     if let Err(send_err) = upstream.stream.send(
-                                        UpstreamMessage::Text(current_pending.prepared.text.clone().into()),
+                                        UpstreamMessage::Text(current_frame),
                                     ).await {
                                     let previous_account_id = upstream.account_id.clone();
                                     log::warn!(
@@ -1770,7 +1770,7 @@ fn rewrite_client_frame(
     text: &str,
     context: &WsRequestContext,
 ) -> Result<PreparedClientFrame, WsSessionError> {
-    let raw_text = text.to_string();
+    let raw_body = bytes::Bytes::copy_from_slice(text.as_bytes());
     let mut payload = serde_json::from_str::<Value>(text).map_err(|err| {
         WsSessionError::bad_request_bilingual(
             "WebSocket JSON 载荷无效",
@@ -1930,7 +1930,7 @@ fn rewrite_client_frame(
 
     Ok(PreparedClientFrame {
         text,
-        raw_text,
+        raw_body,
         input: request.input,
         client_model: client_model_for_log,
         model: Some(request.model),
@@ -2430,17 +2430,13 @@ async fn reconnect_upstream_for_pending_request(
             pending.prepared.text.as_str(),
             pending.retried_missing_tool_call_context,
         );
-        capture_native_ws_upstream_attempt(
+        let frame = capture_native_ws_upstream_attempt(
             context,
             &pending.log,
             &replacement,
             pending.prepared.text.as_str(),
         );
-        match replacement
-            .stream
-            .send(UpstreamMessage::Text(pending.prepared.text.clone().into()))
-            .await
-        {
+        match replacement.stream.send(UpstreamMessage::Text(frame)).await {
             Ok(()) => {
                 if attempt > 1 {
                     log::info!(
@@ -3375,12 +3371,16 @@ fn build_upstream_websocket_request(
     Ok(request)
 }
 
+/// Build the upstream frame once and capture it; the request log shares the
+/// frame buffer with the send (no extra copy).
 fn capture_native_ws_upstream_attempt(
     context: &WsRequestContext,
     pending: &PendingWsRequestLog,
     upstream: &ConnectedUpstreamWebsocket,
     text: &str,
-) {
+) -> tokio_tungstenite::tungstenite::Utf8Bytes {
+    let frame = tokio_tungstenite::tungstenite::Utf8Bytes::from(text.to_string());
+    let sent_body = bytes::Bytes::from(frame.clone());
     crate::gateway::capture_outbound_payload(
         crate::gateway::OutboundPayloadContext {
             trace_id: pending.trace_id.as_str(),
@@ -3390,9 +3390,10 @@ fn capture_native_ws_upstream_attempt(
         upstream.upstream_url.as_str(),
         "websocket",
         &[],
-        &bytes::Bytes::copy_from_slice(text.as_bytes()),
+        &sent_body,
         None,
     );
+    frame
 }
 
 fn begin_ws_request_log(
@@ -3404,17 +3405,14 @@ fn begin_ws_request_log(
     let trace_id = crate::gateway::next_trace_id();
     // Capture the client frame so WebSocket requests also expose their body
     // in the request log detail view.
-    if let Some(storage) = open_storage() {
-        crate::gateway::store_client_request_log_payload(
-            &storage,
-            trace_id.as_str(),
-            &bytes::Bytes::from(prepared.raw_text.clone()),
-            Some(crate::gateway::request_log_payload_conversation_key(
-                context.api_key.id.as_str(),
-                context.incoming_headers.session_id(),
-            )),
-        );
-    }
+    crate::gateway::store_client_request_log_payload(
+        trace_id.as_str(),
+        &prepared.raw_body,
+        Some(crate::gateway::request_log_payload_conversation_key(
+            context.api_key.id.as_str(),
+            context.incoming_headers.session_id(),
+        )),
+    );
     let effective_protocol_type = crate::apikey_profile::resolve_gateway_protocol_type(
         context.api_key.protocol_type.as_str(),
         RESPONSES_ENDPOINT,
@@ -3467,9 +3465,8 @@ fn record_rejected_ws_request(
     authenticated_text: Option<&str>,
 ) {
     let trace_id = crate::gateway::next_trace_id();
-    if let (Some(text), Some(storage)) = (authenticated_text, open_storage()) {
+    if let Some(text) = authenticated_text {
         crate::gateway::store_client_request_log_payload(
-            &storage,
             trace_id.as_str(),
             &bytes::Bytes::copy_from_slice(text.as_bytes()),
             Some(crate::gateway::request_log_payload_conversation_key(
@@ -3912,10 +3909,11 @@ async fn try_retry_ws_request_after_terminal(
     }
     let retry_text = retry_text.unwrap_or_else(|| pending.prepared.text.clone());
     let retry_input = ws_request_input_from_text(retry_text.as_str())?;
-    capture_native_ws_upstream_attempt(context, &pending.log, upstream, retry_text.as_str());
+    let retry_frame =
+        capture_native_ws_upstream_attempt(context, &pending.log, upstream, retry_text.as_str());
     match upstream
         .stream
-        .send(UpstreamMessage::Text(retry_text.clone().into()))
+        .send(UpstreamMessage::Text(retry_frame))
         .await
     {
         Ok(()) => {

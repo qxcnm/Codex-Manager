@@ -167,6 +167,15 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
         // DomainStorage contract. Keep the synchronous path for desktop and
         // compatibility callers that do not carry AppState.
         "requestlog/clear" => super::ok_or_error(requestlog_clear::clear_request_logs()),
+        // Admin-only diagnostics of the request payload write queue. With a
+        // `traceId`, also reports why that trace's content was not recorded.
+        "requestlog/payload_queue_stats" => super::value_or_error(if actor.is_admin() {
+            Ok(crate::gateway::request_log_payload_queue_stats(
+                super::str_param(req, "traceId"),
+            ))
+        } else {
+            Err("permission_denied: requestlog/payload_queue_stats".to_string())
+        }),
         "requestlog/today_summary" => {
             let day_start_ts = super::i64_param(req, "dayStartTs");
             let day_end_ts = super::i64_param(req, "dayEndTs");

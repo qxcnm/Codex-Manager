@@ -1925,9 +1925,11 @@ pub(super) fn build_local_validation_result(
     trace_id: String,
     incoming_headers: super::super::IncomingHeaderSnapshot,
     storage: crate::storage_helpers::StorageHandle,
-    mut body: Vec<u8>,
+    client_body: Bytes,
     api_key: ApiKey,
 ) -> Result<LocalValidationResult, LocalValidationError> {
+    // `client_body` is shared with the request log client capture; the
+    // forwarding path takes owned copies only where it rewrites the body.
     // 按当前策略取消每次请求都更新 api_keys.last_used_at，减少并发写入冲突。
     let account_group_filter =
         crate::apikey::remote::group_filter(&storage, &api_key.id).map_err(|err| {
@@ -1969,7 +1971,7 @@ pub(super) fn build_local_validation_result(
             crate::gateway::bilingual_error("不支持的请求方法", "unsupported method"),
         )
     })?;
-    let initial_request_value = super::super::parse_request_json_value(&body);
+    let initial_request_value = super::super::parse_request_json_value(&client_body);
     let initial_service_tier_diagnostic = initial_request_value
         .as_ref()
         .map(|value| super::super::inspect_service_tier_value(value.get("service_tier")))
@@ -2039,7 +2041,7 @@ pub(super) fn build_local_validation_result(
             request_shape,
         ) = apply_passthrough_request_overrides(
             &logical_path,
-            body,
+            client_body.to_vec(),
             &api_key,
             initial_request_meta.service_tier.clone(),
             compact_model_override_for_logical_request.as_deref(),
@@ -2163,7 +2165,7 @@ pub(super) fn build_local_validation_result(
     let passthrough_path = logical_path.clone();
     let mut passthrough_body = apply_passthrough_request_overrides(
         &logical_path,
-        body.clone(),
+        client_body.to_vec(),
         &api_key,
         initial_request_meta.service_tier.clone(),
         compact_model_override_for_logical_request.as_deref(),
@@ -2209,7 +2211,8 @@ pub(super) fn build_local_validation_result(
         passthrough_body_value_for_validation.as_ref(),
     )
     .map_err(|err| LocalValidationError::new(400, err.message()))?;
-    let original_body = body.clone();
+    let original_body = client_body;
+    let mut body: Vec<u8> = original_body.to_vec();
     let (mut path, mut response_adapter, mut gemini_stream_output_mode, mut tool_name_restore_map) =
         if effective_protocol_type == crate::apikey_profile::PROTOCOL_OPENAI_COMPAT
             && is_openai_images_generations_path(normalized_path.as_str())
@@ -2322,7 +2325,7 @@ pub(super) fn build_local_validation_result(
             path
         );
         path = normalized_path.clone();
-        body = original_body;
+        body = original_body.to_vec();
         response_adapter = super::super::ResponseAdapter::Passthrough;
         gemini_stream_output_mode = None;
         tool_name_restore_map.clear();

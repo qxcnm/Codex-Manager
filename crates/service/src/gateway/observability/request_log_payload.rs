@@ -11,14 +11,19 @@
 //!   once per distinct fragment, so consecutive requests of a conversation
 //!   only add their new tail.
 //!
-//! Splitting, hashing and the database write run on a dedicated writer
-//! thread; the gateway snapshots the clear generation before enqueueing.
+//! Logging must never affect receiving or forwarding a request. The gateway
+//! hot path only builds a job from reference-counted `Bytes`, snapshots the
+//! in-memory clear generation and hands the job to the write queue
+//! ([`pipeline`]): no database access, no file IO, no storage pool, no
+//! blocking, no error returned and no panic propagated. Redaction, splitting
+//! and hashing run on a small preprocessing pool, database writes are group
+//! committed by one writer thread, and jobs over the memory budget are
+//! spilled to disk by a dedicated thread ([`spill`]).
 
 use base64::Engine;
 use bytes::Bytes;
 use codexmanager_core::storage::{
-    now_ts, RequestLogPayload, RequestLogPayloadManifestInput, RequestLogPayloadParentHint,
-    RequestLogPayloadPart, RequestLogUpstreamAttempt, Storage, PAYLOAD_STAGE_CLIENT,
+    now_ts, RequestLogPayloadManifestInput, RequestLogPayloadPart, PAYLOAD_STAGE_CLIENT,
     PAYLOAD_STAGE_UPSTREAM,
 };
 use serde_json::{Map, Value};
@@ -26,6 +31,30 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
+
+#[path = "request_log_payload_clear.rs"]
+mod clear;
+#[path = "request_log_payload_persist.rs"]
+mod persist;
+#[path = "request_log_payload_pipeline.rs"]
+mod pipeline;
+#[path = "request_log_payload_spill.rs"]
+mod spill;
+#[path = "request_log_payload_writer.rs"]
+mod writer;
+
+pub(crate) use clear::{
+    begin_request_log_payload_clear, finish_request_log_payload_clear,
+    guard_request_log_payload_clear,
+};
+#[cfg(test)]
+use persist::{
+    persist_request_log_payload, persist_request_log_payload_with_cache, run_payload_writer,
+    ParentCache,
+};
+pub(crate) use pipeline::{
+    initialize_request_log_payload_pipeline, request_log_payload_queue_stats,
+};
 
 /// Size cap of a stored preview when the preview mode is enabled.
 pub(crate) const REQUEST_LOG_PAYLOAD_PREVIEW_MAX_BYTES: usize = 16 * 1024;
@@ -35,11 +64,6 @@ pub(crate) const RAW_BODY_FIELD: &str = "$body";
 /// Candidate list fields, in detection order: OpenAI Responses `input`,
 /// Chat Completions / Anthropic `messages`, Gemini `contents`.
 const LIST_FIELDS: [&str; 3] = ["input", "messages", "contents"];
-const PARENT_CACHE_CAPACITY: usize = 256;
-/// Bounded queue of the async writer; full queues drop payload jobs instead
-/// of blocking the gateway hot path.
-#[cfg(not(test))]
-const WRITER_QUEUE_CAPACITY: usize = 64;
 
 static REDACTION_ENABLED: AtomicBool = AtomicBool::new(true);
 static PREVIEW_ENABLED: AtomicBool = AtomicBool::new(true);
@@ -132,8 +156,13 @@ pub(crate) struct RequestLogPayloadJob {
     pub redact: bool,
     pub preview: bool,
     pub created_at: i64,
-    /// Snapshot taken before enqueue, checked against SQLite at commit time.
+    /// In-memory mirror of the clear generation at capture time (or
+    /// [`clear::GENERATION_UNRESOLVED`]); checked against SQLite at commit.
     pub generation: i64,
+    /// Clears started in this process at capture time (see [`clear`]).
+    pub clear_epoch: u64,
+    /// Process run that captured the job.
+    pub boot_id: u64,
     pub attempt: Option<OutboundAttemptCapture>,
 }
 
@@ -152,48 +181,76 @@ pub(crate) fn request_log_payload_conversation_key(
     format!("{}|{}", key_id.trim(), conversation)
 }
 
-/// Hot-path entry: capture a request body for the given stage.
-/// Reads only the clear generation here; splitting, hashing and writes run in
-/// the worker. A capture failure never fails the upstream request.
+/// Hot-path entry: capture a request body for the given stage. Builds the
+/// job (reference-counted `Bytes`, no copy) and enqueues it. Never touches
+/// the database or the file system, never blocks, never fails the request
+/// and never lets a panic escape.
 pub(crate) fn store_request_log_payload(
-    storage: &Storage,
     trace_id: &str,
     stage: &str,
     body: &Bytes,
     conversation_key: Option<String>,
     attempt: Option<OutboundAttemptCapture>,
 ) {
-    let trace_id = trace_id.trim();
-    if trace_id.is_empty() || crate::storage_helpers::seaorm_enabled() {
-        return;
-    }
-    let generation = match storage.request_log_payload_generation() {
-        Ok(generation) => generation,
-        Err(err) => {
-            log::warn!("event=request_log_payload_generation_failed trace_id={trace_id} err={err}");
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let trace_id = trace_id.trim();
+        if trace_id.is_empty() || crate::storage_helpers::seaorm_enabled() {
             return;
         }
-    };
-    let job = RequestLogPayloadJob {
-        trace_id: trace_id.to_string(),
-        generation,
-        stage: stage.to_string(),
-        body: body.clone(),
-        conversation_key,
-        redact: request_log_payload_redaction_enabled(),
-        preview: request_log_payload_preview_enabled(),
-        created_at: now_ts(),
-        attempt,
-    };
-    #[cfg(test)]
-    {
-        persist_request_log_payload(storage, job);
+        let job = RequestLogPayloadJob {
+            trace_id: trace_id.to_string(),
+            generation: clear::GENERATION_UNRESOLVED,
+            clear_epoch: 0,
+            boot_id: 0,
+            stage: stage.to_string(),
+            body: body.clone(),
+            conversation_key,
+            redact: request_log_payload_redaction_enabled(),
+            preview: request_log_payload_preview_enabled(),
+            created_at: now_ts(),
+            attempt,
+        };
+        dispatch_request_log_payload_job(job);
+    }));
+}
+
+#[cfg(not(test))]
+fn dispatch_request_log_payload_job(job: RequestLogPayloadJob) {
+    match pipeline::global_pipeline() {
+        Some(pipeline) => pipeline.submit(job),
+        None => pipeline::count_unstarted_drop(),
     }
-    #[cfg(not(test))]
-    {
-        let _ = storage;
-        enqueue_request_log_payload(job);
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_PIPELINE: std::cell::RefCell<Option<std::sync::Arc<pipeline::PipelineShared>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Route this thread's captures to `pipeline` instead of the synchronous
+/// test writer.
+#[cfg(test)]
+pub(crate) fn set_test_pipeline(pipeline: Option<std::sync::Arc<pipeline::PipelineShared>>) {
+    TEST_PIPELINE.with(|slot| *slot.borrow_mut() = pipeline);
+}
+
+/// Unit tests persist synchronously (existing tests read the payload right
+/// after the request) unless a test pipeline is installed on this thread.
+#[cfg(test)]
+fn dispatch_request_log_payload_job(mut job: RequestLogPayloadJob) {
+    if let Some(pipeline) = TEST_PIPELINE.with(|slot| slot.borrow().clone()) {
+        pipeline.submit(job);
+        return;
     }
+    let Some(storage) = crate::storage_helpers::open_storage() else {
+        return;
+    };
+    match storage.request_log_payload_generation() {
+        Ok(generation) => job.generation = generation,
+        Err(_) => return,
+    }
+    persist_request_log_payload(&storage, job);
 }
 
 /// Capture the body exactly as received from the client. Called for every
@@ -201,19 +258,11 @@ pub(crate) fn store_request_log_payload(
 /// (validation rejects, local responses, aggregate-API failures) still have
 /// content to show.
 pub(crate) fn store_client_request_log_payload(
-    storage: &Storage,
     trace_id: &str,
     body: &Bytes,
     conversation_key: Option<String>,
 ) {
-    store_request_log_payload(
-        storage,
-        trace_id,
-        PAYLOAD_STAGE_CLIENT,
-        body,
-        conversation_key,
-        None,
-    );
+    store_request_log_payload(trace_id, PAYLOAD_STAGE_CLIENT, body, conversation_key, None);
 }
 
 /// Called immediately before a transport submits the body, once per actual
@@ -228,37 +277,38 @@ pub(crate) fn capture_outbound_payload(
     wire_body: &Bytes,
     logical_body: Option<&Bytes>,
 ) {
-    let Some(storage) = crate::storage_helpers::open_storage() else {
-        return;
-    };
-    let stage = stage_for_outbound_attempt(scope.trace_id);
-    let content_encoding = headers
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("content-encoding"))
-        .map(|(_, value)| value.clone());
-    let safe_url = reqwest::Url::parse(target_url)
-        .map(|mut url| {
-            url.set_query(None);
-            url.set_fragment(None);
-            let _ = url.set_username("");
-            let _ = url.set_password(None);
-            url.to_string()
-        })
-        .unwrap_or_else(|_| "<invalid upstream URL>".to_string());
-    store_request_log_payload(
-        &storage,
-        scope.trace_id,
-        &stage,
-        logical_body.unwrap_or(wire_body),
-        Some(request_log_payload_conversation_key(scope.key_id, None)),
-        Some(OutboundAttemptCapture {
-            method: method.to_string(),
-            url: safe_url,
-            transport: transport.to_string(),
-            content_encoding,
-            wire_body: wire_body.clone(),
-        }),
-    );
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if scope.trace_id.trim().is_empty() || crate::storage_helpers::seaorm_enabled() {
+            return;
+        }
+        let stage = stage_for_outbound_attempt(scope.trace_id);
+        let content_encoding = headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-encoding"))
+            .map(|(_, value)| value.clone());
+        let safe_url = reqwest::Url::parse(target_url)
+            .map(|mut url| {
+                url.set_query(None);
+                url.set_fragment(None);
+                let _ = url.set_username("");
+                let _ = url.set_password(None);
+                url.to_string()
+            })
+            .unwrap_or_else(|_| "<invalid upstream URL>".to_string());
+        store_request_log_payload(
+            scope.trace_id,
+            &stage,
+            logical_body.unwrap_or(wire_body),
+            Some(request_log_payload_conversation_key(scope.key_id, None)),
+            Some(OutboundAttemptCapture {
+                method: method.to_string(),
+                url: safe_url,
+                transport: transport.to_string(),
+                content_encoding,
+                wire_body: wire_body.clone(),
+            }),
+        );
+    }));
 }
 
 fn bytes_hash(bytes: &[u8]) -> String {
@@ -268,243 +318,6 @@ fn bytes_hash(bytes: &[u8]) -> String {
         hash.push_str(&format!("{byte:02x}"));
     }
     hash
-}
-
-/// True when this is an upstream capture whose body was already stored as the
-/// client capture, i.e. the gateway forwarded the request unchanged.
-fn upstream_matches_client(storage: &Storage, job: &RequestLogPayloadJob, hash: &str) -> bool {
-    if !job.stage.starts_with(PAYLOAD_STAGE_UPSTREAM) || hash.is_empty() {
-        return false;
-    }
-    matches!(
-        storage.find_request_log_payload_body_hash(&job.trace_id, PAYLOAD_STAGE_CLIENT),
-        Ok(Some(existing)) if existing == hash
-    )
-}
-
-#[cfg(not(test))]
-struct PayloadWriter {
-    tx: std::sync::mpsc::SyncSender<RequestLogPayloadJob>,
-    dropped: std::sync::atomic::AtomicU64,
-}
-
-#[cfg(not(test))]
-static PAYLOAD_WRITER: std::sync::OnceLock<PayloadWriter> = std::sync::OnceLock::new();
-
-#[cfg(not(test))]
-fn payload_writer() -> &'static PayloadWriter {
-    PAYLOAD_WRITER.get_or_init(|| {
-        let (tx, rx) = std::sync::mpsc::sync_channel::<RequestLogPayloadJob>(WRITER_QUEUE_CAPACITY);
-        let spawned = std::thread::Builder::new()
-            .name("request-log-payload-writer".to_string())
-            .spawn(move || run_payload_writer(rx, crate::storage_helpers::open_storage, || {}));
-        if let Err(err) = spawned {
-            log::warn!("event=request_log_payload_writer_spawn_failed err={err}");
-        }
-        PayloadWriter {
-            tx,
-            dropped: std::sync::atomic::AtomicU64::new(0),
-        }
-    })
-}
-
-fn run_payload_writer<F, S, H>(
-    rx: std::sync::mpsc::Receiver<RequestLogPayloadJob>,
-    mut open: F,
-    mut before_write: H,
-) where
-    F: FnMut() -> Option<S>,
-    S: std::ops::Deref<Target = Storage>,
-    H: FnMut(),
-{
-    let mut cache = ParentCache::default();
-    for job in rx {
-        before_write();
-        let Some(storage) = open() else {
-            log::warn!(
-                "event=request_log_payload_storage_unavailable trace_id={}",
-                job.trace_id
-            );
-            continue;
-        };
-        persist_request_log_payload_with_cache(&storage, job, &mut cache);
-    }
-}
-
-#[cfg(not(test))]
-fn enqueue_request_log_payload(job: RequestLogPayloadJob) {
-    let writer = payload_writer();
-    match writer.tx.try_send(job) {
-        Ok(()) => {}
-        Err(std::sync::mpsc::TrySendError::Full(job)) => {
-            let dropped = writer.dropped.fetch_add(1, Ordering::Relaxed) + 1;
-            if dropped == 1 || dropped % 256 == 0 {
-                log::warn!(
-                    "event=request_log_payload_queue_full trace_id={} dropped={} capacity={}",
-                    job.trace_id,
-                    dropped,
-                    WRITER_QUEUE_CAPACITY
-                );
-            }
-        }
-        Err(std::sync::mpsc::TrySendError::Disconnected(job)) => {
-            log::warn!(
-                "event=request_log_payload_writer_unavailable trace_id={}",
-                job.trace_id
-            );
-        }
-    }
-}
-
-/// Most recent manifest per conversation with its resolved item ids, so a
-/// follow-up request can compute its shared prefix without re-walking the
-/// parent chain in the database.
-#[derive(Default)]
-pub(crate) struct ParentCache {
-    entries: HashMap<String, RequestLogPayloadParentHint>,
-    order: VecDeque<String>,
-}
-
-impl ParentCache {
-    fn get(&self, key: &str) -> Option<&RequestLogPayloadParentHint> {
-        self.entries.get(key)
-    }
-
-    fn put(&mut self, key: String, hint: RequestLogPayloadParentHint) {
-        if self.entries.insert(key.clone(), hint).is_none() {
-            self.order.push_back(key);
-            while self.order.len() > PARENT_CACHE_CAPACITY {
-                if let Some(evicted) = self.order.pop_front() {
-                    self.entries.remove(&evicted);
-                }
-            }
-        }
-    }
-}
-
-/// Synchronously persist one job without a shared parent cache (tests).
-#[cfg(test)]
-pub(crate) fn persist_request_log_payload(storage: &Storage, job: RequestLogPayloadJob) {
-    let mut cache = ParentCache::default();
-    persist_request_log_payload_with_cache(storage, job, &mut cache);
-}
-
-pub(crate) fn persist_request_log_payload_with_cache(
-    storage: &Storage,
-    job: RequestLogPayloadJob,
-    cache: &mut ParentCache,
-) {
-    if job.preview {
-        let text = preview_payload_text(&job.body, job.redact);
-        let (payload, truncated) =
-            truncate_utf8_payload(&text, REQUEST_LOG_PAYLOAD_PREVIEW_MAX_BYTES);
-        let hash = bytes_hash(&job.body);
-        if upstream_matches_client(storage, &job, hash.as_str()) {
-            persist_attempt_metadata(storage, &job, true);
-            return;
-        }
-        let record = RequestLogPayload {
-            trace_id: job.trace_id.clone(),
-            stage: job.stage.clone(),
-            payload,
-            payload_bytes: job.body.len() as i64,
-            payload_truncated: truncated,
-            redacted: job.redact,
-            body_hash: hash,
-            created_at: job.created_at,
-        };
-        match storage.insert_request_log_payload_if_current(&record, job.generation) {
-            Ok(true) => persist_attempt_metadata(storage, &job, false),
-            Ok(false) => {}
-            Err(err) => log::warn!(
-                "event=request_log_payload_insert_failed trace_id={} err={}",
-                job.trace_id,
-                err
-            ),
-        }
-        return;
-    }
-
-    let mut input = split_request_payload(&job);
-    if job.stage.starts_with(PAYLOAD_STAGE_UPSTREAM) {
-        match storage.find_request_log_payload_manifest(&job.trace_id, PAYLOAD_STAGE_CLIENT) {
-            Ok(Some(client)) => input.conversation_key = client.conversation_key,
-            Ok(None) if job.attempt.is_some() => input.conversation_key = None,
-            Ok(None) => {}
-            Err(err) => {
-                log::warn!(
-                    "event=request_log_payload_client_context_read_failed trace_id={} err={err}",
-                    job.trace_id
-                );
-                input.conversation_key = None;
-            }
-        }
-    }
-    let cache_key = input
-        .conversation_key
-        .as_ref()
-        .zip(input.list_field.as_ref())
-        .map(|(conversation, field)| format!("{conversation}#{field}#{}", job.stage));
-    let hint = cache_key.as_deref().and_then(|key| cache.get(key)).cloned();
-    match storage.insert_request_log_payload_manifest_if_current(
-        &input,
-        hint.as_ref(),
-        job.generation,
-    ) {
-        Ok(write) => {
-            if write.inserted || write.identical_to_client {
-                persist_attempt_metadata(storage, &job, write.identical_to_client);
-            }
-            if write.inserted {
-                if let Some(key) = cache_key {
-                    cache.put(
-                        key,
-                        RequestLogPayloadParentHint {
-                            trace_id: input.trace_id.clone(),
-                            stage: input.stage.clone(),
-                            item_blob_ids: write.item_blob_ids,
-                        },
-                    );
-                }
-            }
-        }
-        Err(err) => {
-            log::warn!(
-                "event=request_log_payload_manifest_insert_failed trace_id={} err={}",
-                job.trace_id,
-                err
-            );
-        }
-    }
-}
-
-fn persist_attempt_metadata(
-    storage: &Storage,
-    job: &RequestLogPayloadJob,
-    identical_to_client: bool,
-) {
-    let Some(attempt) = job.attempt.as_ref() else {
-        return;
-    };
-    let record = RequestLogUpstreamAttempt {
-        trace_id: job.trace_id.clone(),
-        stage: job.stage.clone(),
-        method: attempt.method.clone(),
-        url: attempt.url.clone(),
-        transport: attempt.transport.clone(),
-        content_encoding: attempt.content_encoding.clone(),
-        wire_sha256: bytes_hash(&attempt.wire_body),
-        identical_to_client,
-        created_at: job.created_at,
-    };
-    if let Err(err) =
-        storage.record_request_log_upstream_attempt_if_current(&record, job.generation)
-    {
-        log::warn!(
-            "event=request_log_attempt_insert_failed trace_id={} err={err}",
-            job.trace_id
-        );
-    }
 }
 
 fn preview_payload_text(body: &[u8], redact: bool) -> String {

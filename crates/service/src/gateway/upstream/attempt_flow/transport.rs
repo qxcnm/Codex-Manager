@@ -1684,8 +1684,10 @@ async fn send_websocket_upstream_request_with_capture(
                     );
                     // body_text is the final WebSocket response.create frame.
                     if let Some(text) = body_text {
+                        // The request log shares the frame buffer with the send.
+                        let frame = tokio_tungstenite::tungstenite::Utf8Bytes::from(text);
                         if let Some((trace_id, key_id)) = capture.as_ref() {
-                            let sent_body = Bytes::from(text.clone());
+                            let sent_body = Bytes::from(frame.clone());
                             super::super::super::capture_outbound_payload(
                                 super::super::super::OutboundPayloadContext { trace_id, key_id },
                                 "WS",
@@ -1698,7 +1700,7 @@ async fn send_websocket_upstream_request_with_capture(
                         }
                         let send_result = tokio::select! {
                             _ = &mut cancel_rx => return,
-                            result = ws_stream.send(Message::Text(text.into())) => result,
+                            result = ws_stream.send(Message::Text(frame)) => result,
                         };
                         if let Err(e) = send_result {
                             let _ = body_tx.send(super::super::GatewayByteStreamItem::Error(

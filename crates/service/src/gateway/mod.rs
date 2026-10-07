@@ -501,8 +501,10 @@ use request_gate::request_gate_lock;
 use request_gate::RequestGateAcquireError;
 pub(crate) use request_log::write_request_log;
 pub(crate) use request_log_payload::{
-    capture_outbound_payload, request_log_payload_conversation_key,
-    request_log_payload_preview_enabled, request_log_payload_redaction_enabled,
+    begin_request_log_payload_clear, capture_outbound_payload, finish_request_log_payload_clear,
+    guard_request_log_payload_clear, initialize_request_log_payload_pipeline,
+    request_log_payload_conversation_key, request_log_payload_preview_enabled,
+    request_log_payload_queue_stats, request_log_payload_redaction_enabled,
     set_request_log_payload_preview_enabled, set_request_log_payload_redaction_enabled,
     store_client_request_log_payload, OutboundPayloadContext,
 };

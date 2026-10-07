@@ -109,7 +109,8 @@ pub(super) fn prepare_local_request(
     trace_id: String,
     debug: bool,
 ) -> Result<LocalValidationResult, LocalValidationError> {
-    let body = io::read_request_body(request)?;
+    // Zero-copy: the client capture and the forwarding path share one buffer.
+    let body = Bytes::from(io::read_request_body(request)?);
     let incoming_headers = super::IncomingHeaderSnapshot::from_request(request);
     let platform_key = io::extract_platform_key_or_error(request, &incoming_headers, debug)?;
 
@@ -120,9 +121,8 @@ pub(super) fn prepare_local_request(
     // Runs for every authenticated request, including ones that never reach
     // the upstream (validation rejects, local responses, aggregate failures).
     super::store_client_request_log_payload(
-        &storage,
         trace_id.as_str(),
-        &Bytes::from(body.clone()),
+        &body,
         Some(super::request_log_payload_conversation_key(
             api_key.id.as_str(),
             incoming_headers.session_id(),
