@@ -733,11 +733,14 @@ fn request_log_payload_queue_spill_panic_releases_handoff_and_resumes_memory() {
         let stats = shared.snapshot_stats(None);
         stats.written_total == 1 && !stats.spilling
     });
-    shared.submit(job("trc_sp_after", "{\"input\":\"b\"}", true));
+    // Same size as the first job, so it fits the budget and must not spill.
+    let after = job("trc_sp_b", "{\"input\":\"b\"}", true);
+    assert!(job_accounted_bytes(&after) <= budget_bytes);
+    shared.submit(after);
     wait_until("later job written from memory", || {
         shared.snapshot_stats(None).written_total == 2
     });
-    assert!(stored(&storage, "trc_sp_after"));
+    assert!(stored(&storage, "trc_sp_b"));
     assert_eq!(shared.snapshot_stats(None).spilled_total, 0);
 }
 
@@ -797,8 +800,21 @@ fn request_log_payload_queue_holds_pre_clear_handoff_jobs_off_disk() {
     let dir = TempDir::new("hold");
     let clear_state = private_clear_state();
     clear_state.observe_generation(storage.request_log_payload_generation().unwrap(), None);
-    let first = job("trc_hold_a", "{\"input\":\"a\"}", true);
+    // The first job fills the memory budget, so the next ones spill. It is
+    // large enough that the hand-off budget (half the queue budget) holds the
+    // held pre-clear job and the post-clear job together.
+    let first = job(
+        "trc_hold_a",
+        &format!("{{\"input\":\"{}\"}}", "a".repeat(4096)),
+        true,
+    );
     let budget_bytes = job_accounted_bytes(&first);
+    let before = job("trc_hold_b", "{\"input\":\"secret-before-clear\"}", true);
+    let after = job("trc_hold_c", "{\"input\":\"after-clear\"}", true);
+    assert!(
+        job_accounted_bytes(&before) + job_accounted_bytes(&after)
+            <= spill_handoff_budget(budget_bytes)
+    );
     let pipeline = start(
         &storage,
         budget_bytes,
@@ -814,16 +830,12 @@ fn request_log_payload_queue_holds_pre_clear_handoff_jobs_off_disk() {
         lock_inner(&shared).clear_boundaries.contains_key(&seq)
     });
     // Captured before the clear committed: must never reach the disk.
-    shared.submit(job(
-        "trc_hold_b",
-        "{\"input\":\"secret-before-clear\"}",
-        true,
-    ));
+    shared.submit(before);
     wait_until("pre-clear job held", || lock_inner(&shared).held.len() == 1);
     storage.clear_request_logs().unwrap();
     let generation = storage.request_log_payload_generation().unwrap();
     clear_state.observe_generation(generation, None);
-    shared.submit(job("trc_hold_c", "{\"input\":\"after-clear\"}", true));
+    shared.submit(after);
     wait_until("post-clear job spilled", || {
         shared.snapshot_stats(None).spilled_total == 1
     });
@@ -834,14 +846,18 @@ fn request_log_payload_queue_holds_pre_clear_handoff_jobs_off_disk() {
         let stats = shared.snapshot_stats(None);
         stats.spill_pending_jobs == 0 && lock_inner(&shared).held.is_empty()
     });
-    assert_eq!(shared.snapshot_stats(None).discarded_by_clear_total, 2);
+    // The held job is discarded by the purge. The first job is discarded
+    // too if it is still queued, or rejected by the database if the gated
+    // writer already took it.
+    assert!(shared.snapshot_stats(None).discarded_by_clear_total >= 1);
     assert_eq!(
         shared.drop_reason_for_trace("trc_hold_b"),
         Some(TraceDropReason::Stale)
     );
     pipeline.gate.grant(100);
-    wait_until("post-clear job written", || {
-        shared.snapshot_stats(None).written_total == 1
+    wait_until("post-clear job written, pre-clear jobs gone", || {
+        let stats = shared.snapshot_stats(None);
+        stats.written_total == 1 && stats.discarded_by_clear_total + stats.stale_rejected_total == 2
     });
     assert!(stored(&storage, "trc_hold_c"));
     assert!(!stored(&storage, "trc_hold_a"));
@@ -901,7 +917,14 @@ fn request_log_payload_queue_clear_before_store_install_keeps_new_segments() {
     let clear_state = private_clear_state();
     clear_state.observe_generation(0, None);
     let first = job("trc_late_a", "{\"input\":\"a\"}", true);
-    let budget_bytes = job_accounted_bytes(&first);
+    let second = job("trc_late_c", "{\"input\":\"c\"}", true);
+    // Both jobs fit in memory and together in the hand-off area: they spill
+    // only because of the leftover segment.
+    let budget_bytes = 8 * job_accounted_bytes(&first);
+    assert!(
+        job_accounted_bytes(&first) + job_accounted_bytes(&second)
+            <= spill_handoff_budget(budget_bytes)
+    );
     let pipeline = start(
         &storage,
         budget_bytes,
@@ -920,7 +943,7 @@ fn request_log_payload_queue_clear_before_store_install_keeps_new_segments() {
         SpillStore::open(&dir.0, SEGMENT_MAX_BYTES).unwrap(),
     );
     shared.submit(first);
-    shared.submit(job("trc_late_c", "{\"input\":\"c\"}", true));
+    shared.submit(second);
     // Leftover segments put the queue in spilling mode: both jobs spill.
     wait_until("jobs spilled while the clear runs", || {
         let stats = shared.snapshot_stats(None);
