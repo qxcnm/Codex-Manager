@@ -57,6 +57,8 @@ jobs:
       - name: Test request payload storage, cleanup and detail
         run: |
           cargo test -p codexmanager-core --lib request_log_payload_store
+          cargo test -p codexmanager-core --lib request_log_payload_batch
+          cargo test -p codexmanager-core --lib request_log_spill
           cargo test -p codexmanager-service --lib request_log_payload -- --test-threads=1
           cargo test -p codexmanager-service --lib requestlog::detail -- --test-threads=1
           cargo test -p codexmanager-service --lib response_id_only_comes_from_successful_completed_event

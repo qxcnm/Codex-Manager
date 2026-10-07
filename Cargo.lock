@@ -399,6 +399,7 @@ version = "0.6.3"
 dependencies = [
  "base64",
  "chrono",
+ "crc32fast",
  "rand 0.8.5",
  "rusqlite",
  "serde",

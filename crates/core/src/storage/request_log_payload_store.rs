@@ -210,21 +210,47 @@ impl Storage {
         if !self.has_request_log_payload_store()? {
             return Ok(RequestLogPayloadManifestWrite::default());
         }
-        // The upstream capture is redundant when the gateway forwarded the
-        // client body unchanged.
+        if let Some(identical) = self.request_log_payload_manifest_identical_to_client(input)? {
+            return Ok(identical);
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let write =
+            self.insert_request_log_payload_manifest_in_tx(input, parent_hint, generation)?;
+        if write.inserted {
+            tx.commit()?;
+        }
+        Ok(write)
+    }
+
+    /// The upstream capture is redundant when the gateway forwarded the
+    /// client body unchanged.
+    pub(super) fn request_log_payload_manifest_identical_to_client(
+        &self,
+        input: &RequestLogPayloadManifestInput,
+    ) -> Result<Option<RequestLogPayloadManifestWrite>> {
         if input.stage.starts_with(PAYLOAD_STAGE_UPSTREAM) && !input.body_hash.is_empty() {
             let client_hash = self.find_request_log_payload_manifest_body_hash(
                 &input.trace_id,
                 PAYLOAD_STAGE_CLIENT,
             )?;
             if client_hash.as_deref() == Some(input.body_hash.as_str()) {
-                return Ok(RequestLogPayloadManifestWrite {
+                return Ok(Some(RequestLogPayloadManifestWrite {
                     identical_to_client: true,
                     ..Default::default()
-                });
+                }));
             }
         }
-        let tx = self.conn.unchecked_transaction()?;
+        Ok(None)
+    }
+
+    /// Generation check and manifest insert; the caller owns the write
+    /// transaction (and must not commit partial work on error).
+    pub(super) fn insert_request_log_payload_manifest_in_tx(
+        &self,
+        input: &RequestLogPayloadManifestInput,
+        parent_hint: Option<&RequestLogPayloadParentHint>,
+        generation: Option<i64>,
+    ) -> Result<RequestLogPayloadManifestWrite> {
         if let Some(generation) = generation {
             if !self.request_log_payload_job_is_current(generation, input.created_at)? {
                 return Ok(RequestLogPayloadManifestWrite::default());
@@ -240,7 +266,6 @@ impl Storage {
             .optional()?
             .is_some();
         if exists {
-            tx.commit()?;
             return Ok(RequestLogPayloadManifestWrite::default());
         }
 
@@ -315,7 +340,6 @@ impl Storage {
             shared_prefix_len,
             &item_blob_ids[shared_prefix_len..],
         )?;
-        tx.commit()?;
         Ok(RequestLogPayloadManifestWrite {
             inserted: true,
             identical_to_client: false,
@@ -578,6 +602,20 @@ impl Storage {
         generation: i64,
     ) -> Result<bool> {
         let tx = self.conn.unchecked_transaction()?;
+        if !self.record_request_log_upstream_attempt_if_current_in_tx(attempt, generation)? {
+            return Ok(false);
+        }
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Body of [`Self::record_request_log_upstream_attempt_if_current`]; the
+    /// caller owns the write transaction.
+    pub(super) fn record_request_log_upstream_attempt_if_current_in_tx(
+        &self,
+        attempt: &RequestLogUpstreamAttempt,
+        generation: i64,
+    ) -> Result<bool> {
         if !self.request_log_payload_job_is_current(generation, attempt.created_at)? {
             return Ok(false);
         }
@@ -598,7 +636,6 @@ impl Storage {
                 attempt.created_at,
             ),
         )?;
-        tx.commit()?;
         Ok(true)
     }
 

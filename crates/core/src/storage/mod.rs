@@ -35,6 +35,7 @@ mod proxy_profiles;
 mod proxy_tests;
 mod quota_pools;
 mod request_log_filters;
+mod request_log_payload_batch;
 mod request_log_payload_purge;
 mod request_log_payload_store;
 pub mod request_log_query;
@@ -63,6 +64,7 @@ pub use model_catalog_v2::{
     ModelFastPolicyV2, ModelPriceV2, ModelRouteV2,
 };
 pub use proxy_profiles::derive_proxy_profile_url_metadata;
+pub use request_log_payload_batch::{is_sqlite_busy_error, RequestLogPayloadBatch};
 pub use request_log_payload_store::{
     RequestLogPayloadFull, RequestLogPayloadManifest, RequestLogPayloadManifestInput,
     RequestLogPayloadManifestWrite, RequestLogPayloadParentHint, RequestLogPayloadPart,

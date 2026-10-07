@@ -272,11 +272,24 @@ impl Storage {
         generation: i64,
     ) -> Result<bool> {
         let tx = self.conn.unchecked_transaction()?;
+        if !self.insert_request_log_payload_if_current_in_tx(payload, generation)? {
+            return Ok(false);
+        }
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Body of [`Self::insert_request_log_payload_if_current`]; the caller
+    /// owns the write transaction.
+    pub(super) fn insert_request_log_payload_if_current_in_tx(
+        &self,
+        payload: &RequestLogPayload,
+        generation: i64,
+    ) -> Result<bool> {
         if !self.request_log_payload_job_is_current(generation, payload.created_at)? {
             return Ok(false);
         }
         self.insert_request_log_payload(payload)?;
-        tx.commit()?;
         Ok(true)
     }
 
