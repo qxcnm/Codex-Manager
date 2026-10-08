@@ -4,6 +4,7 @@ use super::key_id_filters::KeyIdSqlFilter;
 use super::request_log_filters::{
     account_join_clause, build_request_log_filters, token_stats_join_clause, RequestLogSqlFilters,
 };
+use super::request_log_payload_purge::CURRENT_PAYLOAD_GENERATION_SQL;
 use super::{
     now_ts, RequestLog, RequestLogPayload, RequestLogQuerySummary, RequestLogTodaySummary,
     RequestTokenStat, Storage,
@@ -238,17 +239,20 @@ impl Storage {
     /// request hot path, so callers treat errors as best-effort.
     pub fn insert_request_log_payload(&self, payload: &RequestLogPayload) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO request_log_payloads (
-                trace_id, stage, payload, payload_bytes, payload_truncated, redacted,
-                body_hash, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-             ON CONFLICT(trace_id, stage) DO UPDATE SET
-                payload=excluded.payload,
-                payload_bytes=excluded.payload_bytes,
-                payload_truncated=excluded.payload_truncated,
-                redacted=excluded.redacted,
-                body_hash=excluded.body_hash,
-                created_at=excluded.created_at",
+            &format!(
+                "INSERT INTO request_log_payloads (
+                    trace_id, stage, payload, payload_bytes, payload_truncated, redacted,
+                    body_hash, created_at, generation
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, {CURRENT_PAYLOAD_GENERATION_SQL})
+                 ON CONFLICT(trace_id, stage) DO UPDATE SET
+                    payload=excluded.payload,
+                    payload_bytes=excluded.payload_bytes,
+                    payload_truncated=excluded.payload_truncated,
+                    redacted=excluded.redacted,
+                    body_hash=excluded.body_hash,
+                    created_at=excluded.created_at,
+                    generation=excluded.generation"
+            ),
             params![
                 payload.trace_id,
                 payload.stage,

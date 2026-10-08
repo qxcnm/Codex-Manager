@@ -41,6 +41,7 @@ pub mod request_log_query;
 mod request_logs;
 mod storage_space;
 pub use request_log_payload_purge::RequestLogPayloadPurgeProgress;
+use request_log_payload_purge::REQUEST_LOG_PAYLOAD_GENERATION_TABLES;
 pub use storage_space::{
     wal_checkpoint_pending, DatabaseSpaceUsage, WalCheckpointOutcome, AUTO_VACUUM_FULL,
     AUTO_VACUUM_INCREMENTAL, AUTO_VACUUM_NONE,
@@ -2380,6 +2381,16 @@ impl Storage {
         self.apply_sql_migration(
             "142_request_log_payload_purges",
             include_str!("../../migrations/142_request_log_payload_purges.sql"),
+        )?;
+        self.apply_sql_or_compat_migration(
+            "143_request_log_payload_purge_generation",
+            include_str!("../../migrations/143_request_log_payload_purge_generation.sql"),
+            |storage| {
+                for table in REQUEST_LOG_PAYLOAD_GENERATION_TABLES {
+                    storage.ensure_column(table, "generation", "INTEGER")?;
+                }
+                Ok(())
+            },
         )?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_api_key_account_group_filter_column()?;

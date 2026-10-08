@@ -10,6 +10,7 @@
 use rusqlite::{types::Value, OptionalExtension, Result};
 use std::collections::HashMap;
 
+use super::request_log_payload_purge::CURRENT_PAYLOAD_GENERATION_SQL;
 use super::{Storage, PAYLOAD_STAGE_CLIENT, PAYLOAD_STAGE_UPSTREAM};
 
 const BLOB_INSERT_CHUNK: usize = 200;
@@ -266,11 +267,14 @@ impl Storage {
             self.select_request_log_payload_parent(input, &item_blob_ids, parent_hint)?;
 
         self.conn.execute(
-            "INSERT INTO request_log_payload_manifests (
-                trace_id, stage, body_kind, list_field, conversation_key, parent_trace_id,
-                shared_prefix_len, item_count, previous_response_id, payload_bytes,
-                redacted, body_hash, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            &format!(
+                "INSERT INTO request_log_payload_manifests (
+                    trace_id, stage, body_kind, list_field, conversation_key, parent_trace_id,
+                    shared_prefix_len, item_count, previous_response_id, payload_bytes,
+                    redacted, body_hash, created_at, generation
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                           {CURRENT_PAYLOAD_GENERATION_SQL})"
+            ),
             (
                 input.trace_id.as_str(),
                 input.stage.as_str(),
@@ -582,10 +586,12 @@ impl Storage {
             return Ok(false);
         }
         self.conn.execute(
-            "INSERT OR IGNORE INTO request_log_upstream_attempts
-                 (trace_id, stage, method, url, transport, content_encoding,
-                  wire_sha256, identical_to_client, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            &format!(
+                "INSERT OR IGNORE INTO request_log_upstream_attempts
+                     (trace_id, stage, method, url, transport, content_encoding,
+                      wire_sha256, identical_to_client, created_at, generation)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, {CURRENT_PAYLOAD_GENERATION_SQL})"
+            ),
             (
                 attempt.trace_id.as_str(),
                 attempt.stage.as_str(),
@@ -703,10 +709,13 @@ impl Storage {
             return Ok(());
         }
         self.conn.execute(
-            "INSERT OR IGNORE INTO request_log_response_links (key_id, response_id, trace_id, created_at)
-             SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (
-                 SELECT 1 FROM request_logs WHERE trace_id = ?3 AND key_id = ?1
-                   AND cleared_at IS NULL)",
+            &format!(
+                "INSERT OR IGNORE INTO request_log_response_links
+                     (key_id, response_id, trace_id, created_at, generation)
+                 SELECT ?1, ?2, ?3, ?4, {CURRENT_PAYLOAD_GENERATION_SQL} WHERE EXISTS (
+                     SELECT 1 FROM request_logs WHERE trace_id = ?3 AND key_id = ?1
+                       AND cleared_at IS NULL)"
+            ),
             (key_id, response_id, trace_id, super::now_ts()),
         )?;
         Ok(())

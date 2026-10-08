@@ -1,7 +1,7 @@
 use super::super::{
     now_ts, RequestLog, RequestLogPayload, RequestLogPayloadManifestInput,
-    RequestLogPayloadParentHint, RequestLogPayloadPart, RequestTokenStat, Storage,
-    PAYLOAD_STAGE_CLIENT,
+    RequestLogPayloadParentHint, RequestLogPayloadPart, RequestLogUpstreamAttempt,
+    RequestTokenStat, Storage, PAYLOAD_STAGE_CLIENT,
 };
 use super::DrainSlot;
 use std::path::PathBuf;
@@ -259,7 +259,7 @@ fn reused_rowid_after_clear_is_not_purged() {
         .expect("insert old");
     begin_clear_without_drain(&storage, cleared_at);
     // Another path removed the newest old row, so SQLite may hand out the
-    // same rowid again. The later created_at keeps the new row safe.
+    // same rowid again. The new row's generation keeps it safe.
     storage
         .conn
         .execute("DELETE FROM request_log_payload_manifests", [])
@@ -453,4 +453,224 @@ fn preview_of_a_request_spanning_the_retention_cutoff_is_hidden_before_the_sweep
         .is_some());
     storage.drain_request_log_payload_purges(None).unwrap();
     assert_eq!(count(&storage, "request_log_payloads"), 1);
+}
+
+const CLEARED_TABLES: [&str; 4] = [
+    "request_log_payloads",
+    "request_log_payload_manifests",
+    "request_log_upstream_attempts",
+    "request_log_response_links",
+];
+
+/// One row in every cleared table, written through the production APIs.
+fn write_payload_rows(storage: &Storage, trace_id: &str, created_at: i64) {
+    storage
+        .insert_request_log_payload(&RequestLogPayload {
+            trace_id: trace_id.to_string(),
+            stage: PAYLOAD_STAGE_CLIENT.to_string(),
+            payload: "{}".to_string(),
+            payload_bytes: 2,
+            payload_truncated: false,
+            redacted: true,
+            body_hash: format!("hash-{trace_id}"),
+            created_at,
+        })
+        .expect("insert preview");
+    storage
+        .insert_request_log_payload_manifest(&manifest(trace_id, created_at, &[trace_id]), None)
+        .expect("insert manifest");
+    let generation = storage.request_log_payload_generation().unwrap();
+    assert!(storage
+        .record_request_log_upstream_attempt_if_current(
+            &RequestLogUpstreamAttempt {
+                trace_id: trace_id.to_string(),
+                stage: "upstream".to_string(),
+                method: "POST".to_string(),
+                url: "https://upstream.invalid/v1/responses".to_string(),
+                transport: "http".to_string(),
+                content_encoding: None,
+                wire_sha256: format!("sha-{trace_id}"),
+                identical_to_client: false,
+                created_at,
+            },
+            generation,
+        )
+        .expect("insert attempt"));
+    seed_log(storage, trace_id);
+    storage
+        .record_request_log_response_id("gk_purge", &format!("resp_{trace_id}"), trace_id)
+        .expect("insert response link");
+}
+
+fn rowid_of(storage: &Storage, table: &str, trace_id: &str) -> i64 {
+    storage
+        .conn
+        .query_row(
+            &format!("SELECT rowid FROM {table} WHERE trace_id = ?1"),
+            [trace_id],
+            |row| row.get(0),
+        )
+        .expect("row exists")
+}
+
+fn generation_of(storage: &Storage, table: &str, trace_id: &str) -> Option<i64> {
+    storage
+        .conn
+        .query_row(
+            &format!("SELECT generation FROM {table} WHERE trace_id = ?1"),
+            [trace_id],
+            |row| row.get(0),
+        )
+        .expect("row exists")
+}
+
+fn marker_max_rowid(storage: &Storage, table: &str) -> i64 {
+    storage
+        .conn
+        .query_row(
+            "SELECT max_rowid FROM request_log_payload_purges WHERE table_name = ?1",
+            [table],
+            |row| row.get(0),
+        )
+        .expect("clear marker exists")
+}
+
+#[test]
+fn same_second_rowid_reuse_after_clear_is_not_purged() {
+    let storage = memory_storage();
+    // Rows on both sides of the clear share its created_at second (response
+    // links stamp their own now_ts(), which is not later than this either).
+    let second = now_ts() + 2;
+    write_payload_rows(&storage, "trc_old", second);
+    begin_clear_without_drain(&storage, second);
+    let generation = storage.request_log_payload_generation().unwrap();
+    // Another path removed the newest old rows, so SQLite hands their rowids
+    // out again to the rows written right after the clear.
+    for table in CLEARED_TABLES {
+        storage
+            .conn
+            .execute(&format!("DELETE FROM {table}"), [])
+            .unwrap();
+    }
+    write_payload_rows(&storage, "trc_new", second);
+    for table in CLEARED_TABLES {
+        assert!(
+            rowid_of(&storage, table, "trc_new") <= marker_max_rowid(&storage, table),
+            "{table}: the new row reuses a rowid inside the clear bound"
+        );
+        assert_eq!(
+            generation_of(&storage, table, "trc_new"),
+            Some(generation),
+            "{table}: writes store the current generation"
+        );
+    }
+    assert!(storage
+        .find_request_log_payload_by_trace_id("trc_new", PAYLOAD_STAGE_CLIENT)
+        .unwrap()
+        .is_some());
+    assert!(storage
+        .load_request_log_payload_full("trc_new", "upstream")
+        .unwrap()
+        .is_some());
+    assert!(storage
+        .find_request_log_upstream_attempt("trc_new", "upstream")
+        .unwrap()
+        .is_some());
+    storage
+        .drain_request_log_payload_purges(None)
+        .expect("drain");
+    for table in CLEARED_TABLES {
+        assert_eq!(
+            count(&storage, table),
+            1,
+            "{table}: the row written after the clear survives the purge"
+        );
+    }
+    assert!(
+        storage
+            .load_request_log_payload_full("trc_new", "upstream")
+            .unwrap()
+            .expect("manifest kept")
+            .complete
+    );
+    assert!(!storage.request_log_payload_purge_pending().unwrap());
+}
+
+#[test]
+fn legacy_clear_marker_only_purges_rows_written_before_the_upgrade() {
+    let storage = memory_storage();
+    let cleared_at = now_ts();
+    // State left by a clear that ran before migration 143: a row without
+    // generation and a marker without generation.
+    storage
+        .insert_request_log_payload_manifest(&manifest("trc_legacy", cleared_at, &["a"]), None)
+        .unwrap();
+    storage
+        .conn
+        .execute(
+            "UPDATE request_log_payload_manifests SET generation = NULL",
+            [],
+        )
+        .unwrap();
+    storage
+        .conn
+        .execute(
+            "INSERT INTO request_log_payload_purges
+                (table_name, max_rowid, cleared_at, cursor_rowid, generation)
+             VALUES ('request_log_payload_manifests', 2, ?1, 0, NULL)",
+            [cleared_at],
+        )
+        .unwrap();
+    // Written after the upgrade, inside the legacy rowid and time bounds.
+    storage
+        .insert_request_log_payload_manifest(&manifest("trc_after", cleared_at, &["b"]), None)
+        .unwrap();
+    assert!(rowid_of(&storage, "request_log_payload_manifests", "trc_after") <= 2);
+    assert!(storage
+        .load_request_log_payload_full("trc_legacy", "upstream")
+        .unwrap()
+        .is_none());
+    assert!(storage
+        .load_request_log_payload_full("trc_after", "upstream")
+        .unwrap()
+        .is_some());
+    storage
+        .drain_request_log_payload_purges(None)
+        .expect("drain");
+    assert_eq!(count(&storage, "request_log_payload_manifests"), 1);
+    assert!(storage
+        .load_request_log_payload_full("trc_after", "upstream")
+        .unwrap()
+        .is_some());
+}
+
+#[test]
+fn generation_migration_finishes_when_columns_already_exist() {
+    let db = TempDb::new("generation-migration");
+    let version = "143_request_log_payload_purge_generation";
+    {
+        let storage = db.open(false);
+        // As if a previous run added the columns but stopped before
+        // recording the migration.
+        storage
+            .conn
+            .execute(
+                "DELETE FROM schema_migrations WHERE version = ?1",
+                [version],
+            )
+            .unwrap();
+    }
+    let storage = db.open(false);
+    let applied: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM schema_migrations WHERE version = ?1",
+            [version],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(applied, 1);
+    for table in super::REQUEST_LOG_PAYLOAD_GENERATION_TABLES {
+        assert!(storage.has_column(table, "generation").unwrap(), "{table}");
+    }
 }
