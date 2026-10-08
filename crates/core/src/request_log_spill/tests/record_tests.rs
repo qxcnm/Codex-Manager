@@ -18,6 +18,7 @@ pub(super) fn sample_meta(trace_id: &str) -> SpillRecordMeta {
             content_encoding: Some("zstd".to_string()),
         }),
         created_at: 1_700_000_123,
+        original: None,
     }
 }
 
@@ -70,6 +71,36 @@ fn record_round_trips_minimal_meta_and_binary_body() {
     assert_eq!(record.meta, meta);
     assert_eq!(record.body(), &body[..]);
     assert_eq!(record.wire_body(), None);
+}
+
+#[test]
+fn rewritten_record_keeps_original_digests_and_never_writes_the_wire_body() {
+    let mut meta = sample_meta("trc_redacted");
+    meta.original = Some(SpillOriginalDigests {
+        body_sha256: "ab".repeat(32),
+        body_len: 4096,
+        wire_sha256: Some("cd".repeat(32)),
+    });
+    let wire = b"\x28\xb5raw-wire-with-sk-secret";
+    let bytes = encode(&meta, br#"{"api_key":"[REDACTED]"}"#, Some(wire));
+    assert!(
+        !bytes.windows(b"sk-secret".len()).any(|w| w == b"sk-secret"),
+        "the wire body of a rewritten record is not written"
+    );
+    let ReadOutcome::Record(record, frame_len) = decode_one(&bytes) else {
+        panic!("record expected");
+    };
+    assert_eq!(frame_len, bytes.len() as u64);
+    assert_eq!(record.meta, meta);
+    assert_eq!(record.body(), br#"{"api_key":"[REDACTED]"}"#);
+    assert_eq!(record.wire_body(), None);
+
+    meta.original.as_mut().unwrap().wire_sha256 = None;
+    let bytes = encode(&meta, b"{}", None);
+    let ReadOutcome::Record(record, _) = decode_one(&bytes) else {
+        panic!("record expected");
+    };
+    assert_eq!(record.meta, meta);
 }
 
 #[test]

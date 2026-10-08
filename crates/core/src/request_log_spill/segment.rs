@@ -265,7 +265,7 @@ impl SpillStore {
         if self.active.is_none() {
             self.open_active()?;
         }
-        let wire = record.wire_body.filter(|_| record.meta.attempt.is_some());
+        let wire = record.wire_to_write();
         let result = {
             let active = self.active.as_mut().expect("active segment");
             active

@@ -43,6 +43,7 @@ fn meta(trace_id: &str, generation: i64) -> SpillRecordMeta {
             content_encoding: None,
         }),
         created_at: 10,
+        original: None,
     }
 }
 

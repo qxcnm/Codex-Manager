@@ -9,6 +9,10 @@
 //! short (crash while appending) is reported as [`ReadOutcome::Torn`]; a
 //! record with a bad magic, version, CRC or meta block is
 //! [`ReadOutcome::Corrupt`]. Both are skipped and counted by the caller.
+//!
+//! A record whose body was rewritten before spilling (redaction) carries
+//! [`SpillOriginalDigests`] of the bytes that were actually sent and never
+//! carries a wire body, so no unredacted copy reaches the disk.
 
 use std::io::{self, Read, Write};
 use std::ops::Range;
@@ -26,6 +30,7 @@ const FLAG_CONVERSATION: u8 = 1 << 3;
 const FLAG_ATTEMPT: u8 = 1 << 4;
 const FLAG_CONTENT_ENCODING: u8 = 1 << 5;
 const FLAG_WIRE_SEPARATE: u8 = 1 << 6;
+const FLAG_ORIGINAL_DIGESTS: u8 = 1 << 7;
 
 /// Transport metadata of an outbound attempt (the wire body travels
 /// separately in the payload).
@@ -35,6 +40,20 @@ pub struct SpillAttemptMeta {
     pub url: String,
     pub transport: String,
     pub content_encoding: Option<String>,
+}
+
+/// Digests of the original request bytes, kept when the spilled body is a
+/// rewritten (redacted) copy so the stored hashes and sizes still describe
+/// what was received and sent.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SpillOriginalDigests {
+    /// SHA-256 (hex) of the original body.
+    pub body_sha256: String,
+    /// Length of the original body in bytes.
+    pub body_len: u64,
+    /// SHA-256 (hex) of the attempt's wire bytes (equal to `body_sha256`
+    /// when the wire body was the body itself).
+    pub wire_sha256: Option<String>,
 }
 
 /// Job header persisted in front of the raw body.
@@ -52,15 +71,28 @@ pub struct SpillRecordMeta {
     pub conversation_key: Option<String>,
     pub attempt: Option<SpillAttemptMeta>,
     pub created_at: i64,
+    /// Set when the body is a rewritten copy; such records never carry a
+    /// wire body.
+    pub original: Option<SpillOriginalDigests>,
 }
 
 /// Borrowed view used for encoding. `wire_body == None` means the wire body
-/// is identical to `body` (or there is no attempt).
+/// is identical to `body` (or there is no attempt). The wire body is
+/// dropped when `meta.original` is set.
 #[derive(Debug, Clone, Copy)]
 pub struct SpillRecordRef<'a> {
     pub meta: &'a SpillRecordMeta,
     pub body: &'a [u8],
     pub wire_body: Option<&'a [u8]>,
+}
+
+impl<'a> SpillRecordRef<'a> {
+    /// Wire body that is actually written: only for attempts, and never for
+    /// a rewritten body.
+    pub fn wire_to_write(&self) -> Option<&'a [u8]> {
+        self.wire_body
+            .filter(|_| self.meta.attempt.is_some() && self.meta.original.is_none())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,7 +130,7 @@ pub fn encode_frame(record: &SpillRecordRef<'_>) -> Result<EncodedFrame, RecordE
     if meta.conversation_key.is_some() {
         flags |= FLAG_CONVERSATION;
     }
-    let wire = record.wire_body.filter(|_| meta.attempt.is_some());
+    let wire = record.wire_to_write();
     if let Some(attempt) = meta.attempt.as_ref() {
         flags |= FLAG_ATTEMPT;
         if attempt.content_encoding.is_some() {
@@ -107,6 +139,9 @@ pub fn encode_frame(record: &SpillRecordRef<'_>) -> Result<EncodedFrame, RecordE
         if wire.is_some() {
             flags |= FLAG_WIRE_SEPARATE;
         }
+    }
+    if meta.original.is_some() {
+        flags |= FLAG_ORIGINAL_DIGESTS;
     }
     let mut out = Vec::with_capacity(128 + meta.trace_id.len() + meta.stage.len());
     out.push(flags);
@@ -125,6 +160,17 @@ pub fn encode_frame(record: &SpillRecordRef<'_>) -> Result<EncodedFrame, RecordE
         put_str(&mut out, &attempt.transport);
         if let Some(encoding) = attempt.content_encoding.as_deref() {
             put_str(&mut out, encoding);
+        }
+    }
+    if let Some(original) = meta.original.as_ref() {
+        put_str(&mut out, &original.body_sha256);
+        out.extend_from_slice(&original.body_len.to_le_bytes());
+        match original.wire_sha256.as_deref() {
+            Some(wire_sha256) => {
+                out.push(1);
+                put_str(&mut out, wire_sha256);
+            }
+            None => out.push(0),
         }
     }
     if let Some(wire) = wire {
@@ -162,7 +208,7 @@ pub fn write_record<W: Write>(writer: &mut W, record: &SpillRecordRef<'_>) -> io
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "spill record too large"))?;
     writer.write_all(&frame.header)?;
     writer.write_all(&frame.meta)?;
-    if let Some(wire) = record.wire_body.filter(|_| record.meta.attempt.is_some()) {
+    if let Some(wire) = record.wire_to_write() {
         writer.write_all(wire)?;
     }
     writer.write_all(record.body)?;
@@ -335,6 +381,25 @@ pub fn decode_payload(payload: Vec<u8>) -> Result<DecodedRecord, &'static str> {
     } else {
         None
     };
+    let original = if flags & FLAG_ORIGINAL_DIGESTS != 0 {
+        let body_sha256 = cursor.string()?;
+        let body_len = cursor.u64()?;
+        let wire_sha256 = match cursor.u8()? {
+            0 => None,
+            1 => Some(cursor.string()?),
+            _ => return Err("bad wire digest flag"),
+        };
+        Some(SpillOriginalDigests {
+            body_sha256,
+            body_len,
+            wire_sha256,
+        })
+    } else {
+        None
+    };
+    if original.is_some() && flags & FLAG_WIRE_SEPARATE != 0 {
+        return Err("rewritten body with a wire body");
+    }
     let wire_len = if flags & FLAG_WIRE_SEPARATE != 0 {
         Some(cursor.u64()? as usize)
     } else {
@@ -367,6 +432,7 @@ pub fn decode_payload(payload: Vec<u8>) -> Result<DecodedRecord, &'static str> {
             conversation_key,
             attempt,
             created_at,
+            original,
         },
         payload,
         body_range,
