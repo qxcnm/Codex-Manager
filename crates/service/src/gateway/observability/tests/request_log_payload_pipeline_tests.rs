@@ -1,10 +1,13 @@
 use super::super::clear::{self as payload_clear, ClearState};
-use super::super::{set_test_pipeline, store_client_request_log_payload, RequestLogPayloadJob};
+use super::super::{
+    bytes_hash, set_test_pipeline, store_client_request_log_payload, OutboundAttemptCapture,
+    RequestLogPayloadJob,
+};
 use super::*;
 use bytes::Bytes;
 use codexmanager_core::request_log_spill::record::{SpillRecordMeta, SpillRecordRef};
 use codexmanager_core::request_log_spill::segment::{list_segments, segment_path};
-use codexmanager_core::storage::{now_ts, PAYLOAD_STAGE_CLIENT};
+use codexmanager_core::storage::{now_ts, PAYLOAD_STAGE_CLIENT, PAYLOAD_STAGE_UPSTREAM};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64 as TestCounter;
 use std::time::Instant;
@@ -168,6 +171,7 @@ fn job(trace_id: &str, body: &str, preview: bool) -> RequestLogPayloadJob {
         clear_epoch: 0,
         boot_id: 0,
         attempt: None,
+        original: None,
     }
 }
 
@@ -403,6 +407,7 @@ fn spill_meta(trace_id: &str, generation: Option<i64>, boot_id: u64) -> SpillRec
         conversation_key: Some("gk_q|conv".to_string()),
         attempt: None,
         created_at: now_ts(),
+        original: None,
     }
 }
 
@@ -1054,4 +1059,107 @@ fn request_log_payload_queue_retries_unavailable_storage_without_dropping() {
             .trace_drop_reason,
         None
     );
+}
+
+fn redacting_upstream_job(
+    trace_id: &str,
+    body: &str,
+    preview: bool,
+    wire: Bytes,
+) -> RequestLogPayloadJob {
+    let mut job = job(trace_id, body, preview);
+    job.stage = PAYLOAD_STAGE_UPSTREAM.to_string();
+    job.redact = true;
+    job.attempt = Some(OutboundAttemptCapture {
+        method: "POST".to_string(),
+        url: "https://upstream.invalid/v1/responses".to_string(),
+        transport: "http".to_string(),
+        content_encoding: Some("zstd".to_string()),
+        wire_body: wire,
+    });
+    job
+}
+
+#[test]
+fn request_log_payload_queue_redacts_spilled_jobs_before_they_reach_the_disk() {
+    let storage = storage();
+    let dir = TempDir::new("redact");
+    let first = job("trc_red_a", "{\"input\":\"a\"}", true);
+    let budget_bytes = job_accounted_bytes(&first);
+    let pipeline = start(
+        &storage,
+        budget_bytes,
+        SpillSetup::Opened(SpillStore::open(&dir.0, SEGMENT_MAX_BYTES).unwrap()),
+        private_clear_state(),
+        None,
+        None,
+    );
+    let shared = pipeline.shared.clone();
+    // Fills the memory budget; the gated writer holds it, so the next jobs
+    // spill.
+    shared.submit(first);
+    let body = r#"{"model":"m","api_key":"sk-spill-body-secret","input":[{"role":"user","content":"hi","authorization":"Bearer sk-spill-item-secret"}]}"#;
+    // A separate wire body (e.g. compressed) that also holds the secret.
+    let wire = Bytes::from_static(b"\x28\xb5\x2f\xfd compressed sk-spill-wire-secret");
+    shared.submit(redacting_upstream_job(
+        "trc_red_preview",
+        body,
+        true,
+        wire.clone(),
+    ));
+    wait_until("preview job spilled", || {
+        shared.snapshot_stats(None).spilled_total == 1
+    });
+    shared.submit(redacting_upstream_job(
+        "trc_red_full",
+        body,
+        false,
+        wire.clone(),
+    ));
+    wait_until("full job spilled", || {
+        shared.snapshot_stats(None).spilled_total == 2
+    });
+    for secret in [
+        &b"sk-spill-body-secret"[..],
+        b"sk-spill-item-secret",
+        b"sk-spill-wire-secret",
+    ] {
+        assert!(
+            !spill_files_contain(&dir, secret),
+            "{} reached the spill files",
+            String::from_utf8_lossy(secret)
+        );
+    }
+    assert!(spill_files_contain(&dir, b"[REDACTED]"));
+
+    pipeline.gate.grant(100);
+    wait_until("spilled jobs replayed", || {
+        shared.snapshot_stats(None).written_total == 3
+    });
+    let preview = storage
+        .find_request_log_payload_by_trace_id("trc_red_preview", PAYLOAD_STAGE_UPSTREAM)
+        .unwrap()
+        .expect("preview replayed");
+    assert!(preview.redacted);
+    assert!(!preview.payload.contains("sk-spill"), "{}", preview.payload);
+    assert!(preview.payload.contains("[REDACTED]"));
+    assert_eq!(preview.body_hash, bytes_hash(body.as_bytes()));
+    assert_eq!(preview.payload_bytes, body.len() as i64);
+    let full = storage
+        .load_request_log_payload_full("trc_red_full", PAYLOAD_STAGE_UPSTREAM)
+        .unwrap()
+        .expect("manifest replayed");
+    let stored_text = format!("{:?}{:?}", full.fields, full.items);
+    assert!(!stored_text.contains("sk-spill"), "{stored_text}");
+    assert!(stored_text.contains("[REDACTED]"));
+    assert_eq!(full.manifest.body_hash, bytes_hash(body.as_bytes()));
+    assert_eq!(full.manifest.payload_bytes, body.len() as i64);
+    for trace_id in ["trc_red_preview", "trc_red_full"] {
+        let attempt = storage
+            .find_request_log_upstream_attempt(trace_id, PAYLOAD_STAGE_UPSTREAM)
+            .unwrap()
+            .expect("attempt replayed");
+        assert_eq!(attempt.wire_sha256, bytes_hash(&wire), "{trace_id}");
+    }
+    wait_until("replayed segments deleted", || segments(&dir) == 0);
 }

@@ -141,6 +141,12 @@ pub(crate) struct PayloadWriteResult {
 
 /// Pure CPU work, safe to run on any thread.
 pub(crate) fn prepare_request_log_payload(job: &RequestLogPayloadJob) -> PreparedPayload {
+    // A job replayed from a redacted spill record describes the original
+    // bytes through its digests; its body is the redacted copy.
+    let (body_hash, body_len) = match job.original.as_ref() {
+        Some(original) => (original.body_sha256.clone(), original.body_len as i64),
+        None => (bytes_hash(&job.body), job.body.len() as i64),
+    };
     let body = if job.preview {
         let text = preview_payload_text(&job.body, job.redact);
         let (payload, truncated) =
@@ -149,14 +155,17 @@ pub(crate) fn prepare_request_log_payload(job: &RequestLogPayloadJob) -> Prepare
             trace_id: job.trace_id.clone(),
             stage: job.stage.clone(),
             payload,
-            payload_bytes: job.body.len() as i64,
+            payload_bytes: body_len,
             payload_truncated: truncated,
             redacted: job.redact,
-            body_hash: bytes_hash(&job.body),
+            body_hash,
             created_at: job.created_at,
         })
     } else {
-        PreparedBody::Manifest(split_request_payload(job))
+        let mut input = split_request_payload(job);
+        input.body_hash = body_hash;
+        input.payload_bytes = body_len;
+        PreparedBody::Manifest(input)
     };
     let attempt = job
         .attempt
@@ -168,7 +177,13 @@ pub(crate) fn prepare_request_log_payload(job: &RequestLogPayloadJob) -> Prepare
             url: attempt.url.clone(),
             transport: attempt.transport.clone(),
             content_encoding: attempt.content_encoding.clone(),
-            wire_sha256: bytes_hash(&attempt.wire_body),
+            wire_sha256: match job.original.as_ref() {
+                Some(original) => original
+                    .wire_sha256
+                    .clone()
+                    .unwrap_or_else(|| original.body_sha256.clone()),
+                None => bytes_hash(&attempt.wire_body),
+            },
             identical_to_client: false,
             created_at: job.created_at,
         });

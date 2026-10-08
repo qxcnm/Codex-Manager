@@ -9,7 +9,7 @@
 //! Panics are isolated by a per-job guard plus a restarting loop.
 
 use super::pipeline::{lock_inner, PipelineShared, QueuedJob};
-use super::RequestLogPayloadJob;
+use super::{original_digests, redacted_spill_body, RequestLogPayloadJob};
 use codexmanager_core::request_log_spill::budget::check_spill_space;
 use codexmanager_core::request_log_spill::order::DropReason;
 use codexmanager_core::request_log_spill::record::{
@@ -138,7 +138,15 @@ fn same_allocation(left: &bytes::Bytes, right: &bytes::Bytes) -> bool {
     left.as_ptr() == right.as_ptr() && left.len() == right.len()
 }
 
+/// Append one job. A job that asks for redaction is redacted here, before
+/// it reaches the disk, exactly as the database path would store it; only
+/// digests of the original body and wire bytes are kept next to it.
 fn append_job(store: &mut SpillStore, job: &RequestLogPayloadJob) -> std::io::Result<u64> {
+    let (body, original) = if job.redact {
+        (redacted_spill_body(job), Some(original_digests(job)))
+    } else {
+        (job.body.clone(), None)
+    };
     let meta = SpillRecordMeta {
         trace_id: job.trace_id.clone(),
         stage: job.stage.clone(),
@@ -155,15 +163,19 @@ fn append_job(store: &mut SpillStore, job: &RequestLogPayloadJob) -> std::io::Re
             content_encoding: attempt.content_encoding.clone(),
         }),
         created_at: job.created_at,
+        original,
     };
+    // Never spilled with a redacted body (the encoder drops it as well).
     let wire_body = job
         .attempt
         .as_ref()
-        .filter(|attempt| !same_allocation(&attempt.wire_body, &job.body))
+        .filter(|attempt| {
+            meta.original.is_none() && !same_allocation(&attempt.wire_body, &job.body)
+        })
         .map(|attempt| &attempt.wire_body[..]);
     store.append(&SpillRecordRef {
         meta: &meta,
-        body: &job.body,
+        body: &body,
         wire_body,
     })
 }

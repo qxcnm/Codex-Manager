@@ -421,6 +421,7 @@ fn job_from_record(record: DecodedRecord) -> RequestLogPayloadJob {
         clear_epoch: meta.clear_epoch,
         boot_id: meta.boot_id,
         attempt,
+        original: meta.original,
     }
 }
 

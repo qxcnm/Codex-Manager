@@ -22,6 +22,7 @@
 
 use base64::Engine;
 use bytes::Bytes;
+use codexmanager_core::request_log_spill::record::SpillOriginalDigests;
 use codexmanager_core::storage::{
     now_ts, RequestLogPayloadManifestInput, RequestLogPayloadPart, PAYLOAD_STAGE_CLIENT,
     PAYLOAD_STAGE_UPSTREAM,
@@ -59,6 +60,7 @@ pub(crate) use pipeline::{
 /// Size cap of a stored preview when the preview mode is enabled.
 pub(crate) const REQUEST_LOG_PAYLOAD_PREVIEW_MAX_BYTES: usize = 16 * 1024;
 const REDACTED_PLACEHOLDER: &str = "[REDACTED]";
+const NON_UTF8_PREVIEW_PLACEHOLDER: &str = "<non-utf8 body omitted>";
 /// Field name used for bodies that are not a JSON object.
 pub(crate) const RAW_BODY_FIELD: &str = "$body";
 /// Candidate list fields, in detection order: OpenAI Responses `input`,
@@ -164,6 +166,10 @@ pub(crate) struct RequestLogPayloadJob {
     /// Process run that captured the job.
     pub boot_id: u64,
     pub attempt: Option<OutboundAttemptCapture>,
+    /// Set for a job replayed from a spill segment whose body was redacted
+    /// before it reached the disk: hashes and sizes of the bytes that were
+    /// actually received and sent. `None` on the capture path.
+    pub original: Option<SpillOriginalDigests>,
 }
 
 /// Build the conversation key used to find the parent request whose items
@@ -209,6 +215,7 @@ pub(crate) fn store_request_log_payload(
             preview: request_log_payload_preview_enabled(),
             created_at: now_ts(),
             attempt,
+            original: None,
         };
         dispatch_request_log_payload_job(job);
     }));
@@ -322,7 +329,7 @@ fn bytes_hash(bytes: &[u8]) -> String {
 
 fn preview_payload_text(body: &[u8], redact: bool) -> String {
     let Ok(text) = std::str::from_utf8(body) else {
-        return "<non-utf8 body omitted>".to_string();
+        return NON_UTF8_PREVIEW_PLACEHOLDER.to_string();
     };
     if !redact {
         return text.to_string();
@@ -422,6 +429,47 @@ pub(crate) fn sanitize_request_payload(body: &[u8]) -> String {
         Ok(value) => serde_json::to_string(&redact_sensitive_value("", value))
             .unwrap_or_else(|_| "<unserializable body omitted>".to_string()),
         Err(_) => text.to_string(),
+    }
+}
+
+/// Body written to a spill segment for a job that asks for redaction. It
+/// never holds more than the database would store, and preprocessing it
+/// again (preview or split, with redaction) gives exactly the rows the
+/// original body gives:
+/// * JSON: the redacted JSON (redaction is idempotent);
+/// * other UTF-8 text: unchanged, as the database stores it;
+/// * not UTF-8: the preview placeholder in preview mode, the raw bytes in
+///   full mode (stored base64 encoded there).
+///
+/// The caller keeps the hashes and size of the original body separately
+/// and never spills the wire body.
+pub(crate) fn redacted_spill_body(job: &RequestLogPayloadJob) -> Bytes {
+    let Ok(text) = std::str::from_utf8(&job.body) else {
+        return if job.preview {
+            Bytes::from_static(NON_UTF8_PREVIEW_PLACEHOLDER.as_bytes())
+        } else {
+            job.body.clone()
+        };
+    };
+    match serde_json::from_str::<Value>(text) {
+        Ok(value) => match serde_json::to_vec(&redact_sensitive_value("", value)) {
+            Ok(redacted) => Bytes::from(redacted),
+            Err(_) => Bytes::from_static(b"null"),
+        },
+        Err(_) => job.body.clone(),
+    }
+}
+
+/// Digests of `job`'s original body and wire bytes, kept next to a
+/// [`redacted_spill_body`].
+pub(crate) fn original_digests(job: &RequestLogPayloadJob) -> SpillOriginalDigests {
+    SpillOriginalDigests {
+        body_sha256: bytes_hash(&job.body),
+        body_len: job.body.len() as u64,
+        wire_sha256: job
+            .attempt
+            .as_ref()
+            .map(|attempt| bytes_hash(&attempt.wire_body)),
     }
 }
 

@@ -30,6 +30,7 @@ fn stage_job(
         clear_epoch: 0,
         boot_id: 0,
         attempt: None,
+        original: None,
     }
 }
 
@@ -504,4 +505,70 @@ fn preview_upstream_capture_is_skipped_when_unchanged() {
             PAYLOAD_STAGE_UPSTREAM.to_string()
         ]
     );
+}
+
+/// A redacted spill copy plus the original digests must preprocess into
+/// exactly the rows the original body gives, in both storage modes.
+#[test]
+fn redacted_spill_body_prepares_like_the_original_body() {
+    use super::persist::{prepare_request_log_payload, PreparedBody};
+
+    let bodies: [&[u8]; 5] = [
+        br#"{"model":"m","api_key":"sk-eq-secret","previous_response_id":"resp_eq","input":[{"role":"user","content":"hi","token":"t-eq-secret"}]}"#,
+        br#"[{"authorization":"Bearer sk-eq-array","nested":{"password":"p-eq-secret"}}]"#,
+        br#"{"messages":[{"role":"user","content":"x"}],"metadata":{"refresh_token":"r-eq-secret"},"n":1.5}"#,
+        b"plain text, not json",
+        &[0xff, 0xfe, 0x00, 0x41],
+    ];
+    for body in bodies {
+        for preview in [true, false] {
+            let mut original = job("trc_eq", body, true, preview);
+            original.attempt = Some(OutboundAttemptCapture {
+                method: "POST".to_string(),
+                url: "https://upstream.invalid/v1/responses".to_string(),
+                transport: "http".to_string(),
+                content_encoding: Some("zstd".to_string()),
+                wire_body: Bytes::from_static(b"\x28\xb5\x2f\xfd wire sk-eq-wire"),
+            });
+            // What the spill thread writes and the replay rebuilds.
+            let spilled = redacted_spill_body(&original);
+            let mut replayed = original.clone();
+            replayed.body = spilled.clone();
+            replayed.original = Some(original_digests(&original));
+            if let Some(attempt) = replayed.attempt.as_mut() {
+                attempt.wire_body = spilled.clone();
+            }
+            for secret in [
+                "sk-eq-secret",
+                "t-eq-secret",
+                "sk-eq-array",
+                "p-eq-secret",
+                "r-eq-secret",
+            ] {
+                assert!(
+                    !spilled
+                        .windows(secret.len())
+                        .any(|window| window == secret.as_bytes()),
+                    "{secret} spilled (preview={preview})"
+                );
+            }
+
+            let expected = prepare_request_log_payload(&original);
+            let actual = prepare_request_log_payload(&replayed);
+            let describe = |body: &PreparedBody| match body {
+                PreparedBody::Preview(record) => format!("{record:?}"),
+                PreparedBody::Manifest(input) => format!("{input:?}"),
+            };
+            assert_eq!(
+                describe(&actual.body),
+                describe(&expected.body),
+                "preview={preview} body={:?}",
+                String::from_utf8_lossy(body)
+            );
+            assert_eq!(
+                format!("{:?}", actual.attempt),
+                format!("{:?}", expected.attempt)
+            );
+        }
+    }
 }
