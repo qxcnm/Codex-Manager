@@ -112,6 +112,22 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
   </tr>
   <tr>
     <td align="center" valign="middle" width="180">
+      <a href="https://omniakey.com">
+        <img src="assets/images/sponsors/OmniaKey.png" alt="OmniaKey" width="120" />
+      </a>
+    </td>
+    <td valign="top">
+      <strong>嗨嗨嗨！很高兴被你看见 👋</strong><br />
+      我们是 <strong><a href="https://omniakey.com">OmniaKey</a></strong> 团队，专为开发者打造的全模态 AI API 中转平台，提供文本、图片、视频与音频模型接入，一套 API Key 覆盖多种 AI 场景。<br />
+      <strong>📝 文本：</strong>GPT、Claude、Gemini、Grok、GLM、Qwen 等主流大模型全线覆盖，对话、代码、推理一站满足。<br />
+      <strong>🎨 图片：</strong>GPT-image-2.5、Nanobanna 2.1、Seedream 5.0 Pro，文生图、图生图、改图设计开箱即用。<br />
+      <strong>🎬 视频：</strong>Seedance 2.5、Wan3、Kling、MiniMaxH3，文生视频与图生视频模型，一键接入即可出片。<br />
+      <strong>🔊 音频：</strong>Suno AI 音乐生成，直接 API 调用，轻松落地音频创作场景。<br />
+      官网：<a href="https://omniakey.com">omniakey.com</a> · 中文地址：<a href="https://omniakey.com/zh">omniakey.com/zh</a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="middle" width="180">
       <a href="https://daitouai.com/">
         <img src="assets/images/sponsors/daitouai.svg" alt="呆头 AI" width="120" />
       </a>
