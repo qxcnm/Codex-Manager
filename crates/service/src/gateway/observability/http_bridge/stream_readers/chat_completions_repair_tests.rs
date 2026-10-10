@@ -74,6 +74,46 @@ fn repair_valid_completion_keeps_stop_and_usage() {
     assert!(state.terminal_error.is_none());
 }
 
+fn assert_tool_failure_can_complete(event: &str) {
+    for error in [
+        Value::Null,
+        serde_json::json!({ "message": "Tool unavailable" }),
+    ] {
+        let tool_failure = serde_json::json!({
+            "type": event,
+            "item_id": "mcp_review",
+            "output_index": 0,
+            "sequence_number": 1,
+            "error": error,
+        });
+        for prefix in [String::new(), format!("event: {event}\n")] {
+            let sse = format!(
+                "{prefix}data: {tool_failure}\n\n\
+                 data: {{\"type\":\"response.output_text.delta\",\"delta\":\"The tool is unavailable; here is the fallback answer.\"}}\n\n\
+                 data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"resp_review\",\"status\":\"completed\",\"usage\":{{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}}}}\n\n"
+            );
+            let (body, state) = run_fixture(&sse);
+            assert!(body.contains("The tool is unavailable; here is the fallback answer."));
+            assert!(body.contains("\"finish_reason\":\"stop\""));
+            assert!(body.contains("data: [DONE]"));
+            assert!(state.saw_terminal);
+            assert_eq!(state.last_event_type.as_deref(), Some("response.completed"));
+            assert_eq!(state.usage.total_tokens, Some(2));
+            assert!(state.terminal_error.is_none());
+        }
+    }
+}
+
+#[test]
+fn review_mcp_tool_failure_does_not_abort_completed_response() {
+    assert_tool_failure_can_complete("response.mcp_call.failed");
+}
+
+#[test]
+fn review_mcp_list_tools_failure_does_not_abort_completed_response() {
+    assert_tool_failure_can_complete("response.mcp_list_tools.failed");
+}
+
 struct BrokenReader;
 impl Read for BrokenReader {
     fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
@@ -123,8 +163,13 @@ fn repair_done_marker_without_completed_is_not_success() {
 #[test]
 fn repair_terminal_error_variants_fail_closed() {
     for sse in [
+        "event: error\ndata: not-json\n\n",
         "event: response.cancelled\n\n",
+        "event: response.canceled\n\n",
+        "event: response.incomplete\n\n",
+        "event: response.error\ndata: not-json\n\n",
         "event: response.failed\ndata: not-json\n\n",
+        "event: message\ndata: {\"type\":\"response.failed\"}\n\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"failed\",\"error\":{\"message\":\"Synthetic failed despite event name\"}}}\n\n",
         "data: {\"response\":{\"status\":\"incomplete\",\"status_details\":{\"error\":{\"code\":\"timeout\",\"message\":\"Synthetic upstream timeout\"}}}}\n\n",
     ] {

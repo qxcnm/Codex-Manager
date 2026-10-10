@@ -1,12 +1,11 @@
 use super::{
     chat_image_payload, classify_upstream_stream_read_error, collect_image_generation_data_urls,
     collect_output_text_from_event_fields, collect_response_output_text,
-    collect_response_reasoning_summary_text, inspect_sse_frame_for_protocol,
-    mark_first_response_ms, merge_usage, should_emit_keepalive_after_first_frame,
-    stream_idle_timed_out, stream_idle_timeout_message, stream_reader_disconnected_message,
-    stream_wait_timeout, upstream_hint_or_stream_incomplete_message, Arc, Cursor, Mutex,
-    PassthroughSseCollector, PassthroughSseProtocol, Read, SseKeepAliveFrame, SseTerminal,
-    UpstreamSseFramePump, UpstreamSseFramePumpItem,
+    collect_response_reasoning_summary_text, mark_first_response_ms, merge_usage,
+    should_emit_keepalive_after_first_frame, stream_idle_timed_out, stream_idle_timeout_message,
+    stream_reader_disconnected_message, stream_wait_timeout,
+    upstream_hint_or_stream_incomplete_message, Arc, Cursor, Mutex, PassthroughSseCollector, Read,
+    SseKeepAliveFrame, UpstreamSseFramePump, UpstreamSseFramePumpItem,
 };
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -438,38 +437,71 @@ impl ChatCompletionsFromResponsesSseReader {
         )
     }
 
+    fn is_response_failure_event(kind: &str) -> bool {
+        matches!(
+            kind.trim().to_ascii_lowercase().as_str(),
+            "error"
+                | "response.error"
+                | "response.failed"
+                | "response.incomplete"
+                | "response.cancelled"
+                | "response.canceled"
+        )
+    }
+
     fn handle_frame(&mut self, lines: &[String]) -> Option<Vec<u8>> {
-        let inspection = inspect_sse_frame_for_protocol(lines, PassthroughSseProtocol::Generic);
         let value = Self::data_json(lines).unwrap_or(Value::Null);
         self.remember_meta(&value);
         let event_type = Self::event_type(lines, &value);
-        if let Some(kind) = inspection.last_event_type {
+        if let Some(kind) = event_type.as_ref() {
             if let Ok(mut collector) = self.usage_collector.lock() {
-                collector.last_event_type = Some(kind);
+                collector.last_event_type = Some(kind.clone());
             }
         }
-        let inspected_error = match inspection.terminal {
-            Some(SseTerminal::Err(message)) => Some(message),
-            _ => None,
-        };
+        let data_event_type = value.get("type").and_then(Value::as_str);
+        let failure_event = [event_type.as_deref(), data_event_type]
+            .into_iter()
+            .flatten()
+            .find(|kind| Self::is_response_failure_event(kind));
+        // Tool sub-events can carry their own error while the response continues.
+        // Only errors on the response envelope terminate the chat stream.
+        let is_response_sub_event = [event_type.as_deref(), data_event_type]
+            .into_iter()
+            .flatten()
+            .any(|kind| {
+                kind.starts_with("response.")
+                    && !Self::is_response_failure_event(kind)
+                    && !matches!(
+                        kind,
+                        "response.created"
+                            | "response.in_progress"
+                            | "response.completed"
+                            | "response.done"
+                    )
+            });
         let upstream_error = [
-            value.get("error"),
+            value
+                .get("error")
+                .filter(|_| !is_response_sub_event || failure_event.is_some()),
             value.pointer("/response/error"),
             value.pointer("/response/status_details/error"),
         ]
         .into_iter()
         .flatten()
         .find(|error| !error.is_null())
-        .or_else(|| (event_type.as_deref() == Some("error")).then_some(&value));
+        .or_else(|| {
+            (event_type.as_deref() == Some("error") || data_event_type == Some("error"))
+                .then_some(&value)
+        });
         let response_status = value.pointer("/response/status").and_then(Value::as_str);
-        if inspected_error.is_some()
+        if failure_event.is_some()
             || upstream_error.is_some()
             || matches!(
                 response_status,
                 Some("failed" | "incomplete" | "cancelled" | "canceled")
             )
         {
-            let incomplete = event_type.as_deref() == Some("response.incomplete")
+            let incomplete = failure_event == Some("response.incomplete")
                 || response_status == Some("incomplete");
             let default_code = if incomplete {
                 "upstream_response_incomplete"
@@ -480,7 +512,7 @@ impl ChatCompletionsFromResponsesSseReader {
                 .pointer("/response/incomplete_details/reason")
                 .and_then(Value::as_str)
                 .or_else(|| upstream_error.and_then(Value::as_str))
-                .or(inspected_error.as_deref());
+                .or(failure_event);
             // Only forward scalar error contract fields, never response output or raw bodies.
             let field = |name: &str| {
                 upstream_error
