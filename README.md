@@ -293,6 +293,7 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
 - Skills 与插件：`/skills/` 路由以独立 Tab 管理 Skills 安装和 Codex 插件安装；Skills 可从内置/自定义 GitHub 仓库或 skills.sh 搜索后单独安装，也支持 ZIP、目录导入和安全卸载；Codex 原生 Marketplace 继续负责完整插件安装，系统 Skill 只读
 - 项目启动：桌面端收藏本机目录；Windows / macOS 直接在 ChatGPT Codex App 中打开对应工作区，“会话”通过本机 CLI 继续项目；Web / Docker 不访问设备目录
 - 设置页：统一管理端口、监听地址、代理、请求超时、SSE 保活、主题、自动更新、后台行为
+- 基础设置中的“移除 requires_openai_auth”默认开启，保持托管网关的图片/actor 扩展认证行为。关闭后仅在切换到网关、重复应用或启动同步时保留 `cm` provider 已有的值，不会恢复此前删除的字段；保留 `true` 可能禁用 Codex 图片扩展。此设置不影响直连聚合 API，也不改写其他 provider。
 
 ### Service 版
 - `codexmanager-service`：提供本地 OpenAI 兼容网关

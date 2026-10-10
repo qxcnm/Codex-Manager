@@ -261,6 +261,7 @@ If this project has helped you, donations are welcome!
 - Skills and Plugins: `/skills/` separates Skills and Codex plugins, with repository/skills.sh install, ZIP/directory import, safe uninstall, native Marketplace flow, and read-only system Skills.
 - Project Launcher: desktop bookmarks local folders; Windows/macOS open them in the ChatGPT Codex App, Sessions uses the local CLI, and Web/Docker do not access device directories.
 - Settings: manage port, listen address, proxy, timeouts, SSE keepalive, theme, updates, and background behavior.
+- “Remove requires_openai_auth” in Basic settings is enabled by default, preserving the managed gateway's image/actor extension auth behavior. Disable it to preserve an existing value in the `cm` provider during gateway switching, reapplication, or startup sync; it does not restore a previously removed field. Keeping `true` may disable Codex image extensions. Direct aggregate profiles and other providers are unaffected.
 
 ### Service Edition
 

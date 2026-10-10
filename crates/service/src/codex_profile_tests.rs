@@ -295,6 +295,7 @@ name = "Other"
         &managed_catalog,
         true,
         "cm-managed-key",
+        true,
     )
     .expect("patch gateway");
 
@@ -336,6 +337,7 @@ name = "Other"
         &managed_catalog,
         false,
         "cm-managed-key",
+        true,
     )
     .expect("disable gateway websocket");
     assert!(without_websocket.contains("supports_websockets = false"));
@@ -1113,6 +1115,39 @@ async fn first_apply_models_failure_removes_new_managed_state() {
 }
 
 #[test]
+fn gateway_config_preserves_requires_openai_auth_when_removal_is_disabled() {
+    let input = r#"
+model_provider = "cm"
+
+[model_providers.cm]
+name = "Custom Gateway"
+requires_openai_auth = true
+"#;
+
+    let output = patch_config_for_gateway(
+        Some(input.to_string()),
+        "http://127.0.0.1:48770/v1",
+        Path::new("/tmp/gateway-models.json"),
+        false,
+        "cm-managed-key",
+        false,
+    )
+    .expect("patch gateway without removing auth requirement");
+    let doc = parse_config(&output).expect("parse patched gateway config");
+    let provider = doc
+        .get("model_providers")
+        .and_then(Item::as_table)
+        .and_then(|providers| providers.get(PROVIDER_ID))
+        .and_then(Item::as_table)
+        .expect("managed provider");
+
+    assert_eq!(
+        provider.get("requires_openai_auth").and_then(Item::as_bool),
+        Some(true)
+    );
+}
+
+#[test]
 fn gateway_config_preserves_custom_managed_provider_values() {
     let input = r#"
 model_provider = "cm"
@@ -1135,6 +1170,7 @@ http_headers = { "x-existing-header" = "keep", "x-openai-actor-authorization" = 
         &managed_catalog,
         true,
         "cm-managed-key",
+        true,
     )
     .expect("patch gateway");
     let doc = parse_config(&output).expect("parse patched gateway config");
@@ -1256,8 +1292,129 @@ fn invalid_toml_is_rejected() {
         Path::new("/tmp/gateway-models.json"),
         false,
         "cm-managed-key",
+        false,
     )
     .is_err());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn gateway_auth_cleanup_setting_covers_apply_reapply_and_startup_sync() {
+    let _lock = crate::test_env_guard();
+    let _backend_guard = EnvGuard::remove("CODEXMANAGER_STORAGE_BACKEND");
+    let _database_url_guard = EnvGuard::remove("CODEXMANAGER_DATABASE_URL");
+    for setting in [None, Some(false), Some(true)] {
+        for existing in [None, Some(false), Some(true)] {
+            let dir = temp_profile("gateway-auth-setting-matrix");
+            let _db_guard = set_test_db(&dir);
+            let _managed_root_guard = EnvGuard::set(
+                "CODEXMANAGER_TEST_DB_DIR",
+                dir.join("managed").to_string_lossy().as_ref(),
+            );
+            let storage = Storage::open(dir.join("codexmanager.db")).unwrap();
+            storage.init().unwrap();
+            if let Some(enabled) = setting {
+                storage
+                    .set_app_setting(
+                        crate::app_settings::APP_SETTING_CODEX_PROFILE_REMOVE_REQUIRES_OPENAI_AUTH_KEY,
+                        if enabled { "1" } else { "0" },
+                        now_ts(),
+                    )
+                    .unwrap();
+            }
+            assert_eq!(
+                remove_requires_openai_auth_enabled(),
+                setting.unwrap_or(true)
+            );
+            let key = ApiKey {
+                id: "auth-setting-key".into(),
+                name: None,
+                model_slug: None,
+                reasoning_effort: None,
+                service_tier: None,
+                rotation_strategy: crate::apikey_profile::ROTATION_HYBRID.into(),
+                aggregate_api_id: None,
+                account_plan_filter: None,
+                aggregate_api_url: None,
+                client_type: crate::apikey_profile::CLIENT_CODEX.into(),
+                protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT.into(),
+                auth_scheme: crate::apikey_profile::AUTH_BEARER.into(),
+                upstream_base_url: None,
+                static_headers_json: None,
+                key_hash: "auth-setting-hash".into(),
+                status: "active".into(),
+                created_at: now_ts(),
+                last_used_at: None,
+            };
+            storage.insert_api_key(&key).unwrap();
+            storage
+                .upsert_api_key_secret(&key.id, "cm-test-secret")
+                .unwrap();
+            let auth_field = existing
+                .map(|value| format!("requires_openai_auth = {value}\n"))
+                .unwrap_or_default();
+            let input = format!(
+                "model_provider = \"cm\"\n[model_providers.cm]\nname = \"Keep name\"\n{auth_field}\n[model_providers.other]\nrequires_openai_auth = true\nbase_url = \"https://other.example/v1\"\n"
+            );
+            let expected = if setting.unwrap_or(true) {
+                None
+            } else {
+                existing
+            };
+            let check = || {
+                let config =
+                    parse_config(&fs::read_to_string(dir.join(CONFIG_FILE)).unwrap()).unwrap();
+                let providers = config["model_providers"].as_table().unwrap();
+                let provider = providers[PROVIDER_ID].as_table().unwrap();
+                assert_eq!(
+                    provider.get("requires_openai_auth").and_then(Item::as_bool),
+                    expected
+                );
+                assert_eq!(provider["name"].as_str(), Some("Keep name"));
+                assert_eq!(
+                    provider["experimental_bearer_token"].as_str(),
+                    Some("cm-test-secret")
+                );
+                assert_eq!(provider["wire_api"].as_str(), Some("responses"));
+                assert_eq!(
+                    provider_http_header(
+                        provider,
+                        crate::gateway::X_OPENAI_ACTOR_AUTHORIZATION_HEADER
+                    ),
+                    Some(crate::gateway::CODEXMANAGER_IMAGE_EXTENSION_ACTOR_AUTHORIZATION)
+                );
+                assert_eq!(
+                    providers["other"]["requires_openai_auth"].as_bool(),
+                    Some(true)
+                );
+                assert_eq!(
+                    providers["other"]["base_url"].as_str(),
+                    Some("https://other.example/v1")
+                );
+            };
+            fs::write(dir.join(CONFIG_FILE), &input).unwrap();
+            let profile_path = dir.to_string_lossy().to_string();
+            for _ in 0..2 {
+                apply_gateway_async(
+                    Some(&key.id),
+                    Some(&profile_path),
+                    Some("http://127.0.0.1:48760"),
+                    Some(false),
+                    false,
+                )
+                .await
+                .unwrap();
+                check();
+            }
+            // Startup sync must read the setting again instead of inheriting an old patch result.
+            fs::write(dir.join(CONFIG_FILE), &input).unwrap();
+            assert!(sync_active_gateway_profile_from_storage_async(&storage)
+                .await
+                .unwrap());
+            check();
+            drop(storage);
+            cleanup_profile(&dir);
+        }
+    }
 }
 
 #[test]

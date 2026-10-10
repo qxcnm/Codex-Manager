@@ -67,17 +67,26 @@ pub fn list_segments(dir: &Path) -> io::Result<Vec<(u64, u64)>> {
         Err(err) => return Err(err),
     };
     for entry in entries {
-        let entry = entry?;
-        let Some(id) = entry.file_name().to_str().and_then(parse_segment_file_name) else {
-            continue;
-        };
-        let metadata = entry.metadata()?;
-        if metadata.is_file() {
-            segments.push((id, metadata.len()));
+        if let Some(segment) = list_segment_entry(entry?)? {
+            segments.push(segment);
         }
     }
     segments.sort_unstable();
     Ok(segments)
+}
+
+fn list_segment_entry(entry: fs::DirEntry) -> io::Result<Option<(u64, u64)>> {
+    let Some(id) = entry.file_name().to_str().and_then(parse_segment_file_name) else {
+        return Ok(None);
+    };
+    let metadata = match entry.metadata() {
+        Ok(metadata) => metadata,
+        // A spill purge can delete the file after read_dir returned the entry.
+        // This listing is a snapshot; a vanished segment is no longer present.
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    Ok(metadata.is_file().then_some((id, metadata.len())))
 }
 
 /// Create the spill directory (0700 on unix).
