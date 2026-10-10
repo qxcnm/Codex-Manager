@@ -82,11 +82,77 @@ fn parse_openai_responses_event_treats_partial_image_as_non_terminal() {
 
 #[test]
 fn completed_event_with_failed_status_never_succeeds_or_links_a_response_id() {
-    for status in ["failed", "incomplete", "cancelled", "canceled"] {
+    for status in ["failed", "error", "incomplete", "cancelled", "canceled"] {
         let lines = vec![format!("data: {{\"type\":\"response.completed\",\"response\":{{\"object\":\"response\",\"id\":\"resp_contradictory\",\"status\":\"{status}\",\"output\":[]}}}}")];
         let event = super::OpenAIResponsesEvent::parse(&lines).unwrap();
         assert!(matches!(event.terminal, Some(super::SseTerminal::Err(_))));
         assert!(event.usage.response_id.is_none());
         assert!(event.usage.explicit_failure);
+    }
+}
+
+#[test]
+fn mcp_local_errors_are_non_terminal_but_response_envelope_failures_still_win() {
+    let parsed = |value: serde_json::Value| {
+        OpenAIResponsesEvent::parse(&[format!("data: {value}\n"), "\n".to_owned()]).unwrap()
+    };
+    for event_type in [
+        "response.mcp_call.failed",
+        "response.mcp_call.error",
+        "response.mcp_list_tools.failed",
+        "response.mcp_list_tools.error",
+    ] {
+        for error in [
+            serde_json::Value::Null,
+            serde_json::json!("tool server unavailable"),
+            serde_json::json!({"code": "tool_error", "message": "quota exceeded"}),
+        ] {
+            let event =
+                parsed(serde_json::json!({"type": event_type, "status": "failed", "error": error}));
+            assert!(event.terminal.is_none(), "{event_type}/{error}");
+            assert!(event.upstream_error_hint.is_none());
+            assert!(!event.usage.explicit_failure);
+        }
+        for response in [
+            serde_json::json!({"error": {"message": "response failed"}}),
+            serde_json::json!({"status_details": {"error": {"message": "response failed"}}}),
+            serde_json::json!({"status": "failed"}),
+            serde_json::json!({"status": "error"}),
+            serde_json::json!({"status": "incomplete"}),
+            serde_json::json!({"status": "cancelled"}),
+            serde_json::json!({"status": "canceled"}),
+        ] {
+            let event = parsed(
+                serde_json::json!({"type": event_type, "error": "local tool error", "response": response}),
+            );
+            assert!(
+                matches!(event.terminal, Some(SseTerminal::Err(_))),
+                "{event_type}/{response}"
+            );
+            assert!(event.upstream_error_hint.is_some());
+        }
+    }
+    for event_type in [
+        "response.failed",
+        "response.error",
+        "response.incomplete",
+        "response.cancelled",
+        "response.canceled",
+        "error",
+    ] {
+        let event = parsed(
+            serde_json::json!({"type": event_type, "error": {"message": "response failed"}}),
+        );
+        assert!(
+            matches!(event.terminal, Some(SseTerminal::Err(_))),
+            "{event_type}"
+        );
+        if event_type != "error" {
+            let bare = parsed(serde_json::json!({"type": event_type}));
+            assert!(
+                matches!(bare.terminal, Some(SseTerminal::Err(_))),
+                "bare {event_type}"
+            );
+        }
     }
 }

@@ -701,7 +701,12 @@ pub(in super::super) fn parse_usage_from_json(value: &Value) -> UpstreamResponse
     });
     usage.explicit_failure = response_status
         .and_then(Value::as_str)
-        .is_some_and(|status| matches!(status, "failed" | "incomplete" | "cancelled" | "canceled"));
+        .is_some_and(|status| {
+            matches!(
+                status,
+                "failed" | "error" | "incomplete" | "cancelled" | "canceled"
+            )
+        });
     usage
 }
 
@@ -715,7 +720,12 @@ fn json_response_completed_successfully(value: &Value) -> bool {
     if response
         .get("status")
         .and_then(Value::as_str)
-        .is_some_and(|status| matches!(status, "failed" | "incomplete" | "cancelled" | "canceled"))
+        .is_some_and(|status| {
+            matches!(
+                status,
+                "failed" | "error" | "incomplete" | "cancelled" | "canceled"
+            )
+        })
     {
         return false;
     }

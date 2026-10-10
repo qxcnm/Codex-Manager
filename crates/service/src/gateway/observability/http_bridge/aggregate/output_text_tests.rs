@@ -263,6 +263,7 @@ fn output_text_limit_invalid_value_falls_back_to_unbounded() {
 fn explicit_json_completion_requires_success_and_allows_completed_tools() {
     for value in [
         serde_json::json!({"object": "response", "status": "failed", "output": []}),
+        serde_json::json!({"object": "response", "status": "error", "output": []}),
         serde_json::json!({"object": "response", "status": "incomplete", "output": []}),
         serde_json::json!({"object": "response", "status": "completed", "error": {"message": "unsupported tool"}, "output": []}),
         serde_json::json!({"object": "chat.completion", "choices": [{"message": {}, "finish_reason": "length"}]}),
@@ -294,7 +295,7 @@ fn tool_failure_status_does_not_poison_a_completed_primary_response() {
     );
     assert!(usage.completed_successfully);
     assert!(!usage.explicit_failure);
-    for status in ["failed", "incomplete", "canceled", "cancelled"] {
+    for status in ["failed", "error", "incomplete", "canceled", "cancelled"] {
         let failed = super::parse_usage_from_json(
             &serde_json::json!({"type": "response.completed", "response": {"status": status}}),
         );

@@ -153,3 +153,67 @@ fn real_bridge_outcomes_clear_qualification_only_after_success_for_both_endpoint
         }
     });
 }
+
+#[test]
+fn responses_mcp_local_errors_can_recover_but_response_failures_keep_qualification_rejected() {
+    use crate::account::model_support::{clear_unsupported, is_unsupported, mark_unsupported};
+    use crate::gateway::upstream::{
+        GatewayByteStream, GatewayStreamResponse, GatewayUpstreamResponse,
+    };
+    use crate::http::gateway_request::GatewayRequest;
+    use bytes::Bytes;
+
+    crate::gateway::response_test_runtime().unwrap().block_on(async {
+        let completed = serde_json::json!({"type": "response.completed", "response": {
+            "object": "response", "id": "resp_mcp_recovered", "status": "completed", "output": []
+        }});
+        for event_type in ["response.mcp_call.failed", "response.mcp_call.error", "response.mcp_list_tools.failed", "response.mcp_list_tools.error"] {
+            for error in [serde_json::Value::Null, serde_json::json!("tool server unavailable"), serde_json::json!({"code": "tool_error", "message": "quota exceeded"})] {
+                for (failure, success) in [
+                    (None, true),
+                    (Some(serde_json::json!({"type": "response.failed", "error": {"message": "response failed"}})), false),
+                    (Some(serde_json::json!({"type": "response.error"})), false),
+                    (Some(serde_json::json!({"type": "error", "error": {"message": "response failed"}})), false),
+                    (Some(serde_json::json!({"type": "response.completed", "response": {"status": "failed"}})), false),
+                    (Some(serde_json::json!({"type": "response.completed", "response": {"status": "error"}})), false),
+                    (Some(serde_json::json!({"type": "response.completed", "response": {"status": "incomplete"}})), false),
+                    (Some(serde_json::json!({"type": "response.completed", "response": {"status": "canceled"}})), false),
+                    (Some(serde_json::json!({"type": event_type, "error": "local tool error", "response": {"status_details": {"error": {"message": "response failed"}}}})), false),
+                ] {
+                    let local = serde_json::json!({"type": event_type, "status": "failed", "error": error});
+                    let mut body = format!("event: {event_type}\ndata: {local}\n\n");
+                    if let Some(failure) = failure {
+                        body.push_str(&format!("data: {failure}\n\n"));
+                    }
+                    body.push_str(&format!("data: {completed}\n\n"));
+                    let account = "responses-mcp-local-qualification";
+                    let model = "gpt-6-luna";
+                    mark_unsupported(account, model);
+                    let (parts, ()) = axum::http::Request::builder().method("POST").uri("/v1/responses").body(()).unwrap().into_parts();
+                    let (request, receiver) = GatewayRequest::new(parts, Bytes::from_static(b"{}"));
+                    let mut headers = reqwest::header::HeaderMap::new();
+                    headers.insert("content-type", "text/event-stream".parse().unwrap());
+                    let upstream = GatewayUpstreamResponse::Stream(GatewayStreamResponse::new(reqwest::StatusCode::OK, headers,
+                        GatewayByteStream::from_bytes(Bytes::copy_from_slice(body.as_bytes()))));
+                    let delivery = tokio::spawn(async move {
+                        crate::gateway::http_bridge::respond_with_upstream_async(request, upstream,
+                            crate::gateway::acquire_account_inflight(account), crate::gateway::ResponseAdapter::Passthrough,
+                            None, None, "/v1/responses", None, true, false, None, Some(model), std::time::Instant::now()).await
+                    });
+                    let response = receiver.await.unwrap();
+                    let delivered = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+                    assert_eq!(delivered.as_ref(), body.as_bytes(), "Responses bytes stay unchanged");
+                    let bridge = delivery.await.unwrap().unwrap();
+                    assert_eq!(bridge.is_ok(true), success, "{body}/{bridge:?}");
+                    if success {
+                        assert!(bridge.upstream_error_hint.is_none());
+                        assert_eq!(bridge.usage.response_id.as_deref(), Some("resp_mcp_recovered"));
+                    }
+                    super::clear_model_rejection_after_success(account, Some(model), 200, true, &bridge);
+                    assert_eq!(!is_unsupported(account, model), success, "{body}/{bridge:?}");
+                    clear_unsupported(account, model);
+                }
+            }
+        }
+    });
+}
