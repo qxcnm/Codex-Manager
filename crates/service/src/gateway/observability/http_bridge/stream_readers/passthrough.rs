@@ -107,7 +107,9 @@ impl PassthroughSseUsageReader {
             // Only explicit error fields may affect persistent account state here. A normal
             // output_text delta can legitimately quote a quota message; compatible upstreams
             // that emit quota notices as output are handled before delivery by stream preflight.
-            if collector.terminal_error.is_none() {
+            if collector.terminal_error.is_none()
+                && matches!(&inspection.terminal, Some(SseTerminal::Err(_)))
+            {
                 if let Some(msg) = extract_usage_limit_from_sse_data(lines) {
                     collector.saw_terminal = true;
                     collector.terminal_error = Some(msg);
@@ -156,6 +158,92 @@ impl PassthroughSseUsageReader {
     ///
     /// # 返回
     /// 返回函数执行结果
+    /// 上游流在没有终止事件的情况下结束时，向下游显式传递错误。
+    fn stream_error_chunk(&mut self, code: &str, message: String) -> Vec<u8> {
+        self.finished = true;
+        if let Ok(mut collector) = self.usage_collector.lock() {
+            // Transport failures after a response terminal must not turn a completed
+            // text/tool response (or an already delivered upstream error) into a new error.
+            if collector.saw_terminal {
+                return Vec::new();
+            }
+            collector
+                .terminal_error
+                .get_or_insert_with(|| message.clone());
+        }
+        if self.protocol == PassthroughSseProtocol::AnthropicNative {
+            let payload = serde_json::json!({
+                "type": "error",
+                "error": {
+                    "type": "api_error",
+                    "message": message,
+                    "code": code
+                }
+            });
+            return format!("event: error\ndata: {payload}\n\n").into_bytes();
+        }
+        let payload = serde_json::json!({
+            "type": "error",
+            "code": code,
+            "message": message,
+            "error": {
+                "type": "upstream_error",
+                "code": code,
+                "message": message,
+                "param": null
+            }
+        });
+        format!("data: {}\n\n", payload).into_bytes()
+    }
+
+    fn complete_tail_frame(&self, frame: &mut Vec<String>) -> bool {
+        if frame
+            .last()
+            .is_some_and(|line| line == "\n" || line == "\r\n")
+        {
+            return true;
+        }
+        // The pump emits its pending frame at EOF. Forward only a complete payload,
+        // then close the event before a possible generated error. A partial JSON
+        // document must not reach the client or absorb the next event's data line.
+        let data = frame
+            .iter()
+            .filter_map(|line| {
+                line.trim_end_matches(['\r', '\n'])
+                    .strip_prefix("data:")
+                    .map(str::trim_start)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !data.is_empty()
+            && data.trim() != "[DONE]"
+            && serde_json::from_str::<serde_json::Value>(&data).is_err()
+        {
+            return false;
+        }
+        if data.is_empty()
+            && frame.iter().any(|line| {
+                let line = line.trim();
+                !line.is_empty()
+                    && !line.starts_with(':')
+                    && !line.starts_with("event:")
+                    && !line.starts_with("id:")
+                    && !line.starts_with("retry:")
+                    && !line.starts_with("data:")
+            })
+        {
+            self.update_usage_from_frame(frame);
+            return false;
+        }
+        if let Some(last) = frame.last_mut() {
+            if !last.ends_with('\n') {
+                last.push('\n');
+            }
+        }
+        frame.push("\n".to_string());
+        true
+    }
+
     async fn next_chunk(&mut self) -> std::io::Result<Vec<u8>> {
         loop {
             match self
@@ -163,44 +251,43 @@ impl PassthroughSseUsageReader {
                 .recv_timeout_async(stream_wait_timeout(self.last_upstream_activity))
                 .await
             {
-                Ok(UpstreamSseFramePumpItem::Frame(frame)) => {
+                Ok(UpstreamSseFramePumpItem::Frame(mut frame)) => {
                     self.last_upstream_activity = Instant::now();
+                    if !self.complete_tail_frame(&mut frame) {
+                        continue;
+                    }
                     self.saw_upstream_frame = true;
                     self.update_usage_from_frame(&frame);
                     mark_first_response_ms(&self.usage_collector, self.request_started_at);
                     return Ok(frame.concat().into_bytes());
                 }
                 Ok(UpstreamSseFramePumpItem::Eof) => {
-                    if let Ok(mut collector) = self.usage_collector.lock() {
-                        if !collector.saw_terminal {
-                            let hint = collector.upstream_error_hint.clone();
-                            collector.terminal_error.get_or_insert_with(|| {
-                                upstream_hint_or_stream_incomplete_message(hint.as_deref())
-                            });
-                        }
-                    }
-                    self.finished = true;
-                    return Ok(Vec::new());
+                    let hint = self
+                        .usage_collector
+                        .lock()
+                        .ok()
+                        .and_then(|collector| collector.upstream_error_hint.clone());
+                    return Ok(self.stream_error_chunk(
+                        "upstream_stream_incomplete",
+                        upstream_hint_or_stream_incomplete_message(hint.as_deref()),
+                    ));
                 }
                 Ok(UpstreamSseFramePumpItem::Error(err)) => {
                     self.last_upstream_activity = Instant::now();
-                    if let Ok(mut collector) = self.usage_collector.lock() {
-                        collector
-                            .terminal_error
-                            .get_or_insert_with(|| classify_upstream_stream_read_error(&err));
-                    }
-                    self.finished = true;
-                    return Ok(Vec::new());
+                    let classified = classify_upstream_stream_read_error(&err);
+                    let message = if err.trim().is_empty() || classified == err {
+                        classified
+                    } else {
+                        format!("{classified}: {err}")
+                    };
+                    return Ok(self.stream_error_chunk("upstream_stream_read_error", message));
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                     if stream_idle_timed_out(self.last_upstream_activity) {
-                        if let Ok(mut collector) = self.usage_collector.lock() {
-                            collector
-                                .terminal_error
-                                .get_or_insert_with(stream_idle_timeout_message);
-                        }
-                        self.finished = true;
-                        return Ok(Vec::new());
+                        return Ok(self.stream_error_chunk(
+                            "upstream_stream_idle_timeout",
+                            stream_idle_timeout_message(),
+                        ));
                     }
                     if should_emit_keepalive_after_first_frame(self.saw_upstream_frame) {
                         return Ok(self.keepalive_frame.bytes().to_vec());
@@ -208,14 +295,15 @@ impl PassthroughSseUsageReader {
                     continue;
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    if let Ok(mut collector) = self.usage_collector.lock() {
-                        let hint = collector.upstream_error_hint.clone();
-                        collector.terminal_error.get_or_insert_with(|| {
-                            hint.unwrap_or_else(stream_reader_disconnected_message)
-                        });
-                    }
-                    self.finished = true;
-                    return Ok(Vec::new());
+                    let hint = self
+                        .usage_collector
+                        .lock()
+                        .ok()
+                        .and_then(|collector| collector.upstream_error_hint.clone());
+                    return Ok(self.stream_error_chunk(
+                        "upstream_stream_disconnected",
+                        hint.unwrap_or_else(stream_reader_disconnected_message),
+                    ));
                 }
             }
         }
@@ -274,3 +362,7 @@ fn extract_usage_limit_from_sse_data(lines: &[String]) -> Option<String> {
 #[cfg(test)]
 #[path = "passthrough_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "passthrough_repair_tests.rs"]
+mod repair_tests;

@@ -87,6 +87,25 @@ fn segment_names_are_lowercase_fixed_width_digits() {
     assert_eq!(parse_segment_file_name(".lock"), None);
 }
 
+#[cfg(unix)]
+#[test]
+fn listing_skips_segment_deleted_after_directory_snapshot() {
+    let dir = TempDir::new("list-purged");
+    prepare_spill_dir(&dir.0).unwrap();
+    let path = segment_path(&dir.0, 42);
+    fs::write(&path, b"payload").unwrap();
+    let entry = fs::read_dir(&dir.0).unwrap().next().unwrap().unwrap();
+    fs::remove_file(path).unwrap();
+
+    // On Unix metadata looks up the retained entry's path. This pins the same
+    // read_dir/purge interleaving as the background queue's cleanup polling.
+    assert_eq!(
+        entry.metadata().unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
+    assert_eq!(list_segment_entry(entry).unwrap(), None);
+}
+
 #[test]
 fn appended_records_are_readable_only_after_flush() {
     let dir = TempDir::new("flush");
