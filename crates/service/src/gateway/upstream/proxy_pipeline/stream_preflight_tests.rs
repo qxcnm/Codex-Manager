@@ -572,3 +572,196 @@ fn preflight_fails_over_when_producer_disconnects_after_metadata() {
             if message.contains("disconnected")
     ));
 }
+
+#[test]
+fn model_rejection_classification_and_last_response_replay_cover_both_endpoints_and_modes() {
+    let body = r#"{"error":{"message":"The 'gpt-6-luna' model is not supported when using Codex with a ChatGPT account."}}"#;
+    for path in ["/v1/responses", "/v1/chat/completions"] {
+        for is_stream in [false, true] {
+            for has_more in [false, true] {
+                let outcome = crate::gateway::run_upstream_io(preflight_stream_response(
+                    json_stream_response_with_status(reqwest::StatusCode::BAD_REQUEST, body),
+                    path,
+                    is_stream,
+                    has_more,
+                ))
+                .unwrap();
+                let StreamPreflightOutcome::ModelUnsupported { message, response } = outcome else {
+                    panic!("complete explicit rejection must be learned even for last candidate");
+                };
+                assert!(message.contains("gpt-6-luna"));
+                assert_eq!(response.status().as_u16(), 400);
+                let (replayed, _) = response.into_buffered().unwrap();
+                assert_eq!(replayed.as_ref(), body.as_bytes());
+            }
+        }
+    }
+}
+
+#[test]
+fn oversized_model_rejection_is_not_learned_and_last_body_replays_losslessly() {
+    let mut body = serde_json::to_vec(&serde_json::json!({
+        "error": {"message": "The 'gpt-6-luna' model is not supported when using Codex with a ChatGPT account."},
+        "padding": "x".repeat(STREAM_PREFLIGHT_MAX_BYTES),
+    })).unwrap();
+    body.extend_from_slice(b" ");
+    for has_more in [false, true] {
+        let response = GatewayUpstreamResponse::Stream(GatewayStreamResponse::new(
+            reqwest::StatusCode::BAD_REQUEST,
+            HeaderMap::new(),
+            GatewayByteStream::from_bytes(Bytes::from(body.clone())),
+        ));
+        let outcome = crate::gateway::run_upstream_io(preflight_stream_response(
+            response,
+            "/v1/responses",
+            true,
+            has_more,
+        ))
+        .unwrap();
+        if has_more {
+            assert!(matches!(
+                outcome,
+                StreamPreflightOutcome::StatusFailover {
+                    status_code: 400,
+                    ..
+                }
+            ));
+        } else {
+            let StreamPreflightOutcome::Ready(response) = outcome else {
+                panic!("last candidate must remain deliverable");
+            };
+            let (replayed, _) = response.into_buffered().unwrap();
+            assert_eq!(replayed.as_ref(), body.as_slice());
+        }
+    }
+}
+
+#[test]
+fn hanging_error_body_obeys_idle_and_wall_clock_caps_without_learning_prefix() {
+    for has_more in [false, true] {
+        for wall_cap in [false, true] {
+            let (tx, rx) = mpsc::channel(2);
+            let body = Bytes::from_static(b"{\"error\":{\"message\":\"The 'gpt-6-luna' model is not supported when using Codex with a ChatGPT account.\"}}");
+            tx.blocking_send(GatewayByteStreamItem::Chunk(body.clone()))
+                .unwrap();
+            let response = GatewayUpstreamResponse::Stream(GatewayStreamResponse::new(
+                reqwest::StatusCode::BAD_REQUEST,
+                HeaderMap::new(),
+                GatewayByteStream::from_receiver(rx),
+            ));
+            let started = std::time::Instant::now();
+            let outcome = crate::gateway::run_upstream_io(preflight_stream_response_with_timeouts(
+                response,
+                "/v1/chat/completions",
+                false,
+                has_more,
+                Some(Duration::from_millis(if wall_cap { 500 } else { 20 })),
+                Some(Duration::from_millis(if wall_cap { 20 } else { 500 })),
+            ))
+            .unwrap();
+            assert!(started.elapsed() < Duration::from_millis(300));
+            if has_more {
+                assert!(matches!(
+                    outcome,
+                    StreamPreflightOutcome::StatusFailover {
+                        status_code: 400,
+                        ..
+                    }
+                ));
+            } else {
+                tx.blocking_send(GatewayByteStreamItem::Eof).unwrap();
+                let StreamPreflightOutcome::Ready(response) = outcome else {
+                    panic!("timeout must preserve final response");
+                };
+                let (replayed, _) = response.into_buffered().unwrap();
+                assert_eq!(replayed, body);
+            }
+        }
+    }
+}
+
+#[test]
+fn broken_error_body_preserves_last_candidate_and_never_learns_partial_json() {
+    for has_more in [false, true] {
+        let (tx, rx) = mpsc::channel(3);
+        tx.blocking_send(GatewayByteStreamItem::Chunk(Bytes::from_static(
+            b"{\"error\":",
+        )))
+        .unwrap();
+        tx.blocking_send(GatewayByteStreamItem::Error(
+            "upstream read failed".to_owned(),
+        ))
+        .unwrap();
+        drop(tx);
+        let response = GatewayUpstreamResponse::Stream(GatewayStreamResponse::new(
+            reqwest::StatusCode::BAD_REQUEST,
+            HeaderMap::new(),
+            GatewayByteStream::from_receiver(rx),
+        ));
+        let outcome = crate::gateway::run_upstream_io(preflight_stream_response(
+            response,
+            "/v1/responses",
+            false,
+            has_more,
+        ))
+        .unwrap();
+        if has_more {
+            assert!(matches!(
+                outcome,
+                StreamPreflightOutcome::StatusFailover {
+                    status_code: 400,
+                    ..
+                }
+            ));
+        } else {
+            let StreamPreflightOutcome::Ready(response) = outcome else {
+                panic!("last response must preserve its read error");
+            };
+            assert!(response
+                .into_buffered()
+                .unwrap_err()
+                .contains("upstream read failed"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn continuously_dripping_error_body_stops_at_wall_clock_limit() {
+    let (tx, rx) = mpsc::channel(2);
+    let producer = tokio::spawn(async move {
+        loop {
+            if tx
+                .send(GatewayByteStreamItem::Chunk(Bytes::from_static(b" ")))
+                .await
+                .is_err()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    });
+    let response = GatewayUpstreamResponse::Stream(GatewayStreamResponse::new(
+        reqwest::StatusCode::BAD_REQUEST,
+        HeaderMap::new(),
+        GatewayByteStream::from_receiver(rx),
+    ));
+    let started = std::time::Instant::now();
+    let outcome = preflight_stream_response_with_timeouts(
+        response,
+        "/v1/responses",
+        true,
+        true,
+        Some(Duration::from_secs(1)),
+        Some(Duration::from_millis(25)),
+    )
+    .await;
+    assert!(started.elapsed() < Duration::from_millis(300));
+    assert!(matches!(
+        outcome,
+        StreamPreflightOutcome::StatusFailover {
+            status_code: 400,
+            ..
+        }
+    ));
+    producer.await.unwrap();
+}

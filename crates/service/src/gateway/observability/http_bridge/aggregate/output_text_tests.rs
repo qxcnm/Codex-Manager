@@ -258,3 +258,47 @@ fn output_text_limit_invalid_value_falls_back_to_unbounded() {
 
     assert_eq!(output_text_limit_bytes(), 0);
 }
+
+#[test]
+fn explicit_json_completion_requires_success_and_allows_completed_tools() {
+    for value in [
+        serde_json::json!({"object": "response", "status": "failed", "output": []}),
+        serde_json::json!({"object": "response", "status": "error", "output": []}),
+        serde_json::json!({"object": "response", "status": "incomplete", "output": []}),
+        serde_json::json!({"object": "response", "status": "completed", "error": {"message": "unsupported tool"}, "output": []}),
+        serde_json::json!({"object": "chat.completion", "choices": [{"message": {}, "finish_reason": "length"}]}),
+        serde_json::json!({"object": "chat.completion", "choices": [{"message": {}, "finish_reason": null}]}),
+        serde_json::json!({"usage": {"output_tokens": 10}}),
+    ] {
+        assert!(!super::parse_usage_from_json(&value).completed_successfully);
+    }
+    for value in [
+        serde_json::json!({"object": "response", "status": "completed", "error": null, "output": [{"type": "function_call", "name": "get_weather"}]}),
+        serde_json::json!({"object": "chat.completion", "choices": [{"message": {"tool_calls": [{"type": "function", "function": {"name": "get_weather"}}]}, "finish_reason": "tool_calls"}]}),
+        serde_json::json!({"object": "chat.completion", "choices": [{"message": {"content": "hello"}, "finish_reason": "stop"}]}),
+    ] {
+        assert!(super::parse_usage_from_json(&value).completed_successfully);
+    }
+}
+
+#[test]
+fn tool_failure_status_does_not_poison_a_completed_primary_response() {
+    let mut usage = super::parse_usage_from_json(
+        &serde_json::json!({"type": "response.mcp_call.failed", "status": "failed"}),
+    );
+    assert!(!usage.explicit_failure);
+    super::merge_usage(
+        &mut usage,
+        super::parse_usage_from_json(
+            &serde_json::json!({"object": "response", "status": "completed", "output": []}),
+        ),
+    );
+    assert!(usage.completed_successfully);
+    assert!(!usage.explicit_failure);
+    for status in ["failed", "error", "incomplete", "canceled", "cancelled"] {
+        let failed = super::parse_usage_from_json(
+            &serde_json::json!({"type": "response.completed", "response": {"status": status}}),
+        );
+        assert!(failed.explicit_failure);
+    }
+}

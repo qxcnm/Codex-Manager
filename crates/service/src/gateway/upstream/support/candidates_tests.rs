@@ -870,3 +870,95 @@ fn candidate_skip_reason_for_proxy_can_skip_last_cooldown_candidate() {
     assert_eq!(default_last, None);
     assert_eq!(strict_last, Some(CandidateSkipReason::Cooldown));
 }
+
+#[test]
+fn model_filter_precedes_sticky_selection_and_keeps_all_unsupported_fallback() {
+    use crate::account::model_support::{clear_unsupported, mark_unsupported};
+    use crate::gateway::conversation_binding::RouteConversationSource;
+    use codexmanager_core::storage::{ConversationBinding, ManagedModelV2Upsert};
+    let _guard = crate::test_env_guard();
+    let storage = Storage::open_in_memory().unwrap();
+    storage.init().unwrap();
+    let alias = codexmanager_core::usage::LUNA_MODEL_SLUG;
+    let first = "model-qualification-first";
+    let second = "model-qualification-second";
+    insert_active_account_with_token(&storage, first, 0);
+    insert_active_account_with_token(&storage, second, 1);
+    let mut mapped = storage.get_managed_model_v2(alias).unwrap().unwrap();
+    mapped
+        .routes
+        .iter_mut()
+        .find(|route| route.source_kind == "account_pool" && route.source_id == "default")
+        .unwrap()
+        .upstream_model = "gpt-qualification-final".to_owned();
+    storage
+        .upsert_managed_model_v2(&ManagedModelV2Upsert {
+            previous_slug: Some(alias.to_owned()),
+            model: mapped,
+        })
+        .unwrap();
+    mark_unsupported(first, "gpt-qualification-final");
+    let mut candidates = super::prepare_gateway_candidates(
+        &storage,
+        Some(alias),
+        None,
+        None,
+        crate::gateway::LowQuotaCandidateMode::NormalOnly,
+    )
+    .unwrap();
+    assert_eq!(
+        candidates.len(),
+        1,
+        "lookup must use the configured final model alias"
+    );
+    assert_eq!(candidates[0].0.id, second);
+    let binding = ConversationBinding {
+        platform_key_hash: "qualification-key".to_owned(),
+        conversation_id: "qualification-conversation".to_owned(),
+        account_id: first.to_owned(),
+        thread_epoch: 1,
+        thread_anchor: "qualification-anchor".to_owned(),
+        status: "active".to_owned(),
+        last_model: Some(alias.to_owned()),
+        last_switch_reason: None,
+        created_at: 1,
+        updated_at: 1,
+        last_used_at: 1,
+    };
+    let setup = crate::gateway::upstream::proxy_pipeline::request_setup::prepare_request_setup(
+        &storage,
+        "/v1/responses",
+        crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        false,
+        &crate::gateway::IncomingHeaderSnapshot::default(),
+        &bytes::Bytes::from_static(b"{}"),
+        &mut candidates,
+        "qualification-key",
+        "qualification-key",
+        Some("qualification-conversation"),
+        RouteConversationSource::PromptCacheKeyExistingOnly,
+        Some(&binding),
+        Some(alias),
+        "qualification-trace",
+    );
+    let routing = setup.conversation_routing.unwrap();
+    assert!(routing.existing_binding.is_none());
+    assert!(!routing.binding_selected);
+    assert_eq!(candidates[0].0.id, second);
+    mark_unsupported(second, "gpt-qualification-final");
+    let fallback = super::prepare_gateway_candidates(
+        &storage,
+        Some(alias),
+        None,
+        None,
+        crate::gateway::LowQuotaCandidateMode::NormalOnly,
+    )
+    .unwrap();
+    assert_eq!(
+        fallback.len(),
+        2,
+        "all rejected preserves diagnosable last-account delivery"
+    );
+    clear_unsupported(first, "gpt-qualification-final");
+    clear_unsupported(second, "gpt-qualification-final");
+}

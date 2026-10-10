@@ -44,6 +44,13 @@ pub(crate) const APP_SETTINGS_ENV_RESERVED_KEYS: &[&str] = &[
 
 pub(crate) const ENV_OVERRIDE_CATALOG: &[EnvOverrideCatalogItem] = &[
     EnvOverrideCatalogItem::new(
+        "CODEXMANAGER_ACCOUNT_MODEL_UNSUPPORTED_TTL_SECS",
+        "账户模型资格拒绝缓存 TTL（秒）",
+        ENV_OVERRIDE_SCOPE_SERVICE,
+        ENV_OVERRIDE_APPLY_MODE_RUNTIME,
+        "1800",
+    ),
+    EnvOverrideCatalogItem::new(
         "CODEXMANAGER_ACCOUNT_IMPORT_BATCH_SIZE",
         "账号导入批大小",
         ENV_OVERRIDE_SCOPE_SERVICE,

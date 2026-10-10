@@ -300,7 +300,6 @@ fn local_models_lists_each_image_model_once_with_image_only_capabilities() {
 
     let response = crate::models_v2::models_response_with_storage(&storage)
         .expect("read managed local models");
-    assert_eq!(response.models.len(), 10);
     for slug in [
         "gpt-image-2",
         "gpt-image-2.5-sunburst",

@@ -12,6 +12,10 @@ const STREAM_INCOMPLETE_FALLBACK_MESSAGE: &str = "连接中断（可能是网络
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct UpstreamResponseUsage {
+    /// Complete JSON response with an explicit successful outcome.
+    pub completed_successfully: bool,
+    /// Explicit response failure status, even when the SSE event name claims completion.
+    pub explicit_failure: bool,
     /// ID observed in a successful upstream Responses completion.
     pub response_id: Option<String>,
     pub input_tokens: Option<i64>,
@@ -114,6 +118,8 @@ pub(in super::super) fn merge_usage(
     target: &mut UpstreamResponseUsage,
     source: UpstreamResponseUsage,
 ) {
+    target.completed_successfully |= source.completed_successfully;
+    target.explicit_failure |= source.explicit_failure;
     if source.response_id.is_some() {
         target.response_id = source.response_id;
     }
@@ -240,6 +246,8 @@ fn parse_usage_from_object(usage: Option<&Map<String, Value>>) -> UpstreamRespon
                 .and_then(Value::as_i64)
         });
     UpstreamResponseUsage {
+        completed_successfully: false,
+        explicit_failure: false,
         response_id: None,
         input_tokens,
         cached_input_tokens,
@@ -676,7 +684,78 @@ pub(in super::super) fn parse_usage_from_json(value: &Value) -> UpstreamResponse
         .and_then(Value::as_object);
     merge_usage(&mut usage, parse_usage_from_object(response_usage));
     usage.output_text = extract_output_text_from_json(value);
+    usage.completed_successfully = json_response_completed_successfully(value);
+    // A tool call can fail while the enclosing response still completes normally.
+    // Only statuses belonging to the response envelope establish response failure.
+    let response_status = value.pointer("/response/status").or_else(|| {
+        let is_response = matches!(
+            value.get("object").and_then(Value::as_str),
+            Some("response" | "chat.completion")
+        ) || matches!(
+            value.get("type").and_then(Value::as_str),
+            Some(
+                "response.completed" | "response.done" | "response.failed" | "response.incomplete"
+            )
+        );
+        is_response.then(|| value.get("status")).flatten()
+    });
+    usage.explicit_failure = response_status
+        .and_then(Value::as_str)
+        .is_some_and(|status| {
+            matches!(
+                status,
+                "failed" | "error" | "incomplete" | "cancelled" | "canceled"
+            )
+        });
     usage
+}
+
+/// Unknown, failed, truncated and tool-capability error responses cannot clear
+/// model eligibility. A valid completed tool response does prove eligibility.
+fn json_response_completed_successfully(value: &Value) -> bool {
+    if value.get("error").is_some_and(|error| !error.is_null()) {
+        return false;
+    }
+    let response = value.get("response").unwrap_or(value);
+    if response
+        .get("status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| {
+            matches!(
+                status,
+                "failed" | "error" | "incomplete" | "cancelled" | "canceled"
+            )
+        })
+    {
+        return false;
+    }
+    if response.get("error").is_some_and(|error| !error.is_null())
+        || response
+            .pointer("/status_details/error")
+            .is_some_and(|error| !error.is_null())
+    {
+        return false;
+    }
+    if response.get("object").and_then(Value::as_str) == Some("response") {
+        return response.get("status").and_then(Value::as_str) == Some("completed")
+            && response.get("output").is_some_and(Value::is_array);
+    }
+    if response.get("object").and_then(Value::as_str) == Some("chat.completion") {
+        return response
+            .get("choices")
+            .and_then(Value::as_array)
+            .is_some_and(|choices| {
+                !choices.is_empty()
+                    && choices.iter().all(|choice| {
+                        choice.get("message").is_some_and(Value::is_object)
+                            && matches!(
+                                choice.get("finish_reason").and_then(Value::as_str),
+                                Some("stop" | "tool_calls" | "function_call")
+                            )
+                    })
+            });
+    }
+    false
 }
 
 /// 函数 `extract_error_message_from_json`

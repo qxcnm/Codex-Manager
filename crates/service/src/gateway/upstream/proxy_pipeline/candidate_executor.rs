@@ -169,30 +169,7 @@ fn account_model_override_for_request(
     storage: &Storage,
     model_for_log: Option<&str>,
 ) -> Option<String> {
-    model_for_log
-        .and_then(|model| {
-            crate::models_v2::enabled_model(storage, crate::models_v2::policy_catalog_slug(model))
-                .ok()
-                .flatten()
-        })
-        .and_then(|model| {
-            model
-                .routes
-                .into_iter()
-                .filter(|route| {
-                    route.enabled
-                        && route.source_kind == "account_pool"
-                        && route.source_id == "default"
-                })
-                .max_by_key(|route| route.priority)
-                .map(|route| route.upstream_model)
-        })
-        .filter(|configured_model| {
-            !crate::models_v2::should_preserve_luna_reserve_alias(
-                model_for_log,
-                Some(configured_model.as_str()),
-            )
-        })
+    crate::account::model_support::account_model_override_for_request(storage, model_for_log)
 }
 
 fn should_failover_terminal_gateway_error(
@@ -715,6 +692,33 @@ pub(in super::super) async fn execute_candidate_sequence(
                             attempt_model_for_log,
                             Some(attempted_account_ids.as_slice()),
                         );
+                    }
+                    StreamPreflightOutcome::ModelUnsupported { message, response } => {
+                        // 精确拒绝：只记住 (账户, 模型)，不把整个账户罚成冷却。
+                        let learned = crate::account::model_support::note_account_model_unsupported(
+                            &account.id,
+                            attempt_model_for_log,
+                            &message,
+                        );
+                        if context.has_more_candidates(idx) {
+                            if !learned {
+                                // A tool/other-model rejection retains ordinary 400 failover.
+                                super::super::super::mark_account_cooldown_for_status(
+                                    &account.id,
+                                    400,
+                                );
+                                super::super::super::record_route_quality(&account.id, 400);
+                            }
+                            attempt_trace.last_attempt_error = Some(message);
+                            record_failover_attempt(
+                                &mut attempt_trace,
+                                &mut last_attempt_url,
+                                &mut last_attempt_error,
+                            );
+                            continue;
+                        }
+                        // Preserve the final candidate's original status, headers and body.
+                        resp = response;
                     }
                     StreamPreflightOutcome::StatusFailover {
                         status_code,

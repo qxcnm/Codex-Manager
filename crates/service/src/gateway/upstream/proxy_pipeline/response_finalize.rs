@@ -376,6 +376,13 @@ fn finalize_bridge_result(
         super::super::super::record_route_quality(account_id, 502);
     }
 
+    clear_model_rejection_after_success(
+        account_id,
+        model_for_log,
+        status_code,
+        client_is_stream,
+        &bridge,
+    );
     let usage = bridge.usage;
     let response_id = (bridge_ok && status_for_log < 400)
         .then(|| usage.response_id.as_deref())
@@ -403,6 +410,34 @@ fn finalize_bridge_result(
         context.record_completed_response_id(response_id);
     }
     Ok(FinalizeUpstreamResponseOutcome::Handled)
+}
+
+fn clear_model_rejection_after_success(
+    account_id: &str,
+    model: Option<&str>,
+    status_code: u16,
+    is_stream: bool,
+    bridge: &crate::gateway::http_bridge::UpstreamResponseBridgeResult,
+) {
+    let completed = if is_stream {
+        bridge.stream_terminal_seen && bridge.stream_terminal_error.is_none()
+    } else {
+        bridge.usage.completed_successfully
+    };
+    if (200..=299).contains(&status_code)
+        && bridge
+            .delivered_status_code
+            .is_none_or(|code| (200..=299).contains(&code))
+        && completed
+        && !bridge.usage.explicit_failure
+        && bridge.is_ok(is_stream)
+        && bridge.upstream_error_hint.is_none()
+        && bridge.stream_terminal_error.is_none()
+    {
+        if let Some(model) = model {
+            crate::account::model_support::clear_unsupported(account_id, model);
+        }
+    }
 }
 
 #[cfg(test)]

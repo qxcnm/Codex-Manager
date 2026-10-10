@@ -246,6 +246,25 @@ fn run_candidate_sequence_with_model_and_statuses(
     track_conversation_binding: bool,
     statuses: Vec<u16>,
 ) -> CandidateSequenceOutcome {
+    run_candidate_sequence_with_error_body(
+        test_name,
+        request_model,
+        model_for_log,
+        track_conversation_binding,
+        statuses,
+        None,
+    )
+}
+
+fn run_candidate_sequence_with_error_body(
+    test_name: &str,
+    request_model: &str,
+    model_for_log: Option<&str>,
+    track_conversation_binding: bool,
+    statuses: Vec<u16>,
+    error_body: Option<&str>,
+) -> CandidateSequenceOutcome {
+    let error_body = error_body.map(str::to_owned);
     let storage = Storage::open_in_memory().expect("open storage");
     storage.init().expect("init storage");
     let now = now_ts();
@@ -282,7 +301,9 @@ fn run_candidate_sequence_with_model_and_statuses(
             let response_body = if status == 200 {
                 r#"{"id":"resp_candidate","object":"response","status":"completed","output":[]}"#
             } else {
-                r#"{"detail":"candidate bad request"}"#
+                error_body
+                    .as_deref()
+                    .unwrap_or(r#"{"detail":"candidate bad request"}"#)
             };
             request
                 .respond(
@@ -551,4 +572,27 @@ fn reserve_alias_keeps_non_luna_account_route_override_authoritative() {
         .as_deref(),
         Some("gpt-5.4")
     );
+}
+
+#[test]
+fn final_candidate_learns_only_the_primary_model_from_real_upstream_json() {
+    use crate::account::model_support::{clear_unsupported, is_unsupported};
+    for (account, rejected_model, expected) in [
+        ("learn-final-primary", "gpt-5.5", true),
+        ("ignore-image-tool", "gpt-image-2", false),
+    ] {
+        let body = serde_json::to_string(&serde_json::json!({"error": {"message": format!("The '{rejected_model}' model is not supported when using Codex with a ChatGPT account.")}})).unwrap();
+        let outcome = run_candidate_sequence_with_error_body(
+            account,
+            "gpt-5.5",
+            Some("gpt-5.5"),
+            false,
+            vec![400, 400, 400],
+            Some(&body),
+        );
+        assert!(!outcome.requests.is_empty());
+        assert_eq!(is_unsupported(account, "gpt-5.5"), expected);
+        assert!(!is_unsupported(account, "gpt-image-2"));
+        clear_unsupported(account, "gpt-5.5");
+    }
 }

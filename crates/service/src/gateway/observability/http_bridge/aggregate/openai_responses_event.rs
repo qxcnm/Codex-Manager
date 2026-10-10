@@ -34,7 +34,9 @@ impl OpenAIResponsesEventKind {
         match kind.trim() {
             "response.completed" => Self::Completed,
             "response.done" => Self::Done,
-            "response.failed" => Self::Failed,
+            "response.failed" | "response.error" | "response.canceled" | "response.cancelled" => {
+                Self::Failed
+            }
             "response.incomplete" => Self::Incomplete,
             "response.output_text.delta" => Self::OutputTextDelta,
             "response.output_text.done" => Self::OutputTextDone,
@@ -86,12 +88,53 @@ impl OpenAIResponsesEvent {
             .map(OpenAIResponsesEventKind::from_type)
             .unwrap_or(OpenAIResponsesEventKind::Other);
 
-        let upstream_error_hint = extract_error_message_from_json(&value);
+        let mcp_local_failure = matches!(
+            event_type.as_deref(),
+            Some(
+                "response.mcp_call.failed"
+                    | "response.mcp_call.error"
+                    | "response.mcp_list_tools.failed"
+                    | "response.mcp_list_tools.error"
+            )
+        );
+        // MCP errors belong to an output item, but response-envelope errors remain
+        // authoritative even if an upstream puts them on an MCP event.
+        let response_error_hint = value.get("response").and_then(|response| {
+            extract_error_message_from_json(response).or_else(|| {
+                response
+                    .get("status_details")
+                    .and_then(extract_error_message_from_json)
+            })
+        });
+        let upstream_error_hint = response_error_hint
+            .or_else(|| {
+                (!mcp_local_failure)
+                    .then(|| extract_error_message_from_json(&value))
+                    .flatten()
+            })
+            .or_else(|| {
+                if !matches!(
+                    kind,
+                    OpenAIResponsesEventKind::Completed | OpenAIResponsesEventKind::Done
+                ) && !mcp_local_failure
+                {
+                    return None;
+                }
+                let status = value.pointer("/response/status").and_then(Value::as_str)?;
+                match status {
+                    "incomplete" => Some(STREAM_INCOMPLETE_FALLBACK_MESSAGE.to_owned()),
+                    "failed" | "error" | "cancelled" | "canceled" => {
+                        Some(UPSTREAM_NON_SUCCESS_FALLBACK_MESSAGE.to_owned())
+                    }
+                    _ => None,
+                }
+            });
         let terminal =
             terminal_for_event(kind, event_type.as_deref(), upstream_error_hint.as_deref());
 
         let mut usage = parse_usage_from_json(&value);
-        if kind == OpenAIResponsesEventKind::Completed {
+        if kind == OpenAIResponsesEventKind::Completed && matches!(terminal, Some(SseTerminal::Ok))
+        {
             usage.response_id = value
                 .get("response")
                 .and_then(|response| response.get("id"))

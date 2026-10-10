@@ -28,8 +28,15 @@ enum PrefixDecision {
 pub(in super::super) enum StreamPreflightOutcome {
     Ready(GatewayUpstreamResponse),
     Failover(String),
-    StatusFailover { status_code: u16, message: String },
+    StatusFailover {
+        status_code: u16,
+        message: String,
+    },
     RetryUsageNotice(String),
+    ModelUnsupported {
+        message: String,
+        response: GatewayUpstreamResponse,
+    },
     TransportFailover(String),
 }
 
@@ -361,6 +368,45 @@ async fn preflight_stream_response_with_timeouts(
     wall_clock_timeout: Option<Duration>,
 ) -> StreamPreflightOutcome {
     let status_code = response.status().as_u16();
+    if status_code == 400 {
+        // Classification has independent byte, idle and wall-clock bounds, including
+        // non-streaming requests and the final candidate. All consumed bytes replay.
+        let idle_timeout = Some(
+            idle_timeout
+                .unwrap_or(Duration::from_secs(2))
+                .min(Duration::from_secs(2)),
+        );
+        let wall_timeout = Some(
+            wall_clock_timeout
+                .unwrap_or(STREAM_PREFLIGHT_WALL_CLOCK_TIMEOUT)
+                .min(STREAM_PREFLIGHT_WALL_CLOCK_TIMEOUT),
+        );
+        let (body, response, terminal) = response
+            .prefetch_stream_prefix_async(
+                STREAM_PREFLIGHT_MAX_BYTES,
+                idle_timeout,
+                wall_timeout,
+                |_| false,
+            )
+            .await;
+        // Only a complete body can establish eligibility. Truncated/timeout/error
+        // prefixes may contain misleading or incomplete rejection JSON.
+        if matches!(terminal, GatewayStreamPrefetchTerminal::Eof) {
+            if let Some(message) =
+                crate::account::model_support::account_model_rejection_message(&body)
+            {
+                return StreamPreflightOutcome::ModelUnsupported { message, response };
+            }
+        }
+        return if has_more_candidates {
+            StreamPreflightOutcome::StatusFailover {
+                status_code,
+                message: summarize_non_200_status_failover(status_code, Some(&body)),
+            }
+        } else {
+            StreamPreflightOutcome::Ready(response)
+        };
+    }
     if has_more_candidates && !(200..=299).contains(&status_code) {
         if should_prefetch_actionable_error_body(status_code) {
             return match response.into_buffered_async().await {
