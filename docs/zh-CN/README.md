@@ -83,6 +83,8 @@
 ## 推荐入口
 
 ### 运行与使用
+
+托管网关的“移除 requires_openai_auth”设置默认开启，以保留当前图片/actor 扩展行为。关闭后，在网关切换、重复应用与启动同步时仅保留 `cm` provider 已有值，不恢复已删除字段；保留 `true` 可能禁用 Codex 图片扩展。直连聚合 API 和其他 provider 不受此开关影响。
 | 文档 | 作用 |
 | --- | --- |
 | [运行与部署指南.md](report/运行与部署指南.md) | 首次启动、Service 版、Docker、macOS 首启 |

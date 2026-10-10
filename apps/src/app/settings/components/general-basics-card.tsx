@@ -16,6 +16,7 @@ import type { AppSettings } from "@/types";
 type GeneralBasicsSnapshot = Pick<
   AppSettings,
   | "updateAutoCheck"
+  | "removeRequiresOpenaiAuth"
   | "autoStartEnabled"
   | "autoStartSupported"
   | "showMainWindowOnStartup"
@@ -155,6 +156,20 @@ export function GeneralBasicsCard({
             onCheckedChange={(value) =>
               updateSettings.mutate({ updateAutoCheck: value })
             }
+          />
+        </div>
+        <div className="flex items-center justify-between gap-4 py-3">
+          <div className="min-w-0 flex flex-col gap-0.5">
+            <Label htmlFor="settings-remove-openai-auth">{t("移除 requires_openai_auth")}</Label>
+            <p id="settings-remove-openai-auth-description" className="text-xs text-muted-foreground">
+              {t("默认开启，在切换到网关或同步配置时清理旧认证标记；关闭仅保留已有值，不恢复已删除的配置。保留 true 可能禁用图片扩展。")}
+            </p>
+          </div>
+          <Switch
+            id="settings-remove-openai-auth"
+            aria-describedby="settings-remove-openai-auth-description"
+            checked={snapshot.removeRequiresOpenaiAuth}
+            onCheckedChange={(value) => updateSettings.mutate({ removeRequiresOpenaiAuth: value })}
           />
         </div>
         <div className="flex items-center justify-between gap-4 py-3">

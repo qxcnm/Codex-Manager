@@ -996,6 +996,7 @@ pub(crate) async fn apply_gateway_async(
             &paths.gateway_model_catalog_path,
             supports_websockets,
             &secret,
+            remove_requires_openai_auth_enabled(),
         )?;
         write_profile_files(
             &profile_dir,
@@ -2803,6 +2804,14 @@ fn expand_home_prefix(input: &str) -> PathBuf {
     PathBuf::from(input)
 }
 
+fn remove_requires_openai_auth_enabled() -> bool {
+    crate::app_settings::get_persisted_app_setting(
+        crate::app_settings::APP_SETTING_CODEX_PROFILE_REMOVE_REQUIRES_OPENAI_AUTH_KEY,
+    )
+    .map(|value| crate::app_settings::parse_bool_with_default(&value, true))
+    .unwrap_or(true)
+}
+
 fn profile_key(profile_dir: &Path) -> String {
     profile_dir.to_string_lossy().to_string()
 }
@@ -2982,6 +2991,7 @@ fn patch_config_for_gateway(
     managed_catalog_path: &Path,
     supports_websockets: bool,
     bearer_token: &str,
+    remove_requires_openai_auth: bool,
 ) -> Result<String, String> {
     let mut doc = parse_config(content.as_deref().unwrap_or(""))?;
     doc.as_table_mut()
@@ -3017,8 +3027,11 @@ fn patch_config_for_gateway(
     // Codex only treats actor authorization as an extension capability for custom providers
     // that do not use ambient OpenAI auth. A provider-scoped bearer token works for local and
     // remote CodexManager gateways without coupling the profile to a movable desktop executable.
-    // It is mutually exclusive with command/env/ambient auth, so remove stale values first.
-    provider.remove("requires_openai_auth");
+    // Keep the existing actor-capable behavior by default. Users who depend on ambient auth
+    // can explicitly preserve their existing value, at the cost of actor/image extensions.
+    if remove_requires_openai_auth {
+        provider.remove("requires_openai_auth");
+    }
     set_provider_bearer_auth(provider, bearer_token)?;
     provider.insert("base_url", toml_value(base_url));
     provider.insert("wire_api", toml_value("responses"));
@@ -3364,6 +3377,7 @@ async fn sync_active_gateway_profile_from_storage_with_changes_async(
                         &paths.gateway_model_catalog_path,
                         supports_websockets,
                         secret,
+                        remove_requires_openai_auth_enabled(),
                     )?)
                 }
                 _ => None,

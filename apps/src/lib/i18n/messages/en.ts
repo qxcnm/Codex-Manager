@@ -184,6 +184,9 @@ export const EN_MESSAGES: MessageCatalog = {
   基础设置: "Basic settings",
   控制应用启动和窗口行为: "Control startup and window behavior.",
   自动检查更新: "Check updates automatically",
+  "移除 requires_openai_auth": "Remove requires_openai_auth",
+  "默认开启，在切换到网关或同步配置时清理旧认证标记；关闭仅保留已有值，不恢复已删除的配置。保留 true 可能禁用图片扩展。":
+    "Enabled by default: clear the old auth flag when switching to the gateway or syncing the profile. Disabling only preserves existing values; it does not restore removed settings. Keeping true may disable image extensions.",
   "启动完成后在后台检查更新，并每 7 小时检查一次":
     "Check for updates in the background after startup, then every 7 hours.",
   "检测到新版本，是否现在更新？":
