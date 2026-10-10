@@ -1233,6 +1233,11 @@ impl AggregateDeliveryContext {
             status_code
         };
         let usage = bridge.usage;
+        let response_id = if bridge_ok && status_code < 400 {
+            usage.response_id.as_deref()
+        } else {
+            None
+        };
 
         super::super::super::record_gateway_request_outcome(
             path,
@@ -1293,6 +1298,14 @@ impl AggregateDeliveryContext {
             final_error.as_deref(),
             Some(started_at.elapsed().as_millis()),
         );
+        if let Some(response_id) = response_id {
+            if let Err(err) = storage.record_request_log_response_id(key_id, response_id, trace_id)
+            {
+                log::warn!(
+                    "event=request_log_response_id_insert_failed trace_id={trace_id} err={err}"
+                );
+            }
+        }
     }
 }
 
@@ -1606,51 +1619,54 @@ pub(in super::super) async fn proxy_aggregate_request(
                         .map_err(|_| "aggregate request header is not textual".to_owned())
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let upstream = match super::super::attempt_flow::transport::send_stream_request(
-                &client,
-                upstream_request.method(),
-                upstream_request.url().as_str(),
-                path,
-                request_deadline,
-                &prepared_headers,
-                &upstream_body,
-                is_stream,
-            )
-            .await
-            {
-                Ok(resp) => {
-                    let duration_ms =
-                        super::super::super::duration_to_millis(attempt_started_at.elapsed());
-                    super::super::super::metrics::record_gateway_upstream_attempt(
-                        duration_ms,
-                        false,
-                    );
-                    resp
-                }
-                Err(err) => {
-                    let duration_ms =
-                        super::super::super::duration_to_millis(attempt_started_at.elapsed());
-                    super::super::super::metrics::record_gateway_upstream_attempt(
-                        duration_ms,
-                        true,
-                    );
-                    let message = format!("aggregate api upstream error: {err}");
-                    last_attempt_url = Some(url.as_str().to_string());
-                    last_attempt_supplier_name = candidate_supplier_name.clone();
-                    last_attempt_error = Some(message);
-                    last_failure_status = 502;
-                    if request.as_ref().is_some_and(Request::is_cancelled) {
-                        last_attempt_error =
-                            Some("broken pipe: downstream HTTP body closed".to_owned());
-                        last_failure_status = 499;
-                        break 'candidates;
+            let upstream =
+                match super::super::attempt_flow::transport::send_stream_request_with_capture(
+                    &client,
+                    upstream_request.method(),
+                    upstream_request.url().as_str(),
+                    path,
+                    request_deadline,
+                    &prepared_headers,
+                    &upstream_body,
+                    is_stream,
+                    Some(super::super::super::OutboundPayloadContext { trace_id, key_id }),
+                    None,
+                )
+                .await
+                {
+                    Ok(resp) => {
+                        let duration_ms =
+                            super::super::super::duration_to_millis(attempt_started_at.elapsed());
+                        super::super::super::metrics::record_gateway_upstream_attempt(
+                            duration_ms,
+                            false,
+                        );
+                        resp
                     }
-                    if attempt_idx < AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
-                        continue;
+                    Err(err) => {
+                        let duration_ms =
+                            super::super::super::duration_to_millis(attempt_started_at.elapsed());
+                        super::super::super::metrics::record_gateway_upstream_attempt(
+                            duration_ms,
+                            true,
+                        );
+                        let message = format!("aggregate api upstream error: {err}");
+                        last_attempt_url = Some(url.as_str().to_string());
+                        last_attempt_supplier_name = candidate_supplier_name.clone();
+                        last_attempt_error = Some(message);
+                        last_failure_status = 502;
+                        if request.as_ref().is_some_and(Request::is_cancelled) {
+                            last_attempt_error =
+                                Some("broken pipe: downstream HTTP body closed".to_owned());
+                            last_failure_status = 499;
+                            break 'candidates;
+                        }
+                        if attempt_idx < AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
+                            continue;
+                        }
+                        break;
                     }
-                    break;
-                }
-            };
+                };
 
             if !upstream.status().is_success() {
                 let status_code = upstream.status().as_u16();

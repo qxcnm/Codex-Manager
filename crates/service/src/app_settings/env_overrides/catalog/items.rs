@@ -212,6 +212,13 @@ pub(crate) const ENV_OVERRIDE_CATALOG: &[EnvOverrideCatalogItem] = &[
         "localhost:1455",
     ),
     EnvOverrideCatalogItem::new(
+        "CODEXMANAGER_MAX_TEXT_INPUT_CHARS",
+        "本地文本输入上限（字符）",
+        ENV_OVERRIDE_SCOPE_SERVICE,
+        ENV_OVERRIDE_APPLY_MODE_RUNTIME,
+        "1048576",
+    ),
+    EnvOverrideCatalogItem::new(
         "CODEXMANAGER_NO_SERVICE",
         "桌面端不启动 Service",
         ENV_OVERRIDE_SCOPE_DESKTOP,

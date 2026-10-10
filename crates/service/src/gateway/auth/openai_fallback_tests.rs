@@ -129,6 +129,7 @@ fn assert_official_openai_request_is_cancellable(is_stream: bool) {
         &mut token,
         false,
         false,
+        None,
     ))
     .expect("gateway async test runtime")
     .expect("send official OpenAI request")

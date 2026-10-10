@@ -532,6 +532,48 @@ fn chat_content_to_responses_parts(
     }
 }
 
+/// Chat completions permits tool message content to be a plain string or an
+/// array of content parts, while the Responses API `function_call_output`
+/// expects a string `output`. Flatten array content (string parts joined with
+/// newlines, image parts as placeholders) so compliant chat clients are not
+/// rejected upstream with `output[0].type` errors.
+fn chat_tool_content_to_output_string(content: &serde_json::Value) -> serde_json::Value {
+    match content {
+        serde_json::Value::String(_) => content.clone(),
+        serde_json::Value::Array(parts) => {
+            let text = parts
+                .iter()
+                .filter_map(chat_tool_output_part_text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            serde_json::Value::String(text)
+        }
+        serde_json::Value::Null => serde_json::Value::String(String::new()),
+        other => serde_json::Value::String(other.to_string()),
+    }
+}
+
+fn chat_tool_output_part_text(part: &serde_json::Value) -> Option<String> {
+    match part {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Object(obj) => {
+            let kind = obj
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("text");
+            match kind {
+                "text" | "input_text" | "output_text" => obj
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                "image_url" => Some("[image]".to_string()),
+                _ => None,
+            }
+        }
+        other => Some(other.to_string()),
+    }
+}
+
 fn chat_tool_to_responses_tool(tool: &serde_json::Value) -> Option<serde_json::Value> {
     let obj = tool.as_object()?;
     if obj.get("type").and_then(serde_json::Value::as_str) != Some("function") {
@@ -693,7 +735,7 @@ fn adapt_openai_chat_completions_body_to_responses(body: Vec<u8>) -> Result<Vec<
             if role == "tool" {
                 let output = message_obj
                     .get("content")
-                    .cloned()
+                    .map(chat_tool_content_to_output_string)
                     .unwrap_or_else(|| serde_json::Value::String(String::new()));
                 input.push(serde_json::json!({
                     "type": "function_call_output",
@@ -1883,9 +1925,11 @@ pub(super) fn build_local_validation_result(
     trace_id: String,
     incoming_headers: super::super::IncomingHeaderSnapshot,
     storage: crate::storage_helpers::StorageHandle,
-    mut body: Vec<u8>,
+    client_body: Bytes,
     api_key: ApiKey,
 ) -> Result<LocalValidationResult, LocalValidationError> {
+    // `client_body` is shared with the request log client capture; the
+    // forwarding path takes owned copies only where it rewrites the body.
     // 按当前策略取消每次请求都更新 api_keys.last_used_at，减少并发写入冲突。
     let account_group_filter =
         crate::apikey::remote::group_filter(&storage, &api_key.id).map_err(|err| {
@@ -1927,7 +1971,7 @@ pub(super) fn build_local_validation_result(
             crate::gateway::bilingual_error("不支持的请求方法", "unsupported method"),
         )
     })?;
-    let initial_request_value = super::super::parse_request_json_value(&body);
+    let initial_request_value = super::super::parse_request_json_value(&client_body);
     let initial_service_tier_diagnostic = initial_request_value
         .as_ref()
         .map(|value| super::super::inspect_service_tier_value(value.get("service_tier")))
@@ -1997,7 +2041,7 @@ pub(super) fn build_local_validation_result(
             request_shape,
         ) = apply_passthrough_request_overrides(
             &logical_path,
-            body,
+            client_body.to_vec(),
             &api_key,
             initial_request_meta.service_tier.clone(),
             compact_model_override_for_logical_request.as_deref(),
@@ -2121,7 +2165,7 @@ pub(super) fn build_local_validation_result(
     let passthrough_path = logical_path.clone();
     let mut passthrough_body = apply_passthrough_request_overrides(
         &logical_path,
-        body.clone(),
+        client_body.to_vec(),
         &api_key,
         initial_request_meta.service_tier.clone(),
         compact_model_override_for_logical_request.as_deref(),
@@ -2167,7 +2211,8 @@ pub(super) fn build_local_validation_result(
         passthrough_body_value_for_validation.as_ref(),
     )
     .map_err(|err| LocalValidationError::new(400, err.message()))?;
-    let original_body = body.clone();
+    let original_body = client_body;
+    let mut body: Vec<u8> = original_body.to_vec();
     let (mut path, mut response_adapter, mut gemini_stream_output_mode, mut tool_name_restore_map) =
         if effective_protocol_type == crate::apikey_profile::PROTOCOL_OPENAI_COMPAT
             && is_openai_images_generations_path(normalized_path.as_str())
@@ -2280,7 +2325,7 @@ pub(super) fn build_local_validation_result(
             path
         );
         path = normalized_path.clone();
-        body = original_body;
+        body = original_body.to_vec();
         response_adapter = super::super::ResponseAdapter::Passthrough;
         gemini_stream_output_mode = None;
         tool_name_restore_map.clear();

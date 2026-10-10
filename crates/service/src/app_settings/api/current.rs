@@ -409,6 +409,14 @@ fn current_app_settings_value_inner(
             thread_aware_account_distribution_enabled.into(),
         );
         object.insert(
+            "requestLogPayloadRedactionEnabled".to_string(),
+            super::super::gateway::current_gateway_request_log_payload_redaction_enabled().into(),
+        );
+        object.insert(
+            "requestLogPayloadPreviewEnabled".to_string(),
+            super::super::gateway::current_gateway_request_log_payload_preview_enabled().into(),
+        );
+        object.insert(
             "upstreamProxyBypassHosts".to_string(),
             upstream_proxy_bypass_hosts.into(),
         );

@@ -38,6 +38,8 @@ import {
   PluginRunLogSummary,
   PluginTaskSummary,
   RequestLog,
+  RequestLogDetail,
+  RequestLogDetailStage,
   RequestLogFilterSummary,
   RequestLogListResult,
   RequestLogListWithSummaryResult,
@@ -1614,6 +1616,86 @@ export function normalizeRequestLogListWithSummaryResult(
   };
 }
 
+function asRawText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function asRawTextArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(asRawText) : [];
+}
+
+function asOptionalText(value: unknown): string | null {
+  const text = asString(value);
+  return text || null;
+}
+
+function normalizeRequestLogDetailStage(value: unknown): RequestLogDetailStage {
+  const stage = asString(value);
+  if (stage === "client" || stage === "upstream" || /^upstream:\d{20}$/.test(stage)) {
+    return stage as RequestLogDetailStage;
+  }
+  return "client";
+}
+
+export function normalizeRequestLogDetail(payload: unknown): RequestLogDetail {
+  const source = asObject(payload);
+  const storageMode = asString(source.storageMode ?? source.storage_mode);
+  return {
+    traceId: asString(source.traceId ?? source.trace_id),
+    stage: normalizeRequestLogDetailStage(source.stage),
+    stages: asArray(source.stages)
+      .map((item) => normalizeRequestLogDetailStage(item))
+      .filter((stage, index, list) => list.indexOf(stage) === index),
+    attempt: source.attempt == null ? null : (() => {
+      const attempt = asObject(source.attempt);
+      return {
+        method: asString(attempt.method),
+        url: asString(attempt.url),
+        transport: asString(attempt.transport),
+        contentEncoding: asOptionalText(attempt.contentEncoding ?? attempt.content_encoding),
+        wireSha256: asString(attempt.wireSha256 ?? attempt.wire_sha256),
+        identicalToClient: asBoolean(attempt.identicalToClient ?? attempt.identical_to_client),
+      };
+    })(),
+    storageMode: storageMode === "full" ? "full" : "preview",
+    payload: asRawText(source.payload),
+    payloadBytes: asInteger(source.payloadBytes ?? source.payload_bytes, 0, 0),
+    payloadTruncated: asBoolean(source.payloadTruncated ?? source.payload_truncated, false),
+    redacted: asBoolean(source.redacted, true),
+    createdAt: asInteger(source.createdAt ?? source.created_at, 0, 0),
+    bodyKind: asOptionalText(source.bodyKind ?? source.body_kind),
+    listField: asOptionalText(source.listField ?? source.list_field),
+    complete: asBoolean(source.complete, true),
+    fields: asArray(source.fields).map((item) => {
+      const field = asObject(item);
+      return { name: asString(field.name), value: asRawText(field.value) };
+    }),
+    items: asRawTextArray(source.items),
+    inheritedItemCount: asInteger(
+      source.inheritedItemCount ?? source.inherited_item_count,
+      0,
+      0
+    ),
+    parentTraceId: asOptionalText(source.parentTraceId ?? source.parent_trace_id),
+    previousResponseId: asOptionalText(
+      source.previousResponseId ?? source.previous_response_id
+    ),
+    context: asArray(source.context).map((item) => {
+      const segment = asObject(item);
+      return {
+        traceId: asString(segment.traceId ?? segment.trace_id),
+        createdAt: asInteger(segment.createdAt ?? segment.created_at, 0, 0),
+        previousResponseId: asOptionalText(
+          segment.previousResponseId ?? segment.previous_response_id
+        ),
+        listField: asOptionalText(segment.listField ?? segment.list_field),
+        complete: asBoolean(segment.complete, true),
+        items: asRawTextArray(segment.items),
+      };
+    }),
+  };
+}
+
 /**
  * 函数 `normalizeRequestLogFilterSummary`
  *
@@ -1865,6 +1947,14 @@ export function normalizeAppSettings(payload: unknown): AppSettings {
     accountMaxInflight: asInteger(source.accountMaxInflight, 1, 0),
     threadAwareAccountDistributionEnabled: asBoolean(
       source.threadAwareAccountDistributionEnabled,
+      true
+    ),
+    requestLogPayloadRedactionEnabled: asBoolean(
+      source.requestLogPayloadRedactionEnabled,
+      true
+    ),
+    requestLogPayloadPreviewEnabled: asBoolean(
+      source.requestLogPayloadPreviewEnabled,
       true
     ),
     quotaGuard: normalizeQuotaGuard(source.quotaGuard ?? source.quota_guard),

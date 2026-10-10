@@ -377,6 +377,9 @@ fn finalize_bridge_result(
     }
 
     let usage = bridge.usage;
+    let response_id = (bridge_ok && status_for_log < 400)
+        .then(|| usage.response_id.as_deref())
+        .flatten();
     context.log_final_result_with_model(
         Some(account_id),
         last_attempt_url,
@@ -396,6 +399,9 @@ fn finalize_bridge_result(
         started_at.elapsed().as_millis(),
         attempted_account_ids,
     );
+    if let Some(response_id) = response_id {
+        context.record_completed_response_id(response_id);
+    }
     Ok(FinalizeUpstreamResponseOutcome::Handled)
 }
 

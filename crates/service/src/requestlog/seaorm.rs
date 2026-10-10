@@ -12,6 +12,11 @@ pub(crate) fn maintain(storage: &Storage, now: i64) -> rusqlite::Result<()> {
     use std::sync::atomic::{AtomicI64, Ordering};
     static LAST_RUN: AtomicI64 = AtomicI64::new(0);
     if !seaorm_enabled() {
+        // The background maintenance thread prunes and purges in batches;
+        // keep the gateway request path free of that work when it runs.
+        if crate::storage_maintenance::background_maintenance_active() {
+            return Ok(());
+        }
         return storage.maybe_run_observability_maintenance(now);
     }
     let configured = |name: &str, default: i64| {

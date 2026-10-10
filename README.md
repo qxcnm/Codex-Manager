@@ -87,29 +87,53 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
 <table>
   <tr>
     <td align="center" valign="middle" width="180">
-      <a href="https://vmcardio.com/zh/register?code=OPK6X2DSLW">
-        <img src="assets/images/sponsors/vmcard.jpg" alt="VMCard" width="120" />
+      <a href="https://sidrune.ai/register?source=github&campaign=codexmanger&promo=codexmanger">
+        <img src="assets/images/sponsors/sidrune.png" alt="Sidrune AI" width="120" />
       </a>
     </td>
     <td valign="top">
-      <strong><a href="https://vmcardio.com/zh/register?code=OPK6X2DSLW">VMCard 企业级虚拟卡发卡平台</a></strong>，面向 AI 账号平台、AI API 服务商及规模化订阅团队，提供专属美国 Visa 卡段、API 批量发卡及企业级用卡管理。<br />
-      全网最低结算汇率，满足企业长期、规模化支付需求。商务合作：<a href="https://t.me/Vmcardio_yuki">@Vmcardio_yuki</a>
+      <strong><a href="https://sidrune.ai/register?source=github&campaign=codexmanger&promo=codexmanger">Sidrune AI｜一个入口，接入并管理全球主流AI模型</a></strong><br />
+      Sidrune AI 面向个人开发者、技术团队与企业，通过统一 API 接入并管理全球主流 AI 模型；通过多线路动态调度提升可用性，模型表现、响应时间与费用透明可查。根据不同模型与线路，API 调用成本可较官方或基准价格降低 40%—98%。<br />
+      立即<a href="https://sidrune.ai/register?source=github&campaign=codexmanger&promo=codexmanger">访问并注册</a>，即可获得 $3.88 试用额度，可直接使用。
     </td>
   </tr>
   <tr>
     <td align="center" valign="middle" width="180">
-      <a href="https://88api.ai/sign-up?aff=OceE">
-        <img src="assets/images/sponsors/88api.png" alt="88API" width="120" />
+      <a href="https://onesay.io">
+        <img src="assets/images/sponsors/onesay.jpg" alt="OneSay Desktop" width="120" />
       </a>
     </td>
     <td valign="top">
-      <strong><a href="https://88api.ai/sign-up?aff=OceE">88API 全模型聚合平台</a></strong><br />
-      🧠 聚合 GPT、Claude、Gemini、Grok、DeepSeek、Kimi、GLM 等语言与编程模型；<br />
-      🎨 图片模型：GPT-Image、Gemini、Grok 等；<br />
-      🎬 视频模型：Seedance、Veo、MiniMax Hailuo H3、Kling、Grok 等；<br />
-      🎙️ 语音能力：Whisper、TTS 等。从文案、出图、改图，到视频生成与配音。<br />
-      🎁 新用户注册送体验额度，可以检测模型能力。站内有人工客服值守！<br />
-      👉 海外企业资质运营，稳定不跑路，提供正规发票，充值比例 1:1。
+      <strong><a href="https://onesay.io">Typeless 最佳平替来了！OneSay Pro 免费用 3 个月！</a></strong><br />
+      还在为打字慢、效率低而烦恼？试试 OneSay Desktop！一款让你开口就能高效工作的 AI 语音助手，集智能听写、AI 翻译、文字改写、智能问答于一体。写邮件、回消息、记录灵感，动动嘴就能搞定！<br />
+      <strong>限时福利：新用户免费体验 Pro 模式 3 个月！</strong>邀请好友注册，还能继续延长会员时长，邀请越多，免费用得越久！<br />
+      体验 Typeless 级别的语音输入效率，从 OneSay 开始！立即注册体验：<a href="https://onesay.io">https://onesay.io</a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="middle" width="180">
+      <a href="https://omniakey.com">
+        <img src="assets/images/sponsors/OmniaKey.png" alt="OmniaKey" width="120" />
+      </a>
+    </td>
+    <td valign="top">
+      <strong>嗨嗨嗨！很高兴被你看见 👋</strong><br />
+      我们是 <strong><a href="https://omniakey.com">OmniaKey</a></strong> 团队，专为开发者打造的全模态 AI API 中转平台，提供文本、图片、视频与音频模型接入，一套 API Key 覆盖多种 AI 场景。<br />
+      <strong>📝 文本：</strong>GPT、Claude、Gemini、Grok、GLM、Qwen 等主流大模型全线覆盖，对话、代码、推理一站满足。<br />
+      <strong>🎨 图片：</strong>GPT-image-2.5、Nanobanna 2.1、Seedream 5.0 Pro，文生图、图生图、改图设计开箱即用。<br />
+      <strong>🎬 视频：</strong>Seedance 2.5、Wan3、Kling、MiniMaxH3，文生视频与图生视频模型，一键接入即可出片。<br />
+      <strong>🔊 音频：</strong>Suno AI 音乐生成，直接 API 调用，轻松落地音频创作场景。<br />
+      官网：<a href="https://omniakey.com">omniakey.com</a> · 中文地址：<a href="https://omniakey.com/zh">omniakey.com/zh</a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="middle" width="180">
+      <a href="https://daitouai.com/">
+        <img src="assets/images/sponsors/daitouai.svg" alt="呆头 AI" width="120" />
+      </a>
+    </td>
+    <td valign="top">
+      <strong><a href="https://daitouai.com/">呆头 AI</a></strong> 专注于国内主流大模型 API 服务，提供 GLM、Kimi、DeepSeek 等模型的便捷接入，适用于对话问答、代码生成、内容创作和自动化开发等常见场景。平台主打比官方更实惠的价格，支持个人开发者快速试用，也适合独立项目与团队按需调用，帮助降低国内大模型的使用成本。欢迎通过<a href="https://daitouai.com/">官网</a>了解可用模型、接入方式与最新优惠。
     </td>
   </tr>
   <tr>

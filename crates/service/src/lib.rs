@@ -97,6 +97,7 @@ pub use runtime::process_env;
 pub(crate) use runtime::reasoning_effort;
 pub use runtime::service_runtime::process_runtime;
 pub(crate) use storage::helpers as storage_helpers;
+pub(crate) use storage::maintenance as storage_maintenance;
 pub(crate) use usage::account_meta as usage_account_meta;
 pub(crate) use usage::aggregate as usage_aggregate;
 pub(crate) use usage::http as usage_http;

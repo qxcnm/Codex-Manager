@@ -1,14 +1,19 @@
-use rusqlite::{params, params_from_iter, types::Value, Result, Row};
+use rusqlite::{params, params_from_iter, types::Value, OptionalExtension, Result, Row};
 
 use super::key_id_filters::KeyIdSqlFilter;
 use super::request_log_filters::{
     account_join_clause, build_request_log_filters, token_stats_join_clause, RequestLogSqlFilters,
 };
+use super::request_log_payload_purge::CURRENT_PAYLOAD_GENERATION_SQL;
 use super::{
-    now_ts, RequestLog, RequestLogQuerySummary, RequestLogTodaySummary, RequestTokenStat, Storage,
+    now_ts, RequestLog, RequestLogPayload, RequestLogQuerySummary, RequestLogTodaySummary,
+    RequestTokenStat, Storage,
 };
 
 const DEFAULT_REQUEST_LOG_RETENTION_DAYS: i64 = 14;
+/// How long a clear or prune deletes payload rows before returning. Rows
+/// left over are invisible already and deleted by background maintenance.
+const CLEAR_SYNC_PURGE_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
 const REQUEST_LOG_RETENTION_DAYS_ENV: &str = "CODEXMANAGER_REQUEST_LOG_RETENTION_DAYS";
 const REQUEST_LOG_LIST_SELECT_COLUMNS: &str = "r.trace_id, r.key_id, r.account_id, r.initial_account_id, r.attempted_account_ids_json, r.initial_aggregate_api_id, r.attempted_aggregate_api_ids_json,
                 r.request_path, r.original_path, r.adapted_path,
@@ -21,6 +26,12 @@ fn request_log_retention_days() -> i64 {
         .ok()
         .and_then(|raw| raw.trim().parse::<i64>().ok())
         .unwrap_or(DEFAULT_REQUEST_LOG_RETENTION_DAYS)
+}
+
+/// Preview rows a pending clear or retention purge has not scheduled for
+/// deletion. Rows waiting for the batched purge must already be invisible.
+fn live_preview_sql(alias: &str) -> String {
+    super::request_log_payload_purge::live_payload_row_sql("request_log_payloads", alias)
 }
 
 fn empty_optional_range(start_ts: Option<i64>, end_ts: Option<i64>) -> bool {
@@ -222,6 +233,158 @@ impl Storage {
     ///
     /// # 返回
     /// 返回函数执行结果
+    /// Upsert a request payload preview for a gateway trace and stage.
+    /// Payloads are pure diagnostics: a missing `request_log_payloads` table
+    /// (pre-migration database) or a write failure must never break the
+    /// request hot path, so callers treat errors as best-effort.
+    pub fn insert_request_log_payload(&self, payload: &RequestLogPayload) -> Result<()> {
+        self.conn.execute(
+            &format!(
+                "INSERT INTO request_log_payloads (
+                    trace_id, stage, payload, payload_bytes, payload_truncated, redacted,
+                    body_hash, created_at, generation
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, {CURRENT_PAYLOAD_GENERATION_SQL})
+                 ON CONFLICT(trace_id, stage) DO UPDATE SET
+                    payload=excluded.payload,
+                    payload_bytes=excluded.payload_bytes,
+                    payload_truncated=excluded.payload_truncated,
+                    redacted=excluded.redacted,
+                    body_hash=excluded.body_hash,
+                    created_at=excluded.created_at,
+                    generation=excluded.generation"
+            ),
+            params![
+                payload.trace_id,
+                payload.stage,
+                payload.payload,
+                payload.payload_bytes,
+                payload.payload_truncated,
+                payload.redacted,
+                payload.body_hash,
+                payload.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Insert only if the job predates neither the last clear nor retention
+    /// pruning. A single write transaction makes check+write atomic with
+    /// clear/prune from another SQLite connection.
+    pub fn insert_request_log_payload_if_current(
+        &self,
+        payload: &RequestLogPayload,
+        generation: i64,
+    ) -> Result<bool> {
+        let tx = self.conn.unchecked_transaction()?;
+        if !self.insert_request_log_payload_if_current_in_tx(payload, generation)? {
+            return Ok(false);
+        }
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Body of [`Self::insert_request_log_payload_if_current`]; the caller
+    /// owns the write transaction.
+    pub(super) fn insert_request_log_payload_if_current_in_tx(
+        &self,
+        payload: &RequestLogPayload,
+        generation: i64,
+    ) -> Result<bool> {
+        if !self.request_log_payload_job_is_current(generation, payload.created_at)? {
+            return Ok(false);
+        }
+        self.insert_request_log_payload(payload)?;
+        Ok(true)
+    }
+
+    /// Load the stored payload preview for a trace. Returns `None` when the
+    /// table has not been created yet or no preview was captured.
+    pub fn find_request_log_payload_by_trace_id(
+        &self,
+        trace_id: &str,
+        stage: &str,
+    ) -> Result<Option<RequestLogPayload>> {
+        if !self.has_table("request_log_payloads")? {
+            return Ok(None);
+        }
+        self.conn
+            .query_row(
+                &format!(
+                    "SELECT trace_id, stage, payload, payload_bytes, payload_truncated, redacted,
+                            body_hash, created_at
+                     FROM request_log_payloads p WHERE trace_id = ?1 AND stage = ?2 AND {}",
+                    live_preview_sql("p")
+                ),
+                (trace_id, stage),
+                |row| {
+                    Ok(RequestLogPayload {
+                        trace_id: row.get(0)?,
+                        stage: row.get(1)?,
+                        payload: row.get(2)?,
+                        payload_bytes: row.get(3)?,
+                        payload_truncated: row.get(4)?,
+                        redacted: row.get(5)?,
+                        body_hash: row.get(6)?,
+                        created_at: row.get(7)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    /// Stages that have a stored preview for this trace, in capture order
+    /// (client before upstream).
+    pub fn list_request_log_payload_stages(&self, trace_id: &str) -> Result<Vec<String>> {
+        if !self.has_table("request_log_payloads")? {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT p.stage FROM request_log_payloads p
+             WHERE p.trace_id = ?1 AND {} ORDER BY p.stage ASC",
+            live_preview_sql("p")
+        ))?;
+        let rows = stmt.query_map([trace_id], |row| row.get::<_, String>(0))?;
+        rows.collect()
+    }
+
+    /// Stored body hash of one stage, used to skip the upstream capture when
+    /// the gateway forwarded the client body unchanged.
+    pub fn find_request_log_payload_body_hash(
+        &self,
+        trace_id: &str,
+        stage: &str,
+    ) -> Result<Option<String>> {
+        if !self.has_table("request_log_payloads")? {
+            return Ok(None);
+        }
+        self.conn
+            .query_row(
+                &format!(
+                    "SELECT p.body_hash FROM request_log_payloads p
+                     WHERE p.trace_id = ?1 AND p.stage = ?2 AND {}",
+                    live_preview_sql("p")
+                ),
+                (trace_id, stage),
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+    }
+
+    /// Resolve the owning API key of a logged request for member-scope
+    /// authorization. `Ok(None)` means no log row exists for the trace.
+    pub fn find_request_log_key_id_by_trace_id(
+        &self,
+        trace_id: &str,
+    ) -> Result<Option<Option<String>>> {
+        self.conn
+            .query_row(
+                "SELECT key_id FROM request_logs WHERE trace_id = ?1 AND cleared_at IS NULL ORDER BY id DESC LIMIT 1",
+                [trace_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+    }
+
     pub fn insert_request_log_with_token_stat(
         &self,
         log: &RequestLog,
@@ -589,25 +752,73 @@ impl Storage {
     pub fn clear_request_logs(&self) -> Result<()> {
         // 中文注释：先把状态计数写入 hourly rollup，再移除可浏览请求明细，避免清日志后仪表盘成功率丢失。
         let rolled_up = self.rollup_all_request_token_stats()?;
-        // Migration 062 runs before the V2 charge snapshot table is created. Keep that
-        // fresh/legacy migration path valid while preserving immutable billed logs once
-        // the V2 schema exists.
-        let affected_logs = if self.has_table("request_charge_snapshots")? {
+        let affected_logs = self.with_secure_delete(|| {
+            let tx = self.conn.unchecked_transaction()?;
+            // Taken after BEGIN IMMEDIATE got the write lock: every payload row
+            // that exists now was captured no later than this moment.
             let cleared_at = now_ts();
-            let hidden_logs = self
-                .conn
-                .execute(hide_billed_request_logs_sql(), [cleared_at])?;
-            let deleted_logs = self.conn.execute(clear_request_logs_sql(), [])?;
-            hidden_logs.saturating_add(deleted_logs)
-        } else {
-            self.conn.execute("DELETE FROM request_logs", [])?
-        };
-        if rolled_up.saturating_add(affected_logs) > 0 {
-            let _ = self
-                .conn
-                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;");
+            // Migration 062 runs before the V2 charge snapshot table is created. Keep that
+            // fresh/legacy migration path valid while preserving immutable billed logs once
+            // the V2 schema exists.
+            let affected_logs = if self.has_table("request_charge_snapshots")? {
+                let hidden_logs = self
+                    .conn
+                    .execute(hide_billed_request_logs_sql(), [cleared_at])?;
+                let deleted_logs = self.conn.execute(clear_request_logs_sql(), [])?;
+                hidden_logs.saturating_add(deleted_logs)
+            } else {
+                self.conn.execute("DELETE FROM request_logs", [])?
+            };
+            // The log rows and the generation bump commit together: queued
+            // payload jobs are rejected from here on and the detail view can
+            // no longer reach old payloads. The payload rows themselves are
+            // deleted below in short batches instead of inside this transaction.
+            self.begin_request_log_payload_clear(cleared_at)?;
+            tx.commit()?;
+            Ok(affected_logs)
+        })?;
+        // No VACUUM: rewriting the whole file needs as much free disk as the
+        // database and blocks every writer. Freed pages are reused by SQLite
+        // and returned to the OS incrementally by maintenance. Whatever does
+        // not finish within the budget (or fails, e.g. on a busy lock) is
+        // continued by maintenance: the clear itself has already committed.
+        let purge = self.drain_request_log_payload_purges_after_commit(CLEAR_SYNC_PURGE_BUDGET);
+        if rolled_up
+            .saturating_add(affected_logs)
+            .saturating_add(purge.deleted_rows)
+            > 0
+        {
+            self.checkpoint_after_purge();
         }
         Ok(())
+    }
+
+    /// Remove every stored request payload. Payloads are plain diagnostics
+    /// without billing semantics, so clearing never preserves rows the way
+    /// billed request logs are hidden instead of deleted.
+    pub fn clear_request_log_payloads(&self) -> Result<usize> {
+        self.with_secure_delete(|| {
+            let tx = self.conn.unchecked_transaction()?;
+            self.begin_request_log_payload_clear(now_ts())?;
+            tx.commit()
+        })?;
+        let purge = self.drain_request_log_payload_purges_after_commit(CLEAR_SYNC_PURGE_BUDGET);
+        self.checkpoint_after_purge();
+        Ok(purge.deleted_rows)
+    }
+
+    /// Batched deletion that runs after a clear or prune already committed.
+    /// Errors are not reported to the caller: the operation succeeded and
+    /// background maintenance continues from the persisted markers.
+    fn drain_request_log_payload_purges_after_commit(
+        &self,
+        budget: std::time::Duration,
+    ) -> super::RequestLogPayloadPurgeProgress {
+        self.drain_request_log_payload_purges(Some(budget))
+            .unwrap_or(super::RequestLogPayloadPurgeProgress {
+                deleted_rows: 0,
+                pending: true,
+            })
     }
 
     pub fn prune_request_logs_before(&self, cutoff_ts: i64) -> Result<usize> {
@@ -615,20 +826,38 @@ impl Storage {
             return Ok(0);
         }
         self.rollup_request_token_stats_before(cutoff_ts)?;
-        if self.has_table("request_charge_snapshots")? {
-            let hidden_logs = self
-                .conn
-                .execute(hide_billed_request_logs_before_sql(), [cutoff_ts, now_ts()])?;
-            let deleted_logs = self
-                .conn
-                .execute(prune_request_logs_before_sql(), [cutoff_ts])?;
-            Ok(hidden_logs.saturating_add(deleted_logs))
-        } else {
-            self.conn.execute(
-                "DELETE FROM request_logs WHERE created_at < ?1",
-                [cutoff_ts],
-            )
-        }
+        let removed = self.with_secure_delete(|| {
+            let tx = self.conn.unchecked_transaction()?;
+            // Raising the watermark rejects payload jobs older than the cutoff
+            // and marks older payload rows for the batched retention sweep.
+            if self.has_table("request_log_payload_state")? {
+                self.conn.execute(
+                    "UPDATE request_log_payload_state
+                     SET retention_cutoff = MAX(retention_cutoff, ?1) WHERE id = 1",
+                    [cutoff_ts],
+                )?;
+            }
+            self.rebase_request_log_payload_survivors(cutoff_ts)?;
+            let removed = if self.has_table("request_charge_snapshots")? {
+                let hidden_logs = self
+                    .conn
+                    .execute(hide_billed_request_logs_before_sql(), [cutoff_ts, now_ts()])?;
+                let deleted_logs = self
+                    .conn
+                    .execute(prune_request_logs_before_sql(), [cutoff_ts])?;
+                hidden_logs.saturating_add(deleted_logs)
+            } else {
+                self.conn.execute(
+                    "DELETE FROM request_logs WHERE created_at < ?1",
+                    [cutoff_ts],
+                )?
+            };
+            self.mark_request_log_payload_blob_gc()?;
+            tx.commit()?;
+            Ok(removed)
+        })?;
+        self.drain_request_log_payload_purges_after_commit(CLEAR_SYNC_PURGE_BUDGET);
+        Ok(removed)
     }
 
     pub fn prune_request_logs_by_retention(&self, now: i64) -> Result<usize> {

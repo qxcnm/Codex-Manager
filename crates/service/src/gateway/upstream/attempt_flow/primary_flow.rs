@@ -207,6 +207,7 @@ where
         status,
         upstream.headers().get(CONTENT_TYPE),
         has_more_candidates,
+        request_ctx.capture,
         &mut log_gateway_result,
     )
     .await
