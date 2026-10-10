@@ -785,8 +785,10 @@ fn request_log_payload_queue_waits_out_a_busy_database_without_dropping() {
     holder
         .execute_batch("COMMIT")
         .expect("release the write lock");
-    wait_until("job written once the lock is released", || {
-        shared.snapshot_stats(None).written_total == 1
+    // The write counter is published before the in-flight guard releases memory.
+    wait_until("job written and memory budget released", || {
+        let stats = shared.snapshot_stats(None);
+        stats.written_total == 1 && stats.queued_bytes == 0 && stats.queued_jobs == 0
     });
     let stats = shared.snapshot_stats(None);
     assert!(stats.db_busy_retries >= 1, "{stats:?}");
