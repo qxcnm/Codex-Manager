@@ -195,6 +195,18 @@ pub fn sync_runtime_settings_from_storage() {
             raw, true,
         ));
     }
+    if let Some(raw) =
+        settings.get(super::shared::APP_SETTING_GATEWAY_REQUEST_LOG_PAYLOAD_REDACTION_ENABLED_KEY)
+    {
+        gateway::set_request_log_payload_redaction_enabled(super::parse_bool_with_default(
+            raw, true,
+        ));
+    }
+    if let Some(raw) =
+        settings.get(super::shared::APP_SETTING_GATEWAY_REQUEST_LOG_PAYLOAD_PREVIEW_ENABLED_KEY)
+    {
+        gateway::set_request_log_payload_preview_enabled(super::parse_bool_with_default(raw, true));
+    }
     if !process_env_has_value("CODEXMANAGER_ENABLE_REQUEST_COMPRESSION") {
         if let Some(raw) = settings.get(APP_SETTING_GATEWAY_REQUEST_COMPRESSION_ENABLED_KEY) {
             gateway::set_request_compression_enabled(super::parse_bool_with_default(raw, true));

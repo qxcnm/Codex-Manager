@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 64 64">
+  <rect width="64" height="64" fill="#df382f" />
+  <rect x="5" y="5" width="54" height="54" fill="none" stroke="#ffffff" stroke-opacity="0.34" />
+  <text
+    x="32"
+    y="44"
+    fill="#ffffff"
+    font-family="STSong, Songti SC, Noto Serif CJK SC, serif"
+    font-size="38"
+    font-weight="700"
+    text-anchor="middle"
+  >呆</text>
+</svg>

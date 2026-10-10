@@ -147,6 +147,7 @@ pub(super) async fn try_openai_fallback(
     token: &mut Token,
     strip_session_affinity: bool,
     debug: bool,
+    capture: Option<super::OutboundPayloadContext<'_>>,
 ) -> Result<Option<GatewayUpstreamResponse>, String> {
     let (url, _url_alt) = super::compute_upstream_url(upstream_base, request_path);
     let bearer = super::resolve_openai_bearer_token(storage, account, token).await?;
@@ -272,6 +273,7 @@ pub(super) async fn try_openai_fallback(
             upstream_headers.as_slice(),
             &body_for_request,
             is_stream,
+            capture,
         )
         .await
         {
@@ -295,6 +297,7 @@ pub(super) async fn try_openai_fallback(
                     upstream_headers.as_slice(),
                     &body_for_request,
                     is_stream,
+                    capture,
                 )
                 .await
                 {
@@ -340,8 +343,9 @@ async fn send_openai_request(
     headers: &[(String, String)],
     body: &Bytes,
     is_stream: bool,
+    capture: Option<super::OutboundPayloadContext<'_>>,
 ) -> Result<GatewayUpstreamResponse, String> {
-    super::upstream::send_stream_request(
+    super::upstream::send_stream_request_with_capture(
         client,
         method,
         url,
@@ -350,6 +354,8 @@ async fn send_openai_request(
         headers,
         body,
         is_stream,
+        capture,
+        None,
     )
     .await
     .map(GatewayUpstreamResponse::Stream)

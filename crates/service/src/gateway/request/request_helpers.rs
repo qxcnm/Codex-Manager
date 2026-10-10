@@ -2,7 +2,19 @@ use reqwest::header::HeaderValue;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-pub(crate) const MAX_TEXT_INPUT_CHARS: usize = 1_048_576;
+pub(crate) const DEFAULT_MAX_TEXT_INPUT_CHARS: usize = 1_048_576;
+const ENV_MAX_TEXT_INPUT_CHARS: &str = "CODEXMANAGER_MAX_TEXT_INPUT_CHARS";
+
+/// Effective local text-input cap. Defaults to [`DEFAULT_MAX_TEXT_INPUT_CHARS`]; deployments with
+/// legitimately larger text payloads (e.g. long agent transcripts and their summarization
+/// requests) can raise it explicitly with `CODEXMANAGER_MAX_TEXT_INPUT_CHARS`.
+pub(crate) fn max_text_input_chars() -> usize {
+    std::env::var(ENV_MAX_TEXT_INPUT_CHARS)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_MAX_TEXT_INPUT_CHARS)
+}
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ParsedRequestMetadata {
@@ -152,10 +164,11 @@ pub(crate) fn validate_text_input_limit_for_value(
         return Ok(());
     }
     let actual_chars = count_path_text_input_chars(path, &value);
-    if actual_chars > MAX_TEXT_INPUT_CHARS {
+    let max_chars = max_text_input_chars();
+    if actual_chars > max_chars {
         return Err(InputSizeLimitError {
             actual_chars,
-            max_chars: MAX_TEXT_INPUT_CHARS,
+            max_chars,
         });
     }
     Ok(())

@@ -2718,6 +2718,62 @@ async fn official_responses_websocket_proxies_frames_and_headers() {
         2,
         "expected two websocket request log entries"
     );
+    for log in &ws_logs {
+        use sha2::{Digest, Sha256};
+        let trace_id = log.trace_id.as_deref().expect("WS trace id");
+        let client = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(payload) = storage
+                    .find_request_log_payload_by_trace_id(trace_id, "client")
+                    .expect("read original WS frame")
+                {
+                    break payload;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("original WS frame persisted");
+        let original: serde_json::Value =
+            serde_json::from_str(&client.payload).expect("client WS JSON");
+        let index = if original["input"] == "hello" { 0 } else { 1 };
+        if index == 0 {
+            assert_eq!(
+                original["stream"], false,
+                "client stage must preserve original transport fields"
+            );
+            assert_eq!(
+                original["model"], "gpt-4.1",
+                "client stage must precede model rewrite"
+            );
+        }
+        let attempt = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(attempt) = storage
+                    .find_request_log_upstream_attempt(trace_id, "upstream")
+                    .expect("read outbound WS attempt")
+                {
+                    break attempt;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("outbound WS attempt persisted");
+        assert_eq!(attempt.transport, "websocket");
+        assert_eq!(
+            attempt.wire_sha256,
+            format!("{:x}", Sha256::digest(capture.frames[index].as_bytes()))
+        );
+        let upstream = storage
+            .find_request_log_payload_by_trace_id(trace_id, "upstream")
+            .expect("read upstream WS body")
+            .expect("rewritten upstream body persisted");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&upstream.payload).unwrap(),
+            serde_json::from_str::<serde_json::Value>(&capture.frames[index]).unwrap(),
+        );
+    }
     assert!(
         ws_logs
             .iter()
@@ -3577,6 +3633,44 @@ async fn official_responses_websocket_switches_account_after_initial_send_reset(
             other => panic!("unexpected account-switch event: {other:?}"),
         }
     }
+
+    use sha2::{Digest, Sha256};
+    let trace_id = storage
+        .list_request_logs(None, 10)
+        .expect("account-switch WS logs")
+        .into_iter()
+        .find(|entry| entry.request_type.as_deref() == Some("ws"))
+        .and_then(|entry| entry.trace_id)
+        .expect("account-switch trace id");
+    let attempts = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let stages = storage
+                .list_request_log_upstream_attempt_stages(&trace_id)
+                .expect("account-switch stages");
+            if stages.len() >= 2 {
+                break stages;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("account-switch attempts persisted");
+    let latest = storage
+        .find_request_log_upstream_attempt(&trace_id, attempts.last().unwrap())
+        .expect("last attempt")
+        .expect("reconnected attempt");
+    assert_eq!(
+        latest.wire_sha256,
+        format!("{:x}", Sha256::digest(replacement_frame.as_bytes()))
+    );
+    let captured = storage
+        .find_request_log_payload_by_trace_id(&trace_id, &latest.stage)
+        .expect("upstream content")
+        .expect("reconnected body");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&captured.payload).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&replacement_frame).unwrap(),
+    );
 
     let _ = client_ws.close(None).await;
     let _ = shutdown_tx.send(());

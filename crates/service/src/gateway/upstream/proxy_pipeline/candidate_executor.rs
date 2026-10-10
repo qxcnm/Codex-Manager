@@ -404,7 +404,8 @@ pub(in super::super) async fn execute_candidate_sequence(
             .as_ref()
             .ok_or_else(|| "request already consumed".to_string())?;
         let request_ctx =
-            UpstreamRequestContext::from_request(request_ref, context.protocol_type());
+            UpstreamRequestContext::from_request(request_ref, context.protocol_type())
+                .with_capture(context.payload_capture());
         let incoming_session_id = attempt_headers.session_id();
         let incoming_turn_state = attempt_headers.turn_state();
         let incoming_conversation_id = attempt_headers.conversation_id();
@@ -484,7 +485,8 @@ pub(in super::super) async fn execute_candidate_sequence(
                 .as_ref()
                 .ok_or_else(|| "request already consumed before same-account retry".to_string())?;
             let retry_request_ctx =
-                UpstreamRequestContext::from_request(request_ref, context.protocol_type());
+                UpstreamRequestContext::from_request(request_ref, context.protocol_type())
+                    .with_capture(context.payload_capture());
             decision = run_candidate_attempt(CandidateAttemptParams {
                 storage,
                 method,

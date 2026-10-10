@@ -10,7 +10,7 @@ pub(super) mod support;
 
 #[cfg(test)]
 pub(super) use attempt_flow::transport::send_async_stream_request;
-pub(super) use attempt_flow::transport::send_stream_request;
+pub(super) use attempt_flow::transport::send_stream_request_with_capture;
 pub(super) use response::{
     GatewayByteStream, GatewayByteStreamItem, GatewayStreamResponse, GatewayUpstreamResponse,
 };

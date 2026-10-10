@@ -1,4 +1,4 @@
-import { ShieldCheck, Workflow } from "lucide-react";
+import { FileText, ShieldCheck, Workflow } from "lucide-react";
 import { AppSettings } from "@/types";
 import { toast } from "sonner";
 import { Label } from "@/components/ui/label";
@@ -174,6 +174,46 @@ export function GatewayTabContent({
             onCheckedChange={(checked) =>
               updateSettings.mutate({
                 threadAwareAccountDistributionEnabled: checked,
+              })
+            }
+          />
+        </div>
+
+        <div className="flex flex-col gap-3 border-t pt-6 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-primary" />
+              <Label>{t("请求内容脱敏")}</Label>
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              {t("开启后，请求日志里保存的请求内容会把密钥、Token、密码等凭据字段替换为 [REDACTED]；关闭后按原样保存，不做任何脱敏。仅影响之后的新请求。")}
+            </p>
+          </div>
+          <Switch
+            checked={snapshot.requestLogPayloadRedactionEnabled}
+            onCheckedChange={(checked) =>
+              updateSettings.mutate({
+                requestLogPayloadRedactionEnabled: checked,
+              })
+            }
+          />
+        </div>
+
+        <div className="flex flex-col gap-3 border-t pt-6 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <FileText className="h-4 w-4 text-primary" />
+              <Label>{t("请求内容仅保留 16 KB 预览")}</Label>
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              {t("开启后每个请求只保存前 16 KB，超出部分截断；关闭后完整保存请求内容，同一会话的历史消息只存一份，按需拼回完整请求。仅影响之后的新请求。")}
+            </p>
+          </div>
+          <Switch
+            checked={snapshot.requestLogPayloadPreviewEnabled}
+            onCheckedChange={(checked) =>
+              updateSettings.mutate({
+                requestLogPayloadPreviewEnabled: checked,
               })
             }
           />

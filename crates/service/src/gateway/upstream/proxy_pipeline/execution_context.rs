@@ -199,6 +199,27 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
         self.protocol_type
     }
 
+    pub(in super::super) fn payload_capture(
+        &self,
+    ) -> super::super::super::OutboundPayloadContext<'_> {
+        super::super::super::OutboundPayloadContext {
+            trace_id: self.trace_id,
+            key_id: self.key_id,
+        }
+    }
+
+    pub(in super::super) fn record_completed_response_id(&self, response_id: &str) {
+        if let Err(err) =
+            self.storage
+                .record_request_log_response_id(self.key_id, response_id, self.trace_id)
+        {
+            log::warn!(
+                "event=request_log_response_id_insert_failed trace_id={} err={err}",
+                self.trace_id
+            );
+        }
+    }
+
     /// 函数 `should_skip_candidate`
     ///
     /// 作者: gaohongshun

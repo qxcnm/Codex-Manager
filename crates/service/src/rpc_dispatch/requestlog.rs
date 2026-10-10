@@ -1,4 +1,6 @@
-use codexmanager_core::rpc::types::{JsonRpcRequest, JsonRpcResponse, RequestLogListParams};
+use codexmanager_core::rpc::types::{
+    JsonRpcRequest, JsonRpcResponse, RequestLogDetailParams, RequestLogListParams,
+};
 use codexmanager_core::storage::Storage;
 
 use crate::storage_helpers::StorageHandle;
@@ -118,6 +120,29 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                 }
             }))
         }
+        "requestlog/detail" => {
+            let params = req
+                .params
+                .clone()
+                .map(serde_json::from_value::<RequestLogDetailParams>)
+                .transpose()
+                .map(Option::unwrap_or_default)
+                .map_err(|err| format!("invalid requestlog/detail params: {err}"));
+            super::value_or_error(params.and_then(|params| {
+                if actor.is_admin() {
+                    let storage = crate::storage_helpers::open_storage()
+                        .ok_or_else(|| "open storage failed".to_string())?;
+                    crate::requestlog::detail::read_request_log_detail(&storage, &params, None)
+                } else {
+                    let (storage, key_ids) = member_requestlog_scope(actor)?;
+                    crate::requestlog::detail::read_request_log_detail(
+                        &storage,
+                        &params,
+                        Some(key_ids.as_slice()),
+                    )
+                }
+            }))
+        }
         "requestlog/summary" => {
             let params = req
                 .params
@@ -142,6 +167,15 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
         // DomainStorage contract. Keep the synchronous path for desktop and
         // compatibility callers that do not carry AppState.
         "requestlog/clear" => super::ok_or_error(requestlog_clear::clear_request_logs()),
+        // Admin-only diagnostics of the request payload write queue. With a
+        // `traceId`, also reports why that trace's content was not recorded.
+        "requestlog/payload_queue_stats" => super::value_or_error(if actor.is_admin() {
+            Ok(crate::gateway::request_log_payload_queue_stats(
+                super::str_param(req, "traceId"),
+            ))
+        } else {
+            Err("permission_denied: requestlog/payload_queue_stats".to_string())
+        }),
         "requestlog/today_summary" => {
             let day_start_ts = super::i64_param(req, "dayStartTs");
             let day_end_ts = super::i64_param(req, "dayEndTs");
