@@ -120,6 +120,11 @@ pub(crate) struct UpstreamSseFramePump {
 
 impl UpstreamSseFramePump {
     #[cfg(test)]
+    pub(super) fn from_receiver(rx: Receiver<UpstreamSseFramePumpItem>) -> Self {
+        Self { rx }
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_reader<R>(upstream: R) -> Self
     where
         R: Read + Send + 'static,

@@ -107,7 +107,9 @@ impl PassthroughSseUsageReader {
             // Only explicit error fields may affect persistent account state here. A normal
             // output_text delta can legitimately quote a quota message; compatible upstreams
             // that emit quota notices as output are handled before delivery by stream preflight.
-            if collector.terminal_error.is_none() {
+            if collector.terminal_error.is_none()
+                && matches!(&inspection.terminal, Some(SseTerminal::Err(_)))
+            {
                 if let Some(msg) = extract_usage_limit_from_sse_data(lines) {
                     collector.saw_terminal = true;
                     collector.terminal_error = Some(msg);
@@ -157,15 +159,29 @@ impl PassthroughSseUsageReader {
     /// # 返回
     /// 返回函数执行结果
     /// 上游流在没有终止事件的情况下结束时，向下游显式传递错误。
-    /// 同一帧同时携带 Responses 形状（type/code/message）与 chat 形状（error 对象），
-    /// 使两类客户端都能解析出真实原因，而不是只看到“流结束但没有结束标记”。
     fn stream_error_chunk(&mut self, code: &str, message: String) -> Vec<u8> {
+        self.finished = true;
         if let Ok(mut collector) = self.usage_collector.lock() {
+            // Transport failures after a response terminal must not turn a completed
+            // text/tool response (or an already delivered upstream error) into a new error.
+            if collector.saw_terminal {
+                return Vec::new();
+            }
             collector
                 .terminal_error
                 .get_or_insert_with(|| message.clone());
         }
-        self.finished = true;
+        if self.protocol == PassthroughSseProtocol::AnthropicNative {
+            let payload = serde_json::json!({
+                "type": "error",
+                "error": {
+                    "type": "api_error",
+                    "message": message,
+                    "code": code
+                }
+            });
+            return format!("event: error\ndata: {payload}\n\n").into_bytes();
+        }
         let payload = serde_json::json!({
             "type": "error",
             "code": code,
@@ -180,6 +196,54 @@ impl PassthroughSseUsageReader {
         format!("data: {}\n\n", payload).into_bytes()
     }
 
+    fn complete_tail_frame(&self, frame: &mut Vec<String>) -> bool {
+        if frame
+            .last()
+            .is_some_and(|line| line == "\n" || line == "\r\n")
+        {
+            return true;
+        }
+        // The pump emits its pending frame at EOF. Forward only a complete payload,
+        // then close the event before a possible generated error. A partial JSON
+        // document must not reach the client or absorb the next event's data line.
+        let data = frame
+            .iter()
+            .filter_map(|line| {
+                line.trim_end_matches(['\r', '\n'])
+                    .strip_prefix("data:")
+                    .map(str::trim_start)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !data.is_empty()
+            && data.trim() != "[DONE]"
+            && serde_json::from_str::<serde_json::Value>(&data).is_err()
+        {
+            return false;
+        }
+        if data.is_empty()
+            && frame.iter().any(|line| {
+                let line = line.trim();
+                !line.is_empty()
+                    && !line.starts_with(':')
+                    && !line.starts_with("event:")
+                    && !line.starts_with("id:")
+                    && !line.starts_with("retry:")
+                    && !line.starts_with("data:")
+            })
+        {
+            self.update_usage_from_frame(frame);
+            return false;
+        }
+        if let Some(last) = frame.last_mut() {
+            if !last.ends_with('\n') {
+                last.push('\n');
+            }
+        }
+        frame.push("\n".to_string());
+        true
+    }
+
     async fn next_chunk(&mut self) -> std::io::Result<Vec<u8>> {
         loop {
             match self
@@ -187,23 +251,17 @@ impl PassthroughSseUsageReader {
                 .recv_timeout_async(stream_wait_timeout(self.last_upstream_activity))
                 .await
             {
-                Ok(UpstreamSseFramePumpItem::Frame(frame)) => {
+                Ok(UpstreamSseFramePumpItem::Frame(mut frame)) => {
                     self.last_upstream_activity = Instant::now();
+                    if !self.complete_tail_frame(&mut frame) {
+                        continue;
+                    }
                     self.saw_upstream_frame = true;
                     self.update_usage_from_frame(&frame);
                     mark_first_response_ms(&self.usage_collector, self.request_started_at);
                     return Ok(frame.concat().into_bytes());
                 }
                 Ok(UpstreamSseFramePumpItem::Eof) => {
-                    let terminal_seen = self
-                        .usage_collector
-                        .lock()
-                        .map(|collector| collector.saw_terminal)
-                        .unwrap_or(false);
-                    if terminal_seen {
-                        self.finished = true;
-                        return Ok(Vec::new());
-                    }
                     let hint = self
                         .usage_collector
                         .lock()
