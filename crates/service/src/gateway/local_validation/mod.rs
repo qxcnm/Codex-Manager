@@ -52,6 +52,8 @@ pub(super) struct LocalValidationResult {
 pub(super) struct LocalValidationError {
     pub(super) status_code: u16,
     pub(super) message: String,
+    /// Populated only after an API key has been authenticated.
+    pub(super) key_id: Option<String>,
 }
 
 impl LocalValidationError {
@@ -70,6 +72,7 @@ impl LocalValidationError {
         Self {
             status_code,
             message: message.into(),
+            key_id: None,
         }
     }
 }
@@ -106,13 +109,27 @@ pub(super) fn prepare_local_request(
     trace_id: String,
     debug: bool,
 ) -> Result<LocalValidationResult, LocalValidationError> {
-    let body = io::read_request_body(request)?;
+    // Zero-copy: the client capture and the forwarding path share one buffer.
+    let body = Bytes::from(io::read_request_body(request)?);
     let incoming_headers = super::IncomingHeaderSnapshot::from_request(request);
     let platform_key = io::extract_platform_key_or_error(request, &incoming_headers, debug)?;
 
     let storage = auth::open_storage_or_error()?;
     let api_key = auth::load_active_api_key(&storage, &platform_key, request.url(), debug)?;
 
+    // Capture the body exactly as received for the request log detail view.
+    // Runs for every authenticated request, including ones that never reach
+    // the upstream (validation rejects, local responses, aggregate failures).
+    super::store_client_request_log_payload(
+        trace_id.as_str(),
+        &body,
+        Some(super::request_log_payload_conversation_key(
+            api_key.id.as_str(),
+            incoming_headers.session_id(),
+        )),
+    );
+
+    let key_id = api_key.id.clone();
     request::build_local_validation_result(
         request,
         trace_id,
@@ -121,4 +138,8 @@ pub(super) fn prepare_local_request(
         body,
         api_key,
     )
+    .map_err(|mut error| {
+        error.key_id = Some(key_id);
+        error
+    })
 }

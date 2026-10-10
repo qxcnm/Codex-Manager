@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 base64 = "0.22"
+crc32fast = "1.5"
 rand = "0.8"
 rusqlite = { path = "../rusqlite", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

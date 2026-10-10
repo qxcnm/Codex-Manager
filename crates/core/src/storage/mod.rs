@@ -35,8 +35,18 @@ mod proxy_profiles;
 mod proxy_tests;
 mod quota_pools;
 mod request_log_filters;
+mod request_log_payload_batch;
+mod request_log_payload_purge;
+mod request_log_payload_store;
 pub mod request_log_query;
 mod request_logs;
+mod storage_space;
+pub use request_log_payload_purge::RequestLogPayloadPurgeProgress;
+use request_log_payload_purge::REQUEST_LOG_PAYLOAD_GENERATION_TABLES;
+pub use storage_space::{
+    wal_checkpoint_pending, DatabaseSpaceUsage, WalCheckpointOutcome, AUTO_VACUUM_FULL,
+    AUTO_VACUUM_INCREMENTAL, AUTO_VACUUM_NONE,
+};
 mod request_token_stats;
 mod reset_credit_operations;
 mod settings;
@@ -55,6 +65,12 @@ pub use model_catalog_v2::{
     ModelFastPolicyV2, ModelPriceV2, ModelRouteV2,
 };
 pub use proxy_profiles::derive_proxy_profile_url_metadata;
+pub use request_log_payload_batch::{is_sqlite_busy_error, RequestLogPayloadBatch};
+pub use request_log_payload_store::{
+    RequestLogPayloadFull, RequestLogPayloadManifest, RequestLogPayloadManifestInput,
+    RequestLogPayloadManifestWrite, RequestLogPayloadParentHint, RequestLogPayloadPart,
+    RequestLogUpstreamAttempt,
+};
 pub use reset_credit_operations::{
     ResetCreditOperation, ResetCreditOperationClaim, ResetCreditOperationStatus,
     ResetCreditOperationUpdate,
@@ -807,6 +823,32 @@ pub struct CodexSkillRepositoryCatalogSnapshot {
     pub repositories: Vec<CodexSkillRepositoryRecord>,
     pub skills: Vec<CodexSkillRepositorySkillRecord>,
 }
+
+/// Request payload preview attached to a gateway trace for the request log
+/// detail view (preview storage mode). `payload_bytes` records the original
+/// body size before the ingest-time size cap was applied; `redacted` records
+/// whether credential-like keys were masked before storing.
+///
+/// `stage` is [`PAYLOAD_STAGE_CLIENT`] (body as received) or
+/// [`PAYLOAD_STAGE_UPSTREAM`] (body actually forwarded upstream);
+/// `body_hash` identifies the stored text so the upstream row can be skipped
+/// when the gateway did not rewrite the body.
+#[derive(Debug, Clone, Default)]
+pub struct RequestLogPayload {
+    pub trace_id: String,
+    pub stage: String,
+    pub payload: String,
+    pub payload_bytes: i64,
+    pub payload_truncated: bool,
+    pub redacted: bool,
+    pub body_hash: String,
+    pub created_at: i64,
+}
+
+/// Body as received from the client.
+pub const PAYLOAD_STAGE_CLIENT: &str = "client";
+/// Body actually sent upstream after local rewriting.
+pub const PAYLOAD_STAGE_UPSTREAM: &str = "upstream";
 
 #[derive(Debug, Clone, Default)]
 pub struct RequestLog {
@@ -1653,7 +1695,11 @@ impl Storage {
         // 中文注释：并发写入时给 SQLite 一点等待时间，避免瞬时 lock 导致请求直接失败。
         conn.busy_timeout(Duration::from_millis(3000))?;
         // 中文注释：复杂筛选/聚合的临时 B-tree 优先走内存，减少报表查询落盘开销。
-        conn.execute_batch("PRAGMA temp_store=MEMORY; PRAGMA foreign_keys=ON;")?;
+        // journal_size_limit caps the WAL file left behind after a checkpoint, so
+        // a large purge does not keep a multi-GB WAL file around afterwards.
+        conn.execute_batch(
+            "PRAGMA temp_store=MEMORY; PRAGMA foreign_keys=ON; PRAGMA journal_size_limit=67108864;",
+        )?;
         Ok(())
     }
 
@@ -1720,6 +1766,7 @@ impl Storage {
     /// # 返回
     /// 返回函数执行结果
     pub fn init(&self) -> Result<()> {
+        self.prefer_incremental_auto_vacuum_for_new_database()?;
         self.ensure_migrations_table()?;
         *self.migration_cache() = None;
 
@@ -2321,6 +2368,32 @@ impl Storage {
         )?;
         self.apply_model_catalog_revision9_migration()?;
         self.apply_model_catalog_revision10_migration()?;
+        self.apply_sql_migration(
+            "139_request_log_payloads",
+            include_str!("../../migrations/139_request_log_payloads.sql"),
+        )?;
+        self.apply_sql_migration(
+            "140_request_log_payload_store",
+            include_str!("../../migrations/140_request_log_payload_store.sql"),
+        )?;
+        self.apply_sql_migration(
+            "141_request_log_response_links",
+            include_str!("../../migrations/141_request_log_response_links.sql"),
+        )?;
+        self.apply_sql_migration(
+            "142_request_log_payload_purges",
+            include_str!("../../migrations/142_request_log_payload_purges.sql"),
+        )?;
+        self.apply_sql_or_compat_migration(
+            "143_request_log_payload_purge_generation",
+            include_str!("../../migrations/143_request_log_payload_purge_generation.sql"),
+            |storage| {
+                for table in REQUEST_LOG_PAYLOAD_GENERATION_TABLES {
+                    storage.ensure_column(table, "generation", "INTEGER")?;
+                }
+                Ok(())
+            },
+        )?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_api_key_account_group_filter_column()?;
         self.ensure_aggregate_apis_table()?;

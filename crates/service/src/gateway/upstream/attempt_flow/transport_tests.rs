@@ -1189,6 +1189,68 @@ fn websocket_upstream_request_text_from_http_body_rejects_invalid_payload() {
 }
 
 #[test]
+fn captured_upstream_websocket_body_matches_sent_response_create_frame() {
+    use sha2::{Digest, Sha256};
+    let _env_lock = crate::test_env_guard();
+    let _reload_guard = RuntimeConfigReloadGuard;
+    let _proxy_guard = EnvGuard::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "");
+    let _proxy_list_guard = EnvGuard::set("CODEXMANAGER_PROXY_LIST", "");
+    let db_path = std::env::temp_dir().join(format!(
+        "codexmanager-ws-request-capture-{}-{}.sqlite",
+        std::process::id(),
+        crate::gateway::next_trace_id()
+    ));
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+    let storage = codexmanager_core::storage::Storage::open(&db_path).expect("open capture db");
+    storage.init().expect("init capture db");
+    crate::gateway::reload_runtime_config_from_env();
+    let (url, _headers_rx, frame_rx, handle) =
+        spawn_mock_websocket_upstream(r#"{"type":"response.completed"}"#);
+    let body = Bytes::from_static(br#"{"model":"codex","input":"hello"}"#);
+    let trace_id = "trc_ws_actual_frame";
+    let response =
+        crate::gateway::run_upstream_io(super::send_websocket_upstream_request_with_capture(
+            url.as_str(),
+            "acct_ws_capture",
+            Some(Instant::now() + Duration::from_secs(5)),
+            &[("Authorization".to_string(), "Bearer token_ws".to_string())],
+            &body,
+            Some(crate::gateway::OutboundPayloadContext {
+                trace_id,
+                key_id: "gk_ws_capture",
+            }),
+        ))
+        .expect("gateway async test runtime")
+        .expect("upstream WS connected");
+    let _ = response.read_all_bytes().expect("read WS response");
+    let sent_frame = frame_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("mock received frame");
+    handle.join().expect("join mock upstream");
+    let stages = storage
+        .list_request_log_upstream_attempt_stages(trace_id)
+        .expect("attempt stages");
+    assert_eq!(stages, vec!["upstream".to_string()]);
+    let attempt = storage
+        .find_request_log_upstream_attempt(trace_id, &stages[0])
+        .unwrap()
+        .unwrap();
+    assert_eq!(attempt.transport, "websocket");
+    assert_eq!(
+        attempt.wire_sha256,
+        format!("{:x}", Sha256::digest(sent_frame.as_bytes()))
+    );
+    let stored = storage
+        .find_request_log_payload_by_trace_id(trace_id, &stages[0])
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&stored.payload).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&sent_frame).unwrap(),
+    );
+}
+
+#[test]
 fn send_websocket_upstream_request_builds_valid_handshake_and_stops_on_completed() {
     let _env_lock = crate::test_env_guard();
     let _reload_guard = RuntimeConfigReloadGuard;

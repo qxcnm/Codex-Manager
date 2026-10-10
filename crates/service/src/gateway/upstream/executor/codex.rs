@@ -68,6 +68,7 @@ where
             strip_session_affinity,
             debug,
             has_more_candidates,
+            request_ctx.capture,
             &mut log_gateway_result,
         )
         .await

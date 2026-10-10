@@ -71,7 +71,7 @@ pub(crate) async fn handle_gateway_request_async(mut request: Request) -> Result
                             response_adapter: None,
                             ..Default::default()
                         },
-                        None,
+                        err.key_id.as_deref(),
                         None,
                         &request_path_for_log,
                         &request_method_for_log,

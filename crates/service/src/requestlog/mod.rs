@@ -1,5 +1,7 @@
 #[path = "requestlog_clear.rs"]
 pub(crate) mod clear;
+#[path = "requestlog_detail.rs"]
+pub(crate) mod detail;
 #[path = "requestlog_list.rs"]
 pub(crate) mod list;
 pub(crate) mod seaorm;

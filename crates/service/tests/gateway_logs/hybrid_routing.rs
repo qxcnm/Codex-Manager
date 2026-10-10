@@ -171,6 +171,60 @@ fn insert_hybrid_aggregate_first_key(
 }
 
 #[test]
+fn rejected_root_array_request_stores_only_redacted_client_payload() {
+    let _lock = test_env_guard();
+    let dir = new_test_dir("codexmanager-rejected-root-array-redaction");
+    let db_path: PathBuf = dir.join("codexmanager.db");
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init db");
+    let key_id = "gk_rejected_array";
+    let platform_key = "pk_rejected_array";
+    insert_hybrid_key(&storage, key_id, platform_key, now_ts());
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let (status, _) = post_http_raw(
+        &server.addr,
+        "/v1/responses",
+        r#"[{"api_key":"sk-dummy-secret","nested":{"password":"dummy-password"}}]"#,
+        &[
+            ("Content-Type", "application/json"),
+            ("Authorization", &format!("Bearer {platform_key}")),
+        ],
+    );
+    server.join();
+    assert!(status >= 400, "root array must fail gateway validation");
+    let trace_id = storage
+        .list_request_logs(Some(&format!("key:={key_id}")), 10)
+        .expect("list rejected request logs")
+        .into_iter()
+        .find_map(|log| log.trace_id)
+        .expect("rejected trace id");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let captured = loop {
+        if let Some(captured) = storage
+            .find_request_log_payload_by_trace_id(
+                &trace_id,
+                codexmanager_core::storage::PAYLOAD_STAGE_CLIENT,
+            )
+            .expect("read captured client body")
+        {
+            break captured;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "rejected request capture timed out"
+        );
+        thread::sleep(Duration::from_millis(20));
+    };
+    let parsed: serde_json::Value =
+        serde_json::from_str(&captured.payload).expect("captured root array");
+    assert_eq!(parsed[0]["api_key"], "[REDACTED]");
+    assert_eq!(parsed[0]["nested"]["password"], "[REDACTED]");
+    assert!(!captured.payload.contains("sk-dummy-secret"));
+    assert!(!captured.payload.contains("dummy-password"));
+}
+
+#[test]
 fn hybrid_aggregate_first_aggregate_only_skips_active_account_and_uses_aggregate_api() {
     let _lock = test_env_guard();
     let dir = new_test_dir("codexmanager-hybrid-aggregate-only");
@@ -486,7 +540,8 @@ fn hybrid_aggregate_first_dual_route_falls_back_once_and_preserves_tools() {
 
     assert_eq!(status, 200, "gateway response: {response_body}");
     assert!(response_body.contains("resp_account_fallback"));
-    assert_eq!(aggregate_rx.try_iter().count(), 4, "aggregate retry count");
+    let aggregate_requests = aggregate_rx.try_iter().collect::<Vec<_>>();
+    assert_eq!(aggregate_requests.len(), 4, "aggregate retry count");
     let local_requests = local_rx.try_iter().collect::<Vec<_>>();
     assert_eq!(local_requests.len(), 1, "account fallback request count");
     let local_body: serde_json::Value =
@@ -506,6 +561,17 @@ fn hybrid_aggregate_first_dual_route_falls_back_once_and_preserves_tools() {
         logs[0].actual_source_kind.as_deref(),
         Some("openai_account")
     );
+    let trace_id = logs[0].trace_id.as_deref().expect("non-stream trace id");
+    let attempts = wait_for_upstream_attempts(&storage, trace_id, 5);
+    for (attempt, captured) in attempts
+        .iter()
+        .zip(aggregate_requests.iter().chain(local_requests.iter()))
+    {
+        assert_eq!(
+            attempt.wire_sha256,
+            format!("{:x}", Sha256::digest(&captured.body))
+        );
+    }
 }
 
 #[test]
@@ -576,7 +642,8 @@ fn hybrid_aggregate_first_dual_route_streams_from_account_after_aggregate_failur
     assert_eq!(status, 200, "gateway response: {response_body}");
     assert!(response_body.contains("account fallback ok"));
     assert!(response_body.contains("resp_hybrid_aggregate_first_stream"));
-    assert_eq!(aggregate_rx.try_iter().count(), 4, "aggregate retry count");
+    let aggregate_requests = aggregate_rx.try_iter().collect::<Vec<_>>();
+    assert_eq!(aggregate_requests.len(), 4, "aggregate retry count");
     let local_requests = local_rx.try_iter().collect::<Vec<_>>();
     assert_eq!(local_requests.len(), 1, "account fallback request count");
     let local_body: serde_json::Value =
@@ -599,6 +666,25 @@ fn hybrid_aggregate_first_dual_route_streams_from_account_after_aggregate_failur
     assert_eq!(
         logs[0].actual_source_kind.as_deref(),
         Some("openai_account")
+    );
+    let trace_id = logs[0].trace_id.as_deref().expect("stream trace id");
+    let attempts = wait_for_upstream_attempts(&storage, trace_id, 5);
+    assert_eq!(attempts.len(), 5);
+    for (attempt, captured) in attempts
+        .iter()
+        .zip(aggregate_requests.iter().chain(local_requests.iter()))
+    {
+        assert_eq!(
+            attempt.wire_sha256,
+            format!("{:x}", Sha256::digest(&captured.body)),
+            "each actual send (aggregate retries and account fallback) must match its mock upstream"
+        );
+    }
+    assert_eq!(
+        storage
+            .find_request_log_trace_for_response_id(key_id, "resp_hybrid_aggregate_first_stream",)
+            .expect("response association"),
+        Some(trace_id.to_string()),
     );
 }
 
@@ -706,6 +792,31 @@ fn hybrid_aggregate_only_streams_chat_completions_tool_calls_from_aggregate_api(
     assert!(response_body.contains("{\\\"question\\\":\\\"2+2\\\"}"));
     assert!(response_body.contains("\"finish_reason\":\"tool_calls\""));
     assert!(response_body.contains("data: [DONE]"));
+    let trace_id = storage
+        .list_request_logs(Some(&format!("key:={key_id}")), 10)
+        .expect("list request logs")
+        .into_iter()
+        .find_map(|log| log.trace_id)
+        .expect("aggregate request trace id");
+    let attempts = wait_for_upstream_attempts(&storage, &trace_id, 1);
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0].method, "POST");
+    assert_eq!(attempts[0].transport, "http");
+    assert!(attempts[0].url.ends_with("/chat/completions"));
+    assert_eq!(
+        attempts[0].wire_sha256,
+        format!("{:x}", Sha256::digest(&aggregate_requests[0].body)),
+        "captured wire digest must match bytes observed by mock aggregate upstream"
+    );
+    let captured = storage
+        .find_request_log_payload_by_trace_id(&trace_id, &attempts[0].stage)
+        .expect("read captured attempt")
+        .expect("distinct upstream payload");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&captured.payload).unwrap(),
+        aggregate_body,
+        "decoded upstream attempt must match the mock's received body"
+    );
 }
 
 #[test]

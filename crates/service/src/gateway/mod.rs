@@ -183,6 +183,8 @@ mod request_gate;
 mod request_helpers;
 #[path = "observability/request_log.rs"]
 mod request_log;
+#[path = "observability/request_log_payload.rs"]
+mod request_log_payload;
 #[path = "request/request_rewrite.rs"]
 mod request_rewrite;
 #[path = "routing/route_hint.rs"]
@@ -222,8 +224,9 @@ use protocol_adapter::{
 pub(super) use request_helpers::parse_request_metadata;
 pub(super) use request_helpers::{
     inspect_service_tier_value, is_html_content_type, is_upstream_challenge_response,
-    normalize_models_path, parse_request_json_value, parse_request_metadata_from_value,
-    validate_text_input_limit_for_path, validate_text_input_limit_for_value,
+    max_text_input_chars, normalize_models_path, parse_request_json_value,
+    parse_request_metadata_from_value, validate_text_input_limit_for_path,
+    validate_text_input_limit_for_value, DEFAULT_MAX_TEXT_INPUT_CHARS,
 };
 #[cfg(test)]
 use request_helpers::{should_drop_incoming_header, should_drop_incoming_header_for_failover};
@@ -497,6 +500,14 @@ use request_gate::request_gate_lock;
 #[cfg(test)]
 use request_gate::RequestGateAcquireError;
 pub(crate) use request_log::write_request_log;
+pub(crate) use request_log_payload::{
+    begin_request_log_payload_clear, capture_outbound_payload, finish_request_log_payload_clear,
+    guard_request_log_payload_clear, initialize_request_log_payload_pipeline,
+    request_log_payload_conversation_key, request_log_payload_preview_enabled,
+    request_log_payload_queue_stats, request_log_payload_redaction_enabled,
+    set_request_log_payload_preview_enabled, set_request_log_payload_redaction_enabled,
+    store_client_request_log_payload, OutboundPayloadContext,
+};
 use route_hint::{apply_route_strategy, apply_route_strategy_with_source};
 use route_quality::record_route_quality;
 pub(crate) use runtime_config::async_upstream_client_for_aggregate_url;

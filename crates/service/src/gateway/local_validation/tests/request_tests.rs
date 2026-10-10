@@ -1768,3 +1768,122 @@ fn anthropic_model_must_exist_in_v2_catalog() {
     .expect_err("missing model should fail");
     assert!(err.message.contains("claude model not found in model list"));
 }
+
+#[test]
+fn openai_chat_tool_message_array_content_flattens_to_string_output() {
+    let body = serde_json::json!({
+        "model": "gpt-6.1-sol",
+        "messages": [
+            { "role": "user", "content": "weather?" },
+            {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_test_array",
+                    "type": "function",
+                    "function": { "name": "get_weather", "arguments": "{\"city\":\"beijing\"}" }
+                }]
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_test_array",
+                "content": [
+                    { "type": "text", "text": "sunny" },
+                    { "type": "text", "text": "18C" }
+                ]
+            }
+        ]
+    });
+    let adapted = adapt_openai_chat_completions_body_to_responses(
+        serde_json::to_vec(&body).expect("serialize chat body"),
+    )
+    .expect("adapt chat body");
+    let payload: Value = serde_json::from_slice(&adapted).expect("json body");
+
+    let input = payload
+        .get("input")
+        .and_then(Value::as_array)
+        .expect("input array");
+    let tool_output = input
+        .iter()
+        .find(|item| item.get("type").and_then(Value::as_str) == Some("function_call_output"))
+        .expect("function_call_output item");
+    // 数组形式的 tool content 必须拍平为字符串，否则上游会拒绝 output[0].type='text'。
+    assert_eq!(
+        tool_output.get("output"),
+        Some(&Value::String("sunny\n18C".to_string()))
+    );
+}
+
+#[test]
+fn openai_chat_tool_message_string_content_keeps_string_output() {
+    let body = serde_json::json!({
+        "model": "gpt-6.1-sol",
+        "messages": [
+            { "role": "user", "content": "weather?" },
+            {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_test_string",
+                    "type": "function",
+                    "function": { "name": "get_weather", "arguments": "{}" }
+                }]
+            },
+            { "role": "tool", "tool_call_id": "call_test_string", "content": "sunny" }
+        ]
+    });
+    let adapted = adapt_openai_chat_completions_body_to_responses(
+        serde_json::to_vec(&body).expect("serialize chat body"),
+    )
+    .expect("adapt chat body");
+    let payload: Value = serde_json::from_slice(&adapted).expect("json body");
+
+    let input = payload
+        .get("input")
+        .and_then(Value::as_array)
+        .expect("input array");
+    let tool_output = input
+        .iter()
+        .find(|item| item.get("type").and_then(Value::as_str) == Some("function_call_output"))
+        .expect("function_call_output item");
+    assert_eq!(
+        tool_output.get("output"),
+        Some(&Value::String("sunny".to_string()))
+    );
+}
+
+#[test]
+fn openai_chat_tool_message_mixed_content_uses_image_placeholder() {
+    let body = serde_json::json!({
+        "model": "gpt-6.1-sol",
+        "messages": [
+            {
+                "role": "tool",
+                "tool_call_id": "call_test_mixed",
+                "content": [
+                    { "type": "image_url", "image_url": { "url": "https://example.com/a.png" } },
+                    { "type": "text", "text": "screenshot attached" }
+                ]
+            }
+        ]
+    });
+    let adapted = adapt_openai_chat_completions_body_to_responses(
+        serde_json::to_vec(&body).expect("serialize chat body"),
+    )
+    .expect("adapt chat body");
+    let payload: Value = serde_json::from_slice(&adapted).expect("json body");
+
+    let input = payload
+        .get("input")
+        .and_then(Value::as_array)
+        .expect("input array");
+    let tool_output = input
+        .iter()
+        .find(|item| item.get("type").and_then(Value::as_str) == Some("function_call_output"))
+        .expect("function_call_output item");
+    assert_eq!(
+        tool_output.get("output"),
+        Some(&Value::String("[image]\nscreenshot attached".to_string()))
+    );
+}

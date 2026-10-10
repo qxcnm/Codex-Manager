@@ -391,6 +391,18 @@ fn initialized_storage_paths() -> &'static Mutex<HashMap<String, ()>> {
     INITIALIZED_STORAGE_PATHS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[cfg(test)]
+thread_local! {
+    static OPEN_STORAGE_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Number of `open_storage` calls made by the current thread (tests assert
+/// that the request log capture hot path never acquires storage).
+#[cfg(test)]
+pub(crate) fn open_storage_calls_on_this_thread() -> u64 {
+    OPEN_STORAGE_CALLS.with(|calls| calls.get())
+}
+
 /// 函数 `open_storage`
 ///
 /// 作者: gaohongshun
@@ -403,6 +415,8 @@ fn initialized_storage_paths() -> &'static Mutex<HashMap<String, ()>> {
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn open_storage() -> Option<StorageHandle> {
+    #[cfg(test)]
+    OPEN_STORAGE_CALLS.with(|calls| calls.set(calls.get() + 1));
     if seaorm_enabled() {
         return open_storage_at_path(REMOTE_CONTEXT_POOL_KEY);
     }

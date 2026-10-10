@@ -91,6 +91,14 @@ impl OpenAIResponsesEvent {
             terminal_for_event(kind, event_type.as_deref(), upstream_error_hint.as_deref());
 
         let mut usage = parse_usage_from_json(&value);
+        if kind == OpenAIResponsesEventKind::Completed {
+            usage.response_id = value
+                .get("response")
+                .and_then(|response| response.get("id"))
+                .and_then(Value::as_str)
+                .filter(|id| id.starts_with("resp_") && *id != "resp_proxy")
+                .map(str::to_string);
+        }
         usage.output_text = None;
         let mut output_text_snapshot_key = None;
         let output_text_kind = collect_event_output_text(&value, kind).map(
