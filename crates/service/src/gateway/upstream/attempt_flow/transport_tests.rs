@@ -2,8 +2,9 @@ use super::{
     apply_final_upstream_header_policy, apply_gemini_codex_compat_header_profile,
     encode_request_body, is_session_scoped_header, resolve_request_compression,
     resolve_request_compression_with_flag, send_async_stream_request,
-    should_retry_transport_without_compression, should_wrap_upstream_as_stream_response,
-    strip_compact_service_tier_for_transport, RequestCompression,
+    should_retry_transport_without_compression, should_use_async_http_transport,
+    should_wrap_upstream_as_stream_response, strip_compact_service_tier_for_transport,
+    RequestCompression,
 };
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
@@ -20,6 +21,109 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 
 type WsServerRequest = tokio_tungstenite::tungstenite::handshake::server::Request;
 type WsServerResponse = tokio_tungstenite::tungstenite::handshake::server::Response;
+
+#[tokio::test(flavor = "current_thread")]
+async fn native_transport_awaits_headers_and_body_without_blocking_caller_runtime() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    for path in ["/v1/responses", "/v1/chat/completions"] {
+        for is_stream in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}{path}", listener.local_addr().unwrap());
+            let expected = if is_stream {
+                "data: {\"type\":\"response.completed\"}\n\ndata: [DONE]\n\n"
+            } else {
+                "{\"id\":\"async-fixture\",\"output\":[]}"
+            };
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                    let read = socket.read(&mut buffer).await.unwrap();
+                    assert!(read > 0);
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                assert!(String::from_utf8_lossy(&request).contains(path));
+                tokio::task::yield_now().await;
+                let content_type = if is_stream {
+                    "text/event-stream"
+                } else {
+                    "application/json"
+                };
+                let headers = format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", expected.len());
+                socket.write_all(headers.as_bytes()).await.unwrap();
+                tokio::task::yield_now().await;
+                socket.write_all(expected.as_bytes()).await.unwrap();
+            });
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let result = tokio::time::timeout(Duration::from_secs(3), async {
+                let response = super::send_stream_request(
+                    &client,
+                    &reqwest::Method::POST,
+                    &url,
+                    path,
+                    Some(Instant::now() + Duration::from_secs(3)),
+                    &[],
+                    &Bytes::new(),
+                    is_stream,
+                )
+                .await
+                .unwrap();
+                assert_eq!(response.status(), reqwest::StatusCode::OK);
+                response.read_all_bytes_async().await.unwrap()
+            })
+            .await
+            .expect("the provider shares the caller's only runtime thread");
+            assert_eq!(result.as_ref(), expected.as_bytes());
+            server.await.unwrap();
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancelling_native_header_wait_disconnects_silent_upstream() {
+    use tokio::io::AsyncReadExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1/responses", listener.local_addr().unwrap());
+    let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        accepted_tx.send(()).unwrap();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            match socket.read(&mut buffer).await {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {}
+            }
+        }
+    });
+    let request = tokio::spawn(async move {
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        super::send_stream_request(
+            &client,
+            &reqwest::Method::POST,
+            &url,
+            "/v1/responses",
+            None,
+            &[],
+            &Bytes::new(),
+            true,
+        )
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(3), accepted_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    request.abort();
+    assert!(request.await.unwrap_err().is_cancelled());
+    tokio::time::timeout(Duration::from_secs(3), server)
+        .await
+        .expect("cancelled header wait must drop the provider socket")
+        .unwrap();
+}
 
 struct EnvGuard {
     key: &'static str,
@@ -57,6 +161,27 @@ fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a s
         .iter()
         .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
         .map(|(_, value)| value.as_str())
+}
+
+#[test]
+fn chatgpt_account_header_falls_back_when_stored_chatgpt_id_is_blank() {
+    let account = codexmanager_core::storage::Account {
+        id: "header-fallback".to_string(),
+        label: "Header fallback".to_string(),
+        issuer: "https://auth.openai.com".to_string(),
+        chatgpt_account_id: Some(" \t".to_string()),
+        workspace_id: Some(" workspace-fallback ".to_string()),
+        group_name: None,
+        sort: 0,
+        status: "active".to_string(),
+        created_at: 0,
+        updated_at: 0,
+    };
+
+    assert_eq!(
+        super::resolve_chatgpt_account_header(&account, "https://chatgpt.com/backend-api/codex"),
+        Some("workspace-fallback")
+    );
 }
 
 fn mock_websocket_config() -> WebSocketConfig {
@@ -117,6 +242,38 @@ fn spawn_raw_http_response(
                 Ok(0) => break,
                 Ok(read) => request.extend_from_slice(&buf[..read]),
                 Err(_) => break,
+            }
+        }
+        // Drain any request payload before closing the connection.  The
+        // non-streaming async transport test sends a POST body; responding
+        // before the client finishes uploading can make reqwest report a
+        // spurious body decode/reset error on an otherwise valid response.
+        let header_end = request
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .map(|index| index + 4)
+            .unwrap_or(request.len());
+        let content_length = request[..header_end]
+            .split(|byte| *byte == b'\n')
+            .find_map(|line| {
+                let line = line.strip_suffix(b"\r").unwrap_or(line);
+                let separator = line.iter().position(|byte| *byte == b':')?;
+                let (name, value_with_separator) = line.split_at(separator);
+                let value = &value_with_separator[1..];
+                if name.eq_ignore_ascii_case(b"content-length") {
+                    std::str::from_utf8(value)
+                        .ok()
+                        .map(str::trim)
+                        .and_then(|value| value.parse::<usize>().ok())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+        while request.len().saturating_sub(header_end) < content_length {
+            match stream.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => request.extend_from_slice(&buf[..read]),
             }
         }
 
@@ -474,6 +631,20 @@ fn gemini_codex_compat_header_profile_matches_cpa_executor_shape() {
     crate::gateway::set_gateway_user_agent(None).expect("clear global gateway user agent");
 }
 
+#[test]
+fn non_streaming_requests_use_bounded_async_transport_bridge() {
+    assert!(should_use_async_http_transport(
+        "/v1/chat/completions",
+        false
+    ));
+    assert!(should_use_async_http_transport("/v1/responses", false));
+    assert!(should_use_async_http_transport("/v1/responses", true));
+    assert!(should_use_async_http_transport(
+        "/v1/responses/compact",
+        true
+    ));
+}
+
 /// 函数 `encode_request_body_adds_zstd_content_encoding`
 ///
 /// 作者: gaohongshun
@@ -705,7 +876,9 @@ fn stream_transport_does_not_fast_close_successful_sse_body() {
 fn stream_transport_timeout_does_not_cap_active_body_duration() {
     let _env_lock = crate::test_env_guard();
     let _reload_guard = RuntimeConfigReloadGuard;
-    let _stream_timeout_guard = EnvGuard::set("CODEXMANAGER_UPSTREAM_STREAM_TIMEOUT_MS", "200");
+    // Keep enough headroom for a busy CI host to establish the local socket;
+    // the body deliberately remains active longer than this header deadline.
+    let _stream_timeout_guard = EnvGuard::set("CODEXMANAGER_UPSTREAM_STREAM_TIMEOUT_MS", "1000");
     crate::gateway::reload_runtime_config_from_env();
 
     let chunks = vec![
@@ -714,7 +887,7 @@ fn stream_transport_timeout_does_not_cap_active_body_duration() {
         b"data: {\"type\":\"response.completed\"}\n\n".to_vec(),
     ];
     let expected = chunks.concat();
-    let (url, handle) = spawn_active_streaming_http_response(chunks, Duration::from_millis(80));
+    let (url, handle) = spawn_active_streaming_http_response(chunks, Duration::from_millis(400));
 
     let response = send_mock_stream_request(url.as_str());
     assert_eq!(response.status(), reqwest::StatusCode::OK);
@@ -724,6 +897,77 @@ fn stream_transport_timeout_does_not_cap_active_body_duration() {
 
     assert_eq!(body.as_ref(), expected.as_slice());
     handle.join().expect("join streaming mock upstream");
+}
+
+#[test]
+fn non_streaming_async_transport_reads_json_body_without_blocking_client() {
+    let body = br#"{"id":"async-json","choices":[]}"#.to_vec();
+    let (url, release, handle) = spawn_raw_http_response(
+        "200 OK",
+        vec![("Content-Type", "application/json")],
+        body.clone(),
+        false,
+    );
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(1))
+        .build()
+        .expect("build reqwest client");
+
+    let response = send_async_stream_request(
+        &client,
+        &reqwest::Method::POST,
+        url.as_str(),
+        "/v1/chat/completions",
+        Some(Instant::now() + Duration::from_secs(5)),
+        &[("Content-Type".to_string(), "application/json".to_string())],
+        &Bytes::from_static(br#"{"model":"demo"}"#),
+        false,
+    )
+    .expect("send non-streaming async request");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(response.read_all_bytes().expect("read json body"), body);
+    let _ = release.send(());
+    handle.join().expect("join mock upstream");
+}
+
+#[test]
+fn non_streaming_async_transport_enforces_deadline_while_reading_body() {
+    let (url, release, handle) = spawn_raw_http_response(
+        "200 OK",
+        vec![("Content-Type", "application/json")],
+        br#"{"id":"unfinished"}"#.to_vec(),
+        true,
+    );
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(1))
+        .build()
+        .unwrap();
+    let started_at = Instant::now();
+    let response = send_async_stream_request(
+        &client,
+        &reqwest::Method::GET,
+        &url,
+        "/v1/chat/completions",
+        Some(started_at + Duration::from_millis(150)),
+        &[],
+        &Bytes::new(),
+        false,
+    )
+    .expect("headers arrive before deadline");
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let result = response.read_all_bytes();
+    let elapsed = started_at.elapsed();
+    let _ = release.send(());
+    handle.join().expect("join slow-body upstream");
+    assert!(
+        result.is_err(),
+        "unfinished JSON body must time out: {result:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "body timeout was not enforced: {elapsed:?}"
+    );
 }
 
 #[test]
@@ -764,6 +1008,15 @@ fn stream_transport_reports_response_headers_timeout() {
         started_at.elapsed()
     );
     handle.join().expect("join delayed-header mock upstream");
+}
+
+#[test]
+fn async_stream_worker_limit_error_is_retryable_message() {
+    let err = super::AsyncStreamRequestError::WorkerLimit;
+    assert_eq!(
+        err.to_string(),
+        "async upstream stream worker limit reached; retry later"
+    );
 }
 
 #[test]
@@ -936,6 +1189,68 @@ fn websocket_upstream_request_text_from_http_body_rejects_invalid_payload() {
 }
 
 #[test]
+fn captured_upstream_websocket_body_matches_sent_response_create_frame() {
+    use sha2::{Digest, Sha256};
+    let _env_lock = crate::test_env_guard();
+    let _reload_guard = RuntimeConfigReloadGuard;
+    let _proxy_guard = EnvGuard::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "");
+    let _proxy_list_guard = EnvGuard::set("CODEXMANAGER_PROXY_LIST", "");
+    let db_path = std::env::temp_dir().join(format!(
+        "codexmanager-ws-request-capture-{}-{}.sqlite",
+        std::process::id(),
+        crate::gateway::next_trace_id()
+    ));
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+    let storage = codexmanager_core::storage::Storage::open(&db_path).expect("open capture db");
+    storage.init().expect("init capture db");
+    crate::gateway::reload_runtime_config_from_env();
+    let (url, _headers_rx, frame_rx, handle) =
+        spawn_mock_websocket_upstream(r#"{"type":"response.completed"}"#);
+    let body = Bytes::from_static(br#"{"model":"codex","input":"hello"}"#);
+    let trace_id = "trc_ws_actual_frame";
+    let response =
+        crate::gateway::run_upstream_io(super::send_websocket_upstream_request_with_capture(
+            url.as_str(),
+            "acct_ws_capture",
+            Some(Instant::now() + Duration::from_secs(5)),
+            &[("Authorization".to_string(), "Bearer token_ws".to_string())],
+            &body,
+            Some(crate::gateway::OutboundPayloadContext {
+                trace_id,
+                key_id: "gk_ws_capture",
+            }),
+        ))
+        .expect("gateway async test runtime")
+        .expect("upstream WS connected");
+    let _ = response.read_all_bytes().expect("read WS response");
+    let sent_frame = frame_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("mock received frame");
+    handle.join().expect("join mock upstream");
+    let stages = storage
+        .list_request_log_upstream_attempt_stages(trace_id)
+        .expect("attempt stages");
+    assert_eq!(stages, vec!["upstream".to_string()]);
+    let attempt = storage
+        .find_request_log_upstream_attempt(trace_id, &stages[0])
+        .unwrap()
+        .unwrap();
+    assert_eq!(attempt.transport, "websocket");
+    assert_eq!(
+        attempt.wire_sha256,
+        format!("{:x}", Sha256::digest(sent_frame.as_bytes()))
+    );
+    let stored = storage
+        .find_request_log_payload_by_trace_id(trace_id, &stages[0])
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&stored.payload).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&sent_frame).unwrap(),
+    );
+}
+
+#[test]
 fn send_websocket_upstream_request_builds_valid_handshake_and_stops_on_completed() {
     let _env_lock = crate::test_env_guard();
     let _reload_guard = RuntimeConfigReloadGuard;
@@ -945,7 +1260,7 @@ fn send_websocket_upstream_request_builds_valid_handshake_and_stops_on_completed
     let (url, headers_rx, frame_rx, handle) =
         spawn_mock_websocket_upstream(r#"{"type":"response.completed"}"#);
     let body = Bytes::from(r#"{"model":"codex","input":"hello"}"#);
-    let response = super::send_websocket_upstream_request(
+    let response = crate::gateway::run_upstream_io(super::send_websocket_upstream_request(
         url.as_str(),
         "acct_ws_direct",
         Some(Instant::now() + Duration::from_secs(5)),
@@ -955,7 +1270,8 @@ fn send_websocket_upstream_request_builds_valid_handshake_and_stops_on_completed
             ("Connection".to_string(), "close".to_string()),
         ],
         &body,
-    )
+    ))
+    .expect("gateway async test runtime")
     .expect("websocket upstream request connects");
     let response_body = response.read_all_bytes().expect("read websocket body");
     assert_eq!(
@@ -1018,13 +1334,14 @@ fn send_websocket_upstream_request_does_not_mark_recovery_completed_after_applic
         spawn_mock_websocket_upstream(r#"{"type":"response.failed"}"#);
     let body = Bytes::from(r#"{"model":"codex","input":"hello"}"#);
 
-    let response = super::send_websocket_upstream_request(
+    let response = crate::gateway::run_upstream_io(super::send_websocket_upstream_request(
         url.as_str(),
         "acct_ws_incomplete_probe",
         Some(Instant::now() + Duration::from_secs(5)),
         &[],
         &body,
-    )
+    ))
+    .expect("gateway async test runtime")
     .expect("incomplete websocket probe still returns its terminal event");
     let response_body = response
         .read_all_bytes()
@@ -1069,13 +1386,14 @@ fn send_websocket_upstream_request_uses_system_environment_proxy() {
     crate::gateway::reload_runtime_config_from_env();
 
     let body = Bytes::from(r#"{"model":"codex","input":"hello"}"#);
-    let response = super::send_websocket_upstream_request(
+    let response = crate::gateway::run_upstream_io(super::send_websocket_upstream_request(
         "ws://example.invalid/v1/responses",
         "acct_ws_proxy",
         Some(Instant::now() + Duration::from_secs(5)),
         &[],
         &body,
-    )
+    ))
+    .expect("gateway async test runtime")
     .expect("websocket upstream request connects through proxy");
     let response_body = response
         .read_all_bytes()
@@ -1104,13 +1422,14 @@ fn send_websocket_upstream_request_returns_err_for_invalid_body_before_handshake
     // Invalid bodies must return Err immediately (before handshake) so the
     // caller can fall back to HTTP streaming.
     let invalid_body = Bytes::from_static(br#"{"model":"codex"}"#);
-    let result = super::send_websocket_upstream_request(
+    let result = crate::gateway::run_upstream_io(super::send_websocket_upstream_request(
         "wss://chatgpt.com/backend-api/codex/responses",
         "acct_ws_invalid_body",
         None,
         &[],
         &invalid_body,
-    );
+    ))
+    .expect("gateway async test runtime");
     assert!(result.is_err(), "expected Err for invalid body");
     let msg = result.unwrap_err();
     assert!(
@@ -1131,12 +1450,49 @@ fn send_websocket_upstream_request_falls_back_on_unreachable_host() {
     // We use a deadline 2 seconds from now so the test completes quickly.
     let deadline = Instant::now() + Duration::from_secs(2);
     let body = Bytes::from(r#"{"model":"codex","input":"hello"}"#);
-    let result = super::send_websocket_upstream_request(
+    let result = crate::gateway::run_upstream_io(super::send_websocket_upstream_request(
         "wss://127.0.0.1:1", // port 1 is not open
         "acct_ws_unreachable",
         Some(deadline),
         &[],
         &body,
-    );
+    ))
+    .expect("gateway async test runtime");
     assert!(result.is_err(), "expected Err when host is unreachable");
+}
+
+#[tokio::test]
+async fn cancelling_native_async_send_before_headers_closes_upstream_socket() {
+    use tokio::io::AsyncReadExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1/responses", listener.local_addr().unwrap());
+    let send = tokio::spawn(async move {
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        super::send_stream_request(
+            &client,
+            &reqwest::Method::POST,
+            &url,
+            "/v1/responses",
+            Some(Instant::now() + Duration::from_secs(10)),
+            &[],
+            &Bytes::new(),
+            true,
+        )
+        .await
+    });
+    let (mut socket, _) = listener.accept().await.unwrap();
+    let mut headers = Vec::new();
+    while !headers.ends_with(b"\r\n\r\n") {
+        let mut byte = [0_u8; 1];
+        socket.read_exact(&mut byte).await.unwrap();
+        headers.push(byte[0]);
+    }
+    send.abort();
+    let _ = send.await;
+    let mut byte = [0_u8; 1];
+    let read = tokio::time::timeout(Duration::from_secs(2), socket.read(&mut byte))
+        .await
+        .expect("cancelled header wait must close upstream socket")
+        .unwrap();
+    assert_eq!(read, 0);
 }

@@ -61,7 +61,7 @@ fn challenge_cooldown_reason(protocol_type: &str) -> super::super::super::Cooldo
 ///
 /// # 返回
 /// 返回函数执行结果
-fn try_refresh_chatgpt_access_token(
+async fn try_refresh_chatgpt_access_token(
     storage: &Storage,
     upstream_base: &str,
     account: &Account,
@@ -79,13 +79,14 @@ fn try_refresh_chatgpt_access_token(
         account.issuer.clone()
     };
     let client_id = super::super::super::runtime_config::token_exchange_client_id();
-    crate::usage_token_refresh::refresh_and_persist_access_token(
+    crate::usage_token_refresh::refresh_and_persist_access_token_async(
         storage,
         token,
         issuer.as_str(),
         client_id.as_str(),
         token_refresh_ahead_secs(),
-    )?;
+    )
+    .await?;
     let refreshed = token.access_token.trim();
     if refreshed.is_empty() {
         return Err("refreshed chatgpt access token is empty".to_string());
@@ -117,8 +118,8 @@ fn try_refresh_chatgpt_access_token(
 /// # 返回
 /// 返回函数执行结果
 #[allow(clippy::too_many_arguments)]
-fn retry_upstream_server_error_once(
-    client: &reqwest::blocking::Client,
+async fn retry_upstream_server_error_once(
+    client: &reqwest::Client,
     method: &reqwest::Method,
     url: &str,
     request_deadline: Option<Instant>,
@@ -143,12 +144,14 @@ fn retry_upstream_server_error_once(
             account.id
         );
     }
-    if !backoff::sleep_with_exponential_jitter(
+    if !backoff::sleep_with_exponential_jitter_async(
         std::time::Duration::from_millis(120),
         std::time::Duration::from_millis(900),
         1,
         request_deadline,
-    ) {
+    )
+    .await
+    {
         return Err(());
     }
 
@@ -164,7 +167,9 @@ fn retry_upstream_server_error_once(
         auth_token,
         account,
         strip_session_affinity,
-    ) {
+    )
+    .await
+    {
         Ok(resp) => Ok(Some(resp)),
         Err(err) => {
             log::warn!(
@@ -190,8 +195,8 @@ fn retry_upstream_server_error_once(
 /// # 返回
 /// 返回函数执行结果
 #[allow(clippy::too_many_arguments)]
-fn retry_chatgpt_challenge_without_compression(
-    client: &reqwest::blocking::Client,
+async fn retry_chatgpt_challenge_without_compression(
+    client: &reqwest::Client,
     method: &reqwest::Method,
     upstream_base: &str,
     url: &str,
@@ -239,7 +244,9 @@ fn retry_chatgpt_challenge_without_compression(
         auth_token,
         account,
         strip_session_affinity,
-    ) {
+    )
+    .await
+    {
         Ok(resp) => Ok(resp.status().is_success().then_some(resp)),
         Err(err) => {
             log::warn!(
@@ -265,8 +272,8 @@ fn should_retry_chatgpt_responses_bad_request(upstream_base: &str, url: &str, st
 }
 
 #[allow(clippy::too_many_arguments)]
-fn retry_chatgpt_responses_bad_request_without_session_headers(
-    client: &reqwest::blocking::Client,
+async fn retry_chatgpt_responses_bad_request_without_session_headers(
+    client: &reqwest::Client,
     method: &reqwest::Method,
     upstream_base: &str,
     url: &str,
@@ -303,7 +310,9 @@ fn retry_chatgpt_responses_bad_request_without_session_headers(
         is_stream,
         auth_token,
         account,
-    ) {
+    )
+    .await
+    {
         Ok(response) if response.status().is_success() => Some(response),
         Ok(response) => {
             log::warn!(
@@ -355,8 +364,8 @@ fn allow_openai_fallback_for_authorization(
 /// # 返回
 /// 返回函数执行结果
 #[allow(clippy::too_many_arguments)]
-pub(in crate::gateway::upstream) fn process_upstream_post_retry_flow<F>(
-    client: &reqwest::blocking::Client,
+pub(in crate::gateway::upstream) async fn process_upstream_post_retry_flow<F>(
+    client: &reqwest::Client,
     storage: &Storage,
     method: &reqwest::Method,
     upstream_base: &str,
@@ -391,7 +400,7 @@ where
     let mut status = upstream.status();
 
     if status.as_u16() == 401 && authorization.uses_agent_identity {
-        let buffered = upstream.into_buffered();
+        let buffered = upstream.into_buffered_async().await;
         let (response_body, rebuilt_upstream) = match buffered {
             Ok(buffered) => buffered,
             Err(err) => {
@@ -413,13 +422,15 @@ where
             response_body.as_ref(),
         ) {
             if let Some(failed_task_id) = authorization.task_id.as_deref() {
-                match crate::agent_identity::recover_account_agent_identity_authorization(
+                match crate::agent_identity::recover_account_agent_identity_authorization_async(
                     storage,
                     client,
                     account,
                     token,
                     failed_task_id,
-                ) {
+                )
+                .await
+                {
                     Ok(Some(recovered)) => {
                         current_auth_token = recovered.value;
                         current_request_ctx = request_ctx.with_fedramp(recovered.is_fedramp);
@@ -442,7 +453,9 @@ where
                             current_auth_token.as_str(),
                             account,
                             strip_session_affinity,
-                        ) {
+                        )
+                        .await
+                        {
                             Ok(response) => {
                                 upstream = response;
                                 status = upstream.status();
@@ -506,7 +519,7 @@ where
     }
 
     if status.as_u16() == 401 && !authorization.uses_agent_identity {
-        match try_refresh_chatgpt_access_token(storage, upstream_base, account, token) {
+        match try_refresh_chatgpt_access_token(storage, upstream_base, account, token).await {
             Ok(Some(refreshed_auth_token)) => {
                 current_auth_token = refreshed_auth_token;
                 if debug {
@@ -528,7 +541,9 @@ where
                     current_auth_token.as_str(),
                     account,
                     strip_session_affinity,
-                ) {
+                )
+                .await
+                {
                     Ok(resp) => {
                         upstream = resp;
                         status = upstream.status();
@@ -575,7 +590,9 @@ where
             account,
             debug,
             status,
-        ) {
+        )
+        .await
+        {
             upstream = resp;
             status = upstream.status();
             upstream_content_type = upstream.headers().get(reqwest::header::CONTENT_TYPE);
@@ -600,7 +617,9 @@ where
             debug,
             has_more_candidates,
             &mut log_gateway_result,
-        ) {
+        )
+        .await
+        {
             AltPathRetryResult::NotTriggered => {}
             AltPathRetryResult::Upstream(resp) => {
                 upstream = resp;
@@ -637,7 +656,9 @@ where
         strip_session_affinity,
         debug,
         status,
-    ) {
+    )
+    .await
+    {
         Ok(Some(resp)) => {
             upstream = resp;
             status = upstream.status();
@@ -671,7 +692,9 @@ where
             status,
             upstream_content_type,
             upstream_cf_ray,
-        ) {
+        )
+        .await
+        {
             Ok(Some(resp)) => {
                 upstream = resp;
                 status = upstream.status();
@@ -707,7 +730,9 @@ where
             status,
             debug,
             disable_challenge_stateless_retry,
-        ) {
+        )
+        .await
+        {
             StatelessRetryResult::NotTriggered => {}
             StatelessRetryResult::Upstream(resp) => {
                 upstream = resp;
@@ -750,8 +775,11 @@ where
             status,
             upstream_content_type,
             has_more_candidates,
+            current_request_ctx.capture,
             &mut log_gateway_result,
-        ) {
+        )
+        .await
+        {
             FallbackBranchResult::NotTriggered => {}
             FallbackBranchResult::RespondUpstream(resp) => {
                 return PostRetryFlowDecision::RespondUpstream(resp);

@@ -14,6 +14,7 @@ pub(crate) fn run_gateway_keepalive_once() -> Result<(), String> {
     // the catalog remains readable without contacting any upstream `/models` API.
     let storage =
         crate::storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     storage
         .list_api_models_v2()
         .map_err(|err| format!("model catalog V2 keepalive failed: {err}"))?;

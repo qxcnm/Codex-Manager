@@ -57,3 +57,23 @@ fn metadata_only_upstream_frame_records_first_response_before_keepalive() {
     let usage = usage_collector.lock().expect("usage lock").clone();
     assert!(usage.first_response_ms.is_some());
 }
+
+#[test]
+fn missing_upstream_model_uses_current_bridge_default() {
+    let upstream = concat!(
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_without_model\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let usage_collector = Arc::new(Mutex::new(UpstreamResponseUsage::default()));
+    let mut reader = AnthropicSseReader::from_reader(
+        Cursor::new(upstream.as_bytes().to_vec()),
+        usage_collector,
+        None,
+        None,
+        Instant::now(),
+    );
+    let mut out = String::new();
+    reader.read_to_string(&mut out).expect("read anthropic SSE");
+    assert!(out.contains("\"model\":\"gpt-6-sol\""));
+}

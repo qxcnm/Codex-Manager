@@ -522,6 +522,11 @@ export const accountClient = {
     invoke("service_account_update", withAddr({ accountId, status: "disabled" })),
   enableAccount: (accountId: string) =>
     invoke("service_account_update", withAddr({ accountId, status: "active" })),
+  updateResetWarmup: (accountIds: string[], enabled: boolean) =>
+    invoke<{ updated: number }>(
+      "service_account_reset_warmup_update",
+      withAddr({ accountIds, enabled }),
+    ),
   import: importAccountContents,
   async importByDirectory(): Promise<AccountImportResult> {
     const picked = readAccountImportResult(

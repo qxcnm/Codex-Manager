@@ -49,7 +49,8 @@ pub(crate) fn delete_accounts(account_ids: Vec<String>) -> Result<DeleteManyResu
         return Err("missing accountIds".to_string());
     }
 
-    let mut storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let mut result = DeleteManyResult {
         requested: unique.len(),
         deleted: 0,

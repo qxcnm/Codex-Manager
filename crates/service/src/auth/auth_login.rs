@@ -66,6 +66,57 @@ pub(crate) fn login_start(
     group_name: Option<String>,
     workspace_id: Option<String>,
 ) -> Result<LoginStartResult, String> {
+    crate::auth_tokens::run_auth_future(login_start_async(
+        login_type,
+        open_browser,
+        note,
+        tags,
+        group_name,
+        workspace_id,
+    ))
+}
+
+pub(crate) async fn login_start_async(
+    login_type: &str,
+    open_browser: bool,
+    note: Option<String>,
+    tags: Option<String>,
+    group_name: Option<String>,
+    workspace_id: Option<String>,
+) -> Result<LoginStartResult, String> {
+    let device = if is_device_login_type(login_type.trim()) {
+        let issuer =
+            std::env::var("CODEXMANAGER_ISSUER").unwrap_or_else(|_| DEFAULT_ISSUER.to_owned());
+        let client_id = std::env::var("CODEXMANAGER_CLIENT_ID")
+            .unwrap_or_else(|_| DEFAULT_CLIENT_ID.to_owned());
+        Some(crate::auth_tokens::request_device_code_async(&issuer, &client_id).await?)
+    } else {
+        None
+    };
+    let login_type = login_type.to_owned();
+    crate::auth_tokens::run_auth_storage(move || {
+        login_start_prepared(
+            &login_type,
+            open_browser,
+            note,
+            tags,
+            group_name,
+            workspace_id,
+            device,
+        )
+    })
+    .await
+}
+
+fn login_start_prepared(
+    login_type: &str,
+    open_browser: bool,
+    note: Option<String>,
+    tags: Option<String>,
+    group_name: Option<String>,
+    workspace_id: Option<String>,
+    device: Option<crate::auth_tokens::DeviceCodeStartResult>,
+) -> Result<LoginStartResult, String> {
     // 读取登录相关配置
     let issuer =
         std::env::var("CODEXMANAGER_ISSUER").unwrap_or_else(|_| DEFAULT_ISSUER.to_string());
@@ -99,8 +150,9 @@ pub(crate) fn login_start(
     };
 
     if is_device {
-        let device = crate::auth_tokens::request_device_code(&issuer, &client_id)?;
-        let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+        let device = device.ok_or_else(|| "device login response is unavailable".to_owned())?;
+        let storage_handle = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+        let storage = &crate::account::remote_storage::AccountStorage::new(&storage_handle);
         storage
             .insert_login_session(&LoginSession {
                 login_id: login_id.clone(),
@@ -126,7 +178,7 @@ pub(crate) fn login_start(
             .to_string(),
             created_at: now_ts(),
         });
-        drop(storage);
+        drop(storage_handle);
         crate::auth_tokens::spawn_device_code_login_completion(
             issuer.clone(),
             login_id.clone(),
@@ -143,7 +195,8 @@ pub(crate) fn login_start(
     let pkce = generate_pkce();
 
     // 写入登录会话
-    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage_handle = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage_handle);
     storage
         .insert_login_session(&LoginSession {
             login_id: login_id.clone(),
@@ -182,7 +235,7 @@ pub(crate) fn login_start(
         .to_string(),
         created_at: now_ts(),
     });
-    drop(storage);
+    drop(storage_handle);
 
     // 可选自动打开浏览器
     if open_browser {
@@ -215,6 +268,7 @@ pub(crate) fn login_status(login_id: &str) -> serde_json::Value {
         Some(storage) => storage,
         None => return serde_json::json!({ "status": "unknown" }),
     };
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let mut session = match storage.get_login_session(login_id) {
         Ok(Some(session)) => session,
         _ => return serde_json::json!({ "status": "unknown" }),
@@ -254,6 +308,7 @@ pub(crate) fn login_cancel(login_id: &str) -> Result<serde_json::Value, String> 
         return Err("missing login id".to_string());
     }
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let cancelled = storage
         .cancel_login_session(login_id)
         .map_err(|err| err.to_string())?;

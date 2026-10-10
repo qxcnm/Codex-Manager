@@ -1,13 +1,14 @@
-use reqwest::blocking::Client;
 use reqwest::redirect::Policy;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::Mutex;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
@@ -131,6 +132,48 @@ fn mutation_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+type MutationLease = Arc<tokio::sync::MutexGuard<'static, ()>>;
+static REPOSITORY_PHASE_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(8);
+
+/// ZIP scanning, hashing, disk access, and synchronous storage facades run in
+/// bounded phases; downloads never occupy these blocking workers.
+async fn run_phase<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let permit = REPOSITORY_PHASE_WORKERS
+        .acquire()
+        .await
+        .map_err(|_| "Skills repository workers unavailable".to_string())?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work()
+    })
+    .await
+    .map_err(|error| format!("Skills repository worker failed: {error}"))?
+}
+
+async fn run_locked_phase<T: Send + 'static>(
+    lease: &MutationLease,
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    // A dropped HTTP future cannot release the mutation lock while its disk or
+    // database commit is still running on a blocking worker.
+    let lease = lease.clone();
+    run_phase(move || {
+        let _lease = lease;
+        work()
+    })
+    .await
+}
+
+async fn build_inventory_async(
+    codex_home: Option<&str>,
+    warnings: Vec<String>,
+) -> Result<CodexSkillRepositoryInventory, String> {
+    let codex_home = codex_home.map(str::to_owned);
+    run_phase(move || build_inventory(codex_home.as_deref(), warnings)).await
+}
+
 fn http_client() -> Result<&'static Client, String> {
     static CLIENT: OnceLock<Result<Client, String>> = OnceLock::new();
     CLIENT
@@ -156,6 +199,14 @@ pub(crate) fn add(
     ref_name: Option<&str>,
     codex_home: Option<&str>,
 ) -> Result<CodexSkillRepositoryInventory, String> {
+    crate::gateway::run_upstream_io(add_async(source, ref_name, codex_home))?
+}
+
+pub(crate) async fn add_async(
+    source: Option<&str>,
+    ref_name: Option<&str>,
+    codex_home: Option<&str>,
+) -> Result<CodexSkillRepositoryInventory, String> {
     let source = source
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -163,58 +214,81 @@ pub(crate) fn add(
     let source = normalize_github_source(source)?;
     let ref_name = match normalize_ref_name(ref_name)? {
         Some(ref_name) => ref_name,
-        None => fetch_default_branch(&source).unwrap_or_else(|_| DEFAULT_REF_NAME.to_string()),
+        None => fetch_default_branch(&source)
+            .await
+            .unwrap_or_else(|_| DEFAULT_REF_NAME.to_string()),
     };
     let repository_id = stable_repository_id(&source.owner, &source.repository, &ref_name);
-    let _guard = mutation_lock()
-        .lock()
-        .map_err(|_| "Skills repository mutation lock poisoned".to_string())?;
-    let now = codexmanager_core::storage::now_ts();
-    let storage = open_storage()?;
-    storage
-        .upsert_codex_skill_repository(&codexmanager_core::storage::CodexSkillRepositoryUpsert {
-            id: repository_id.clone(),
-            owner: source.owner,
-            repository: source.repository,
-            ref_name,
-            is_builtin: false,
-            enabled: true,
-            created_at: now,
-            updated_at: now,
-        })
-        .map_err(|err| format!("save Skills repository failed: {err}"))?;
-    drop(storage);
+    let lease = Arc::new(mutation_lock().lock().await);
+    let saved_id = repository_id.clone();
+    run_locked_phase(&lease, move || {
+        let now = codexmanager_core::storage::now_ts();
+        let storage = open_storage()?;
+        let storage = crate::account::remote_storage::AccountStorage::new(&storage);
+        storage
+            .upsert_codex_skill_repository(
+                &codexmanager_core::storage::CodexSkillRepositoryUpsert {
+                    id: saved_id,
+                    owner: source.owner,
+                    repository: source.repository,
+                    ref_name,
+                    is_builtin: false,
+                    enabled: true,
+                    created_at: now,
+                    updated_at: now,
+                },
+            )
+            .map_err(|err| format!("save Skills repository failed: {err}"))
+    })
+    .await?;
 
     let mut warnings = Vec::new();
-    if let Err(err) = refresh_one_locked(&repository_id) {
+    if let Err(err) = refresh_one_locked(&repository_id, &lease).await {
         warnings.push(err);
     }
-    drop(_guard);
-    build_inventory(codex_home, warnings)
+    drop(lease);
+    build_inventory_async(codex_home, warnings).await
 }
 
 pub(crate) fn delete(
     repository_id: Option<&str>,
     codex_home: Option<&str>,
 ) -> Result<CodexSkillRepositoryInventory, String> {
-    let repository_id = required_opaque_id(repository_id, "repositoryId")?;
-    let _guard = mutation_lock()
-        .lock()
-        .map_err(|_| "Skills repository mutation lock poisoned".to_string())?;
-    let storage = open_storage()?;
-    let deleted = storage
-        .delete_codex_skill_repository(repository_id)
-        .map_err(|err| format!("delete Skills repository failed: {err}"))?;
-    if !deleted {
-        return Err("Skills repository not found".to_string());
-    }
-    drop(storage);
-    cleanup_repository_cache(repository_id, None);
-    drop(_guard);
-    build_inventory(codex_home, Vec::new())
+    crate::gateway::run_upstream_io(delete_async(repository_id, codex_home))?
+}
+
+pub(crate) async fn delete_async(
+    repository_id: Option<&str>,
+    codex_home: Option<&str>,
+) -> Result<CodexSkillRepositoryInventory, String> {
+    let repository_id = required_opaque_id(repository_id, "repositoryId")?.to_owned();
+    let lease = Arc::new(mutation_lock().lock().await);
+    run_locked_phase(&lease, move || {
+        let storage = open_storage()?;
+        let storage = crate::account::remote_storage::AccountStorage::new(&storage);
+        let deleted = storage
+            .delete_codex_skill_repository(&repository_id)
+            .map_err(|err| format!("delete Skills repository failed: {err}"))?;
+        if !deleted {
+            return Err("Skills repository not found".to_string());
+        }
+        drop(storage);
+        cleanup_repository_cache(&repository_id, None);
+        Ok(())
+    })
+    .await?;
+    drop(lease);
+    build_inventory_async(codex_home, Vec::new()).await
 }
 
 pub(crate) fn refresh(
+    repository_id: Option<&str>,
+    codex_home: Option<&str>,
+) -> Result<CodexSkillRepositoryInventory, String> {
+    crate::gateway::run_upstream_io(refresh_async(repository_id, codex_home))?
+}
+
+pub(crate) async fn refresh_async(
     repository_id: Option<&str>,
     codex_home: Option<&str>,
 ) -> Result<CodexSkillRepositoryInventory, String> {
@@ -226,21 +300,26 @@ pub(crate) fn refresh(
     let repository_ids = if let Some(repository_id) = repository_id {
         vec![repository_id.to_string()]
     } else {
-        open_storage()?
-            .list_codex_skill_repositories()
-            .map_err(|err| format!("list Skills repositories failed: {err}"))?
-            .into_iter()
-            .filter(|repository| repository.enabled)
-            .map(|repository| repository.id)
-            .collect()
+        run_phase(|| {
+            Ok(
+                crate::account::remote_storage::AccountStorage::new(&*open_storage()?)
+                    .list_codex_skill_repositories()
+                    .map_err(|err| format!("list Skills repositories failed: {err}"))?
+                    .into_iter()
+                    .filter(|repository| repository.enabled)
+                    .map(|repository| repository.id)
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .await?
     };
     let mut warnings = Vec::new();
     for repository_id in repository_ids {
-        if let Err(err) = refresh_one(&repository_id) {
+        if let Err(err) = refresh_one(&repository_id).await {
             warnings.push(err);
         }
     }
-    build_inventory(codex_home, warnings)
+    build_inventory_async(codex_home, warnings).await
 }
 
 pub(crate) fn install(
@@ -248,46 +327,68 @@ pub(crate) fn install(
     skill_id: Option<&str>,
     codex_home: Option<&str>,
 ) -> Result<CodexSkillRepositoryInventory, String> {
-    let repository_id = required_opaque_id(repository_id, "repositoryId")?;
-    let skill_id = required_opaque_id(skill_id, "skillId")?;
-    let _guard = mutation_lock()
-        .lock()
-        .map_err(|_| "Skills repository mutation lock poisoned".to_string())?;
-    let (mut repository, mut skill) = load_repository_and_skill(repository_id, skill_id)?;
-    let mut cache_path = repository
-        .revision
-        .as_deref()
-        .map(|revision| repository_cache_path(repository_id, revision))
-        .transpose()?
-        .unwrap_or_default();
-    if cache_path.as_os_str().is_empty() || !cache_path.exists() {
-        refresh_one_locked(repository_id)?;
-        (repository, skill) = load_repository_and_skill(repository_id, skill_id)?;
+    crate::gateway::run_upstream_io(install_async(repository_id, skill_id, codex_home))?
+}
+
+pub(crate) async fn install_async(
+    repository_id: Option<&str>,
+    skill_id: Option<&str>,
+    codex_home: Option<&str>,
+) -> Result<CodexSkillRepositoryInventory, String> {
+    let repository_id = required_opaque_id(repository_id, "repositoryId")?.to_owned();
+    let skill_id = required_opaque_id(skill_id, "skillId")?.to_owned();
+    let lease = Arc::new(mutation_lock().lock().await);
+    let lookup_id = repository_id.clone();
+    let lookup_skill = skill_id.clone();
+    let missing_cache = run_locked_phase(&lease, move || {
+        let (repository, _) = load_repository_and_skill(&lookup_id, &lookup_skill)?;
+        let path = repository
+            .revision
+            .as_deref()
+            .map(|revision| repository_cache_path(&lookup_id, revision))
+            .transpose()?;
+        Ok(path.is_none_or(|path| !path.exists()))
+    })
+    .await?;
+    if missing_cache {
+        refresh_one_locked(&repository_id, &lease).await?;
+    }
+    let install_home = codex_home.map(str::to_owned);
+    run_locked_phase(&lease, move || {
+        let (repository, skill) = load_repository_and_skill(&repository_id, &skill_id)?;
         let revision = repository
             .revision
             .as_deref()
-            .ok_or_else(|| "refreshed Skills repository has no revision".to_string())?;
-        cache_path = repository_cache_path(repository_id, revision)?;
-    }
-    let archive = read_file_bounded(&cache_path, MAX_REPOSITORY_ARCHIVE_BYTES)?;
-    let expected_revision = repository
-        .revision
-        .as_deref()
-        .ok_or_else(|| "Skills repository snapshot has no revision".to_string())?;
-    if skill.revision.as_deref() != Some(expected_revision) {
-        return Err("repository Skill revision does not match its snapshot".to_string());
-    }
-    if archive_revision(&archive) != expected_revision {
-        return Err("cached Skills repository revision does not match its snapshot".to_string());
-    }
-    let selected = build_selected_skill_archive(&archive, &skill.path)?;
-    crate::codex_skills::install_archive_bytes(&selected, codex_home)?;
-    drop(repository);
-    drop(_guard);
-    build_inventory(codex_home, Vec::new())
+            .ok_or_else(|| "Skills repository snapshot has no revision".to_string())?;
+        let cache_path = repository_cache_path(&repository_id, revision)?;
+        let archive = read_file_bounded(&cache_path, MAX_REPOSITORY_ARCHIVE_BYTES)?;
+        if skill.revision.as_deref() != Some(revision) {
+            return Err("repository Skill revision does not match its snapshot".to_string());
+        }
+        if archive_revision(&archive) != revision {
+            return Err(
+                "cached Skills repository revision does not match its snapshot".to_string(),
+            );
+        }
+        let selected = build_selected_skill_archive(&archive, &skill.path)?;
+        crate::codex_skills::install_archive_bytes(&selected, install_home.as_deref())?;
+        Ok(())
+    })
+    .await?;
+    drop(lease);
+    build_inventory_async(codex_home, Vec::new()).await
 }
 
 pub(crate) fn registry_search(
+    query: Option<&str>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+    codex_home: Option<&str>,
+) -> Result<CodexSkillRegistrySearchResult, String> {
+    crate::gateway::run_upstream_io(registry_search_async(query, limit, offset, codex_home))?
+}
+
+pub(crate) async fn registry_search_async(
     query: Option<&str>,
     limit: Option<i64>,
     offset: Option<i64>,
@@ -302,8 +403,9 @@ pub(crate) fn registry_search(
     }
     let limit = usize::try_from(limit.unwrap_or(24).clamp(1, 50)).unwrap_or(24);
     let offset = usize::try_from(offset.unwrap_or(0).clamp(0, 10_000)).unwrap_or(0);
-    let response = fetch_skills_sh_search(query, limit, offset)?;
-    let installed = installed_skill_names(codex_home)?;
+    let response = fetch_skills_sh_search(query, limit, offset).await?;
+    let installed_home = codex_home.map(str::to_owned);
+    let installed = run_phase(move || installed_skill_names(installed_home.as_deref())).await?;
     let mut warnings = Vec::new();
     let mut items = Vec::new();
     for item in response.skills {
@@ -359,6 +461,14 @@ pub(crate) fn registry_install(
     skill_id: Option<&str>,
     codex_home: Option<&str>,
 ) -> Result<crate::codex_skills::CodexSkillsInventory, String> {
+    crate::gateway::run_upstream_io(registry_install_async(source, skill_id, codex_home))?
+}
+
+pub(crate) async fn registry_install_async(
+    source: Option<&str>,
+    skill_id: Option<&str>,
+    codex_home: Option<&str>,
+) -> Result<crate::codex_skills::CodexSkillsInventory, String> {
     let source = source
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -371,17 +481,33 @@ pub(crate) fn registry_install(
     if skill_id.len() > 256 || skill_id.chars().any(char::is_control) {
         return Err("invalid skillId".to_string());
     }
-    verify_skills_sh_entry(&source, skill_id)?;
-    let preferred_ref =
-        fetch_default_branch(&source).unwrap_or_else(|_| DEFAULT_REF_NAME.to_string());
-    let (ref_name, archive) = match download_repository_archive(&source, &preferred_ref) {
+    verify_skills_sh_entry(&source, skill_id).await?;
+    let preferred_ref = fetch_default_branch(&source)
+        .await
+        .unwrap_or_else(|_| DEFAULT_REF_NAME.to_string());
+    let (ref_name, archive) = match download_repository_archive(&source, &preferred_ref).await {
         Ok(archive) => (preferred_ref, archive),
         Err(first_error) if preferred_ref != "master" => (
             "master".to_string(),
-            download_repository_archive(&source, "master").map_err(|_| first_error)?,
+            download_repository_archive(&source, "master")
+                .await
+                .map_err(|_| first_error)?,
         ),
         Err(error) => return Err(error),
     };
+    let skill_id = skill_id.to_owned();
+    let codex_home = codex_home.map(str::to_owned);
+    run_phase(move || install_registry_archive(source, ref_name, archive, skill_id, codex_home))
+        .await
+}
+
+fn install_registry_archive(
+    source: GitHubRepositorySource,
+    ref_name: String,
+    archive: Vec<u8>,
+    skill_id: String,
+    codex_home: Option<String>,
+) -> Result<crate::codex_skills::CodexSkillsInventory, String> {
     let transient_id = stable_repository_id(&source.owner, &source.repository, &ref_name);
     let skills = scan_repository_archive(&archive, &transient_id, &source, &ref_name)?;
     let normalized_skill_id = skill_id.trim_matches('/');
@@ -403,7 +529,7 @@ pub(crate) fn registry_install(
         _ => return Err("skillId matches more than one skill in the repository".to_string()),
     };
     let selected = build_selected_skill_archive(&archive, &skill.path)?;
-    crate::codex_skills::install_archive_bytes(&selected, codex_home)
+    crate::codex_skills::install_archive_bytes(&selected, codex_home.as_deref())
 }
 
 fn open_storage() -> Result<crate::storage_helpers::StorageHandle, String> {
@@ -416,6 +542,7 @@ fn build_inventory(
     mut warnings: Vec<String>,
 ) -> Result<CodexSkillRepositoryInventory, String> {
     let storage = open_storage()?;
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     let snapshot = storage
         .codex_skill_repository_catalog_snapshot()
         .map_err(|err| format!("list Skills repository catalog failed: {err}"))?;
@@ -499,6 +626,7 @@ fn load_repository_and_skill(
     String,
 > {
     let storage = open_storage()?;
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     let repository = storage
         .get_codex_skill_repository(repository_id)
         .map_err(|err| format!("read Skills repository failed: {err}"))?
@@ -510,55 +638,74 @@ fn load_repository_and_skill(
     Ok((repository, skill))
 }
 
-fn refresh_one(repository_id: &str) -> Result<(), String> {
-    let _guard = mutation_lock()
-        .lock()
-        .map_err(|_| "Skills repository mutation lock poisoned".to_string())?;
-    refresh_one_locked(repository_id)
+async fn refresh_one(repository_id: &str) -> Result<(), String> {
+    let lease = Arc::new(mutation_lock().lock().await);
+    refresh_one_locked(repository_id, &lease).await
 }
 
-fn refresh_one_locked(repository_id: &str) -> Result<(), String> {
-    let storage = open_storage()?;
-    let repository = storage
-        .get_codex_skill_repository(repository_id)
-        .map_err(|err| format!("read Skills repository failed: {err}"))?
-        .ok_or_else(|| "Skills repository not found".to_string())?;
-    drop(storage);
+async fn refresh_one_locked(repository_id: &str, lease: &MutationLease) -> Result<(), String> {
+    let lookup_id = repository_id.to_owned();
+    let repository = run_locked_phase(lease, move || {
+        let storage = open_storage()?;
+        let storage = crate::account::remote_storage::AccountStorage::new(&storage);
+        storage
+            .get_codex_skill_repository(&lookup_id)
+            .map_err(|err| format!("read Skills repository failed: {err}"))?
+            .ok_or_else(|| "Skills repository not found".to_string())
+    })
+    .await?;
     let source = GitHubRepositorySource {
         owner: repository.owner.clone(),
         repository: repository.repository.clone(),
     };
-    let result: Result<(), String> = (|| {
-        let archive = download_repository_archive(&source, &repository.ref_name)?;
-        let scanned =
-            scan_repository_archive(&archive, repository_id, &source, &repository.ref_name)?;
-        let revision = archive_revision(&archive);
-        write_cache_archive(repository_id, &revision, &archive)?;
-        let scanned_at = codexmanager_core::storage::now_ts();
-        let records = scanned
-            .into_iter()
-            .map(
-                |skill| codexmanager_core::storage::CodexSkillRepositorySkillRecord {
-                    repository_id: repository_id.to_string(),
-                    skill_id: skill.skill_id,
-                    name: skill.name,
-                    description: skill.description,
-                    path: skill.path,
-                    source_url: skill.source_url,
-                    revision: Some(revision.clone()),
-                },
-            )
-            .collect::<Vec<_>>();
-        open_storage()?
-            .replace_codex_skill_repository_snapshot(repository_id, &records, scanned_at)
-            .map_err(|err| format!("save Skills repository snapshot failed: {err}"))?;
-        cleanup_repository_cache(repository_id, Some(&revision));
-        Ok(())
-    })();
+    let result: Result<(), String> = async {
+        let archive = download_repository_archive(&source, &repository.ref_name).await?;
+        let repository_id = repository_id.to_owned();
+        let scan_source = source.clone();
+        run_locked_phase(lease, move || {
+            let scanned = scan_repository_archive(
+                &archive,
+                &repository_id,
+                &scan_source,
+                &repository.ref_name,
+            )?;
+            let revision = archive_revision(&archive);
+            write_cache_archive(&repository_id, &revision, &archive)?;
+            let scanned_at = codexmanager_core::storage::now_ts();
+            let records = scanned
+                .into_iter()
+                .map(
+                    |skill| codexmanager_core::storage::CodexSkillRepositorySkillRecord {
+                        repository_id: repository_id.clone(),
+                        skill_id: skill.skill_id,
+                        name: skill.name,
+                        description: skill.description,
+                        path: skill.path,
+                        source_url: skill.source_url,
+                        revision: Some(revision.clone()),
+                    },
+                )
+                .collect::<Vec<_>>();
+            crate::account::remote_storage::AccountStorage::new(&*open_storage()?)
+                .replace_codex_skill_repository_snapshot(&repository_id, &records, scanned_at)
+                .map_err(|err| format!("save Skills repository snapshot failed: {err}"))?;
+            cleanup_repository_cache(&repository_id, Some(&revision));
+            Ok(())
+        })
+        .await
+    }
+    .await;
     if let Err(err) = &result {
-        if let Ok(storage) = open_storage() {
-            let _ = storage.record_codex_skill_repository_error(repository_id, err);
-        }
+        let error = err.clone();
+        let repository_id = repository_id.to_owned();
+        let _ = run_locked_phase(lease, move || {
+            let storage = open_storage()?;
+            let storage = crate::account::remote_storage::AccountStorage::new(&storage);
+            storage
+                .record_codex_skill_repository_error(&repository_id, &error)
+                .map_err(|error| error.to_string())
+        })
+        .await;
     }
     result.map_err(|err| {
         format!(
@@ -725,7 +872,7 @@ fn hex_prefix(bytes: &[u8], count: usize) -> String {
     output
 }
 
-fn download_repository_archive(
+async fn download_repository_archive(
     source: &GitHubRepositorySource,
     ref_name: &str,
 ) -> Result<Vec<u8>, String> {
@@ -742,21 +889,22 @@ fn download_repository_archive(
         MAX_REPOSITORY_ARCHIVE_BYTES,
         "download GitHub repository archive",
     )
+    .await
 }
 
-fn fetch_default_branch(source: &GitHubRepositorySource) -> Result<String, String> {
+async fn fetch_default_branch(source: &GitHubRepositorySource) -> Result<String, String> {
     let url = format!(
         "https://api.github.com/repos/{}/{}",
         source.owner, source.repository
     );
-    let bytes = get_bounded(&url, MAX_GITHUB_METADATA_BYTES, "read GitHub repository")?;
+    let bytes = get_bounded(&url, MAX_GITHUB_METADATA_BYTES, "read GitHub repository").await?;
     let metadata: GitHubRepositoryMetadata = serde_json::from_slice(&bytes)
         .map_err(|err| format!("parse GitHub repository metadata failed: {err}"))?;
     normalize_ref_name(Some(&metadata.default_branch))?
         .ok_or_else(|| "GitHub repository has no default branch".to_string())
 }
 
-fn fetch_skills_sh_search(
+async fn fetch_skills_sh_search(
     query: &str,
     limit: usize,
     offset: usize,
@@ -765,13 +913,16 @@ fn fetch_skills_sh_search(
         "https://skills.sh/api/search?q={}&limit={limit}&offset={offset}",
         urlencoding::encode(query)
     );
-    let bytes = get_bounded(&url, MAX_REGISTRY_RESPONSE_BYTES, "skills.sh search")?;
+    let bytes = get_bounded(&url, MAX_REGISTRY_RESPONSE_BYTES, "skills.sh search").await?;
     serde_json::from_slice(&bytes)
         .map_err(|err| format!("parse skills.sh search response failed: {err}"))
 }
 
-fn verify_skills_sh_entry(source: &GitHubRepositorySource, skill_id: &str) -> Result<(), String> {
-    let response = fetch_skills_sh_search(skill_id, 50, 0)?;
+async fn verify_skills_sh_entry(
+    source: &GitHubRepositorySource,
+    skill_id: &str,
+) -> Result<(), String> {
+    let response = fetch_skills_sh_search(skill_id, 50, 0).await?;
     let expected_source = format!("{}/{}", source.owner, source.repository);
     let expected_id = format!("{expected_source}/{skill_id}");
     let registered = response.skills.into_iter().any(|item| {
@@ -787,11 +938,12 @@ fn verify_skills_sh_entry(source: &GitHubRepositorySource, skill_id: &str) -> Re
     Ok(())
 }
 
-fn get_bounded(url: &str, max_bytes: usize, action: &str) -> Result<Vec<u8>, String> {
+async fn get_bounded(url: &str, max_bytes: usize, action: &str) -> Result<Vec<u8>, String> {
     let mut response = http_client()?
         .get(url)
         .header(reqwest::header::ACCEPT_ENCODING, "identity")
         .send()
+        .await
         .map_err(|err| format!("{action} failed: {err}"))?;
     if !response.status().is_success() {
         return Err(format!("{action} returned HTTP {}", response.status()));
@@ -808,13 +960,15 @@ fn get_bounded(url: &str, max_bytes: usize, action: &str) -> Result<Vec<u8>, Str
             .unwrap_or_default()
             .min(max_bytes as u64) as usize,
     );
-    response
-        .by_ref()
-        .take(max_bytes as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|err| format!("{action} body failed: {err}"))?;
-    if bytes.len() > max_bytes {
-        return Err(format!("{action} exceeded the size limit"));
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|err| format!("{action} body failed: {err}"))?
+    {
+        if chunk.len() > max_bytes.saturating_sub(bytes.len()) {
+            return Err(format!("{action} exceeded the size limit"));
+        }
+        bytes.extend_from_slice(&chunk);
     }
     Ok(bytes)
 }

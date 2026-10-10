@@ -60,5 +60,8 @@ fn derive_status_for_log_respects_disconnect_delivery_and_bridge_fallbacks() {
 fn client_disconnect_error_matches_common_socket_messages() {
     assert!(is_client_disconnect_error("broken pipe"));
     assert!(is_client_disconnect_error("connection reset by peer"));
+    assert!(is_client_disconnect_error(
+        "你的主机中的软件中止了一个已建立的连接。 (os error 10053)"
+    ));
     assert!(!is_client_disconnect_error("upstream timeout"));
 }

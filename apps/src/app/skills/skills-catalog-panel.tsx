@@ -329,6 +329,7 @@ export function SkillsCatalogPanel({
       enabled && activeTab === "registry" && registryQueryText.length >= 2,
     staleTime: 30_000,
     retry: 1,
+    gcTime: 60_000,
   });
 
   const initialRefreshMutation = useMutation({

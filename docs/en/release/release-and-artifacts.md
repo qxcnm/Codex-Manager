@@ -70,7 +70,7 @@ Common example:
 pwsh -NoLogo -NoProfile -File scripts/rebuild.ps1 `
   -AllPlatforms `
   -GitRef main `
-  -ReleaseTag v0.1.9 `
+  -ReleaseTag v0.6.0 `
   -GithubToken <token>
 ```
 
@@ -98,9 +98,9 @@ pwsh -NoLogo -NoProfile -File scripts/rebuild.ps1 `
 
 1. Synchronize the project version in the root `Cargo.toml`, `apps/package.json`, Tauri `Cargo.toml` / `tauri.conf.json`, and both `Cargo.lock` files
 2. Make sure `CHANGELOG.md` has been updated
-3. Make sure the desktop frontend build passes: `pnpm -C apps run build`
+3. Make sure the desktop frontend build passes: `pnpm -C apps run build:desktop`
 4. Make sure core tests pass: `pnpm -C apps run test`, `cargo test --workspace`
-5. If the gateway protocol changed, also run `scripts/tests/gateway_regression_suite.ps1`
+5. If the gateway protocol changed, run `cargo test -p codexmanager-service gateway --offline -- --test-threads=1`; the old `scripts/tests/gateway_regression_suite.ps1` probe has been removed.
 
 ## Common failure cases
 

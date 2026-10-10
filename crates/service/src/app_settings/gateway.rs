@@ -275,6 +275,35 @@ pub fn current_gateway_thread_aware_account_distribution_enabled() -> bool {
     gateway::thread_aware_account_distribution_enabled()
 }
 
+/// Mask credential-like keys in captured request payloads (default on).
+pub fn set_gateway_request_log_payload_redaction_enabled(enabled: bool) -> Result<bool, String> {
+    let applied = gateway::set_request_log_payload_redaction_enabled(enabled);
+    save_persisted_bool_setting(
+        super::shared::APP_SETTING_GATEWAY_REQUEST_LOG_PAYLOAD_REDACTION_ENABLED_KEY,
+        applied,
+    )?;
+    Ok(applied)
+}
+
+pub fn current_gateway_request_log_payload_redaction_enabled() -> bool {
+    gateway::request_log_payload_redaction_enabled()
+}
+
+/// Keep only a 16 KB preview of captured request payloads (default on).
+/// When off, full bodies are stored with conversation-level de-duplication.
+pub fn set_gateway_request_log_payload_preview_enabled(enabled: bool) -> Result<bool, String> {
+    let applied = gateway::set_request_log_payload_preview_enabled(enabled);
+    save_persisted_bool_setting(
+        super::shared::APP_SETTING_GATEWAY_REQUEST_LOG_PAYLOAD_PREVIEW_ENABLED_KEY,
+        applied,
+    )?;
+    Ok(applied)
+}
+
+pub fn current_gateway_request_log_payload_preview_enabled() -> bool {
+    gateway::request_log_payload_preview_enabled()
+}
+
 pub(crate) fn set_gateway_quota_guard(
     input: QuotaGuardInput,
 ) -> Result<gateway::QuotaGuardConfig, String> {
@@ -441,28 +470,50 @@ pub fn default_gateway_user_agent_version() -> &'static str {
 /// # 返回
 /// 返回 npm registry 中 @openai/codex 的 latest 版本
 pub fn fetch_codex_latest_version() -> Result<CodexLatestVersionInfo, String> {
-    fetch_codex_latest_version_from_url(CODEX_NPM_LATEST_URL)
+    gateway::run_upstream_io(fetch_codex_latest_version_async())?
 }
 
-pub(crate) fn sync_gateway_user_agent_version_from_codex_latest() -> Result<String, String> {
-    sync_gateway_user_agent_version_from_codex_latest_url(CODEX_NPM_LATEST_URL)
+pub(crate) async fn fetch_codex_latest_version_async() -> Result<CodexLatestVersionInfo, String> {
+    fetch_codex_latest_version_from_url_async(CODEX_NPM_LATEST_URL).await
 }
 
+pub(crate) async fn sync_gateway_user_agent_version_from_codex_latest_async(
+) -> Result<String, String> {
+    sync_gateway_user_agent_version_from_codex_latest_url_async(CODEX_NPM_LATEST_URL).await
+}
+
+#[cfg(test)]
 fn sync_gateway_user_agent_version_from_codex_latest_url(
     registry_url: &str,
 ) -> Result<String, String> {
-    let latest = fetch_codex_latest_version_from_url(registry_url)?;
+    gateway::run_upstream_io(sync_gateway_user_agent_version_from_codex_latest_url_async(
+        registry_url,
+    ))?
+}
+
+async fn sync_gateway_user_agent_version_from_codex_latest_url_async(
+    registry_url: &str,
+) -> Result<String, String> {
+    let latest = fetch_codex_latest_version_from_url_async(registry_url).await?;
     set_gateway_user_agent_version(latest.version.as_str())
 }
 
+#[cfg(test)]
 fn fetch_codex_latest_version_from_url(
     registry_url: &str,
 ) -> Result<CodexLatestVersionInfo, String> {
-    let response = gateway::upstream_client()
+    gateway::run_upstream_io(fetch_codex_latest_version_from_url_async(registry_url))?
+}
+
+async fn fetch_codex_latest_version_from_url_async(
+    registry_url: &str,
+) -> Result<CodexLatestVersionInfo, String> {
+    let response = gateway::async_upstream_client_for_aggregate_url(registry_url)
         .get(registry_url)
         .header(reqwest::header::ACCEPT, "application/json")
         .timeout(Duration::from_secs(10))
         .send()
+        .await
         .map_err(|err| format!("请求 Codex latest 版本失败: {err}"))?;
     let status = response.status();
     if !status.is_success() {
@@ -472,6 +523,7 @@ fn fetch_codex_latest_version_from_url(
     }
     let payload = response
         .json::<CodexNpmLatestResponse>()
+        .await
         .map_err(|err| format!("解析 Codex latest 版本失败: {err}"))?;
     let version = payload.version.trim();
     if version.is_empty() {

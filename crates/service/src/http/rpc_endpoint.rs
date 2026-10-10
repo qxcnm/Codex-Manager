@@ -5,12 +5,18 @@ use bytes::BytesMut;
 use codexmanager_core::rpc::types::{
     JsonRpcError, JsonRpcErrorObject, JsonRpcMessage, JsonRpcRequest, JsonRpcResponse,
 };
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
+#[cfg(test)]
 use std::io::Read as _;
 use std::panic::AssertUnwindSafe;
+#[cfg(test)]
 use tiny_http::Request;
+#[cfg(test)]
 use tiny_http::Response;
 use url::Url;
+
+static RPC_BLOCKING_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(32);
+static RPC_ASYNC_REQUESTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(64);
 
 /// 函数 `rpc_response_failed`
 ///
@@ -45,6 +51,7 @@ fn rpc_response_failed(resp: &codexmanager_core::rpc::types::JsonRpcResponse) ->
 ///
 /// # 返回
 /// 返回函数执行结果
+#[cfg(test)]
 fn get_header_value<'a>(request: &'a Request, name: &str) -> Option<&'a str> {
     request
         .headers()
@@ -65,6 +72,7 @@ fn get_header_value<'a>(request: &'a Request, name: &str) -> Option<&'a str> {
 ///
 /// # 返回
 /// 返回函数执行结果
+#[cfg(test)]
 fn is_json_content_type(request: &Request) -> bool {
     get_header_value(request, "Content-Type")
         .and_then(|value| value.split(';').next())
@@ -72,6 +80,7 @@ fn is_json_content_type(request: &Request) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(test)]
 fn rpc_actor_from_request_headers(request: &Request) -> crate::RpcActor {
     crate::RpcActor::from_parts(
         get_header_value(request, "X-CodexManager-Rpc-Actor-Role"),
@@ -321,6 +330,49 @@ async fn read_axum_rpc_body_bounded(body: Body) -> Result<String, StatusCode> {
     String::from_utf8(bytes.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)
 }
 
+async fn try_handle_async_network_body(
+    body: &str,
+    actor: &crate::RpcActor,
+) -> Option<(u16, String, bool)> {
+    let JsonRpcMessage::Request(request) = serde_json::from_str(body).ok()? else {
+        return None;
+    };
+    if !crate::rpc_dispatch::is_async_method(&request.method) {
+        return None;
+    }
+    let Ok(_permit) = RPC_ASYNC_REQUESTS.try_acquire() else {
+        return Some((503, "{}".to_owned(), false));
+    };
+    let result = AssertUnwindSafe(crate::rpc_dispatch::try_handle_network_request_async(
+        &request, actor,
+    ))
+    .catch_unwind()
+    .await;
+    let message = match result {
+        Ok(message) => message?,
+        Err(payload) => {
+            let panic_message = panic_payload_message(payload.as_ref());
+            log::error!(
+                "rpc handler panicked: method={} id={} panic={}",
+                request.method,
+                request.id,
+                panic_message
+            );
+            JsonRpcMessage::Error(JsonRpcError {
+                id: request.id,
+                error: JsonRpcErrorObject {
+                    code: -32603,
+                    data: None,
+                    message: format!("internal_error: {panic_message}"),
+                },
+            })
+        }
+    };
+    let success = jsonrpc_message_success(&message);
+    let json = serde_json::to_string(&message).unwrap_or_else(|_| "{}".to_owned());
+    Some((200, json, success))
+}
+
 /// 函数 `handle_rpc_http`
 ///
 /// 作者: gaohongshun
@@ -333,6 +385,10 @@ async fn read_axum_rpc_body_bounded(body: Body) -> Result<String, StatusCode> {
 /// # 返回
 /// 返回函数执行结果
 pub(crate) async fn handle_rpc_http(request: axum::extract::Request) -> AxumResponse {
+    let state = request
+        .extensions()
+        .get::<std::sync::Arc<super::state::AppState>>()
+        .cloned();
     let mut rpc_metrics_guard = crate::gateway::begin_rpc_request();
     let headers = request.headers();
     if let Some(response) = validate_axum_headers(headers) {
@@ -351,21 +407,55 @@ pub(crate) async fn handle_rpc_http(request: axum::extract::Request) -> AxumResp
         Ok(body) => body,
         Err(status) => return (status, "{}").into_response(),
     };
-    let (status, response_body, success) =
-        match tokio::task::spawn_blocking(move || handle_rpc_body(&body_for_task, actor)).await {
-            Ok(result) => result,
-            Err(err) => {
-                log::error!("rpc http blocking task failed: {}", err);
-                let fallback = JsonRpcResponse {
-                    id: 0.into(),
-                    result: crate::error_codes::rpc_error_payload(
-                        "internal_error: rpc task failed".to_string(),
-                    ),
-                };
-                let body = serde_json::to_string(&fallback).unwrap_or_else(|_| "{}".to_string());
-                (200, body, false)
+    if let Some(state) = state {
+        if let Ok(JsonRpcMessage::Request(req)) = serde_json::from_str(&body_for_task) {
+            if let Some(message) =
+                crate::rpc_dispatch::storage_async::handle(state, &req, &actor).await
+            {
+                if jsonrpc_message_success(&message) {
+                    rpc_metrics_guard.mark_success();
+                }
+                return (
+                    StatusCode::OK,
+                    serde_json::to_string(&message).unwrap_or_else(|_| "{}".into()),
+                )
+                    .into_response();
             }
-        };
+        }
+    }
+    if let Some((status, body, success)) =
+        try_handle_async_network_body(&body_for_task, &actor).await
+    {
+        if success {
+            rpc_metrics_guard.mark_success();
+        }
+        return (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), body).into_response();
+    }
+    let permit = match RPC_BLOCKING_WORKERS.try_acquire() {
+        Ok(permit) => permit,
+        Err(_) => return (StatusCode::SERVICE_UNAVAILABLE, "{}").into_response(),
+    };
+    let (status, response_body, success) = match crate::runtime::blocking::run("rpc", move || {
+        // A cancelled HTTP future must not release capacity while a
+        // synchronous dispatch is still executing.
+        let _permit = permit;
+        handle_rpc_body(&body_for_task, actor)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(err) => {
+            log::error!("rpc http blocking task failed: {}", err);
+            let fallback = JsonRpcResponse {
+                id: 0.into(),
+                result: crate::error_codes::rpc_error_payload(
+                    "internal_error: rpc task failed".to_string(),
+                ),
+            };
+            let body = serde_json::to_string(&fallback).unwrap_or_else(|_| "{}".to_string());
+            (200, body, false)
+        }
+    };
     if success {
         rpc_metrics_guard.mark_success();
     }
@@ -387,6 +477,7 @@ pub(crate) async fn handle_rpc_http(request: axum::extract::Request) -> AxumResp
 ///
 /// # 返回
 /// 无
+#[cfg(test)]
 pub fn handle_rpc(mut request: Request) {
     let mut rpc_metrics_guard = crate::gateway::begin_rpc_request();
     if request.method().as_str() != "POST" {

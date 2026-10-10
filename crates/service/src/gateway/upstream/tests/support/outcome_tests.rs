@@ -250,6 +250,7 @@ fn official_status_500_with_more_candidates_keeps_upstream_response() {
 
 #[test]
 fn official_compact_502_with_low_quota_snapshot_triggers_failover() {
+    let _guard = crate::test_env_guard();
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
     storage
@@ -269,6 +270,7 @@ fn official_compact_502_with_low_quota_snapshot_triggers_failover() {
 
 #[test]
 fn official_compact_502_without_low_quota_snapshot_keeps_upstream_response() {
+    let _guard = crate::test_env_guard();
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
     let decision = decide_upstream_outcome(

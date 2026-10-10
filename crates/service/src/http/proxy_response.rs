@@ -2,6 +2,7 @@ use axum::body::Body;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderValue, Response, StatusCode};
 
+#[cfg(test)]
 use crate::http::header_filter::should_skip_response_header;
 
 /// 函数 `text_response`
@@ -57,6 +58,7 @@ pub(crate) fn text_error_response(status: StatusCode, body: impl Into<String>) -
 ///
 /// # 返回
 /// 返回函数执行结果
+#[cfg(test)]
 pub(crate) fn merge_upstream_headers(
     mut builder: axum::http::response::Builder,
     headers: &reqwest::header::HeaderMap,

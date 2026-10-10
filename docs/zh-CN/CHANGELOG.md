@@ -5,6 +5,62 @@
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-09-30
+
+### Added
+
+- 设置页和顶部栏的界面语言新增“自动检测”，跟随已支持的系统或浏览器语言，其他语言回退英文；手动选择的语言继续持久化保存。
+- 模型目录 revision 10 内置 `gpt-6.1-sol`，同步官方模型介绍、推理档位，以及短/长上下文的输入、缓存输入、缓存写入和输出价格；保留同名 custom、用户编辑及删除记录。
+- 模型管理页可为每个聚合或自定义模型选择支持的推理强度档位及默认档位；生成的 Codex 模型目录据此启用思考强度选择器（#481）。
+
+### Changed
+
+- 收紧桌面导航、设置、仪表盘、平台模式和模型管理页面的布局密度与状态呈现，统一支持的多语言界面细节。
+
+### Fixed
+
+- Linux 打包新增最终 AppImage 的 `.DirIcon` 校验与修复，解决 AppImageHub 目录检查因缺少图标元数据而失败的问题。
+- 改进流式响应终态投递跟踪和桥接诊断日志，区分已向客户端投递终态、上游未完成和客户端投递失败等情况。
+
+## [0.6.2] - 2026-09-25
+
+### Added
+
+- 模型目录 revision 9 新增 `gpt-6-sol`、`gpt-6-luna`、`gpt-image-2.5-sunburst` 和 `gpt-image-2.5-flare`；fresh 目录现在包含 11 个 builtin，其中 10 个默认可见，`codex-auto-review` 保持隐藏。
+
+### Changed
+
+- 从 builtin 目录移除已于 2026-08-31 从 ChatGPT 登录的 Codex 退役的 `gpt-5.4`、`gpt-5.4-mini`，以及在该登录方式下 deprecated 的 `gpt-5.2`；通用 API Key 仍可通过 custom 模型使用 `gpt-5.2`。revision 9 会删除未定制 builtin 及其默认账号池 route；用户编辑、自定义价格或 tiers、非默认 routes 与 permission/API Key 关联会转为 custom 保留。
+- free-account 模型上限选项改为基于当前文本模型目录生成；已持久化但不再属于当前候选目录、图片专用或旧 fallback 的值统一归一化为 `auto`。账号预热和账号文本测试的 fallback 改为 `gpt-6-luna`，观测桥接的缺省模型改为 `gpt-6-sol`。
+- 价格同步继续在未勾选时保护自定义价格；明确勾选模型后，允许外部价格覆盖所选模型的自定义价格，未选中的自定义模型不会被触碰。
+- 发布版本提升到 `0.6.2`，同步 workspace、前端、Tauri 桌面端和锁文件。
+
+### Fixed
+
+- 修复桌面端开发启动时 pnpm 命令解析和 Next 代理的启动竞态；页面隐藏后会停止页面级轮询和后台任务，账号测试与 SSE 在终态主动清理监听。
+- 修复 service、gateway、账号和 usage 路径的资源生命周期、请求取消、队列指标与并发边界，减少旧同步桥接在生产路径中的残留。
+- 强化旧 SQLite 模型目录自动迁移：加入迁移锁、在线备份、迁移前检查、大小写冲突兼容和迁移后冒烟检查；迁移失败时自动恢复备份，避免升级过程中破坏原库。
+- 为 GHCR Release Compose 增加可选 Docker OTA profile；默认只检查并等待用户确认，用户明确启用 `ota-auto` 后才会自动更新带标记的 service/web 镜像，固定版本标签仍保持不变。
+
+## [0.6.1] - 2026-09-24
+
+### Added
+
+- OpenAI 账号池新增默认开启的“额度重置自动唤醒”：标准 5 小时额度耗尽后，在上游重置时间到达时自动发送预热消息并刷新用量；支持单个和批量启停，持久化每周期尝试记录，跳过停用账号与尚未恢复的周额度。
+- Codex 接入方式新增聚合 API 直连，可选择 active 的 Codex / Compatible Responses API-key 条目并沿用其认证请求头与 User-Agent，无需经过本地网关（#475）。
+
+### Changed
+
+- 完成服务端异步化与 SeaORM 存储迁移的生产收尾，补齐远程账号、聚合 API、API Key、用量、日志与网关路径的事务、关闭和生产验收门禁。
+- 模型管理页统一状态卡样式；“应用模型”未勾选时默认应用完整目录，勾选后仅应用所选模型，并同步模型价格与目录元数据。
+- 模型删除改为实际删除；内置模型删除后记录墓碑，后续启动或补种不会自动恢复。
+- 发布版本提升到 `0.6.1`，同步 workspace、前端、Tauri 桌面端和锁文件。
+
+### Fixed
+
+- 修复聚合 API 已成功返回后，Windows 客户端断开被错误记为 502 的问题；`os error 10053/10054/10058` 等下游断连现在按客户端中断处理（#479）。
+- 修复异步服务迁移后的账号、聚合 API、额度重置与候选路由边界问题，并加强事务回滚与生产配置校验。
+
 ## [0.6.0] - 2026-09-05
 
 ### Fixed
@@ -535,7 +591,11 @@
 ### Changed
 - 账号管理页操作区整合为单一“账号操作”下拉菜单，替代右侧多按钮堆叠，界面更简洁。
 
-[Unreleased]: https://github.com/qxcnm/Codex-Manager/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/qxcnm/Codex-Manager/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/qxcnm/Codex-Manager/releases/tag/v0.6.3
+[0.6.2]: https://github.com/qxcnm/Codex-Manager/releases/tag/v0.6.2
+[0.6.1]: https://github.com/qxcnm/Codex-Manager/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/qxcnm/Codex-Manager/releases/tag/v0.6.0
 [0.5.4]: https://github.com/qxcnm/Codex-Manager/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/qxcnm/Codex-Manager/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/qxcnm/Codex-Manager/compare/v0.5.1...v0.5.2

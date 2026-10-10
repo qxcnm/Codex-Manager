@@ -23,7 +23,7 @@ CodexManager 不是单一前端项目，也不是单一 Rust 服务项目。
 - `ARCHITECTURE.md`：结构边界与运行关系
 - `TESTING.md`：仓库级验证基线
 - `SECURITY.md`：安全问题与敏感信息处理规则
-- `docs/README.md`：治理文档目录与提交规则
+- `docs/zh-CN/README.md`：治理文档目录与提交规则
 
 ## 2. 开发环境
 
@@ -85,10 +85,10 @@ pwsh -NoLogo -NoProfile -File scripts/rebuild.ps1 -Bundle nsis -CleanDist -Porta
 
 以下文件已明显偏大，修改时必须克制追加总控逻辑：
 
-- `apps/src/main.js`
+- `apps/src/components/layout/app-bootstrap.tsx`
 - `apps/src-tauri/src/lib.rs`
 - `crates/service/src/lib.rs`
-- `crates/service/src/gateway/protocol_adapter/response_conversion.rs`
+- `crates/service/src/gateway/observability/http_bridge/`
 - `.github/workflows/release-all.yml`
 
 ### 3.3 大文件预警阈值

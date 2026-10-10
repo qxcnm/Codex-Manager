@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { accountClient } from "@/lib/api/account-client";
+import { CODEX_PROFILE_CANDIDATES_QUERY_KEY } from "@/lib/api/codex-profile-client";
 import { aggregateApiUsesIncomingPath } from "@/lib/aggregate-api-provider";
 import { copyTextToClipboard } from "@/lib/utils/clipboard";
 import { useAppStore } from "@/lib/store/useAppStore";
@@ -173,9 +174,10 @@ export function AggregateApiModal({
 
   useEffect(() => {
     if (!open) return;
-    window.requestAnimationFrame(() => {
+    const frameId = window.requestAnimationFrame(() => {
       bodyScrollRef.current?.scrollTo({ top: 0 });
     });
+    return () => window.cancelAnimationFrame(frameId);
   }, [open]);
 
   useEffect(() => {
@@ -447,6 +449,9 @@ export function AggregateApiModal({
           queryClient.invalidateQueries({ queryKey: ["apikeys"] }),
           queryClient.invalidateQueries({ queryKey: ["startup-snapshot"] }),
           queryClient.invalidateQueries({ queryKey: ["quota"] }),
+          queryClient.invalidateQueries({
+            queryKey: CODEX_PROFILE_CANDIDATES_QUERY_KEY,
+          }),
         ]);
         onOpenChange(false);
         return;
@@ -482,6 +487,9 @@ export function AggregateApiModal({
         queryClient.invalidateQueries({ queryKey: ["apikeys"] }),
         queryClient.invalidateQueries({ queryKey: ["startup-snapshot"] }),
         queryClient.invalidateQueries({ queryKey: ["quota"] }),
+        queryClient.invalidateQueries({
+          queryKey: CODEX_PROFILE_CANDIDATES_QUERY_KEY,
+        }),
       ]);
       onOpenChange(false);
     } catch (error: unknown) {

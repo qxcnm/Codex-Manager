@@ -114,6 +114,14 @@ pub async fn service_managed_model_import_commit_v2(
     rpc_call_in_background("apikey/managedModelImportCommitV2", addr, Some(payload)).await
 }
 
+#[tauri::command]
+pub async fn service_managed_model_price_sync_v2(
+    addr: Option<String>,
+    payload: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    rpc_call_in_background("apikey/managedModelPriceSyncV2", addr, payload).await
+}
+
 /// 函数 `service_apikey_create`
 ///
 /// 作者: gaohongshun

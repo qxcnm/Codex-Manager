@@ -6,12 +6,14 @@ pub(crate) mod delete;
 pub(crate) mod disable;
 #[path = "apikey_enable.rs"]
 pub(crate) mod enable;
+pub(crate) mod injected;
 #[path = "apikey_list.rs"]
 pub(crate) mod list;
 #[path = "apikey_profile.rs"]
 pub(crate) mod profile;
 #[path = "apikey_read_secret.rs"]
 pub(crate) mod read_secret;
+pub(crate) mod remote;
 #[path = "apikey_service_tier.rs"]
 pub(crate) mod service_tier;
 #[path = "apikey_update_model.rs"]

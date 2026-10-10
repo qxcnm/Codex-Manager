@@ -2,7 +2,7 @@ use codexmanager_core::storage::{now_ts, AggregateApi, Storage};
 
 use super::{
     build_aggregate_api_request, build_anthropic_bridge_aggregate_api_request, build_upstream_url,
-    effective_action_path, resolve_aggregate_api_rotation_candidates,
+    effective_action_path, is_client_delivery_error, resolve_aggregate_api_rotation_candidates,
     resolve_passthrough_sse_protocol, responses_to_anthropic_messages_action_path,
     rewrite_body_model_override, should_bridge_responses_to_anthropic, AggregateApiAuthConfig,
 };
@@ -153,10 +153,10 @@ fn anthropic_bridge_request_adds_required_messages_headers_with_default_auth() {
                 .expect("user agent header"),
         )
         .into();
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let built = build_anthropic_bridge_aggregate_api_request(
         &client,
-        &request,
+        &request.into(),
         &reqwest::Method::POST,
         reqwest::Url::parse("https://api.anthropic.com/v1/messages").expect("url"),
         &Bytes::from_static(br#"{"model":"claude-sonnet","messages":[]}"#),
@@ -214,10 +214,10 @@ fn aggregate_request_user_agent_override_replaces_conflicting_auth_header() {
                 .expect("incoming user agent"),
         )
         .into();
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let built = build_aggregate_api_request(
         &client,
-        &request,
+        &request.into(),
         &reqwest::Method::POST,
         reqwest::Url::parse("https://example.com/v1/responses").expect("url"),
         &Bytes::from_static(br#"{"model":"gpt-test"}"#),
@@ -241,6 +241,95 @@ fn aggregate_request_user_agent_override_replaces_conflicting_auth_header() {
         .collect::<Vec<_>>();
     assert_eq!(values, vec!["Aggregate-Override/4.0"]);
     assert!(!values.iter().any(|value| value.contains("must-not-leak")));
+}
+
+#[test]
+fn aggregate_delivery_recognizes_windows_client_disconnect_errors() {
+    assert!(is_client_delivery_error(
+        "你的主机中的软件中止了一个已建立的连接。 (os error 10053)"
+    ));
+    assert!(is_client_delivery_error(
+        "An existing connection was forcibly closed by the remote host. (os error 10054)"
+    ));
+    assert!(!is_client_delivery_error("upstream returned status 502"));
+}
+
+#[test]
+fn aggregate_stream_request_forces_identity_encoding_for_sse_observation() {
+    let request: tiny_http::Request = tiny_http::TestRequest::new()
+        .with_header(
+            tiny_http::Header::from_bytes("Accept", "application/json")
+                .expect("incoming accept header"),
+        )
+        .with_header(
+            tiny_http::Header::from_bytes("Accept-Encoding", "gzip, br, zstd")
+                .expect("incoming accept-encoding header"),
+        )
+        .into();
+    let client = reqwest::Client::new();
+    let built = build_aggregate_api_request(
+        &client,
+        &request.into(),
+        &reqwest::Method::POST,
+        reqwest::Url::parse("https://example.com/v1/responses").expect("url"),
+        &Bytes::from_static(br#"{"model":"gpt-test","stream":true}"#),
+        "aggregate-secret",
+        &AggregateApiAuthConfig::ApiKeyDefaultBearer,
+        &std::collections::HashSet::new(),
+        "Aggregate-Test/1.0",
+        None,
+        true,
+    )
+    .expect("build aggregate stream request");
+
+    assert_eq!(
+        built
+            .headers()
+            .get("accept")
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+    assert_eq!(
+        built
+            .headers()
+            .get("accept-encoding")
+            .and_then(|value| value.to_str().ok()),
+        Some("identity")
+    );
+    assert_eq!(built.headers().get_all("accept-encoding").iter().count(), 1);
+}
+
+#[test]
+fn aggregate_non_stream_request_preserves_client_accept_encoding() {
+    let request: tiny_http::Request = tiny_http::TestRequest::new()
+        .with_header(
+            tiny_http::Header::from_bytes("Accept-Encoding", "gzip, br")
+                .expect("incoming accept-encoding header"),
+        )
+        .into();
+    let client = reqwest::Client::new();
+    let built = build_aggregate_api_request(
+        &client,
+        &request.into(),
+        &reqwest::Method::POST,
+        reqwest::Url::parse("https://example.com/v1/responses").expect("url"),
+        &Bytes::from_static(br#"{"model":"gpt-test","stream":false}"#),
+        "aggregate-secret",
+        &AggregateApiAuthConfig::ApiKeyDefaultBearer,
+        &std::collections::HashSet::new(),
+        "Aggregate-Test/1.0",
+        None,
+        false,
+    )
+    .expect("build aggregate non-stream request");
+
+    assert_eq!(
+        built
+            .headers()
+            .get("accept-encoding")
+            .and_then(|value| value.to_str().ok()),
+        Some("gzip, br")
+    );
 }
 
 #[test]

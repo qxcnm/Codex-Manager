@@ -14,6 +14,7 @@ pub(crate) mod validation;
 
 pub(crate) fn list_proxy_profiles() -> Result<Vec<ProxyProfileEntry>, String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     let items = storage
         .list_proxy_profiles()
         .map_err(|err| format!("list proxy profiles failed: {err}"))?;
@@ -39,6 +40,7 @@ pub(crate) fn create_proxy_profile(
     notes: Option<String>,
 ) -> Result<ProxyProfileEntry, String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     let normalized_name = normalize_required_text("name", name)?;
     let normalized_proxy_url = normalize_proxy_url(proxy_url)?;
     let created = storage
@@ -81,6 +83,7 @@ pub(crate) fn update_proxy_profile(
         url_changed,
     )?;
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     let accounts_count = storage
         .list_account_ids_bound_to_proxy_profile(&updated.id)
         .map(|l| l.len() as i64)
@@ -93,6 +96,7 @@ pub(crate) fn update_proxy_profile(
 pub(crate) fn delete_proxy_profile(id: &str) -> Result<(), String> {
     let normalized_id = normalize_required_str("id", id)?;
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     let bound_accounts = storage
         .list_account_ids_bound_to_proxy_profile(normalized_id)
         .map_err(|err| format!("read proxy profile bindings failed: {err}"))?;
@@ -113,19 +117,28 @@ pub(crate) fn delete_proxy_profile(id: &str) -> Result<(), String> {
 }
 
 pub(crate) fn test_proxy_profile(id: &str) -> Result<ProxyProfileEntry, String> {
+    crate::gateway::run_upstream_io(test_proxy_profile_async(id))?
+}
+
+pub(crate) async fn test_proxy_profile_async(id: &str) -> Result<ProxyProfileEntry, String> {
     let normalized_id = normalize_required_str("id", id)?;
-    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = open_storage()
+        .map(|pooled| pooled.shared_handle())
+        .ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     let profile = storage
         .find_proxy_profile(normalized_id)
         .map_err(|err| format!("read proxy profile failed: {err}"))?
         .ok_or_else(|| "proxy profile not found".to_string())?;
 
     let proxy_url = validation::normalize_proxy_profile_url(&profile.proxy_url)?;
-    let outcome = crate::account::proxy_health::check_account_proxy(&proxy_url, |country_code| {
-        storage
-            .find_cached_proxy_flag_by_country(country_code)
-            .unwrap_or(None)
-    });
+    let outcome =
+        crate::account::proxy_health::check_account_proxy_async(&proxy_url, |country_code| {
+            storage
+                .find_cached_proxy_flag_by_country(country_code)
+                .unwrap_or(None)
+        })
+        .await;
 
     let updated = storage
         .update_proxy_profile(&ProxyProfileUpdateInput {
@@ -219,6 +232,7 @@ pub(crate) fn test_proxy_profile(id: &str) -> Result<ProxyProfileEntry, String> 
 pub(crate) fn test_proxy_profile_latency(id: &str) -> Result<JobState, String> {
     let normalized_id = normalize_required_str("id", id)?;
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
 
     let _ = storage
         .find_proxy_profile(normalized_id)
@@ -239,6 +253,7 @@ pub(crate) fn test_proxy_profile_speed(
 ) -> Result<JobState, String> {
     let normalized_id = normalize_required_str("id", id)?;
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
 
     let _ = storage
         .find_proxy_profile(normalized_id)
@@ -262,6 +277,7 @@ pub(crate) fn test_proxy_profile_cloudflare_style_speed(
 ) -> Result<JobState, String> {
     let normalized_id = normalize_required_str("id", id)?;
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
 
     let _ = storage
         .find_proxy_profile(normalized_id)
@@ -301,6 +317,7 @@ fn storage_update_proxy_profile(
     url_changed: bool,
 ) -> Result<ProxyProfile, String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     storage
         .update_proxy_profile(&ProxyProfileUpdateInput {
             id: id.to_string(),
@@ -456,6 +473,7 @@ pub(crate) fn get_proxy_profile_speed_test_history(
     limit: Option<usize>,
 ) -> Result<ProxySpeedTestListResult, String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     let normalized_id = normalize_required_str("id", profile_id)?;
 
     let limit = limit.unwrap_or(20);
@@ -493,6 +511,7 @@ pub(crate) fn get_proxy_profile_latency_test_history(
     limit: Option<usize>,
 ) -> Result<ProxyProfileUrlTestListResult, String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     let normalized_id = normalize_required_str("id", profile_id)?;
 
     let limit = limit.unwrap_or(20);
@@ -524,6 +543,7 @@ pub(crate) fn get_proxy_profile_diagnostics_history(
     limit: Option<usize>,
 ) -> Result<ProxyDiagnosticTestListResult, String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     let normalized_id = normalize_required_str("id", profile_id)?;
 
     let limit = limit.unwrap_or(20);

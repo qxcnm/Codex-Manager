@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -282,8 +282,10 @@ function matchesSearch(profile: ProxyProfile, search: string): boolean {
 
 export function ProxySettingsCard({
   canManage,
+  active,
 }: {
   canManage: boolean;
+  active: boolean;
 }) {
   const { t } = useI18n();
   const queryClient = useQueryClient();
@@ -298,12 +300,15 @@ export function ProxySettingsCard({
   const [selectedDetailProfile, setSelectedDetailProfile] = useState<ProxyProfile | null>(null);
 
   const isMountedRef = useRef(true);
+  const activeRef = useRef(active);
+  const activeStateGenerationRef = useRef(0);
   const trackedJobIdsRef = useRef<Record<string, string>>({});
+  const cancellingJobIdsRef = useRef(new Set<string>());
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: PROXY_PROFILES_QUERY_KEY,
     queryFn: () => proxyProfilesClient.listProxyProfiles(),
-    enabled: canManage,
+    enabled: canManage && active,
   });
   const {
     isLoading: isLoadingPresets,
@@ -313,7 +318,7 @@ export function ProxySettingsCard({
   } = useQuery({
     queryKey: PROXY_TEST_PRESETS_QUERY_KEY,
     queryFn: () => proxyProfilesClient.listProxyTestPresets(),
-    enabled: canManage,
+    enabled: canManage && active,
   });
 
   const items = useMemo(() => data?.items ?? [], [data?.items]);
@@ -350,11 +355,58 @@ export function ProxySettingsCard({
   };
 
   useEffect(() => {
+    activeRef.current = active;
+  }, [active]);
+
+  const requestCancelJob = useCallback((jobId: string) => {
+    const normalizedJobId = jobId.trim();
+    if (
+      !normalizedJobId ||
+      cancellingJobIdsRef.current.has(normalizedJobId)
+    ) {
+      return;
+    }
+    cancellingJobIdsRef.current.add(normalizedJobId);
+    void proxyProfilesClient
+      .cancelProxyTestJob({ jobId: normalizedJobId })
+      .catch(() => {})
+      .finally(() => {
+        cancellingJobIdsRef.current.delete(normalizedJobId);
+      });
+  }, []);
+
+  const cancelTrackedJobs = useCallback(() => {
+    const jobIds = Array.from(
+      new Set(Object.values(trackedJobIdsRef.current).filter(Boolean)),
+    );
+    trackedJobIdsRef.current = {};
+    jobIds.forEach(requestCancelJob);
+  }, [requestCancelJob]);
+
+  useEffect(() => {
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
+      cancelTrackedJobs();
     };
-  }, []);
+  }, [cancelTrackedJobs]);
+
+  useEffect(() => {
+    const generation = ++activeStateGenerationRef.current;
+    cancelTrackedJobs();
+    const clearId = window.setTimeout(() => {
+      if (
+        !isMountedRef.current ||
+        activeRef.current !== active ||
+        activeStateGenerationRef.current !== generation ||
+        Object.keys(trackedJobIdsRef.current).length > 0
+      ) {
+        return;
+      }
+      setActiveJobs({});
+    }, 0);
+    return () => window.clearTimeout(clearId);
+  }, [active, cancelTrackedJobs]);
 
   const setActiveJob = (profileId: string, job: ProxyTestJobState) => {
     setActiveJobs((current) => ({
@@ -365,7 +417,7 @@ export function ProxySettingsCard({
 
   const clearActiveJob = (profileId: string, jobId?: string) => {
     setActiveJobs((current) => {
-      if (!(profileId in current)) return current;
+      if (!(profileId in current) || (jobId && current[profileId].jobId !== jobId)) return current;
       const next = { ...current };
       delete next[profileId];
       return next;
@@ -376,9 +428,10 @@ export function ProxySettingsCard({
   };
 
   const finishTrackedJob = async (profileId: string, job: ProxyTestJobState) => {
+    if (!activeRef.current) return;
     clearActiveJob(profileId, job.jobId);
     await invalidateProfiles();
-    if (!isMountedRef.current) return;
+    if (!isMountedRef.current || !activeRef.current) return;
     if (job.status === "completed") {
       toast.success(job.kind === "speed" ? t("速度测试通过") : t("代理测试通过"));
       return;
@@ -395,31 +448,50 @@ export function ProxySettingsCard({
   };
 
   const pollProxyTestJob = async (profileId: string, initialJob: ProxyTestJobState) => {
+    if (!isMountedRef.current || !activeRef.current) {
+      requestCancelJob(initialJob.jobId);
+      return;
+    }
     trackedJobIdsRef.current[profileId] = initialJob.jobId;
     setActiveJob(profileId, initialJob);
 
     let currentJob = initialJob;
     while (!isTerminalJobStatus(currentJob.status)) {
       await new Promise((resolve) => window.setTimeout(resolve, JOB_POLL_INTERVAL_MS));
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current || !activeRef.current) {
+        requestCancelJob(initialJob.jobId);
+        return;
+      }
       if (trackedJobIdsRef.current[profileId] !== initialJob.jobId) return;
       try {
         currentJob = await proxyProfilesClient.getProxyTestJob({
           jobId: initialJob.jobId,
         });
       } catch (pollError) {
+        if (
+          !isMountedRef.current ||
+          !activeRef.current ||
+          trackedJobIdsRef.current[profileId] !== initialJob.jobId
+        ) return;
         clearActiveJob(profileId, initialJob.jobId);
         await invalidateProfiles();
-        if (isMountedRef.current) {
+        if (isMountedRef.current && activeRef.current) {
           toast.error(`${t("读取测试状态失败")}: ${getAppErrorMessage(pollError)}`);
         }
         return;
       }
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current || !activeRef.current) {
+        requestCancelJob(initialJob.jobId);
+        return;
+      }
       if (trackedJobIdsRef.current[profileId] !== initialJob.jobId) return;
       setActiveJob(profileId, currentJob);
     }
 
+    if (!isMountedRef.current || !activeRef.current) {
+      requestCancelJob(initialJob.jobId);
+      return;
+    }
     if (trackedJobIdsRef.current[profileId] !== initialJob.jobId) return;
     await finishTrackedJob(profileId, currentJob);
   };
@@ -455,9 +527,14 @@ export function ProxySettingsCard({
       id,
     }: {
       id: string;
+      generation: number;
     }) =>
       proxyProfilesClient.testProxyProfileLatency({ id }),
     onSuccess: (result, variables) => {
+      if (!isMountedRef.current || !activeRef.current || variables.generation !== activeStateGenerationRef.current) {
+        requestCancelJob(result.jobId);
+        return;
+      }
       void pollProxyTestJob(result.proxyProfileId ?? variables.id, result);
     },
     onError: (mutationError: unknown) => {
@@ -468,6 +545,7 @@ export function ProxySettingsCard({
   const runLatencyTest = (profileId: string) => {
     testMutation.mutate({
       id: profileId,
+      generation: activeStateGenerationRef.current,
     });
   };
 
@@ -477,6 +555,7 @@ export function ProxySettingsCard({
       config,
     }: {
       id: string;
+      generation: number;
       config: {
         downloadPreset?: "all" | "100kb" | "1mb" | "10mb" | "25mb" | null;
         uploadPreset?: "all" | "100kb" | "1mb" | "10mb" | "25mb" | "50mb" | null;
@@ -487,6 +566,10 @@ export function ProxySettingsCard({
         config,
       }),
     onSuccess: (result, variables) => {
+      if (!isMountedRef.current || !activeRef.current || variables.generation !== activeStateGenerationRef.current) {
+        requestCancelJob(result.jobId);
+        return;
+      }
       void pollProxyTestJob(result.proxyProfileId ?? variables.id, result);
     },
     onError: (mutationError: unknown) => {
@@ -512,6 +595,7 @@ export function ProxySettingsCard({
   const runSpeedTest = (profileId: string) => {
     cloudflareSpeedTestMutation.mutate({
       id: profileId,
+      generation: activeStateGenerationRef.current,
       config: {
         downloadPreset: cfDownloadPreset,
         uploadPreset: cfUploadPreset,

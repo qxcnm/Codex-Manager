@@ -39,9 +39,9 @@ If you used a custom platform key, `OPENAI_API_KEY` must be that same custom val
 Example `config.toml`:
 
 ```toml
-model = "gpt-5.4"
+model = "gpt-6-sol"
 model_provider = "cm"
-review_model = "gpt-5.4"
+review_model = "gpt-6-sol"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 cli_auth_credentials_store = "file"
@@ -96,10 +96,35 @@ Docker images default to `TZ=Asia/Shanghai`, and compose examples use `TZ=${TZ:-
 ### GitHub Packages / GHCR
 - After a Release is published, both `codexmanager-service` and `codexmanager-web` images are pushed to GitHub Packages (GHCR).
 - Stable releases update the versioned, `stable`, and `latest` tags. Prereleases only publish their versioned tag and never replace the floating tags.
-- Use `stable` for automatic updates, or pin a release such as `docker pull ghcr.io/qxcnm/codexmanager-service:v0.5.2`.
+- Use `stable` for automatic updates, or pin a release such as `docker pull ghcr.io/qxcnm/codexmanager-service:v0.6.0`.
 - [`docker/docker-compose.release.yml`](../../../docker/docker-compose.release.yml) defaults to `stable`. Set `CODEXMANAGER_RELEASE_TAG` only when pinning a version.
-- Example: `CODEXMANAGER_RELEASE_TAG=v0.1.15 docker compose -f docker/docker-compose.release.yml up -d`
+- Example: `CODEXMANAGER_RELEASE_TAG=v0.6.0 docker compose -f docker/docker-compose.release.yml up -d`
 - `registry.cn-hangzhou.aliyuncs.com/kilimiao/codex-manager` is not part of the current official release workflow and may be outdated. The GHCR `service` and `web` images above are the maintained prebuilt images.
+
+### Optional Docker OTA updates
+
+- The official Release Compose file includes an opt-in Watchtower OTA checker. Keep `CODEXMANAGER_RELEASE_TAG` on the floating `stable` tag (or another moving tag), then run:
+
+  ```bash
+  docker compose -f docker/docker-compose.release.yml --profile ota up -d
+  ```
+
+- Watchtower checks the labeled CodexManager service and web images every 300 seconds, but the `ota` profile only reports an available update. Set `CODEXMANAGER_OTA_INTERVAL=60` to change the interval in seconds, and inspect it with `docker compose -f docker/docker-compose.release.yml logs -f codexmanager-ota`.
+- After the user confirms the update, run this one-shot command to pull the new images and perform a rolling restart:
+
+  ```bash
+  docker compose -f docker/docker-compose.release.yml --profile ota run --rm --no-deps codexmanager-ota \
+    --label-enable --run-once --cleanup --rolling-restart --stop-timeout 20s
+  ```
+
+- If the user explicitly consents to automatic checking and upgrading, enable the `ota-auto` profile:
+
+  ```bash
+  docker compose -f docker/docker-compose.release.yml --profile ota-auto up -d
+  ```
+
+- A pinned tag such as `CODEXMANAGER_RELEASE_TAG=v0.6.2` will not move between releases; switch back to `stable` to follow official releases. The OTA sidecar needs access to the Docker socket, so enable it only on hosts you trust.
+- Service restarts reuse the same `/data` volume and run the automatic migration path. Keep that volume in place so migration locking, online backup, smoke checks, and failure recovery can work during an upgrade.
 
 ### Method 1: `docker compose`
 ```bash

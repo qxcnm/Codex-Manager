@@ -70,7 +70,7 @@ Anthropic 适配阶段可能生成临时 `prompt_cache_key`，因此不能把这
   `crates/service/src/gateway/request/session_affinity.rs`
 - 回归测试：
   `crates/service/src/gateway/local_validation/tests/request_tests.rs`
-  `crates/service/tests/gateway_logs/openai.rs`
+  `crates/service/tests/gateway_logs/prompt_cache.rs`
   `crates/service/src/http/tests/proxy_runtime_tests.rs`
 
 ## 排障建议

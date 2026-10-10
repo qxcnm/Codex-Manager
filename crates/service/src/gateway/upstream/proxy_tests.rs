@@ -100,7 +100,7 @@ fn seed_platform_catalog(storage: &Storage, slug: &str) {
         return;
     }
     let mut model = storage
-        .get_managed_model_v2("gpt-5.4-mini")
+        .get_managed_model_v2("gpt-6-luna")
         .expect("read template model")
         .expect("template model");
     model.id.clear();
@@ -866,7 +866,7 @@ fn account_route_model_validation_accepts_direct_upstream_source_model() {
         .upsert_discovered_model_source_models(
             "openai_account",
             "acc-direct-route",
-            &["gpt-5.4-mini".to_string()],
+            &["gpt-6-luna".to_string()],
             "manual",
         )
         .expect("seed direct upstream source model");
@@ -874,7 +874,7 @@ fn account_route_model_validation_accepts_direct_upstream_source_model() {
     let model = validate_model_route(
         &storage,
         "key-route",
-        Some("gpt-5.4-mini"),
+        Some("gpt-6-luna"),
         execution_plan(GatewayUpstreamRouteKind::AccountRotation),
     )
     .expect("account route should accept direct upstream source model")

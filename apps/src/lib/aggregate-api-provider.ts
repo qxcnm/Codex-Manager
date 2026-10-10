@@ -19,3 +19,13 @@ export function aggregateApiProviderMatchesFilter(
   if (!filter || filter === "all" || provider === filter) return true;
   return provider === "compatible" && (filter === "codex" || filter === "claude");
 }
+
+export function aggregateApiStatusMatchesFilter(
+  status: string,
+  statusFilter: string,
+): boolean {
+  const normalizedStatus = normalizeAggregateApiProvider(status);
+  const filter = normalizeAggregateApiProvider(statusFilter);
+
+  return !filter || filter === "all" || normalizedStatus === filter;
+}

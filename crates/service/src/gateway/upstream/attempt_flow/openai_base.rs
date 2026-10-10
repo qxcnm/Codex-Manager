@@ -22,8 +22,8 @@ pub(in crate::gateway::upstream) enum OpenAiAttemptResult {
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(in crate::gateway::upstream) fn handle_openai_base_attempt<F>(
-    client: &reqwest::blocking::Client,
+pub(in crate::gateway::upstream) async fn handle_openai_base_attempt<F>(
+    client: &reqwest::Client,
     storage: &Storage,
     method: &reqwest::Method,
     path: &str,
@@ -36,6 +36,7 @@ pub(in crate::gateway::upstream) fn handle_openai_base_attempt<F>(
     strip_session_affinity: bool,
     debug: bool,
     has_more_candidates: bool,
+    capture: Option<super::super::super::OutboundPayloadContext<'_>>,
     mut log_gateway_result: F,
 ) -> OpenAiAttemptResult
 where
@@ -54,7 +55,10 @@ where
         token,
         strip_session_affinity,
         debug,
-    ) {
+        capture,
+    )
+    .await
+    {
         Ok(Some(resp)) => match decide_upstream_outcome(
             storage,
             &account.id,

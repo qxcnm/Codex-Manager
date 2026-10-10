@@ -14,16 +14,12 @@ const appFramePath = path.join(
   "app-frame.tsx",
 );
 
-test("主内容区保持普通布局，浮层和 sticky 使用同一坐标系", async () => {
+test("主内容区使用原生尺寸，浮层和 sticky 使用同一坐标系", async () => {
   const source = await fs.readFile(appFramePath, "utf8");
 
-  assert.match(source, /data-slot="app-main-scale"/);
-  assert.match(source, /xl:scale-90/);
-  assert.match(source, /xl:h-\[111\.111111%\]/);
-  assert.match(source, /xl:w-\[111\.111111%\]/);
-  assert.match(source, /origin-top-left/);
-  assert.match(source, /px-4 pb-7 pt-4/);
-  assert.match(source, /lg:px-5 lg:pt-5/);
-  assert.match(source, /xl:pl-\[26px\]/);
-  assert.match(source, /xl:pt-\[26px\]/);
+  assert.match(source, /data-slot="app-main-surface"/);
+  assert.match(source, /className="flex h-full w-full flex-col"/);
+  assert.doesNotMatch(source, /xl:scale-90/);
+  assert.match(source, /px-4 pb-5 pt-2/);
+  assert.match(source, /lg:px-6 lg:pb-6 lg:pt-3/);
 });

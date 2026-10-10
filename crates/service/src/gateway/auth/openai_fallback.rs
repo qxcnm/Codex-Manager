@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use codexmanager_core::storage::{Account, Storage, Token};
-use reqwest::blocking::Client;
+use reqwest::Client;
 use reqwest::Method;
 use std::time::Instant;
 
@@ -112,7 +112,15 @@ fn resolve_chatgpt_account_header<'a>(
     account
         .chatgpt_account_id
         .as_deref()
-        .or(account.workspace_id.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            account
+                .workspace_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
 }
 
 /// 函数 `try_openai_fallback`
@@ -126,7 +134,7 @@ fn resolve_chatgpt_account_header<'a>(
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(super) fn try_openai_fallback(
+pub(super) async fn try_openai_fallback(
     client: &Client,
     storage: &Storage,
     method: &Method,
@@ -139,9 +147,10 @@ pub(super) fn try_openai_fallback(
     token: &mut Token,
     strip_session_affinity: bool,
     debug: bool,
+    capture: Option<super::OutboundPayloadContext<'_>>,
 ) -> Result<Option<GatewayUpstreamResponse>, String> {
     let (url, _url_alt) = super::compute_upstream_url(upstream_base, request_path);
-    let bearer = super::resolve_openai_bearer_token(storage, account, token)?;
+    let bearer = super::resolve_openai_bearer_token(storage, account, token).await?;
     let attempt_started_at = Instant::now();
     let is_openai_api_target = super::is_openai_api_base(upstream_base);
 
@@ -174,7 +183,15 @@ pub(super) fn try_openai_fallback(
     let account_id = account
         .chatgpt_account_id
         .as_deref()
-        .or_else(|| account.workspace_id.as_deref());
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            account
+                .workspace_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        });
     super::session_affinity::log_outgoing_session_affinity(
         request_path,
         account_id,
@@ -247,26 +264,19 @@ pub(super) fn try_openai_fallback(
             upstream_base
         );
     }
-    let build_blocking_request = |http: &Client| {
-        let mut builder = http.request(method.clone(), &url);
-        for (name, value) in upstream_headers.iter() {
-            builder = builder.header(name, value);
-        }
-        if !body_for_request.is_empty() {
-            builder = builder.body(body_for_request.clone());
-        }
-        builder
-    };
-    let resp = if is_stream {
-        let async_client = super::async_upstream_client_for_account(account.id.as_str())?;
-        match send_openai_stream_request(
-            &async_client,
+    let resp = {
+        match send_openai_request(
+            client,
             method,
             &url,
             request_path,
             upstream_headers.as_slice(),
             &body_for_request,
-        ) {
+            is_stream,
+            capture,
+        )
+        .await
+        {
             Ok(resp) => resp,
             Err(first_err) => {
                 let fresh =
@@ -279,14 +289,18 @@ pub(super) fn try_openai_fallback(
                             ));
                         }
                     };
-                match send_openai_stream_request(
+                match send_openai_request(
                     &fresh,
                     method,
                     &url,
                     request_path,
                     upstream_headers.as_slice(),
                     &body_for_request,
-                ) {
+                    is_stream,
+                    capture,
+                )
+                .await
+                {
                     Ok(resp) => {
                         log::info!(
                             "event=gateway_openai_fallback_retry_with_fresh_client_succeeded path={} account_id={} upstream_base={}",
@@ -315,63 +329,23 @@ pub(super) fn try_openai_fallback(
                 }
             }
         }
-    } else {
-        match build_blocking_request(client).send() {
-            Ok(resp) => resp.into(),
-            Err(first_err) => {
-                let fresh = match super::fresh_upstream_client_for_account(account.id.as_str()) {
-                    Ok(client) => client,
-                    Err(fresh_err) => {
-                        return Err(format!(
-                            "{}; retry_after_fresh_client_build: {}",
-                            first_err, fresh_err
-                        ));
-                    }
-                };
-                match build_blocking_request(&fresh).send() {
-                    Ok(resp) => {
-                        log::info!(
-                            "event=gateway_openai_fallback_retry_with_fresh_client_succeeded path={} account_id={} upstream_base={}",
-                            request_path,
-                            account.id,
-                            upstream_base
-                        );
-                        resp.into()
-                    }
-                    Err(second_err) => {
-                        let duration_ms = super::duration_to_millis(attempt_started_at.elapsed());
-                        super::metrics::record_gateway_upstream_attempt(duration_ms, true);
-                        log::warn!(
-                            "event=gateway_openai_fallback_retry_with_fresh_client_failed path={} account_id={} upstream_base={} first_err={} retry_err={}",
-                            request_path,
-                            account.id,
-                            upstream_base,
-                            first_err,
-                            second_err
-                        );
-                        return Err(format!(
-                            "{}; retry_after_fresh_client: {}",
-                            first_err, second_err
-                        ));
-                    }
-                }
-            }
-        }
     };
     let duration_ms = super::duration_to_millis(attempt_started_at.elapsed());
     super::metrics::record_gateway_upstream_attempt(duration_ms, false);
     Ok(Some(resp))
 }
 
-fn send_openai_stream_request(
+async fn send_openai_request(
     client: &reqwest::Client,
     method: &Method,
     url: &str,
     request_path: &str,
     headers: &[(String, String)],
     body: &Bytes,
+    is_stream: bool,
+    capture: Option<super::OutboundPayloadContext<'_>>,
 ) -> Result<GatewayUpstreamResponse, String> {
-    super::upstream::send_async_stream_request(
+    super::upstream::send_stream_request_with_capture(
         client,
         method,
         url,
@@ -379,8 +353,11 @@ fn send_openai_stream_request(
         None,
         headers,
         body,
-        true,
+        is_stream,
+        capture,
+        None,
     )
+    .await
     .map(GatewayUpstreamResponse::Stream)
     .map_err(|err| err.to_string())
 }

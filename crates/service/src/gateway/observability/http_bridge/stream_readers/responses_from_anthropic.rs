@@ -45,6 +45,7 @@ struct PendingToolUse {
 }
 
 impl ResponsesFromAnthropicSseReader {
+    #[cfg(test)]
     pub(crate) fn from_reader<R>(
         upstream: R,
         usage_collector: Arc<Mutex<UpstreamResponseUsage>>,
@@ -54,6 +55,34 @@ impl ResponsesFromAnthropicSseReader {
     where
         R: Read + Send + 'static,
     {
+        Self::from_pump(
+            UpstreamSseFramePump::from_reader(upstream),
+            usage_collector,
+            fallback_model,
+            request_started_at,
+        )
+    }
+
+    pub(crate) fn from_stream_response(
+        upstream: crate::gateway::upstream::GatewayStreamResponse,
+        usage_collector: Arc<Mutex<UpstreamResponseUsage>>,
+        fallback_model: Option<&str>,
+        request_started_at: Instant,
+    ) -> Self {
+        Self::from_pump(
+            UpstreamSseFramePump::from_stream(upstream.into_body()),
+            usage_collector,
+            fallback_model,
+            request_started_at,
+        )
+    }
+
+    pub(crate) fn from_pump(
+        upstream: UpstreamSseFramePump,
+        usage_collector: Arc<Mutex<UpstreamResponseUsage>>,
+        fallback_model: Option<&str>,
+        request_started_at: Instant,
+    ) -> Self {
         let mut state = ResponsesFromAnthropicState {
             stop_reason: "stop".to_string(),
             ..Default::default()
@@ -63,7 +92,7 @@ impl ResponsesFromAnthropicSseReader {
             .filter(|value| !value.is_empty())
             .map(str::to_string);
         Self {
-            upstream: UpstreamSseFramePump::from_reader(upstream),
+            upstream,
             out_cursor: Cursor::new(Vec::new()),
             state,
             usage_collector,
@@ -73,6 +102,7 @@ impl ResponsesFromAnthropicSseReader {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn new(
         upstream: reqwest::blocking::Response,
         usage_collector: Arc<Mutex<UpstreamResponseUsage>>,
@@ -87,11 +117,12 @@ impl ResponsesFromAnthropicSseReader {
         )
     }
 
-    fn next_chunk(&mut self) -> std::io::Result<Vec<u8>> {
+    async fn next_chunk(&mut self) -> std::io::Result<Vec<u8>> {
         loop {
             match self
                 .upstream
-                .recv_timeout(stream_wait_timeout(self.last_upstream_activity))
+                .recv_timeout_async(stream_wait_timeout(self.last_upstream_activity))
+                .await
             {
                 Ok(UpstreamSseFramePumpItem::Frame(frame)) => {
                     self.last_upstream_activity = Instant::now();
@@ -578,19 +609,33 @@ impl ResponsesFromAnthropicSseReader {
     }
 }
 
+impl crate::http::gateway_response_body::GatewayResponseBody for ResponsesFromAnthropicSseReader {
+    fn read_async<'a>(
+        &'a mut self,
+        buf: &'a mut [u8],
+    ) -> crate::http::gateway_response_body::BodyReadFuture<'a> {
+        Box::pin(async move {
+            loop {
+                let n = self.out_cursor.read(buf)?;
+                if n > 0 {
+                    return Ok(n);
+                }
+                let chunk = self.next_chunk().await?;
+                if chunk.is_empty() {
+                    return Ok(0);
+                }
+                self.out_cursor = Cursor::new(chunk);
+            }
+        })
+    }
+}
+
+#[cfg(test)]
 impl Read for ResponsesFromAnthropicSseReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        loop {
-            let n = self.out_cursor.read(buf)?;
-            if n > 0 {
-                return Ok(n);
-            }
-            let chunk = self.next_chunk()?;
-            if chunk.is_empty() {
-                return Ok(0);
-            }
-            self.out_cursor = Cursor::new(chunk);
-        }
+        crate::gateway::response_test_runtime()?.block_on(
+            crate::http::gateway_response_body::GatewayResponseBody::read_async(self, buf),
+        )
     }
 }
 

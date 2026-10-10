@@ -197,6 +197,8 @@ PatewayAI специализируется на высококачественн
 - Авторизация: browser OAuth на `chatgpt.com` и Device Code; callback URL можно вставить вручную.
 - Platform Key: генерация или фиксированное значение, отключение, удаление, привязка модели, уровня рассуждений и service tier; ограничение собственной группой и plan-фильтром.
 - Модели: Model Catalog V2 — единственный runtime-источник; builtin/custom, трёхуровневая и long-context цена, маршруты account pool / aggregate API, instructions policy, JSON preview/commit и экспорт Codex cache.
+- Текущий builtin-каталог содержит 12 записей. `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, три модели GPT-5.6, `gpt-5.5`, `gpt-image-2` и два варианта Image 2.5 составляют 11 моделей, видимых по умолчанию; скрыт только `codex-auto-review`.
+- `gpt-5.4` и `gpt-5.4-mini` выведены из Codex со входом через ChatGPT 31 августа 2026 года, а `gpt-5.2` помечена deprecated именно для этого способа входа; общая API-модель этой очисткой не удаляется. Revision 9 удаляет их неизменённые builtin-записи, но пользовательские правки, price tiers, нестандартные routes и связи permission/API key сохраняются после перевода модели в custom. Пользователи API key также могут явно добавить custom-модель с тем же slug.
 - Aggregate API: создание, изменение, баланс и проверка подключения сторонних upstream по V2 routes; модели поставщика загружаются и связываются администратором выборочно.
 - Центр плагинов: `/plugins/`, встроенный, корпоративный и пользовательский marketplace, манифесты, задачи, логи и Rhai.
 - Skills и плагины: `/skills/` разделяет установку Skills и Codex Plugin; поддерживает GitHub, skills.sh, ZIP/каталоги и управление установками, а `.system` Skills остаются только для чтения.
@@ -205,17 +207,27 @@ PatewayAI специализируется на высококачественн
 - Реестр внутренних интерфейсов: desktop/service-команды, RPC и встроенные функции плагинов.
 - Локальный сервис: автоматический запуск, настраиваемые порт и адрес.
 - Локальный шлюз: единый OpenAI-совместимый endpoint для Codex CLI, Gemini CLI, Claude Code и сторонних инструментов; Gemini → `/v1/responses`, SSE, tools, MCP, skills и timeout.
-- Генерация изображений: автоматическая вставка `image_generation` для `/v1/responses`, endpoints `/v1/images/generations` и `/v1/images/edits`, модель по умолчанию `gpt-image-2`.
+- Генерация изображений: автоматическая вставка `image_generation` для `/v1/responses`, endpoints `/v1/images/generations` и `/v1/images/edits`; основная модель совместимого Images API по умолчанию — `gpt-6-luna`, а модель image tool по умолчанию остаётся `gpt-image-2`, при этом два варианта Image 2.5 можно выбрать явно.
 
 ## Скриншоты
 
-![Панель](../../assets/images/dashboard.png)
-![Аккаунты](../../assets/images/accounts.png)
-![Platform Key](../../assets/images/platform-key.png)
-![Aggregate API](../../assets/images/aggregate-api.png)
+![Панель](../../assets/images/dashboard%20.png)
+
+![Пул аккаунтов OpenAI (список)](../../assets/images/accounts.png)
+
+![Пул аккаунтов OpenAI (карточки)](../../assets/images/accounts2.png)
+
+![Агрегация API](../../assets/images/aggregate-api%20.png)
+
+![Ключи платформы](../../assets/images/platform-key%20.png)
+
+![Модели и маршрутизация](../../assets/images/models.png)
+
+![Журнал запросов](../../assets/images/log.png)
+
+![Системные настройки](../../assets/images/setting.png)
+
 ![Центр плагинов](../../assets/images/plug.png)
-![Логи](../../assets/images/log.png)
-![Настройки](../../assets/images/themes.png)
 
 ## Быстрый старт
 

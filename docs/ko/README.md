@@ -197,6 +197,8 @@ PatewayAI는 공식 고품질 모델 API 중계에 집중하며 Claude와 Codex 
 - 계정 인증: `chatgpt.com` 브라우저 OAuth와 Device Code 로그인, 콜백 URL 수동 붙여넣기.
 - 플랫폼 Key: 임의 또는 고정 Key, 비활성화, 삭제, 모델·추론·서비스 등급 바인딩, 사용자 그룹과 플랜 필터의 교집합 내 순환.
 - 모델 관리: Model Catalog V2를 유일한 런타임 기준으로 사용하며 builtin/custom, 3단계 및 긴 컨텍스트 가격, 계정 풀/집계 API 라우트, instructions policy, JSON preview/commit, Codex cache 내보내기를 지원.
+- 현재 builtin 카탈로그에는 12개 레코드가 있습니다. `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, GPT-5.6 세 모델, `gpt-5.5`, `gpt-image-2`, Image 2.5 변형 두 개까지 총 11개 모델이 기본 표시되며, `codex-auto-review`만 숨겨집니다.
+- `gpt-5.4`와 `gpt-5.4-mini`는 2026-08-31에 ChatGPT 로그인 방식의 Codex에서 retired되었고, `gpt-5.2`도 해당 로그인 경로에서 deprecated되었습니다. 일반 API 모델은 이 정리의 영향을 받지 않습니다. revision 9는 수정되지 않은 해당 builtin을 제거하지만 사용자 편집, 가격 tier, 기본값이 아닌 route, permission/API Key 연결은 custom 모델로 전환해 보존합니다. API Key 사용자는 같은 slug를 custom 모델로 명시적으로 추가할 수도 있습니다.
 - 집계 API: V2 라우트 기준으로 외부 upstream 생성, 편집, 잔액, 연결 테스트를 제공하며 모델은 관리자가 가져와 선택적으로 연결.
 - 플러그인 센터: `/plugins/`에서 내장 추천, 기업 비공개, 사용자 소스 marketplace와 manifest, 작업, 로그, Rhai 인터페이스를 제공.
 - Skills와 플러그인: `/skills/`에서 Skills 설치와 Codex Plugin 설치를 분리하고 GitHub, skills.sh, ZIP/폴더 가져오기와 설치 관리를 지원하며 `.system` Skills는 읽기 전용.
@@ -205,17 +207,27 @@ PatewayAI는 공식 고품질 모델 API 중계에 집중하며 Claude와 Codex 
 - 시스템 내부 인터페이스 목록: 데스크톱/서비스 명령, RPC 메서드, 플러그인 내장 함수.
 - 로컬 서비스: 자동 시작, 포트와 수신 주소 설정.
 - 로컬 게이트웨이: Codex CLI, Gemini CLI, Claude Code와 타사 도구를 위한 OpenAI 호환 엔드포인트; Gemini → `/v1/responses`, SSE, tools, MCP, skills, 요청/스트림 timeout 지원.
-- 이미지 생성: `/v1/responses`에 `image_generation` tool을 기본 주입하고 `/v1/images/generations`, `/v1/images/edits` 제공, 기본 모델은 `gpt-image-2`.
+- 이미지 생성: `/v1/responses`에 `image_generation` tool을 기본 주입하고 `/v1/images/generations`, `/v1/images/edits`를 제공합니다. Images API 호환 메인 모델의 기본값은 `gpt-6-luna`이며, 주입되는 이미지 tool의 기본값은 `gpt-image-2`이고 Image 2.5 두 변형은 명시적으로 선택할 수 있습니다.
 
 ## 스크린샷
 
-![대시보드](../../assets/images/dashboard.png)
-![계정 관리](../../assets/images/accounts.png)
-![플랫폼 Key](../../assets/images/platform-key.png)
-![집계 API](../../assets/images/aggregate-api.png)
+![대시보드](../../assets/images/dashboard%20.png)
+
+![OpenAI 계정 풀 (목록 보기)](../../assets/images/accounts.png)
+
+![OpenAI 계정 풀 (카드 보기)](../../assets/images/accounts2.png)
+
+![집계 API](../../assets/images/aggregate-api%20.png)
+
+![플랫폼 키](../../assets/images/platform-key%20.png)
+
+![모델 및 라우팅](../../assets/images/models.png)
+
+![요청 로그](../../assets/images/log.png)
+
+![시스템 설정](../../assets/images/setting.png)
+
 ![플러그인 센터](../../assets/images/plug.png)
-![로그](../../assets/images/log.png)
-![설정](../../assets/images/themes.png)
 
 ## 빠른 시작
 

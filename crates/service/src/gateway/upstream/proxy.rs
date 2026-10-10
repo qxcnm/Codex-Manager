@@ -1,8 +1,8 @@
 use crate::apikey_profile::PROTOCOL_ANTHROPIC_NATIVE;
 use crate::gateway::request_log::RequestLogUsage;
+use crate::http::gateway_request::GatewayRequest as Request;
 use codexmanager_core::storage::ManagedModelV2;
 use std::time::Instant;
-use tiny_http::Request;
 
 use super::super::local_validation::LocalValidationResult;
 use super::executor::{
@@ -13,7 +13,7 @@ use super::proxy_pipeline::candidate_executor::{
     execute_candidate_sequence, CandidateExecutionResult, CandidateExecutorParams,
 };
 use super::proxy_pipeline::execution_context::GatewayUpstreamExecutionContext;
-use super::proxy_pipeline::request_gate::acquire_request_gate;
+use super::proxy_pipeline::request_gate::acquire_request_gate_async;
 use super::proxy_pipeline::request_setup::prepare_request_setup;
 use super::proxy_pipeline::response_finalize::respond_terminal;
 use super::support::precheck::{prepare_candidates_for_proxy, CandidatePrecheckResult};
@@ -208,9 +208,9 @@ fn validate_model_route(
         return Ok(None);
     };
     let catalog_model = crate::models_v2::policy_catalog_slug(model);
-    let managed_model: Option<ManagedModelV2> = storage
-        .get_enabled_model_v2(catalog_model)
-        .map_err(|err| (500, format!("model_catalog_v2_read_failed: {err}")))?;
+    let managed_model: Option<ManagedModelV2> =
+        crate::models_v2::enabled_model(storage, catalog_model)
+            .map_err(|err| (500, format!("model_catalog_v2_read_failed: {err}")))?;
     let Some(managed_model) = managed_model else {
         return Err((404, format!("model_not_found: {model}")));
     };
@@ -324,7 +324,7 @@ fn respond_model_route_error(
     let response = super::super::error_response::terminal_text_response(
         status_code,
         super::super::error_message_for_client(
-            super::super::prefers_raw_errors_for_tiny_http_request(&request),
+            super::super::prefers_raw_errors_for_gateway_request(&request),
             message,
         ),
         Some(trace_id),
@@ -370,7 +370,7 @@ fn resolve_active_explicit_aggregate_candidate(
         return Ok(None);
     };
 
-    let candidate = storage
+    let candidate = crate::account::remote_storage::AccountStorage::new(&storage)
         .find_aggregate_api_by_id(api_id)
         .map_err(|err| format!("find explicit aggregate api failed: {err}"))?;
     Ok(candidate.filter(|api| api.status.trim().eq_ignore_ascii_case("active")))
@@ -388,8 +388,7 @@ fn apply_aggregate_model_filter(
         return Ok(candidates);
     };
     let catalog_model = crate::models_v2::policy_catalog_slug(model);
-    let managed_model = storage
-        .get_enabled_model_v2(catalog_model)
+    let managed_model = crate::models_v2::enabled_model(storage, catalog_model)
         .map_err(|err| format!("read aggregate model routes V2 failed: {err}"))?
         .ok_or_else(|| format!("model_not_found: {model}"))?;
     let mut routes = std::collections::HashMap::new();
@@ -565,7 +564,7 @@ fn respond_aggregate_route_error(
     let response = super::super::error_response::terminal_text_response(
         404,
         super::super::error_message_for_client(
-            super::super::prefers_raw_errors_for_tiny_http_request(&request),
+            super::super::prefers_raw_errors_for_gateway_request(&request),
             message,
         ),
         Some(trace_id),
@@ -575,7 +574,7 @@ fn respond_aggregate_route_error(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn proxy_with_aggregate_candidates(
+async fn proxy_with_aggregate_candidates(
     request: Request,
     storage: &crate::storage_helpers::StorageHandle,
     trace_id: &str,
@@ -649,6 +648,7 @@ fn proxy_with_aggregate_candidates(
             failure_policy,
         },
     )
+    .await
 }
 
 fn resolve_hybrid_aggregate_candidates_for_prepare(
@@ -703,7 +703,7 @@ fn take_or_resolve_aggregate_candidates(
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(in super::super) fn proxy_validated_request(
+pub(in super::super) async fn proxy_validated_request(
     request: Request,
     validated: LocalValidationResult,
     debug: bool,
@@ -876,7 +876,9 @@ pub(in super::super) fn proxy_validated_request(
                     started_at,
                     aggregate_api_candidates,
                     aggregate_failure_policy,
-                ) {
+                )
+                .await
+                {
                     Ok(AggregateAttemptOutcome::Responded) => return Ok(()),
                     Ok(AggregateAttemptOutcome::RequestReleased {
                         request: released_request,
@@ -930,7 +932,7 @@ pub(in super::super) fn proxy_validated_request(
     }
 
     let mut prepared_hybrid_aggregate_candidates = None;
-    let (request, mut candidates) = match prepare_candidates_for_proxy(
+    let (mut request, mut candidates) = match prepare_candidates_for_proxy(
         request,
         &storage,
         trace_id.as_str(),
@@ -987,6 +989,7 @@ pub(in super::super) fn proxy_validated_request(
                         aggregate_api_candidates,
                         AggregateFailurePolicy::RespondError,
                     )
+                    .await
                     .map(|_| ());
                 }
                 Err(err) => {
@@ -1087,13 +1090,15 @@ pub(in super::super) fn proxy_validated_request(
     let disable_challenge_stateless_retry = !(protocol_type == PROTOCOL_ANTHROPIC_NATIVE
         && body.len() <= 2 * 1024)
         && !path.starts_with("/v1/responses");
-    let _request_gate_guard = acquire_request_gate(
+    let request_gate_guard = acquire_request_gate_async(
         trace_id.as_str(),
         key_id.as_str(),
         path.as_str(),
         model_for_log.as_deref(),
         request_deadline,
-    );
+    )
+    .await;
+    request.hold_until_complete(request_gate_guard);
     let exhausted = match execute_candidate_sequence(
         request,
         candidates,
@@ -1119,7 +1124,9 @@ pub(in super::super) fn proxy_validated_request(
             allow_openai_fallback,
             disable_challenge_stateless_retry,
         },
-    )? {
+    )
+    .await?
+    {
         CandidateExecutionResult::Handled => return Ok(()),
         CandidateExecutionResult::Exhausted {
             request,
@@ -1191,6 +1198,7 @@ pub(in super::super) fn proxy_validated_request(
                     aggregate_api_candidates,
                     AggregateFailurePolicy::RespondError,
                 )
+                .await
                 .map(|_| ());
             }
             Err(err) => {

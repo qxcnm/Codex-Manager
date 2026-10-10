@@ -52,7 +52,7 @@ V2 route 用于把平台模型绑定到具体聚合 API 来源和上游模型。
 - 平台模型：`gpt-5.5`
 - 来源：`aggregate_api`
 - 来源 ID：`ag_xxx`
-- 上游模型：`gpt-5.4-mini`
+- 上游模型：`gpt-6-sol`
 
 命中该平台模型时，Gateway 只读取 `model_routes` 构建对应聚合候选，并把该候选请求 JSON body 中的 `model` 改写为 route 的上游模型。route 在模型管理页手工保存，不访问供应商 `/models`。
 

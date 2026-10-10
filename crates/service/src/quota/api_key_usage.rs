@@ -14,6 +14,38 @@ pub(super) struct ApiKeyQuotaContext {
 }
 
 pub(super) fn load_api_key_quota_context(storage: &Storage) -> Result<ApiKeyQuotaContext, String> {
+    if crate::storage_helpers::seaorm_enabled() {
+        let api_keys = crate::apikey::list::read_api_keys_with_storage(storage)?
+            .into_iter()
+            .map(|key| ApiKeyQuotaSummary {
+                id: key.id,
+                name: key.name,
+                model_slug: key.model_slug,
+                status: key.status,
+                quota_limit_tokens: key.quota_limit_tokens,
+                last_used_at: key.last_used_at,
+            })
+            .collect::<Vec<_>>();
+        let key_ids = api_keys
+            .iter()
+            .map(|key| key.id.clone())
+            .collect::<Vec<_>>();
+        let usage_by_key = crate::storage_helpers::seaorm_block_on(move |storage| async move {
+            let mut rows = codexmanager_storage_seaorm::ApiKeyDetailsRepository::usage_by_key(
+                storage.connection(),
+                None,
+                None,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            rows.retain(|row| key_ids.contains(&row.key_id));
+            Ok(rows)
+        })?;
+        return Ok(ApiKeyQuotaContext {
+            api_keys,
+            usage_by_key,
+        });
+    }
     let api_keys = storage
         .list_api_key_quota_summaries()
         .map_err(|err| format!("list api key quota summaries failed: {err}"))?;
@@ -53,9 +85,22 @@ pub(crate) fn read_quota_api_key_usage_with_storage(
         .iter()
         .map(|key| key.id.clone())
         .collect::<Vec<_>>();
-    let model_usage = storage
-        .summarize_request_token_stats_by_key_and_model_for_keys(None, None, &key_ids)
-        .map_err(|err| format!("summarize api key model usage failed: {err}"))?;
+    let model_usage = if crate::storage_helpers::seaorm_enabled() {
+        crate::storage_helpers::seaorm_block_on(move |storage| async move {
+            codexmanager_storage_seaorm::ApiKeyDetailsRepository::usage_by_key_model(
+                storage.connection(),
+                None,
+                None,
+                Some(&key_ids),
+            )
+            .await
+            .map_err(|error| error.to_string())
+        })?
+    } else {
+        storage
+            .summarize_request_token_stats_by_key_and_model_for_keys(None, None, &key_ids)
+            .map_err(|err| format!("summarize api key model usage failed: {err}"))?
+    };
     let mut models_by_key: BTreeMap<String, Vec<QuotaApiKeyModelUsageItem>> = BTreeMap::new();
     for item in model_usage {
         let price = model_pricing::resolve_model_price_from_catalog(

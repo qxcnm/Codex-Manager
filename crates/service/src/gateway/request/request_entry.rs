@@ -1,4 +1,5 @@
-use tiny_http::{Request, Response};
+use crate::http::gateway_request::GatewayRequest as Request;
+use crate::http::gateway_response::Response;
 
 /// 函数 `handle_gateway_request`
 ///
@@ -11,7 +12,7 @@ use tiny_http::{Request, Response};
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(crate) fn handle_gateway_request(mut request: Request) -> Result<(), String> {
+pub(crate) async fn handle_gateway_request_async(mut request: Request) -> Result<(), String> {
     // 处理代理请求（鉴权后转发到上游）
     let debug = super::DEFAULT_GATEWAY_DEBUG;
     if request.method().as_str() == "OPTIONS" {
@@ -26,7 +27,7 @@ pub(crate) fn handle_gateway_request(mut request: Request) -> Result<(), String>
         return Ok(());
     }
 
-    let _request_guard = super::begin_gateway_request();
+    request.hold_until_complete(super::begin_gateway_request());
     let trace_id = super::trace_log::next_trace_id();
     let request_path_for_log = super::normalize_models_path(request.url());
     let request_method_for_log = request.method().as_str().to_string();
@@ -70,7 +71,7 @@ pub(crate) fn handle_gateway_request(mut request: Request) -> Result<(), String>
                             response_adapter: None,
                             ..Default::default()
                         },
-                        None,
+                        err.key_id.as_deref(),
                         None,
                         &request_path_for_log,
                         &request_method_for_log,
@@ -84,7 +85,7 @@ pub(crate) fn handle_gateway_request(mut request: Request) -> Result<(), String>
                     );
                 }
                 let response_message = super::error_message_for_client(
-                    super::prefers_raw_errors_for_tiny_http_request(&request),
+                    super::prefers_raw_errors_for_gateway_request(&request),
                     err.message.as_str(),
                 );
                 let response = super::error_response::terminal_text_response(
@@ -109,7 +110,9 @@ pub(crate) fn handle_gateway_request(mut request: Request) -> Result<(), String>
         validated.model_for_log.as_deref(),
         validated.reasoning_for_log.as_deref(),
         &validated.storage,
-    )? {
+    )
+    .await?
+    {
         Some(request) => request,
         None => return Ok(()),
     };
@@ -143,5 +146,10 @@ pub(crate) fn handle_gateway_request(mut request: Request) -> Result<(), String>
         }
     };
 
-    super::proxy_validated_request(request, validated, debug)
+    super::proxy_validated_request(request, validated, debug).await
+}
+
+#[cfg(test)]
+pub(crate) fn handle_gateway_request(request: Request) -> Result<(), String> {
+    super::run_upstream_io(handle_gateway_request_async(request))?
 }

@@ -629,7 +629,7 @@ fn main() {
     }
     codexmanager_service::sync_runtime_settings_from_storage();
 
-    let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+    let runtime = codexmanager_service::process_runtime().expect("create service runtime");
     runtime.block_on(async_main());
 }
 

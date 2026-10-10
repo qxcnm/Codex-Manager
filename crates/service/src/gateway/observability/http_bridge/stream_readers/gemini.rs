@@ -50,6 +50,7 @@ struct PendingToolCall {
 }
 
 impl GeminiSseReader {
+    #[cfg(test)]
     pub(crate) fn from_reader<R>(
         upstream: R,
         usage_collector: Arc<Mutex<PassthroughSseCollector>>,
@@ -61,8 +62,44 @@ impl GeminiSseReader {
     where
         R: Read + Send + 'static,
     {
+        Self::from_pump(
+            UpstreamSseFramePump::from_reader(upstream),
+            usage_collector,
+            tool_name_restore_map,
+            output_mode,
+            wrap_response_envelope,
+            request_started_at,
+        )
+    }
+
+    pub(crate) fn from_stream_response(
+        upstream: crate::gateway::upstream::GatewayStreamResponse,
+        usage_collector: Arc<Mutex<PassthroughSseCollector>>,
+        tool_name_restore_map: Option<ToolNameRestoreMap>,
+        output_mode: GeminiStreamOutputMode,
+        wrap_response_envelope: bool,
+        request_started_at: Instant,
+    ) -> Self {
+        Self::from_pump(
+            UpstreamSseFramePump::from_stream(upstream.into_body()),
+            usage_collector,
+            tool_name_restore_map,
+            output_mode,
+            wrap_response_envelope,
+            request_started_at,
+        )
+    }
+
+    pub(crate) fn from_pump(
+        upstream: UpstreamSseFramePump,
+        usage_collector: Arc<Mutex<PassthroughSseCollector>>,
+        tool_name_restore_map: Option<ToolNameRestoreMap>,
+        output_mode: GeminiStreamOutputMode,
+        wrap_response_envelope: bool,
+        request_started_at: Instant,
+    ) -> Self {
         Self {
-            upstream: UpstreamSseFramePump::from_reader(upstream),
+            upstream,
             out_cursor: Cursor::new(Vec::new()),
             state: GeminiSseState::default(),
             usage_collector,
@@ -74,6 +111,7 @@ impl GeminiSseReader {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn new(
         upstream: reqwest::blocking::Response,
         usage_collector: Arc<Mutex<PassthroughSseCollector>>,
@@ -92,11 +130,12 @@ impl GeminiSseReader {
         )
     }
 
-    fn next_chunk(&mut self) -> std::io::Result<Vec<u8>> {
+    async fn next_chunk(&mut self) -> std::io::Result<Vec<u8>> {
         loop {
             match self
                 .upstream
-                .recv_timeout(stream_wait_timeout(self.last_upstream_activity))
+                .recv_timeout_async(stream_wait_timeout(self.last_upstream_activity))
+                .await
             {
                 Ok(UpstreamSseFramePumpItem::Frame(frame)) => {
                     self.last_upstream_activity = Instant::now();
@@ -727,19 +766,33 @@ impl GeminiSseReader {
     }
 }
 
+impl crate::http::gateway_response_body::GatewayResponseBody for GeminiSseReader {
+    fn read_async<'a>(
+        &'a mut self,
+        buf: &'a mut [u8],
+    ) -> crate::http::gateway_response_body::BodyReadFuture<'a> {
+        Box::pin(async move {
+            loop {
+                let read = self.out_cursor.read(buf)?;
+                if read > 0 {
+                    return Ok(read);
+                }
+                if self.state.finished {
+                    return Ok(0);
+                }
+                let next = self.next_chunk().await?;
+                self.out_cursor = Cursor::new(next);
+            }
+        })
+    }
+}
+
+#[cfg(test)]
 impl Read for GeminiSseReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        loop {
-            let read = self.out_cursor.read(buf)?;
-            if read > 0 {
-                return Ok(read);
-            }
-            if self.state.finished {
-                return Ok(0);
-            }
-            let next = self.next_chunk()?;
-            self.out_cursor = Cursor::new(next);
-        }
+        crate::gateway::response_test_runtime()?.block_on(
+            crate::http::gateway_response_body::GatewayResponseBody::read_async(self, buf),
+        )
     }
 }
 

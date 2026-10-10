@@ -11,6 +11,7 @@ pub(crate) fn read_usage_snapshots_limited(
     }
     // 读取所有账号最新用量
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let items = storage
         .latest_usage_snapshots_by_account_limited(limit)
         .map_err(|err| format!("list usage snapshots failed: {err}"))?;

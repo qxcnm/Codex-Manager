@@ -1,4 +1,6 @@
-use axum::http::{HeaderMap, Uri};
+use axum::http::HeaderMap;
+#[cfg(test)]
+use axum::http::Uri;
 
 use crate::http::header_filter::should_skip_request_header;
 
@@ -13,8 +15,9 @@ use crate::http::header_filter::should_skip_request_header;
 ///
 /// # 返回
 /// 返回函数执行结果
+#[cfg(test)]
 pub(crate) fn build_target_url(backend_base_url: &str, uri: &Uri) -> String {
-    // 中文注释：部分 tiny_http 请求在重写后可能丢失 query；统一在这里拼接可避免多处实现不一致。
+    // Keep the query when rewriting a test-fixture backend target.
     let path_and_query = uri
         .path_and_query()
         .map(|value| value.as_str())

@@ -42,6 +42,7 @@ export interface Account {
   group: string;
   priority: number;
   preferred: boolean;
+  resetWarmupEnabled: boolean;
   label: string;
   groupName: string;
   sort: number;

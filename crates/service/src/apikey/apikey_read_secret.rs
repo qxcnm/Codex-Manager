@@ -18,6 +18,14 @@ pub(crate) fn read_api_key_secret(key_id: &str) -> Result<ApiKeySecretResult, St
     if normalized.is_empty() {
         return Err("missing key id".to_string());
     }
+    if crate::storage_helpers::seaorm_enabled() {
+        let key = super::remote::secret(normalized)?
+            .ok_or_else(|| "api key secret not found".to_string())?;
+        return Ok(ApiKeySecretResult {
+            id: normalized.to_string(),
+            key,
+        });
+    }
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
     let secret = storage
         .find_api_key_secret_by_id(normalized)

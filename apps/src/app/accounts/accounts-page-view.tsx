@@ -28,6 +28,8 @@ import {
   Search,
   Trash2,
   Zap,
+  AlarmClock,
+  AlarmClockOff,
 } from "lucide-react";
 import { AddAccountModal } from "@/components/modals/add-account-modal";
 import { AccountResetCreditControl } from "@/components/account-reset-credit-control";
@@ -106,6 +108,7 @@ import type {
 } from "@/lib/api/account-client";
 import type { Account, ProxyProfile } from "@/types";
 import { AccountProxyCell } from "@/components/accounts/account-proxy-cell";
+import { AccountResetWarmupBadge } from "@/components/accounts/account-reset-warmup-badge";
 import { AccountProxyGeoStatusGrid } from "@/components/accounts/account-proxy-status-grid";
 import { AccountProxyStatusHeader } from "@/components/accounts/account-proxy-status-header";
 import {
@@ -258,6 +261,8 @@ export interface AccountsPageViewProps {
   isUpdatingProfileAccountId: string | null;
   isUpdatingStatusAccountId: string | null;
   isUpdatingManyStatuses: boolean;
+  isUpdatingResetWarmup: boolean;
+  setAccountResetWarmupEnabled: (accountIds: string[], enabled: boolean) => void;
   statusFilterOptions: StatusFilterOption[];
   importFileActionLabel: string;
   importDirectoryActionLabel: string;
@@ -396,6 +401,8 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     isUpdatingProfileAccountId,
     isUpdatingStatusAccountId,
     isUpdatingManyStatuses,
+    isUpdatingResetWarmup,
+    setAccountResetWarmupEnabled,
     statusFilterOptions,
     importFileActionLabel,
     importDirectoryActionLabel,
@@ -476,6 +483,13 @@ export function AccountsPageView(props: AccountsPageViewProps) {
   );
   const statusMutationBusy =
     isUpdatingManyStatuses || Boolean(isUpdatingStatusAccountId);
+  const selectedIdSet = new Set(effectiveSelectedIds);
+  const resetWarmupEnableTargetIds = accounts
+    .filter((account) => selectedIdSet.has(account.id) && account.resetWarmupEnabled === false)
+    .map((account) => account.id);
+  const resetWarmupDisableTargetIds = accounts
+    .filter((account) => selectedIdSet.has(account.id) && account.resetWarmupEnabled !== false)
+    .map((account) => account.id);
   const accountPoolLayoutRef = useRef<HTMLDivElement>(null);
   const viewMode = useSyncExternalStore(
     subscribeAccountViewMode,
@@ -592,7 +606,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
               <span className="sr-only">{t("更多账号操作")}</span>
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
+          <DropdownMenuContent align="end" className="min-w-56">
             <DropdownMenuGroup>
               <DropdownMenuLabel className="px-2 py-1 text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">
                 {t("排序")}
@@ -650,6 +664,17 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                 />
                 {t("刷新 AT/RT")}
                 <DropdownMenuShortcut>RT</DropdownMenuShortcut>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={!isServiceReady || isUpdatingResetWarmup}
+                onClick={() =>
+                  setAccountResetWarmupEnabled([account.id], account.resetWarmupEnabled === false)
+                }
+              >
+                {account.resetWarmupEnabled === false ? <AlarmClock /> : <AlarmClockOff />}
+                {account.resetWarmupEnabled === false
+                  ? t("开启额度重置自动唤醒")
+                  : t("关闭额度重置自动唤醒")}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
@@ -802,8 +827,9 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     account={account}
                     isPreferred={account.preferred}
                   />
-                  <div className="min-w-0 justify-self-end">
+                  <div className="flex min-w-0 flex-col items-end gap-1.5 justify-self-end">
                     <AccountStatusCell account={account} />
+                    <AccountResetWarmupBadge enabled={account.resetWarmupEnabled !== false} />
                   </div>
                 </div>
               </CardHeader>
@@ -920,7 +946,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       {!isServiceReady ? (
         <Card className="glass-card mission-panel shadow-sm">
           <CardContent className="pt-6 text-sm text-muted-foreground">
@@ -1189,6 +1215,26 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     <DropdownMenuShortcut>
                       {selectedDisableTargetCount || "-"}
                     </DropdownMenuShortcut>
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>{t("额度重置自动唤醒")}</DropdownMenuLabel>
+                  <DropdownMenuItem
+                    disabled={!isServiceReady || isUpdatingResetWarmup || resetWarmupEnableTargetIds.length === 0}
+                    onClick={() => setAccountResetWarmupEnabled(resetWarmupEnableTargetIds, true)}
+                  >
+                    <AlarmClock />
+                    {t("批量开启自动唤醒")}
+                    <DropdownMenuShortcut>{resetWarmupEnableTargetIds.length || "-"}</DropdownMenuShortcut>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    disabled={!isServiceReady || isUpdatingResetWarmup || resetWarmupDisableTargetIds.length === 0}
+                    onClick={() => setAccountResetWarmupEnabled(resetWarmupDisableTargetIds, false)}
+                  >
+                    <AlarmClockOff />
+                    {t("批量关闭自动唤醒")}
+                    <DropdownMenuShortcut>{resetWarmupDisableTargetIds.length || "-"}</DropdownMenuShortcut>
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
                 <DropdownMenuSeparator />
@@ -1534,7 +1580,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                         />
                       </TableCell>
                       <TableCell>
-                        <QuotaOverviewCell items={quotaItems} />
+                        <QuotaOverviewCell items={quotaItems} compact />
                         <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
                           {account.quotaCapacityPrimaryWindowTokens ||
                           account.quotaCapacitySecondaryWindowTokens ? (
@@ -1627,7 +1673,10 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                         <AccountProxyCell account={account} />
                       </TableCell>
                       <TableCell className="account-pool-status-cell align-top">
-                        <AccountStatusCell account={account} />
+                        <div className="flex flex-col items-start gap-1.5">
+                          <AccountStatusCell account={account} />
+                          <AccountResetWarmupBadge enabled={account.resetWarmupEnabled !== false} />
+                        </div>
                       </TableCell>
                     </TableRow>
                   );

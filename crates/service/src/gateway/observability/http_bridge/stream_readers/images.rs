@@ -21,14 +21,43 @@ pub(crate) struct ImagesFromResponsesSseReader {
 }
 
 impl ImagesFromResponsesSseReader {
+    #[cfg(test)]
     pub(crate) fn new(
         upstream: reqwest::blocking::Response,
         usage_collector: Arc<Mutex<PassthroughSseCollector>>,
         request_started_at: Instant,
         response_format: ImagesResponseFormat,
     ) -> Self {
+        Self::from_pump(
+            UpstreamSseFramePump::new(upstream),
+            usage_collector,
+            request_started_at,
+            response_format,
+        )
+    }
+
+    pub(crate) fn from_stream_response(
+        upstream: crate::gateway::upstream::GatewayStreamResponse,
+        usage_collector: Arc<Mutex<PassthroughSseCollector>>,
+        request_started_at: Instant,
+        response_format: ImagesResponseFormat,
+    ) -> Self {
+        Self::from_pump(
+            UpstreamSseFramePump::from_stream(upstream.into_body()),
+            usage_collector,
+            request_started_at,
+            response_format,
+        )
+    }
+
+    pub(crate) fn from_pump(
+        upstream: UpstreamSseFramePump,
+        usage_collector: Arc<Mutex<PassthroughSseCollector>>,
+        request_started_at: Instant,
+        response_format: ImagesResponseFormat,
+    ) -> Self {
         Self {
-            upstream: UpstreamSseFramePump::new(upstream),
+            upstream,
             out_cursor: Cursor::new(Vec::new()),
             usage_collector,
             request_started_at,
@@ -167,11 +196,12 @@ impl ImagesFromResponsesSseReader {
         }
     }
 
-    fn next_chunk(&mut self) -> std::io::Result<Vec<u8>> {
+    async fn next_chunk(&mut self) -> std::io::Result<Vec<u8>> {
         loop {
             match self
                 .upstream
-                .recv_timeout(stream_wait_timeout(self.last_upstream_activity))
+                .recv_timeout_async(stream_wait_timeout(self.last_upstream_activity))
+                .await
             {
                 Ok(UpstreamSseFramePumpItem::Frame(frame)) => {
                     self.last_upstream_activity = Instant::now();
@@ -232,17 +262,31 @@ impl ImagesFromResponsesSseReader {
     }
 }
 
+impl crate::http::gateway_response_body::GatewayResponseBody for ImagesFromResponsesSseReader {
+    fn read_async<'a>(
+        &'a mut self,
+        buf: &'a mut [u8],
+    ) -> crate::http::gateway_response_body::BodyReadFuture<'a> {
+        Box::pin(async move {
+            loop {
+                let read = self.out_cursor.read(buf)?;
+                if read > 0 {
+                    return Ok(read);
+                }
+                if self.finished {
+                    return Ok(0);
+                }
+                self.out_cursor = Cursor::new(self.next_chunk().await?);
+            }
+        })
+    }
+}
+
+#[cfg(test)]
 impl Read for ImagesFromResponsesSseReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        loop {
-            let read = self.out_cursor.read(buf)?;
-            if read > 0 {
-                return Ok(read);
-            }
-            if self.finished {
-                return Ok(0);
-            }
-            self.out_cursor = Cursor::new(self.next_chunk()?);
-        }
+        crate::gateway::response_test_runtime()?.block_on(
+            crate::http::gateway_response_body::GatewayResponseBody::read_async(self, buf),
+        )
     }
 }

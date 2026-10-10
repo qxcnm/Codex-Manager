@@ -206,7 +206,7 @@ fn free_account_model_ceiling_filters_free_accounts_before_quota_selection() {
     let _guard = crate::test_env_guard();
     let _free_model_reset =
         FreeAccountMaxModelReset(crate::gateway::current_free_account_max_model());
-    crate::gateway::set_free_account_max_model("gpt-5.2").expect("set free model ceiling");
+    crate::gateway::set_free_account_max_model("gpt-5.6-luna").expect("set free model ceiling");
     let previous_quota_guard = crate::gateway::current_quota_guard_config();
     let _quota_guard_reset = QuotaGuardReset(previous_quota_guard);
     crate::gateway::set_quota_guard_config(crate::gateway::QuotaGuardConfig {
@@ -225,7 +225,7 @@ fn free_account_model_ceiling_filters_free_accounts_before_quota_selection() {
 
     let candidates = super::prepare_gateway_candidates(
         &storage,
-        Some("gpt-5.4"),
+        Some("gpt-6-sol"),
         None,
         None,
         crate::gateway::LowQuotaCandidateMode::NormalOnly,
@@ -241,7 +241,7 @@ fn free_account_model_ceiling_keeps_boundary_model_and_paid_accounts() {
     let _guard = crate::test_env_guard();
     let _free_model_reset =
         FreeAccountMaxModelReset(crate::gateway::current_free_account_max_model());
-    crate::gateway::set_free_account_max_model("gpt-5.2").expect("set free model ceiling");
+    crate::gateway::set_free_account_max_model("gpt-5.6-luna").expect("set free model ceiling");
     let previous_quota_guard = crate::gateway::current_quota_guard_config();
     let _quota_guard_reset = QuotaGuardReset(previous_quota_guard);
     crate::gateway::set_quota_guard_config(crate::gateway::QuotaGuardConfig {
@@ -260,7 +260,7 @@ fn free_account_model_ceiling_keeps_boundary_model_and_paid_accounts() {
 
     let boundary_candidates = super::prepare_gateway_candidates(
         &storage,
-        Some("gpt-5.2"),
+        Some("gpt-5.6-luna"),
         None,
         None,
         crate::gateway::LowQuotaCandidateMode::NormalOnly,
@@ -270,7 +270,7 @@ fn free_account_model_ceiling_keeps_boundary_model_and_paid_accounts() {
 
     let above_ceiling_candidates = super::prepare_gateway_candidates(
         &storage,
-        Some("gpt-5.4"),
+        Some("gpt-6-sol"),
         None,
         None,
         crate::gateway::LowQuotaCandidateMode::NormalOnly,
@@ -355,7 +355,7 @@ fn free_account_model_ceiling_treats_unknown_request_models_as_above_ceiling() {
     let _guard = crate::test_env_guard();
     let _free_model_reset =
         FreeAccountMaxModelReset(crate::gateway::current_free_account_max_model());
-    crate::gateway::set_free_account_max_model("gpt-5.2").expect("set free model ceiling");
+    crate::gateway::set_free_account_max_model("gpt-5.6-luna").expect("set free model ceiling");
     let previous_quota_guard = crate::gateway::current_quota_guard_config();
     let _quota_guard_reset = QuotaGuardReset(previous_quota_guard);
     crate::gateway::set_quota_guard_config(crate::gateway::QuotaGuardConfig {

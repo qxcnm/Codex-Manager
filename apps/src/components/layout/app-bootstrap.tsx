@@ -357,7 +357,6 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
     setRuntimeCapabilities,
     setServiceStatus,
     setTheme,
-    startAndInitializeService,
     t,
   ]);
 

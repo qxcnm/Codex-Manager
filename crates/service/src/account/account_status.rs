@@ -45,6 +45,7 @@ pub(crate) struct AccountStatusContext {
 /// # 返回
 /// 返回函数执行结果
 fn latest_status_reason(storage: &Storage, account_id: &str) -> Option<String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     storage
         .latest_account_status_reasons(&[account_id.to_string()])
         .ok()
@@ -55,6 +56,7 @@ pub(crate) fn load_account_status_context(
     storage: &Storage,
     account_id: &str,
 ) -> AccountStatusContext {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let account = storage.find_account_by_id(account_id).ok().flatten();
     AccountStatusContext {
         status: account
@@ -78,6 +80,7 @@ pub(crate) fn load_account_status_context(
 /// # 返回
 /// 无
 pub(crate) fn set_account_status(storage: &Storage, account_id: &str, status: &str, reason: &str) {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     set_account_status_with_context(storage, account_id, status, reason, None);
 }
 
@@ -88,6 +91,7 @@ pub(crate) fn set_account_status_with_context(
     reason: &str,
     context: Option<&AccountStatusContext>,
 ) -> bool {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let (account_exists, changed) = storage
         .update_account_status_if_changed_with_existence(account_id, status)
         .unwrap_or((false, false));
@@ -128,6 +132,7 @@ pub(crate) fn set_account_status_with_context(
 /// # 返回
 /// 返回函数执行结果
 fn should_preserve_manual_account_status(storage: &Storage, account_id: &str) -> bool {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     storage
         .find_account_status_by_id(account_id)
         .ok()
@@ -140,6 +145,7 @@ fn should_preserve_manual_account_status(storage: &Storage, account_id: &str) ->
 }
 
 fn should_preserve_usage_limit_status(storage: &Storage, account_id: &str) -> bool {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     storage
         .find_account_status_by_id(account_id)
         .ok()
@@ -300,6 +306,7 @@ pub(crate) fn mark_account_unavailable_for_gateway_error(
     account_id: &str,
     err: &str,
 ) -> bool {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     if let Some(reason) = deactivation_reason_from_message(err) {
         return set_account_banned_with_reason(storage, account_id, reason);
     }
@@ -313,6 +320,7 @@ fn mark_account_unavailable_for_confirmed_usage_exhausted(
     storage: &Storage,
     account_id: &str,
 ) -> bool {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     set_account_limited_with_reason(storage, account_id, "usage_limit_exhausted")
 }
 
@@ -330,6 +338,7 @@ fn mark_account_unavailable_for_confirmed_usage_exhausted(
 /// # 返回
 /// 返回函数执行结果
 fn set_account_unavailable_with_reason(storage: &Storage, account_id: &str, reason: &str) -> bool {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     if should_preserve_manual_account_status(storage, account_id) {
         return false;
     }
@@ -338,6 +347,7 @@ fn set_account_unavailable_with_reason(storage: &Storage, account_id: &str, reas
 }
 
 fn set_account_limited_with_reason(storage: &Storage, account_id: &str, reason: &str) -> bool {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     if should_preserve_usage_limit_status(storage, account_id) {
         return false;
     }
@@ -359,6 +369,7 @@ fn set_account_limited_with_reason(storage: &Storage, account_id: &str, reason: 
 /// # 返回
 /// 返回函数执行结果
 fn set_account_banned_with_reason(storage: &Storage, account_id: &str, reason: &str) -> bool {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     if should_preserve_manual_account_status(storage, account_id) {
         return false;
     }
@@ -382,6 +393,7 @@ pub(crate) fn mark_account_unavailable_for_usage_http_error(
     account_id: &str,
     err: &str,
 ) -> bool {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let Some(AccountAvailabilitySignal::UsageHttp(status_code)) =
         classify_account_availability_signal(err)
     else {
@@ -412,6 +424,7 @@ pub(crate) fn mark_account_unavailable_for_deactivation_error(
     account_id: &str,
     err: &str,
 ) -> bool {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let Some(AccountAvailabilitySignal::Deactivation(reason)) =
         classify_account_availability_signal(err)
     else {
@@ -436,6 +449,7 @@ pub(crate) fn mark_account_unavailable_for_auth_error(
     account_id: &str,
     err: &str,
 ) -> bool {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let Some(signal) = classify_account_availability_signal(err) else {
         return false;
     };
@@ -474,6 +488,7 @@ pub(crate) fn mark_account_unavailable_for_refresh_token_error(
     account_id: &str,
     err: &str,
 ) -> bool {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     match classify_account_availability_signal(err) {
         Some(AccountAvailabilitySignal::RefreshTokenRegionBlocked) => {
             set_account_unavailable_with_reason(
@@ -511,6 +526,7 @@ pub(crate) fn mark_account_unavailable_for_test_auth_status(
     status_code: u16,
     context: &AccountStatusContext,
 ) -> bool {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     set_account_status_after_test_if_context_matches(
         storage,
         account_id,
@@ -539,6 +555,7 @@ pub(crate) fn mark_account_limited_for_test_rate_limit(
     account_id: &str,
     context: &AccountStatusContext,
 ) -> bool {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     set_account_status_after_test_if_context_matches(
         storage,
         account_id,
@@ -555,6 +572,7 @@ fn set_account_status_after_test_if_context_matches(
     reason: &str,
     context: &AccountStatusContext,
 ) -> bool {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let normalized = context.status.trim().to_ascii_lowercase();
     if matches!(normalized.as_str(), "disabled" | "inactive" | "banned") {
         return false;
@@ -609,6 +627,7 @@ pub(crate) fn restore_account_active_after_test(
     account_id: &str,
     context: &AccountStatusContext,
 ) -> bool {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let normalized = context.status.trim().to_ascii_lowercase();
     if !matches!(normalized.as_str(), "unavailable" | "limited") {
         return false;

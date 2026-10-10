@@ -33,10 +33,15 @@ async fn wait_for_shutdown_signal() {
 /// # 返回
 /// 返回函数执行结果
 async fn serve_proxy_on_listener(listener: tokio::net::TcpListener, app: Router) -> io::Result<()> {
-    axum::serve(listener, app)
-        .with_graceful_shutdown(wait_for_shutdown_signal())
-        .await
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
+    let result = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(wait_for_shutdown_signal())
+    .await
+    .map_err(|err| io::Error::new(io::ErrorKind::Other, err));
+    crate::gateway::drain_deferred_responses().await;
+    result
 }
 
 /// 函数 `run_proxy_server`

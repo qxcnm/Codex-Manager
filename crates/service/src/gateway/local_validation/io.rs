@@ -1,4 +1,4 @@
-use tiny_http::Request;
+use crate::http::gateway_request::GatewayRequest as Request;
 
 /// 函数 `read_request_body`
 ///
@@ -75,7 +75,7 @@ pub(super) fn extract_platform_key_or_error(
         let header_names = request
             .headers()
             .iter()
-            .map(|h| h.field.as_str().as_str())
+            .map(|h| h.field.as_str())
             .collect::<Vec<_>>()
             .join(",");
         log::warn!(

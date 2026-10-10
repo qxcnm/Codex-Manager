@@ -1,6 +1,6 @@
 "use client";
 
-import { DEFAULT_LOCALE, type AppLocale } from "../config";
+import { type AppLocale } from "../config";
 import { EN_MESSAGES } from "./en";
 import { KO_MESSAGES } from "./ko";
 import { RU_MESSAGES } from "./ru";
@@ -27,9 +27,11 @@ export function translate(
 ): string {
   const normalizedMessage = String(message || "");
   const template =
-    MESSAGE_CATALOG[locale]?.[normalizedMessage] ??
-    MESSAGE_CATALOG[DEFAULT_LOCALE]?.[normalizedMessage] ??
-    normalizedMessage;
+    locale === "zh-CN"
+      ? normalizedMessage
+      : MESSAGE_CATALOG[locale]?.[normalizedMessage] ??
+        EN_MESSAGES[normalizedMessage] ??
+        normalizedMessage;
   return interpolate(template, values);
 }
 

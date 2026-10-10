@@ -2,6 +2,8 @@ services:
   codexmanager-service:
     image: ghcr.io/qxcnm/codexmanager-service:${CODEXMANAGER_RELEASE_TAG:-stable}
     restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     environment:
       CODEXMANAGER_SERVICE_ADDR: 0.0.0.0:48760
       TZ: ${TZ:-Asia/Shanghai}
@@ -15,6 +17,8 @@ services:
   codexmanager-web:
     image: ghcr.io/qxcnm/codexmanager-web:${CODEXMANAGER_RELEASE_TAG:-stable}
     restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     depends_on:
       codexmanager-service:
         condition: service_healthy
@@ -30,6 +34,39 @@ services:
       - codexmanager-data:/data
     ports:
       - "48761:48761"
+
+  codexmanager-ota:
+    image: containrrr/watchtower:1.7.1
+    profiles:
+      - ota
+    restart: unless-stopped
+    command:
+      - --label-enable
+      - --interval
+      - "${CODEXMANAGER_OTA_INTERVAL:-300}"
+      - --monitor-only
+      - --cleanup
+      - --rolling-restart
+      - --stop-timeout
+      - 20s
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  codexmanager-ota-auto:
+    image: containrrr/watchtower:1.7.1
+    profiles:
+      - ota-auto
+    restart: unless-stopped
+    command:
+      - --label-enable
+      - --interval
+      - "${CODEXMANAGER_OTA_INTERVAL:-300}"
+      - --cleanup
+      - --rolling-restart
+      - --stop-timeout
+      - 20s
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
 
 volumes:
   codexmanager-data:

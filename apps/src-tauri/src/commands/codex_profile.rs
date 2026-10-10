@@ -88,6 +88,21 @@ pub async fn service_codex_profile_apply_direct_account(
     rpc_call_in_background("codexProfile/applyDirectAccount", addr, Some(params)).await
 }
 
+#[tauri::command]
+pub async fn service_codex_profile_apply_direct_aggregate(
+    addr: Option<String>,
+    aggregate_api_id: String,
+    codex_home: Option<String>,
+    reload_after_switch: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({
+        "aggregateApiId": aggregate_api_id,
+        "codexHome": codex_home,
+        "reloadAfterSwitch": reload_after_switch.unwrap_or(false),
+    });
+    rpc_call_in_background("codexProfile/applyDirectAggregate", addr, Some(params)).await
+}
+
 /// 函数 `service_codex_profile_apply_gateway`
 ///
 /// 作者: gaohongshun
@@ -119,6 +134,21 @@ pub async fn service_codex_profile_apply_gateway(
         "reloadAfterSwitch": reload_after_switch.unwrap_or(false),
     });
     rpc_call_in_background("codexProfile/applyGateway", addr, Some(params)).await
+}
+
+#[tauri::command]
+pub async fn service_codex_profile_apply_models(
+    addr: Option<String>,
+    codex_home: Option<String>,
+    model_slugs: Vec<String>,
+    reload_after_switch: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({
+        "codexHome": codex_home,
+        "modelSlugs": model_slugs,
+        "reloadAfterSwitch": reload_after_switch.unwrap_or(false),
+    });
+    rpc_call_in_background("codexProfile/applyModels", addr, Some(params)).await
 }
 
 /// 函数 `service_codex_profile_restore`

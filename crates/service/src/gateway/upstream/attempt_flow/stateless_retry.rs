@@ -52,8 +52,8 @@ fn should_trigger_stateless_retry(
 /// # 返回
 /// 返回函数执行结果
 #[allow(clippy::too_many_arguments)]
-pub(super) fn retry_stateless_then_optional_alt(
-    client: &reqwest::blocking::Client,
+pub(super) async fn retry_stateless_then_optional_alt(
+    client: &reqwest::Client,
     method: &reqwest::Method,
     primary_url: &str,
     alt_url: Option<&str>,
@@ -91,12 +91,14 @@ pub(super) fn retry_stateless_then_optional_alt(
         );
     }
     if matches!(status.as_u16(), 403 | 429) {
-        if !backoff::sleep_with_exponential_jitter(
+        if !backoff::sleep_with_exponential_jitter_async(
             Duration::from_millis(120),
             Duration::from_millis(900),
             1,
             request_deadline,
-        ) {
+        )
+        .await
+        {
             return StatelessRetryResult::Terminal {
                 status_code: 504,
                 message: "upstream total timeout exceeded".to_string(),
@@ -115,7 +117,9 @@ pub(super) fn retry_stateless_then_optional_alt(
         auth_token,
         account,
         true,
-    ) {
+    )
+    .await
+    {
         Ok(resp) => resp,
         Err(err) => {
             log::warn!(
@@ -130,12 +134,14 @@ pub(super) fn retry_stateless_then_optional_alt(
 
     if let Some(alt_url) = alt_url {
         if matches!(response.status().as_u16(), 400 | 404) {
-            if !backoff::sleep_with_exponential_jitter(
+            if !backoff::sleep_with_exponential_jitter_async(
                 Duration::from_millis(80),
                 Duration::from_millis(500),
                 2,
                 request_deadline,
-            ) {
+            )
+            .await
+            {
                 return StatelessRetryResult::Terminal {
                     status_code: 504,
                     message: "upstream total timeout exceeded".to_string(),
@@ -153,7 +159,9 @@ pub(super) fn retry_stateless_then_optional_alt(
                 auth_token,
                 account,
                 true,
-            ) {
+            )
+            .await
+            {
                 Ok(resp) => {
                     response = resp;
                 }

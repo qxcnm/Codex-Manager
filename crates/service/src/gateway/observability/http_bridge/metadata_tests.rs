@@ -44,7 +44,7 @@ fn copy_upstream_response_headers_filters_hop_by_hop_and_adds_trace_id() {
     let headers = copy_upstream_response_headers(&upstream, Some(" trace-123 "));
     let names = headers
         .iter()
-        .map(|header| header.field.as_str().as_str().to_ascii_lowercase())
+        .map(|header| header.field.as_str().to_ascii_lowercase())
         .collect::<Vec<_>>();
 
     assert!(names.contains(&"content-type".to_string()));

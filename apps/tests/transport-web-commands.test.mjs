@@ -85,6 +85,12 @@ async function loadTransportWebCommandsModule() {
 const transportWebCommands = await loadTransportWebCommandsModule();
 const commandMap = transportWebCommands.createWebCommandMap(async () => ({}));
 
+test("quota reset warmup uses a dedicated batch setting RPC", () => {
+  assert.deepEqual(commandMap.service_account_reset_warmup_update, {
+    rpcMethod: "account/resetWarmup/update",
+  });
+});
+
 test("createWebCommandMap keeps app and gateway transport settings payloads aligned", () => {
   const appSettingsSet = commandMap.app_settings_set;
   assert.equal(appSettingsSet.rpcMethod, "appSettings/set");
@@ -224,8 +230,14 @@ test("createWebCommandMap 为 Codex profile 管理提供 Web RPC 映射", () => 
   assert.deepEqual(commandMap.service_codex_profile_apply_direct_account, {
     rpcMethod: "codexProfile/applyDirectAccount",
   });
+  assert.deepEqual(commandMap.service_codex_profile_apply_direct_aggregate, {
+    rpcMethod: "codexProfile/applyDirectAggregate",
+  });
   assert.deepEqual(commandMap.service_codex_profile_apply_gateway, {
     rpcMethod: "codexProfile/applyGateway",
+  });
+  assert.deepEqual(commandMap.service_codex_profile_apply_models, {
+    rpcMethod: "codexProfile/applyModels",
   });
   assert.deepEqual(commandMap.service_codex_profile_restore, {
     rpcMethod: "codexProfile/restore",
@@ -399,6 +411,16 @@ test("createWebCommandMap 为模型目录 V2 原子命令提供 Web RPC 映射",
   assert.deepEqual(commandMap.service_managed_model_delete_v2, {
     rpcMethod: "apikey/managedModelDeleteV2",
   });
+  const priceSync = commandMap.service_managed_model_price_sync_v2;
+  assert.equal(priceSync.rpcMethod, "apikey/managedModelPriceSyncV2");
+  assert.ok(priceSync.mapParams);
+  assert.deepEqual(
+    priceSync.mapParams({
+      addr: "localhost:48760",
+      payload: { modelSlugs: ["gpt-6-sol", "gpt-6-luna"] },
+    }),
+    { modelSlugs: ["gpt-6-sol", "gpt-6-luna"] },
+  );
 
   const upsert = commandMap.service_managed_model_upsert_v2;
   assert.equal(upsert.rpcMethod, "apikey/managedModelUpsertV2");

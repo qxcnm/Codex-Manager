@@ -99,6 +99,13 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
         "account/updateSorts" => super::value_or_error(
             account_sort_updates_param(req).and_then(account_update::update_account_sorts),
         ),
+        "account/resetWarmup/update" => super::value_or_error(
+            serde_json::from_value::<crate::account::reset_warmup_settings::ResetWarmupUpdate>(
+                req.params.clone().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|err| format!("invalid reset warmup settings: {err}"))
+            .and_then(crate::account::reset_warmup_settings::update),
+        ),
         "account/warmup" => {
             let account_ids = req
                 .params

@@ -1,9 +1,15 @@
+use crate::http::gateway_request::GatewayRequest as Request;
+#[cfg(test)]
 use std::io::{Read, Write};
 
-use tiny_http::{HTTPVersion, Header, Request, Response, StatusCode};
+use crate::http::gateway_response::{Header, Response, StatusCode};
+#[cfg(test)]
+use tiny_http::HTTPVersion;
 
+#[cfg(test)]
 const STREAMING_CHUNK_READ_BUF_BYTES: usize = 8 * 1024;
 
+#[cfg(test)]
 fn should_skip_streaming_manual_header(header: &Header) -> bool {
     header.field.equiv("connection")
         || header.field.equiv("content-length")
@@ -16,6 +22,7 @@ fn header_name_exists(headers: &[Header], name: &'static str) -> bool {
     headers.iter().any(|header| header.field.equiv(name))
 }
 
+#[cfg(test)]
 pub(super) fn write_streaming_chunked_response<W, R>(
     writer: &mut W,
     http_version: &HTTPVersion,
@@ -40,7 +47,7 @@ where
         if should_skip_streaming_manual_header(header) {
             continue;
         }
-        writer.write_all(header.field.as_str().as_str().as_bytes())?;
+        writer.write_all(header.field.as_str().as_bytes())?;
         writer.write_all(b": ")?;
         writer.write_all(header.value.as_str().as_bytes())?;
         writer.write_all(b"\r\n")?;
@@ -69,28 +76,21 @@ where
     writer.flush()
 }
 
-pub(super) fn respond_streaming_chunked<R>(
+pub(super) async fn respond_streaming_chunked<R>(
     request: Request,
     status: StatusCode,
-    headers: Vec<Header>,
+    mut headers: Vec<Header>,
     body: R,
 ) -> std::io::Result<()>
 where
-    R: Read + Send + 'static,
+    R: crate::http::gateway_response_body::GatewayResponseBody + 'static,
 {
-    if *request.http_version() <= (1, 0) {
-        return request.respond(Response::new(status, headers, body, None, None));
+    if !header_name_exists(&headers, "x-accel-buffering") {
+        headers.push(Header::from_bytes(b"X-Accel-Buffering", b"no").expect("static header"));
     }
-
-    let http_version = request.http_version().clone();
-    let do_not_send_body = request.method().as_str().eq_ignore_ascii_case("HEAD");
-    let mut writer = request.into_writer();
-    write_streaming_chunked_response(
-        &mut writer,
-        &http_version,
-        status,
-        &headers,
-        body,
-        do_not_send_body,
-    )
+    // Hyper owns HTTP/1 chunk framing and HTTP/2 data framing. Keep the
+    // incremental reader; do not write a nested HTTP response into the body.
+    request
+        .respond_async(Response::new(status, headers, body, None))
+        .await
 }

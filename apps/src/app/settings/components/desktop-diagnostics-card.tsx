@@ -26,13 +26,16 @@ const DESKTOP_DIAGNOSTICS_QUERY_KEY = ["desktop-diagnostics"] as const;
 
 export function DesktopDiagnosticsCard({
   t,
+  active = true,
 }: {
   t: (value: string) => string;
+  active?: boolean;
 }) {
   const queryClient = useQueryClient();
   const diagnostics = useQuery({
     queryKey: DESKTOP_DIAGNOSTICS_QUERY_KEY,
     queryFn: getDesktopDiagnostics,
+    enabled: active,
   });
   const updateDiagnostics = useMutation({
     mutationFn: (patch: DesktopDiagnosticsSettingsPatch) =>

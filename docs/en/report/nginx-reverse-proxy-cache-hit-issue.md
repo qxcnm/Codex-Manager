@@ -33,7 +33,7 @@ That directly affects these paths:
    extracts `conversation_id`, `session_id`, `x-codex-turn-state`, and related headers.
 2. `crates/service/src/gateway/request/session_affinity.rs`
    computes the effective thread anchor.
-3. `crates/service/src/gateway/request/request_rewrite_responses.rs`
+3. `crates/service/src/gateway/request/official_responses_http.rs`
    rewrites the request body with a stable `prompt_cache_key`.
 
 If the proxy strips those headers, the backend falls back to a weaker session anchor and prompt cache reuse becomes unstable.
@@ -197,6 +197,6 @@ Not necessarily. CodexManager logs what the upstream usage reports. If the threa
 
 - [`crates/service/src/gateway/request/incoming_headers.rs`](../../../crates/service/src/gateway/request/incoming_headers.rs)
 - [`crates/service/src/gateway/request/session_affinity.rs`](../../../crates/service/src/gateway/request/session_affinity.rs)
-- [`crates/service/src/gateway/request/request_rewrite_responses.rs`](../../../crates/service/src/gateway/request/request_rewrite_responses.rs)
+- [`crates/service/src/gateway/request/official_responses_http.rs`](../../../crates/service/src/gateway/request/official_responses_http.rs)
 - [`crates/service/src/gateway/observability/http_bridge/aggregate/output_text.rs`](../../../crates/service/src/gateway/observability/http_bridge/aggregate/output_text.rs)
-- [`crates/service/src/gateway/protocol_adapter/response_conversion/sse_conversion/openai_sse_anthropic_bridge.rs`](../../../crates/service/src/gateway/protocol_adapter/response_conversion/sse_conversion/openai_sse_anthropic_bridge.rs)
+- [`crates/service/src/gateway/observability/http_bridge/stream_readers/responses_from_anthropic.rs`](../../../crates/service/src/gateway/observability/http_bridge/stream_readers/responses_from_anthropic.rs)

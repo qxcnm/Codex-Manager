@@ -438,7 +438,8 @@ pub(crate) fn write_request_log_with_attempts(
         );
     }
     // 记录请求最终结果（而非内部重试明细），保证 UI 一次请求只展示一条记录。
-    let (request_log_id, token_stat_error) = match storage.insert_request_log_with_token_stat(
+    let (request_log_id, token_stat_error) = match crate::requestlog::seaorm::insert_with_usage(
+        storage,
         &RequestLog {
             trace_id: trace_context.trace_id.map(|v| v.to_string()),
             key_id: key_id.map(|v| v.to_string()),
@@ -585,7 +586,7 @@ pub(crate) fn write_request_log_with_attempts(
         }
     }
 
-    if let Err(err) = storage.maybe_run_observability_maintenance(created_at) {
+    if let Err(err) = crate::requestlog::seaorm::maintain(storage, created_at) {
         let err_text = err.to_string();
         super::metrics::record_db_error(err_text.as_str());
         log::warn!(
@@ -603,7 +604,24 @@ fn touch_api_key_last_used_after_success(storage: &Storage, key_id: Option<&str>
     if !should_touch_api_key_last_used(key_id, now) {
         return;
     }
-    if let Err(err) = storage.update_api_key_last_used_at_by_id(key_id, now) {
+    let result = if crate::storage_helpers::seaorm_enabled() {
+        let key_id = key_id.to_owned();
+        crate::storage_helpers::seaorm_block_on(move |storage| async move {
+            codexmanager_storage_seaorm::ApiKeysRepository::touch_last_used(
+                storage.connection(),
+                &key_id,
+                now,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+        })
+    } else {
+        storage
+            .update_api_key_last_used_at_by_id(key_id, now)
+            .map_err(|error| error.to_string())
+    };
+    if let Err(err) = result {
         log::warn!(
             "event=api_key_last_used_touch_failed key_id={} err={}",
             key_id,

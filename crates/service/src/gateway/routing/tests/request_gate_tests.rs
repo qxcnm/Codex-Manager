@@ -2,6 +2,30 @@ use super::*;
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[tokio::test(flavor = "current_thread")]
+async fn async_waiters_release_and_cancel_without_blocking_runtime() {
+    let lock = Arc::new(RequestGateLock::new());
+    let first = lock.try_acquire().unwrap().unwrap();
+    let cancelled_lock = Arc::clone(&lock);
+    let cancelled = tokio::spawn(async move { cancelled_lock.acquire_async().await });
+    tokio::task::yield_now().await;
+    cancelled.abort();
+    assert!(matches!(cancelled.await, Err(error) if error.is_cancelled()));
+    let waiting_lock = Arc::clone(&lock);
+    let waiting = tokio::spawn(async move { waiting_lock.acquire_async().await });
+    tokio::task::yield_now().await;
+    assert!(!waiting.is_finished());
+    drop(first);
+    let next = tokio::time::timeout(Duration::from_secs(1), waiting)
+        .await
+        .expect("waiter woken")
+        .unwrap()
+        .unwrap();
+    assert!(lock.try_acquire().unwrap().is_none());
+    drop(next);
+    assert!(lock.try_acquire().unwrap().is_some());
+}
+
 /// 函数 `same_scope_reuses_same_lock_instance`
 ///
 /// 作者: gaohongshun

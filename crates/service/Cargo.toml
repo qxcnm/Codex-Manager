@@ -3,22 +3,33 @@ name = "codexmanager-service"
 version.workspace = true
 edition = "2021"
 
+[features]
+default = ["storage-sqlite"]
+storage-sqlite = ["codexmanager-storage-seaorm/sqlite"]
+storage-mysql = ["codexmanager-storage-seaorm/mysql"]
+storage-postgres = ["codexmanager-storage-seaorm/postgres"]
+
 [dependencies]
 codexmanager-core = { path = "../core" }
+codexmanager-storage-seaorm = { path = "../storage-seaorm", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 toml_edit = "0.22"
 rusqlite = { path = "../rusqlite", features = ["bundled", "backup"] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking", "stream", "socks"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream", "socks"] }
 hyper-util = { version = "0.1", features = ["client-proxy", "client-proxy-system"] }
+http-body = "1"
 bytes = "1"
 rand = "0.8"
 sha2 = "0.10"
-tiny_http = "0.12"
 axum = { version = "0.8", features = ["ws"] }
-tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }
+tower-http = { version = "0.6", features = ["catch-panic", "limit", "trace"] }
+tower = { version = "0.5", features = ["util", "limit"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync"] }
+tokio-util = { version = "0.7", features = ["io"] }
 futures-util = "0.3"
+futures-lite = "2"
 eventsource-stream = "0.2.3"
 tokio-tungstenite = { version = "0.28", features = ["proxy", "rustls-tls-webpki-roots"] }
 tungstenite = { version = "0.27", features = ["deflate", "proxy"] }
@@ -27,6 +38,7 @@ url = "2"
 webbrowser = "0.8"
 urlencoding = "2"
 log = "0.4"
+tracing = "0.1"
 libc = "0.2"
 env_logger = "0.11"
 crossbeam-channel = "0.5"
@@ -41,6 +53,8 @@ sysinfo = "0.30"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+reqwest = { version = "0.12", features = ["blocking"] }
+tiny_http = "0.12"
 rcgen = "0.13"
 
 [target.'cfg(windows)'.build-dependencies]

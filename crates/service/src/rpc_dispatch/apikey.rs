@@ -38,6 +38,7 @@ fn allowed_model_slugs_for_actor(
         .ok_or_else(|| "permission_denied: models requires user session".to_string())?;
     let storage =
         crate::storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let slugs = storage
         .allowed_model_slugs_for_user_v2(user_id, codexmanager_core::storage::now_ts())
         .map_err(|err| format!("read allowed model groups failed: {err}"))?

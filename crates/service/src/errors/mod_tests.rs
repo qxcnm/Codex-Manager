@@ -1,4 +1,45 @@
-use super::{classify_message, ErrorCode};
+use super::{classify_message, rpc_action_error_payload, rpc_error_payload, ErrorCode};
+
+#[test]
+fn classify_permission_denied_without_misclassifying_upstream_errors() {
+    for message in [
+        "permission_denied",
+        "permission_denied: accountManager/users/list",
+        " PERMISSION_DENIED: apikey requires user session ",
+        "无权限(permission_denied: accountManager/wallet/topUp)",
+    ] {
+        assert_eq!(classify_message(message), ErrorCode::PermissionDenied);
+    }
+    assert_eq!(
+        classify_message("upstream returned permission_denied"),
+        ErrorCode::UnknownError
+    );
+    assert_eq!(
+        classify_message("permission_denied_extra"),
+        ErrorCode::UnknownError
+    );
+}
+
+#[test]
+fn permission_denied_rpc_payloads_preserve_existing_error_contract() {
+    let message = "permission_denied: accountManager/wallet/topUp";
+    let expected = serde_json::json!({
+        "error": message,
+        "errorCode": "permission_denied",
+        "errorDetail": {
+            "code": "permission_denied",
+            "message": message,
+        }
+    });
+    assert_eq!(rpc_error_payload(message.to_owned()), expected);
+
+    let mut expected_action = expected;
+    expected_action["ok"] = serde_json::Value::Bool(false);
+    assert_eq!(
+        rpc_action_error_payload(message.to_owned()),
+        expected_action
+    );
+}
 
 /// 函数 `classify_known_messages`
 ///

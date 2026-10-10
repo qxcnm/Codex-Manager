@@ -81,12 +81,15 @@ fn filter_models_for_catalog_policy(
     }
 }
 
-fn models_etag_header(models: &ModelsResponse) -> Result<Option<tiny_http::Header>, String> {
+fn models_etag_header(
+    models: &ModelsResponse,
+) -> Result<Option<crate::http::gateway_response::Header>, String> {
     let Some(etag) = models.extra.get("etag").and_then(serde_json::Value::as_str) else {
         return Ok(None);
     };
-    let header = tiny_http::Header::from_bytes(b"etag".as_slice(), etag.as_bytes())
-        .map_err(|_| "build etag header failed".to_string())?;
+    let header =
+        crate::http::gateway_response::Header::from_bytes(b"etag".as_slice(), etag.as_bytes())
+            .map_err(|_| "build etag header failed".to_string())?;
     Ok(Some(header))
 }
 
@@ -101,7 +104,7 @@ fn models_etag_header(models: &ModelsResponse) -> Result<Option<tiny_http::Heade
 ///
 /// # 返回
 /// 返回函数执行结果
-fn read_cached_models_response(
+async fn read_cached_models_response(
     storage: &codexmanager_core::storage::Storage,
     key_id: &str,
 ) -> Result<
@@ -111,7 +114,7 @@ fn read_cached_models_response(
     ),
     String,
 > {
-    crate::codex_model_catalog::models_response_for_gateway_key(storage, key_id)
+    crate::codex_model_catalog::models_response_for_gateway_key_async(storage, key_id).await
 }
 
 /// 函数 `maybe_respond_local_models`
@@ -125,8 +128,8 @@ fn read_cached_models_response(
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(super) fn maybe_respond_local_models(
-    request: tiny_http::Request,
+pub(super) async fn maybe_respond_local_models(
+    request: crate::http::gateway_request::GatewayRequest,
     trace_id: &str,
     key_id: &str,
     protocol_type: &str,
@@ -137,7 +140,7 @@ pub(super) fn maybe_respond_local_models(
     model_for_log: Option<&str>,
     reasoning_for_log: Option<&str>,
     storage: &codexmanager_core::storage::Storage,
-) -> Result<Option<tiny_http::Request>, String> {
+) -> Result<Option<crate::http::gateway_request::GatewayRequest>, String> {
     let is_models_list = request_method.eq_ignore_ascii_case("GET")
         && (path == "/v1/models" || path.starts_with("/v1/models?"));
     if !is_models_list {
@@ -155,7 +158,7 @@ pub(super) fn maybe_respond_local_models(
         reasoning_for_log,
         storage,
     };
-    let (cached, catalog_policy) = match read_cached_models_response(storage, key_id) {
+    let (cached, catalog_policy) = match read_cached_models_response(storage, key_id).await {
         Ok(result) => result,
         Err(err) => {
             let message = crate::gateway::bilingual_error(

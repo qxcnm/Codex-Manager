@@ -20,6 +20,7 @@ pub(crate) fn run_due_tasks_once() -> u64 {
     let Some(storage) = open_storage() else {
         return DEFAULT_PLUGIN_SCHEDULER_INTERVAL_SECS;
     };
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     let now = codexmanager_core::storage::now_ts();
     if rearm_enabled_interval_tasks_for_plugin(&storage, None, now).is_err() {
         log::warn!("repair plugin task schedules failed");

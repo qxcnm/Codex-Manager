@@ -789,6 +789,21 @@ impl Storage {
         Ok(())
     }
 
+    pub fn update_app_user_password_hash_if_current(
+        &self,
+        id: &str,
+        expected_password_hash: &str,
+        password_hash: &str,
+    ) -> Result<bool> {
+        let updated = self.conn.execute(
+            "UPDATE app_users
+             SET password_hash = ?1, updated_at = ?2
+             WHERE id = ?3 AND password_hash = ?4",
+            (password_hash, now_ts(), id, expected_password_hash),
+        )?;
+        Ok(updated == 1)
+    }
+
     pub fn insert_app_user_session(&self, session: &AppUserSession) -> Result<()> {
         self.conn.execute(
             "INSERT INTO app_user_sessions (

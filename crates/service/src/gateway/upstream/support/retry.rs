@@ -39,8 +39,8 @@ pub(in super::super) enum AltPathRetryResult {
 /// # 返回
 /// 返回函数执行结果
 #[allow(clippy::too_many_arguments)]
-pub(in super::super) fn retry_with_alternate_path<F>(
-    client: &reqwest::blocking::Client,
+pub(in super::super) async fn retry_with_alternate_path<F>(
+    client: &reqwest::Client,
     method: &reqwest::Method,
     alt_url: Option<&str>,
     request_deadline: Option<Instant>,
@@ -89,12 +89,14 @@ where
             message: "upstream total timeout exceeded".to_string(),
         };
     }
-    if !super::backoff::sleep_with_exponential_jitter(
+    if !super::backoff::sleep_with_exponential_jitter_async(
         Duration::from_millis(40),
         Duration::from_millis(200),
         0,
         request_deadline,
-    ) {
+    )
+    .await
+    {
         return AltPathRetryResult::Terminal {
             status_code: 504,
             message: "upstream total timeout exceeded".to_string(),
@@ -112,7 +114,9 @@ where
         auth_token,
         account,
         strip_session_affinity,
-    ) {
+    )
+    .await
+    {
         Ok(response) => AltPathRetryResult::Upstream(response),
         Err(err) => {
             let err_msg = err.to_string();

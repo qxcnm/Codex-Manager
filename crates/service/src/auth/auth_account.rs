@@ -14,11 +14,10 @@ use crate::account_plan::resolve_effective_account_plan;
 use crate::account_status::mark_account_unavailable_for_auth_error;
 use crate::app_settings::{get_persisted_app_setting, save_persisted_app_setting};
 use crate::storage_helpers::open_storage;
-use crate::usage_http::{
-    fetch_account_subscription, fetch_account_subscription_with_explicit_proxy,
-    log_account_data_route,
+use crate::usage_http::{fetch_account_subscription_async, log_account_data_route};
+use crate::usage_token_refresh::{
+    refresh_and_persist_access_token_async, token_refresh_ahead_secs,
 };
-use crate::usage_token_refresh::{refresh_and_persist_access_token, token_refresh_ahead_secs};
 
 const CURRENT_AUTH_ACCOUNT_ID_KEY: &str = "auth.current_account_id";
 const CURRENT_AUTH_MODE_KEY: &str = "auth.current_auth_mode";
@@ -105,7 +104,10 @@ pub(crate) struct ChatgptAuthTokensLoginInput {
 pub(crate) fn login_with_chatgpt_auth_tokens(
     input: ChatgptAuthTokensLoginInput,
 ) -> Result<LoginStartResult, String> {
-    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = open_storage()
+        .map(|storage| storage.shared_handle())
+        .ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let access_token = input.access_token.trim();
     if access_token.is_empty() {
         return Err("accessToken is required".to_string());
@@ -235,12 +237,19 @@ pub(crate) fn login_with_chatgpt_auth_tokens(
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn read_current_account(refresh_token: bool) -> Result<AccountReadResponse, String> {
-    let Some(storage) = open_storage() else {
+    crate::gateway::run_upstream_io(read_current_account_async(refresh_token))?
+}
+
+pub(crate) async fn read_current_account_async(
+    refresh_token: bool,
+) -> Result<AccountReadResponse, String> {
+    let Some(storage) = open_storage().map(|storage| storage.shared_handle()) else {
         return Ok(AccountReadResponse {
             account: None,
             requires_openai_auth: true,
         });
     };
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let Some((account, token)) = resolve_current_account_with_token(&storage)? else {
         return Ok(AccountReadResponse {
             account: None,
@@ -254,13 +263,15 @@ pub(crate) fn read_current_account(refresh_token: bool) -> Result<AccountReadRes
             std::env::var("CODEXMANAGER_ISSUER").unwrap_or_else(|_| DEFAULT_ISSUER.to_string());
         let client_id = std::env::var("CODEXMANAGER_CLIENT_ID")
             .unwrap_or_else(|_| DEFAULT_CLIENT_ID.to_string());
-        if let Err(err) = refresh_and_persist_access_token(
+        if let Err(err) = refresh_and_persist_access_token_async(
             &storage,
             &mut token,
             &issuer,
             &client_id,
             token_refresh_ahead_secs(),
-        ) {
+        )
+        .await
+        {
             let _ = mark_account_unavailable_for_auth_error(&storage, &account.id, &err);
             return Err(err);
         }
@@ -292,7 +303,16 @@ pub(crate) fn read_current_account(refresh_token: bool) -> Result<AccountReadRes
 pub(crate) fn refresh_current_chatgpt_auth_tokens(
     target_account_id: Option<&str>,
 ) -> Result<ChatgptAuthTokensRefreshResponse, String> {
-    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    crate::gateway::run_upstream_io(refresh_current_chatgpt_auth_tokens_async(target_account_id))?
+}
+
+pub(crate) async fn refresh_current_chatgpt_auth_tokens_async(
+    target_account_id: Option<&str>,
+) -> Result<ChatgptAuthTokensRefreshResponse, String> {
+    let storage = open_storage()
+        .map(|storage| storage.shared_handle())
+        .ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let (account, mut token) = resolve_refresh_target(&storage, target_account_id)?
         .ok_or_else(|| "no current chatgptAuthTokens account".to_string())?;
     if token.refresh_token.trim().is_empty() {
@@ -303,13 +323,15 @@ pub(crate) fn refresh_current_chatgpt_auth_tokens(
         std::env::var("CODEXMANAGER_ISSUER").unwrap_or_else(|_| DEFAULT_ISSUER.to_string());
     let client_id =
         std::env::var("CODEXMANAGER_CLIENT_ID").unwrap_or_else(|_| DEFAULT_CLIENT_ID.to_string());
-    if let Err(err) = refresh_and_persist_access_token(
+    if let Err(err) = refresh_and_persist_access_token_async(
         &storage,
         &mut token,
         &issuer,
         &client_id,
         token_refresh_ahead_secs(),
-    ) {
+    )
+    .await
+    {
         let _ = mark_account_unavailable_for_auth_error(&storage, &account.id, &err);
         return Err(err);
     }
@@ -350,20 +372,25 @@ pub(crate) fn refresh_current_chatgpt_auth_tokens(
         false,
     );
     let subscription = match &proxy_mode {
-        crate::account_proxy::AccountProxyMode::Disabled => fetch_account_subscription(
-            &base_url,
-            &token.access_token,
-            &chatgpt_account_id,
-            workspace_id.as_deref(),
-        )?,
-        crate::account_proxy::AccountProxyMode::Explicit { proxy_url, .. } => {
-            fetch_account_subscription_with_explicit_proxy(
+        crate::account_proxy::AccountProxyMode::Disabled => {
+            fetch_account_subscription_async(
                 &base_url,
                 &token.access_token,
                 &chatgpt_account_id,
                 workspace_id.as_deref(),
-                proxy_url,
-            )?
+                None,
+            )
+            .await?
+        }
+        crate::account_proxy::AccountProxyMode::Explicit { proxy_url, .. } => {
+            fetch_account_subscription_async(
+                &base_url,
+                &token.access_token,
+                &chatgpt_account_id,
+                workspace_id.as_deref(),
+                Some(proxy_url),
+            )
+            .await?
         }
         crate::account_proxy::AccountProxyMode::Invalid { error, .. } => {
             return Err(error.clone());
@@ -409,7 +436,15 @@ pub(crate) fn refresh_current_chatgpt_auth_tokens(
 /// 返回函数执行结果
 pub(crate) fn refresh_all_chatgpt_auth_tokens(
 ) -> Result<ChatgptAuthTokensRefreshAllResponse, String> {
-    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    crate::gateway::run_upstream_io(refresh_all_chatgpt_auth_tokens_async())?
+}
+
+pub(crate) async fn refresh_all_chatgpt_auth_tokens_async(
+) -> Result<ChatgptAuthTokensRefreshAllResponse, String> {
+    let storage = open_storage()
+        .map(|storage| storage.shared_handle())
+        .ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let accounts = storage
         .list_account_auth_refresh_targets()
         .map_err(|err| err.to_string())?;
@@ -459,13 +494,15 @@ pub(crate) fn refresh_all_chatgpt_auth_tokens(
 
         requested = requested.saturating_add(1);
         let issuer = refresh_target_issuer(&account, &default_issuer);
-        match refresh_and_persist_access_token(
+        match refresh_and_persist_access_token_async(
             &storage,
             &mut token,
             issuer,
             &client_id,
             token_refresh_ahead_secs(),
-        ) {
+        )
+        .await
+        {
             Ok(()) => {
                 succeeded = succeeded.saturating_add(1);
                 results.push(ChatgptAuthTokensRefreshAllItem {
@@ -520,7 +557,10 @@ fn refresh_target_issuer<'a>(
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn logout_current_account() -> Result<serde_json::Value, String> {
-    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = open_storage()
+        .map(|storage| storage.shared_handle())
+        .ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let current_account_id = get_persisted_app_setting(CURRENT_AUTH_ACCOUNT_ID_KEY);
     if let Some(account_id) = current_account_id.as_deref() {
         if storage
@@ -551,6 +591,7 @@ pub(crate) fn logout_current_account() -> Result<serde_json::Value, String> {
 fn resolve_current_account_with_token(
     storage: &Storage,
 ) -> Result<Option<(Account, Token)>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let Some(account_id) = get_persisted_app_setting(CURRENT_AUTH_ACCOUNT_ID_KEY) else {
         return Ok(None);
     };
@@ -581,6 +622,7 @@ fn resolve_refresh_target(
     storage: &Storage,
     target_account_id: Option<&str>,
 ) -> Result<Option<(Account, Token)>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let Some(target_account_id) = target_account_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -618,6 +660,7 @@ fn current_account_payload(
     token: &Token,
     auth_mode: &str,
 ) -> CurrentAuthAccount {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let claims = parse_id_token_claims(&token.access_token).ok();
     let subscription = storage
         .find_account_subscription(&account.id)

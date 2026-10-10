@@ -3,8 +3,8 @@
 import type { MessageCatalog } from "../types";
 
 export const RU_DASHBOARD_MESSAGES: MessageCatalog = {
-  "CodexManager 无法统计 CLI 请求日志和用量。":
-    "CodexManager не может собирать журналы CLI-запросов и использование.",
+  "本机 Codex 的直连请求不会经过网关；下方仍展示 CodexManager 已记录的网关流量。":
+    "Прямые запросы Codex на этом компьютере обходят шлюз; ниже по-прежнему отображается трафик шлюза, записанный CodexManager.",
   "OpenAI 账号今日消耗": "Расход аккаунтов OpenAI сегодня",
   "OpenAI 账号区间消耗": "Расход аккаунтов OpenAI за период",
   "Top Key": "Топ Key",

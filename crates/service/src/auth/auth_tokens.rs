@@ -17,9 +17,8 @@ use std::future::Future;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::thread;
 use std::time::Duration;
-use tokio::runtime::{Builder, Runtime};
+use tokio::runtime::Runtime;
 
 use crate::account_identity::{
     build_account_storage_id, build_fallback_subject_key, clean_value,
@@ -28,11 +27,18 @@ use crate::account_identity::{
 use crate::auth_callback::resolve_redirect_uri;
 use crate::storage_helpers::open_storage;
 
+#[path = "auth_login_completion.rs"]
+mod completion;
+pub(crate) use completion::{
+    complete_login_async, complete_login_with_redirect_async, drain_auth_completions,
+    run_auth_storage,
+};
+
 static OPENAI_AUTH_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 static OPENAI_AUTH_LOOPBACK_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
-static OPENAI_AUTH_RUNTIME: OnceLock<Runtime> = OnceLock::new();
 static ACTIVE_DEVICE_LOGIN_TASKS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> =
     OnceLock::new();
+static DEVICE_LOGIN_TASKS_CHANGED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 #[cfg(test)]
 static OPENAI_AUTH_LOOPBACK_HTTP_CLIENT_BUILDS: AtomicUsize = AtomicUsize::new(0);
 const OPENAI_AUTH_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -58,14 +64,7 @@ const CLOUDFLARE_BLOCKED_MESSAGE: &str =
 /// # 返回
 /// 返回函数执行结果
 fn auth_runtime() -> &'static Runtime {
-    OPENAI_AUTH_RUNTIME.get_or_init(|| {
-        Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .thread_name("auth-http")
-            .build()
-            .unwrap_or_else(|err| panic!("build auth runtime failed: {err}"))
-    })
+    crate::runtime::service_runtime::process_runtime().expect("service runtime")
 }
 
 /// 函数 `run_auth_future`
@@ -79,11 +78,13 @@ fn auth_runtime() -> &'static Runtime {
 ///
 /// # 返回
 /// 返回函数执行结果
-fn run_auth_future<F>(future: F) -> F::Output
+pub(crate) fn run_auth_future<F, T, E>(future: F) -> Result<T, E>
 where
-    F: Future,
+    F: Future<Output = Result<T, E>> + Send,
+    T: Send,
+    E: From<String> + Send,
 {
-    auth_runtime().block_on(future)
+    crate::runtime::service_runtime::run_sync(future).map_err(E::from)?
 }
 
 /// 函数 `read_json_with_timeout`
@@ -733,6 +734,7 @@ fn format_api_key_exchange_status_error(
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn next_account_sort(storage: &codexmanager_core::storage::Storage) -> i64 {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     storage
         .max_account_sort()
         .ok()
@@ -748,6 +750,7 @@ pub(crate) fn resolve_existing_account_for_login(
     workspace_id: Option<&str>,
     fallback_subject_key: Option<&str>,
 ) -> Result<Option<String>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let identities = storage
         .list_account_workspace_identities_for_subject(subject_account_id)
         .map_err(|e| e.to_string())?;
@@ -921,6 +924,12 @@ enum DeviceLoginError {
     Failed(String),
 }
 
+impl From<String> for DeviceLoginError {
+    fn from(message: String) -> Self {
+        Self::Failed(message)
+    }
+}
+
 impl DeviceLoginError {
     fn message(&self) -> &str {
         match self {
@@ -949,6 +958,7 @@ fn remove_active_device_login_task(login_id: &str, cancel: &Arc<AtomicBool>) {
         .is_some_and(|active| Arc::ptr_eq(active, cancel))
     {
         tasks.remove(login_id);
+        DEVICE_LOGIN_TASKS_CHANGED.notify_waiters();
     }
 }
 
@@ -958,22 +968,22 @@ pub(crate) fn cancel_device_code_login(login_id: &str) {
     }
 }
 
-/// 函数 `request_device_code`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - crate: 参数 crate
-///
-/// # 返回
-/// 返回函数执行结果
-pub(crate) fn request_device_code(
-    issuer: &str,
-    client_id: &str,
-) -> Result<DeviceCodeStartResult, String> {
-    run_auth_future(request_device_code_async(issuer, client_id))
+pub(crate) async fn drain_device_login_tasks() {
+    loop {
+        let changed = DEVICE_LOGIN_TASKS_CHANGED.notified();
+        tokio::pin!(changed);
+        changed.as_mut().enable();
+        {
+            let tasks = lock_active_device_login_tasks();
+            if tasks.is_empty() {
+                return;
+            }
+            for cancel in tasks.values() {
+                cancel.store(true, Ordering::SeqCst);
+            }
+        }
+        changed.await;
+    }
 }
 
 /// 函数 `request_device_code_async`
@@ -988,7 +998,7 @@ pub(crate) fn request_device_code(
 ///
 /// # 返回
 /// 返回函数执行结果
-async fn request_device_code_async(
+pub(crate) async fn request_device_code_async(
     issuer: &str,
     client_id: &str,
 ) -> Result<DeviceCodeStartResult, String> {
@@ -1041,62 +1051,54 @@ pub(crate) fn spawn_device_code_login_completion(
     login_id: String,
     device_code: DeviceCodeStartResult,
 ) -> Result<(), String> {
-    let suffix = login_id
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .take(12)
-        .collect::<String>();
-    let thread_name = if suffix.is_empty() {
-        "device-login".to_string()
-    } else {
-        format!("device-login-{suffix}")
-    };
     let cancel = Arc::new(AtomicBool::new(false));
-    lock_active_device_login_tasks().insert(login_id.clone(), Arc::clone(&cancel));
-
-    let worker_login_id = login_id.clone();
-    let worker_cancel = Arc::clone(&cancel);
-    let spawn_result = thread::Builder::new().name(thread_name).spawn(move || {
-        let result = complete_device_code_login_with_cancel(
-            issuer,
-            worker_login_id.clone(),
-            device_code,
-            Arc::clone(&worker_cancel),
-        );
-        if let Err(err) = result {
-            if let Some(storage) = open_storage() {
-                match err {
-                    DeviceLoginError::Cancelled => {}
-                    DeviceLoginError::Expired => {
-                        let _ = storage.finish_login_session(
-                            &worker_login_id,
-                            "expired",
-                            Some(err.message()),
-                        );
-                    }
-                    DeviceLoginError::Failed(_) => {
-                        let _ = storage.finish_login_session(
-                            &worker_login_id,
-                            "failed",
-                            Some(err.message()),
-                        );
-                    }
+    {
+        let mut tasks = lock_active_device_login_tasks();
+        if crate::shutdown_requested() {
+            return Err("device login rejected during shutdown".to_owned());
+        }
+        if tasks.len() >= 64 {
+            return Err("device login capacity exhausted".to_owned());
+        }
+        if tasks.contains_key(&login_id) {
+            return Err("device login already running".to_owned());
+        }
+        tasks.insert(login_id.clone(), Arc::clone(&cancel));
+    }
+    auth_runtime().spawn(async move {
+        let _task = DeviceLoginTaskGuard {
+            login_id: login_id.clone(),
+            cancel: Arc::clone(&cancel),
+        };
+        let result =
+            complete_device_code_login_with_cancel(issuer, login_id.clone(), device_code, cancel)
+                .await;
+        if let Err(error) = result {
+            let _ = run_auth_storage(move || {
+                if let Some(storage) = open_storage() {
+                    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
+                    let status = match error {
+                        DeviceLoginError::Cancelled => "cancelled",
+                        DeviceLoginError::Expired => "expired",
+                        DeviceLoginError::Failed(_) => "failed",
+                    };
+                    let _ = storage.finish_login_session(&login_id, status, Some(error.message()));
                 }
-            }
+                Ok(())
+            })
+            .await;
         }
-        remove_active_device_login_task(&worker_login_id, &worker_cancel);
     });
+    Ok(())
+}
 
-    match spawn_result {
-        Ok(_) => Ok(()),
-        Err(err) => {
-            remove_active_device_login_task(&login_id, &cancel);
-            let message = format!("failed to start device login worker: {err}");
-            if let Some(storage) = open_storage() {
-                let _ = storage.finish_login_session(&login_id, "failed", Some(&message));
-            }
-            Err(message)
-        }
+struct DeviceLoginTaskGuard {
+    login_id: String,
+    cancel: Arc<AtomicBool>,
+}
+impl Drop for DeviceLoginTaskGuard {
+    fn drop(&mut self) {
+        remove_active_device_login_task(&self.login_id, &self.cancel);
     }
 }
 
@@ -1135,7 +1137,7 @@ async fn poll_device_auth_token_async_with_timeout(
             return Err(DeviceLoginError::Expired);
         }
 
-        let resp = client
+        let request = client
             .post(&url)
             .header("Content-Type", "application/json")
             .body(
@@ -1145,18 +1147,23 @@ async fn poll_device_auth_token_async_with_timeout(
                 })
                 .to_string(),
             )
-            .send()
-            .await
-            .map_err(|err| DeviceLoginError::Failed(err.to_string()))?;
+            .send();
+        let resp = tokio::select! {
+            biased;
+            _ = wait_device_cancel(&cancel) => return Err(DeviceLoginError::Cancelled),
+            result = request => result.map_err(|err| DeviceLoginError::Failed(err.to_string()))?,
+        };
 
         if cancel.load(Ordering::SeqCst) {
             return Err(DeviceLoginError::Cancelled);
         }
 
         if resp.status().is_success() {
-            return read_json_with_timeout(resp, OPENAI_AUTH_READ_TIMEOUT)
-                .await
-                .map_err(DeviceLoginError::Failed);
+            return tokio::select! {
+                biased;
+                _ = wait_device_cancel(&cancel) => Err(DeviceLoginError::Cancelled),
+                result = read_json_with_timeout(resp, OPENAI_AUTH_READ_TIMEOUT) => result.map_err(DeviceLoginError::Failed),
+            };
         }
 
         if matches!(resp.status(), StatusCode::FORBIDDEN | StatusCode::NOT_FOUND) {
@@ -1178,6 +1185,12 @@ async fn poll_device_auth_token_async_with_timeout(
         return Err(DeviceLoginError::Failed(
             format_token_endpoint_status_error(status, &headers, &body),
         ));
+    }
+}
+
+async fn wait_device_cancel(cancel: &AtomicBool) {
+    while !cancel.load(Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_millis(25)).await;
     }
 }
 
@@ -1212,55 +1225,46 @@ async fn sleep_with_device_cancel(
 ///
 /// # 返回
 /// 返回函数执行结果
-fn complete_device_code_login_with_cancel(
+async fn complete_device_code_login_with_cancel(
     issuer: String,
     login_id: String,
     device_code: DeviceCodeStartResult,
     cancel: Arc<AtomicBool>,
 ) -> Result<(), DeviceLoginError> {
-    let code = run_auth_future(poll_device_auth_token_async_with_timeout(
+    let code = poll_device_auth_token_async_with_timeout(
         &issuer,
         &device_code.device_auth_id,
         &device_code.user_code,
         device_code.interval,
         Duration::from_secs(15 * 60),
         Arc::clone(&cancel),
-    ))?;
-
-    if cancel.load(Ordering::SeqCst) {
-        return Err(DeviceLoginError::Cancelled);
-    }
-
-    let storage = open_storage()
-        .ok_or_else(|| DeviceLoginError::Failed("storage unavailable".to_string()))?;
-    let updated = storage
-        .update_login_session_code_verifier_if_pending(&login_id, &code.code_verifier)
-        .map_err(|err| DeviceLoginError::Failed(err.to_string()))?;
-    if !updated {
-        let status = storage
-            .get_login_session(&login_id)
-            .ok()
-            .flatten()
-            .map(|session| session.status);
-        return if status.as_deref() == Some("cancelled") {
-            Err(DeviceLoginError::Cancelled)
-        } else {
-            Err(DeviceLoginError::Failed(
-                "login session is no longer pending".to_string(),
-            ))
-        };
-    }
-    drop(storage);
-
-    if cancel.load(Ordering::SeqCst) {
-        return Err(DeviceLoginError::Cancelled);
-    }
-    complete_login_with_redirect(
-        &login_id,
-        &code.authorization_code,
-        Some(&device_redirect_uri(&issuer)),
     )
-    .map_err(DeviceLoginError::Failed)
+    .await?;
+
+    if cancel.load(Ordering::SeqCst) {
+        return Err(DeviceLoginError::Cancelled);
+    }
+
+    let update_login_id = login_id.clone();
+    let verifier = code.code_verifier.clone();
+    run_auth_storage(move || {
+        let storage_handle = open_storage().ok_or_else(|| "storage unavailable".to_owned())?;
+        let storage = crate::account::remote_storage::AccountStorage::new(&storage_handle);
+        if !storage
+            .update_login_session_code_verifier_if_pending(&update_login_id, &verifier)
+            .map_err(|e| e.to_string())?
+        {
+            return Err("login session is no longer pending".to_owned());
+        }
+        Ok(())
+    })
+    .await
+    .map_err(DeviceLoginError::Failed)?;
+    let redirect = device_redirect_uri(&issuer);
+    tokio::select! {
+        _ = wait_device_cancel(&cancel) => Err(DeviceLoginError::Cancelled),
+        result = complete_login_with_redirect_async(&login_id, &code.authorization_code, Some(&redirect)) => result.map_err(DeviceLoginError::Failed),
+    }
 }
 
 /// 函数 `complete_login`
@@ -1274,6 +1278,7 @@ fn complete_device_code_login_with_cancel(
 ///
 /// # 返回
 /// 返回函数执行结果
+#[cfg(test)]
 pub(crate) fn complete_login(state: &str, code: &str) -> Result<(), String> {
     complete_login_with_redirect(state, code, None)
 }
@@ -1289,184 +1294,18 @@ pub(crate) fn complete_login(state: &str, code: &str) -> Result<(), String> {
 ///
 /// # 返回
 /// 返回函数执行结果
+// Compatibility for synchronous RPC/domain callers. Native HTTP callbacks and
+// device polling call complete_login_with_redirect_async directly.
 pub(crate) fn complete_login_with_redirect(
     state: &str,
     code: &str,
     redirect_uri: Option<&str>,
 ) -> Result<(), String> {
-    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let session = storage
-        .get_login_session(state)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "unknown login session".to_string())?;
-    if session.status != "pending" {
-        return Err(format!(
-            "login session is no longer pending (status: {})",
-            session.status
-        ));
-    }
-
-    let issuer =
-        std::env::var("CODEXMANAGER_ISSUER").unwrap_or_else(|_| DEFAULT_ISSUER.to_string());
-    let client_id =
-        std::env::var("CODEXMANAGER_CLIENT_ID").unwrap_or_else(|_| DEFAULT_CLIENT_ID.to_string());
-    let redirect_uri = redirect_uri
-        .map(|value| value.to_string())
-        .or_else(|| resolve_redirect_uri())
-        .unwrap_or_else(|| "http://localhost:1455/auth/callback".to_string());
-
-    if !storage
-        .claim_login_session_for_completion(state)
-        .map_err(|err| err.to_string())?
-    {
-        return Err("login session is no longer pending".to_string());
-    }
-
-    let completion = (|| -> Result<String, String> {
-        let tokens = exchange_code_for_tokens(
-            &issuer,
-            &client_id,
-            &redirect_uri,
-            &session.code_verifier,
-            code,
-        )?;
-
-        let api_key_access_token = obtain_api_key(&issuer, &client_id, &tokens.id_token).ok();
-        let claims = parse_id_token_claims(&tokens.id_token)?;
-        ensure_workspace_allowed(
-            session.workspace_id.as_deref(),
-            &claims,
-            &tokens.id_token,
-            &tokens.access_token,
-        )?;
-
-        let subject_account_id = claims.sub.clone();
-        let label = claims
-            .email
-            .clone()
-            .unwrap_or_else(|| subject_account_id.clone());
-        let claim_chatgpt_account_id = claims
-            .auth
-            .as_ref()
-            .and_then(|auth| normalize_chatgpt_account_id(auth.chatgpt_account_id.as_deref()));
-        let claim_workspace_id = normalize_workspace_id(claims.workspace_id.as_deref());
-        let chatgpt_account_id = clean_value(
-            claim_chatgpt_account_id
-                .or_else(|| extract_chatgpt_account_id(&tokens.id_token))
-                .or_else(|| extract_chatgpt_account_id(&tokens.access_token)),
-        );
-        let workspace_id = clean_value(
-            claim_workspace_id
-                .or_else(|| extract_workspace_id(&tokens.id_token))
-                .or_else(|| extract_workspace_id(&tokens.access_token))
-                .or_else(|| chatgpt_account_id.clone()),
-        );
-        let fallback_subject_key =
-            build_fallback_subject_key(Some(&subject_account_id), session.tags.as_deref());
-        let account_storage_id = build_account_storage_id(
-            &subject_account_id,
-            chatgpt_account_id.as_deref(),
-            workspace_id.as_deref(),
-            session.tags.as_deref(),
-        );
-        let account_key = resolve_existing_account_for_login(
-            &storage,
-            &subject_account_id,
-            chatgpt_account_id.as_deref(),
-            workspace_id.as_deref(),
-            fallback_subject_key.as_deref(),
-        )?
-        .unwrap_or(account_storage_id);
-        let now = now_ts();
-        let existing_state = storage
-            .find_account_upsert_state_by_id(&account_key)
-            .map_err(|err| err.to_string())?;
-        let sort = existing_state
-            .as_ref()
-            .map(|state| state.sort)
-            .unwrap_or_else(|| next_account_sort(&storage));
-        let created_at = existing_state
-            .as_ref()
-            .map(|state| state.created_at)
-            .unwrap_or(now);
-        let workspace_id_for_log = workspace_id.clone();
-        let chatgpt_account_id_for_log = chatgpt_account_id.clone();
-        let account = Account {
-            id: account_key.clone(),
-            label,
-            issuer: issuer.clone(),
-            chatgpt_account_id,
-            workspace_id,
-            group_name: session.group_name.clone(),
-            sort,
-            status: "active".to_string(),
-            created_at,
-            updated_at: now,
-        };
-        storage
-            .insert_account(&account)
-            .map_err(|err| err.to_string())?;
-        storage
-            .update_account_subject_identity(&account_key, &subject_account_id)
-            .map_err(|err| err.to_string())?;
-        storage
-            .upsert_account_metadata(
-                &account_key,
-                session.note.as_deref(),
-                session.tags.as_deref(),
-            )
-            .map_err(|err| err.to_string())?;
-
-        let token = Token {
-            account_id: account_key.clone(),
-            id_token: tokens.id_token,
-            access_token: tokens.access_token,
-            refresh_token: tokens.refresh_token,
-            api_key_access_token,
-            last_refresh: now,
-        };
-        storage
-            .insert_token(&token)
-            .map_err(|err| err.to_string())?;
-
-        let db_path =
-            std::env::var("CODEXMANAGER_DB_PATH").unwrap_or_else(|_| "<unset>".to_string());
-        log::info!(
-            "oauth login persisted account: db_path={} login_id={} account_id={} workspace_id={} chatgpt_account_id={} redirect_uri={}",
-            db_path,
-            state,
-            account_key,
-            workspace_id_for_log.as_deref().unwrap_or("-"),
-            chatgpt_account_id_for_log.as_deref().unwrap_or("-"),
-            redirect_uri
-        );
-        Ok(account_key)
-    })();
-
-    let account_key = match completion {
-        Ok(account_key) => account_key,
-        Err(err) => {
-            if let Err(status_err) = storage.finish_login_session(state, "failed", Some(&err)) {
-                log::warn!(
-                    "failed to mark login session failed: login_id={} error={}",
-                    state,
-                    status_err
-                );
-            }
-            return Err(err);
-        }
-    };
-
-    if !storage
-        .finish_login_session(state, "success", None)
-        .map_err(|err| err.to_string())?
-    {
-        return Err("login session terminal state changed before completion".to_string());
-    }
-    crate::auth_account::set_current_auth_account_id(Some(&account_key))?;
-    crate::auth_account::set_current_auth_mode(Some("chatgpt"))?;
-    let _ = crate::usage_refresh::enqueue_usage_refresh_after_account_add(&account_key);
-    Ok(())
+    run_auth_future(complete_login_with_redirect_async(
+        state,
+        code,
+        redirect_uri,
+    ))
 }
 
 /// 函数 `build_exchange_code_request`
@@ -1506,37 +1345,6 @@ struct TokenResponse {
     id_token: String,
     access_token: String,
     refresh_token: String,
-}
-
-/// 函数 `exchange_code_for_tokens`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - issuer: 参数 issuer
-/// - client_id: 参数 client_id
-/// - redirect_uri: 参数 redirect_uri
-/// - code_verifier: 参数 code_verifier
-/// - code: 参数 code
-///
-/// # 返回
-/// 返回函数执行结果
-fn exchange_code_for_tokens(
-    issuer: &str,
-    client_id: &str,
-    redirect_uri: &str,
-    code_verifier: &str,
-    code: &str,
-) -> Result<TokenResponse, String> {
-    run_auth_future(exchange_code_for_tokens_async(
-        issuer,
-        client_id,
-        redirect_uri,
-        code_verifier,
-        code,
-    ))
 }
 
 /// 函数 `exchange_code_for_tokens_async`
@@ -1590,25 +1398,6 @@ async fn exchange_code_for_tokens_async(
     read_json_with_timeout(resp, OPENAI_AUTH_READ_TIMEOUT).await
 }
 
-/// 函数 `obtain_api_key`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - crate: 参数 crate
-///
-/// # 返回
-/// 返回函数执行结果
-pub(crate) fn obtain_api_key(
-    issuer: &str,
-    client_id: &str,
-    id_token: &str,
-) -> Result<String, String> {
-    run_auth_future(obtain_api_key_async(issuer, client_id, id_token))
-}
-
 /// 函数 `obtain_api_key_async`
 ///
 /// 作者: gaohongshun
@@ -1622,7 +1411,7 @@ pub(crate) fn obtain_api_key(
 ///
 /// # 返回
 /// 返回函数执行结果
-async fn obtain_api_key_async(
+pub(crate) async fn obtain_api_key_async(
     issuer: &str,
     client_id: &str,
     id_token: &str,

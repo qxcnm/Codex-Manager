@@ -1,4 +1,5 @@
-use tiny_http::{Request, Response};
+use crate::http::gateway_request::GatewayRequest as Request;
+use crate::http::gateway_response::Response;
 
 pub(super) struct LocalResponseContext<'a> {
     pub(super) trace_id: &'a str,
@@ -87,14 +88,14 @@ pub(super) fn respond_local_json_with_headers(
     ctx: &LocalResponseContext<'_>,
     body: String,
     usage: super::request_log::RequestLogUsage,
-    extra_headers: Vec<tiny_http::Header>,
+    extra_headers: Vec<crate::http::gateway_response::Header>,
 ) -> Result<(), String> {
     record_local_result(ctx, 200, usage, None);
     let mut response = super::error_response::with_trace_id_header(
         Response::from_string(body)
             .with_status_code(200)
             .with_header(
-                tiny_http::Header::from_bytes(
+                crate::http::gateway_response::Header::from_bytes(
                     b"content-type".as_slice(),
                     b"application/json".as_slice(),
                 )
@@ -136,7 +137,7 @@ pub(super) fn respond_local_terminal_error(
         Some(message.as_str()),
     );
     let response_message = super::error_message_for_client(
-        super::prefers_raw_errors_for_tiny_http_request(&request),
+        super::prefers_raw_errors_for_gateway_request(&request),
         message,
     );
     let response = super::error_response::terminal_text_response(

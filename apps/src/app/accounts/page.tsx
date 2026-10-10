@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useAccounts } from "@/hooks/useAccounts";
+import { useAccountResetWarmup } from "@/hooks/useAccountResetWarmup";
 import {
   isAdminRole,
   resolveSessionRole,
@@ -135,6 +136,8 @@ function AccountsPageContent({ serviceAddr }: AccountsPageContentProps) {
     isUpdatingStatusAccountId,
     isUpdatingManyStatuses,
   } = useAccounts();
+  const { isUpdatingResetWarmup, setAccountResetWarmupEnabled } =
+    useAccountResetWarmup(serviceAddr, isServiceReady);
   const isPageActive = useDesktopPageActive("/accounts/");
   usePageTransitionReady("/accounts/", !isServiceReady || !isLoading);
 
@@ -1062,6 +1065,8 @@ const toggleCleanupStatus = (rawStatus: string) => {
       isUpdatingProfileAccountId={isUpdatingProfileAccountId}
       isUpdatingStatusAccountId={isUpdatingStatusAccountId}
       isUpdatingManyStatuses={isUpdatingManyStatuses}
+      isUpdatingResetWarmup={isUpdatingResetWarmup}
+      setAccountResetWarmupEnabled={setAccountResetWarmupEnabled}
       statusFilterOptions={statusFilterOptions}
       importFileActionLabel={importFileActionLabel}
       importDirectoryActionLabel={importDirectoryActionLabel}

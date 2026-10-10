@@ -2,8 +2,9 @@ use rusqlite::{params_from_iter, OptionalExtension, Result, Row};
 
 use super::api_key_quota_limits::delete_api_key_quota_limit_by_key_sql;
 use super::key_id_filters::{key_id_in_clause, normalize_key_ids, SQLITE_IN_CLAUSE_BATCH_SIZE};
+use super::traits::{ApiKeyConfigPatch, ApiKeyCreate, DUPLICATE_API_KEY};
 use super::{
-    now_ts, ApiKey, ApiKeyCodexProfileCandidate, ApiKeyGatewayAuth, ApiKeyListSummary,
+    now_ts, ApiKey, ApiKeyCodexProfileCandidate, ApiKeyGatewayAuth, ApiKeyListSummary, ApiKeyOwner,
     ApiKeyProfileConfig, ApiKeyQuotaSummary, ApiKeyStatus, Storage,
 };
 
@@ -81,6 +82,110 @@ const API_KEY_CODEX_PROFILE_CANDIDATE_SELECT_SQL: &str = "SELECT
  LEFT JOIN api_key_profiles p ON p.key_id = k.id";
 
 impl Storage {
+    /// Atomically creates all API-key rows that make a key usable. The legacy
+    /// public insert helpers remain available for import/fixtures.
+    pub fn create_api_key_atomic(&self, input: ApiKeyCreate) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        if self.find_api_key_by_hash(&input.key.key_hash)?.is_some()
+            || self.find_api_key_by_id(&input.key.id)?.is_some()
+        {
+            return Err(rusqlite::Error::InvalidParameterName(
+                DUPLICATE_API_KEY.into(),
+            ));
+        }
+        self.insert_api_key(&input.key)?;
+        self.update_api_key_account_group_filter(
+            &input.key.id,
+            input.account_group_filter.as_deref(),
+        )?;
+        self.upsert_api_key_secret(&input.key.id, &input.secret)?;
+        self.upsert_api_key_quota_limit(&input.key.id, input.quota_limit_tokens)?;
+        if let Some(user_id) = input.owner_user_id {
+            let user = self
+                .find_app_user_by_id(&user_id)?
+                .ok_or_else(|| rusqlite::Error::InvalidParameterName("用户不存在".into()))?;
+            if user.role == "admin" || user.status != "active" {
+                return Err(rusqlite::Error::InvalidParameterName(
+                    "API key owner must be an active member".into(),
+                ));
+            }
+            let wallet_id = format!("wlt_domain_user_{user_id}");
+            self.ensure_wallet_for_owner(&wallet_id, "user", &user_id)?;
+            self.upsert_api_key_owner(&ApiKeyOwner {
+                key_id: input.key.id.clone(),
+                owner_kind: "user".into(),
+                owner_user_id: Some(user_id),
+                project_id: None,
+                updated_at: now_ts(),
+            })?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Atomically applies a normalized API-key patch. All reads and writes are
+    /// performed under the same transaction so a failed protocol/model check
+    /// cannot leave a partially updated key.
+    pub fn update_api_key_atomic(&self, id: &str, patch: ApiKeyConfigPatch) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let current = self
+            .find_api_key_by_id(id)?
+            .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+        if let Some(user_id) = patch.owner_user_id.as_deref() {
+            let owner = self.find_api_key_owner(id)?;
+            if !owner.is_some_and(|owner| {
+                owner.owner_kind == "user" && owner.owner_user_id.as_deref() == Some(user_id)
+            }) {
+                return Err(rusqlite::Error::InvalidParameterName(
+                    "permission_denied: apikey".into(),
+                ));
+            }
+        }
+        let mut group = self.find_api_key_account_group_filter(id)?;
+        let mut next = current.clone();
+        patch.apply(&mut next, &mut group);
+        if patch.name.is_some() {
+            self.update_api_key_name(id, next.name.as_deref())?;
+        }
+        if patch.model.is_some() {
+            self.update_api_key_model_config(
+                id,
+                next.model_slug.as_deref(),
+                next.reasoning_effort.as_deref(),
+                next.service_tier.as_deref(),
+            )?;
+        }
+        if patch.routing.is_some() {
+            self.update_api_key_rotation_config(
+                id,
+                &next.rotation_strategy,
+                next.aggregate_api_id.as_deref(),
+                next.account_plan_filter.as_deref(),
+            )?;
+        }
+        if patch.protocol.is_some()
+            || patch.upstream_base_url.is_some()
+            || patch.static_headers_json.is_some()
+        {
+            self.update_api_key_profile_config(
+                id,
+                &next.client_type,
+                &next.protocol_type,
+                &next.auth_scheme,
+                next.upstream_base_url.as_deref(),
+                next.static_headers_json.as_deref(),
+                next.service_tier.as_deref(),
+            )?;
+        }
+        if patch.routing.is_some() || patch.account_group_filter.is_some() {
+            self.update_api_key_account_group_filter(id, group.as_deref())?;
+        }
+        if let Some(quota) = patch.quota_limit_tokens {
+            self.upsert_api_key_quota_limit(id, quota)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
     /// 函数 `insert_api_key`
     ///
     /// 作者: gaohongshun

@@ -294,38 +294,49 @@ fn models_etag_header_uses_extra_etag_value() {
 }
 
 #[test]
-fn local_models_lists_image_model_once_with_image_only_capabilities() {
+fn local_models_lists_each_image_model_once_with_image_only_capabilities() {
     let storage = codexmanager_core::storage::Storage::open_in_memory().expect("open storage");
     storage.init().expect("init storage");
 
     let response = crate::models_v2::models_response_with_storage(&storage)
         .expect("read managed local models");
-    assert_eq!(response.models.len(), 9);
-    let image_models = response
-        .models
-        .iter()
-        .filter(|model| model.slug == "gpt-image-2")
-        .collect::<Vec<_>>();
-    assert_eq!(image_models.len(), 1);
-    let image = image_models[0];
-    assert_eq!(image.input_modalities, ["text", "image"]);
-    assert_eq!(
-        image.extra["output_modalities"],
-        serde_json::json!(["image"])
-    );
-    assert_eq!(
-        image.extra["supported_endpoints"],
-        serde_json::json!(["/v1/images/generations", "/v1/images/edits"])
-    );
-    assert_eq!(image.extra["supports_text_generation"], false);
+    assert_eq!(response.models.len(), 10);
+    for slug in [
+        "gpt-image-2",
+        "gpt-image-2.5-sunburst",
+        "gpt-image-2.5-flare",
+    ] {
+        let image_models = response
+            .models
+            .iter()
+            .filter(|model| model.slug == slug)
+            .collect::<Vec<_>>();
+        assert_eq!(image_models.len(), 1, "expected one {slug} entry");
+        let image = image_models[0];
+        assert_eq!(image.input_modalities, ["text", "image"]);
+        assert_eq!(
+            image.extra["output_modalities"],
+            serde_json::json!(["image"])
+        );
+        assert_eq!(
+            image.extra["supported_endpoints"],
+            serde_json::json!(["/v1/images/generations", "/v1/images/edits"])
+        );
+        assert_eq!(image.extra["supports_text_generation"], false);
+    }
 
     let serialized: Value =
         serde_json::from_str(&serialize_models_response(&response)).expect("serialize models");
     let data = serialized["data"].as_array().expect("data array");
-    assert_eq!(
-        data.iter()
-            .filter(|model| model["id"] == "gpt-image-2")
-            .count(),
-        1
-    );
+    for slug in [
+        "gpt-image-2",
+        "gpt-image-2.5-sunburst",
+        "gpt-image-2.5-flare",
+    ] {
+        assert_eq!(
+            data.iter().filter(|model| model["id"] == slug).count(),
+            1,
+            "expected one serialized {slug} entry"
+        );
+    }
 }

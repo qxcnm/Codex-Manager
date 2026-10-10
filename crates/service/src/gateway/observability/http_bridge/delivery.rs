@@ -1,16 +1,15 @@
+use crate::http::gateway_request::GatewayRequest as Request;
+use crate::http::gateway_response::{Header, Response, StatusCode};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
-use tiny_http::{Header, Request, Response, StatusCode};
 
 use crate::gateway::upstream::GatewayStreamResponse;
 
 use super::super::{GeminiStreamOutputMode, ResponseAdapter, ToolNameRestoreMap};
 use super::body_conversion::{
-    chat_completion_body_to_single_sse, compatibility_stream_content_type,
-    convert_chat_completions_body_to_compact, convert_error_body_for_adapter,
-    convert_responses_body_to_chat_completions, convert_success_body_for_adapter,
-    gemini_cli_wrap_response_envelope, images_response_body_to_sse,
-    merge_usage_from_body_without_output_text,
+    compatibility_stream_content_type, convert_chat_completions_body_to_compact,
+    convert_error_body_for_adapter, convert_success_body_for_adapter,
+    gemini_cli_wrap_response_envelope, merge_usage_from_body_without_output_text,
 };
 use super::compact_delivery::{
     respond_compact_success_body, respond_invalid_compact_non_success_body,
@@ -94,15 +93,16 @@ struct UpstreamDebugMetaRefs<'a> {
     content_type: &'a Option<String>,
 }
 
-fn respond_usage_collector_stream(
+async fn respond_usage_collector_stream(
     request: Request,
     status: StatusCode,
     headers: Vec<Header>,
-    response_body: Box<dyn std::io::Read + Send>,
+    response_body: Box<dyn crate::http::gateway_response_body::GatewayResponseBody>,
     usage_collector: Arc<Mutex<UpstreamResponseUsage>>,
     meta: UpstreamDebugMetaRefs<'_>,
 ) -> UpstreamResponseBridgeResult {
     let delivery_error = respond_streaming_chunked(request, status, headers, response_body)
+        .await
         .err()
         .map(|err| err.to_string());
     let usage = usage_collector
@@ -121,15 +121,16 @@ fn respond_usage_collector_stream(
     )
 }
 
-fn respond_passthrough_collector_stream(
+async fn respond_passthrough_collector_stream(
     request: Request,
     status: StatusCode,
     headers: Vec<Header>,
-    response_body: Box<dyn std::io::Read + Send>,
+    response_body: Box<dyn crate::http::gateway_response_body::GatewayResponseBody>,
     usage_collector: Arc<Mutex<PassthroughSseCollector>>,
     meta: UpstreamDebugMetaRefs<'_>,
 ) -> UpstreamResponseBridgeResult {
     let delivery_error = respond_streaming_chunked(request, status, headers, response_body)
+        .await
         .err()
         .map(|err| err.to_string());
     let collector = usage_collector
@@ -140,6 +141,7 @@ fn respond_passthrough_collector_stream(
         UpstreamResponseBridgeResult {
             usage: collector.usage,
             stream_terminal_seen: collector.saw_terminal,
+            stream_terminal_delivered: collector.terminal_delivered,
             stream_terminal_error: collector.terminal_error,
             delivery_error,
             upstream_error_hint: collector.upstream_error_hint,
@@ -171,9 +173,44 @@ fn respond_passthrough_collector_stream(
 ///
 /// # 返回
 /// 返回函数执行结果
+#[cfg(test)]
 pub(crate) fn respond_with_upstream(
     request: Request,
     upstream: reqwest::blocking::Response,
+    _inflight_guard: super::super::AccountInFlightGuard,
+    response_adapter: ResponseAdapter,
+    passthrough_sse_protocol: Option<PassthroughSseProtocol>,
+    gemini_stream_output_mode: Option<GeminiStreamOutputMode>,
+    request_path: &str,
+    tool_name_restore_map: Option<&ToolNameRestoreMap>,
+    is_stream: bool,
+    allow_failover_for_deactivation: bool,
+    trace_id: Option<&str>,
+    fallback_model: Option<&str>,
+    request_started_at: std::time::Instant,
+) -> Result<UpstreamResponseBridgeResult, String> {
+    crate::gateway::response_test_runtime()
+        .map_err(|error| error.to_string())?
+        .block_on(respond_with_stream_upstream(
+            request,
+            GatewayStreamResponse::from_blocking_response(upstream),
+            _inflight_guard,
+            response_adapter,
+            passthrough_sse_protocol,
+            gemini_stream_output_mode,
+            request_path,
+            tool_name_restore_map,
+            is_stream,
+            allow_failover_for_deactivation,
+            trace_id,
+            fallback_model,
+            request_started_at,
+        ))
+}
+
+pub(crate) async fn respond_with_stream_upstream(
+    request: Request,
+    upstream: GatewayStreamResponse,
     _inflight_guard: super::super::AccountInFlightGuard,
     response_adapter: ResponseAdapter,
     passthrough_sse_protocol: Option<PassthroughSseProtocol>,
@@ -203,7 +240,8 @@ pub(crate) fn respond_with_upstream(
 
         if !is_stream {
             let upstream_body = upstream
-                .bytes()
+                .read_all_bytes_cancellable(request.cancellation_receiver())
+                .await
                 .map_err(|err| format!("read upstream body failed: {err}"))?;
             let detected_sse =
                 is_sse || (!is_json && looks_like_sse_payload(upstream_body.as_ref()));
@@ -248,7 +286,7 @@ pub(crate) fn respond_with_upstream(
                 )
                 .unwrap_or_else(|| body.clone())
             };
-            let delivery_error = respond_json_bytes(request, status, headers, response_body);
+            let delivery_error = respond_json_bytes(request, status, headers, response_body).await;
             return Ok(terminal_bridge_result_with_debug_meta(
                 usage,
                 delivery_error,
@@ -263,7 +301,8 @@ pub(crate) fn respond_with_upstream(
 
         if status.0 >= 400 && !is_sse {
             let upstream_body = upstream
-                .bytes()
+                .read_all_bytes_cancellable(request.cancellation_receiver())
+                .await
                 .map_err(|err| format!("read upstream body failed: {err}"))?;
             let message = with_upstream_debug_suffix(
                 extract_error_hint_from_body_or_headers(
@@ -283,7 +322,7 @@ pub(crate) fn respond_with_upstream(
             )
             .unwrap_or_else(|| "upstream compatibility bridge failed".to_string());
             let response_body = convert_error_body_for_adapter(response_adapter, &message);
-            let delivery_error = respond_json_bytes(request, status, headers, response_body);
+            let delivery_error = respond_json_bytes(request, status, headers, response_body).await;
             return Ok(terminal_bridge_result_with_debug_meta(
                 UpstreamResponseUsage::default(),
                 delivery_error,
@@ -303,14 +342,15 @@ pub(crate) fn respond_with_upstream(
         match response_adapter {
             ResponseAdapter::AnthropicMessagesFromResponses => {
                 let usage_collector = Arc::new(Mutex::new(UpstreamResponseUsage::default()));
-                let response_body: Box<dyn std::io::Read + Send> =
-                    Box::new(AnthropicSseReader::new(
-                        upstream,
-                        Arc::clone(&usage_collector),
-                        fallback_model,
-                        tool_name_restore_map.cloned(),
-                        request_started_at,
-                    ));
+                let response_body: Box<
+                    dyn crate::http::gateway_response_body::GatewayResponseBody,
+                > = Box::new(AnthropicSseReader::from_stream_response(
+                    upstream,
+                    Arc::clone(&usage_collector),
+                    fallback_model,
+                    tool_name_restore_map.cloned(),
+                    request_started_at,
+                ));
                 return Ok(respond_usage_collector_stream(
                     request,
                     status,
@@ -324,17 +364,19 @@ pub(crate) fn respond_with_upstream(
                         identity_error_code: &upstream_identity_error_code,
                         content_type: &upstream_content_type,
                     },
-                ));
+                )
+                .await);
             }
             ResponseAdapter::ResponsesFromAnthropicMessages => {
                 let usage_collector = Arc::new(Mutex::new(UpstreamResponseUsage::default()));
-                let response_body: Box<dyn std::io::Read + Send> =
-                    Box::new(ResponsesFromAnthropicSseReader::new(
-                        upstream,
-                        Arc::clone(&usage_collector),
-                        fallback_model,
-                        request_started_at,
-                    ));
+                let response_body: Box<
+                    dyn crate::http::gateway_response_body::GatewayResponseBody,
+                > = Box::new(ResponsesFromAnthropicSseReader::from_stream_response(
+                    upstream,
+                    Arc::clone(&usage_collector),
+                    fallback_model,
+                    request_started_at,
+                ));
                 return Ok(respond_usage_collector_stream(
                     request,
                     status,
@@ -348,16 +390,18 @@ pub(crate) fn respond_with_upstream(
                         identity_error_code: &upstream_identity_error_code,
                         content_type: &upstream_content_type,
                     },
-                ));
+                )
+                .await);
             }
             ResponseAdapter::ChatCompletionsFromResponses => {
                 let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
-                let response_body: Box<dyn std::io::Read + Send> =
-                    Box::new(ChatCompletionsFromResponsesSseReader::new(
-                        upstream,
-                        Arc::clone(&usage_collector),
-                        request_started_at,
-                    ));
+                let response_body: Box<
+                    dyn crate::http::gateway_response_body::GatewayResponseBody,
+                > = Box::new(ChatCompletionsFromResponsesSseReader::from_stream_response(
+                    upstream,
+                    Arc::clone(&usage_collector),
+                    request_started_at,
+                ));
                 return Ok(respond_passthrough_collector_stream(
                     request,
                     status,
@@ -371,7 +415,8 @@ pub(crate) fn respond_with_upstream(
                         identity_error_code: &upstream_identity_error_code,
                         content_type: &upstream_content_type,
                     },
-                ));
+                )
+                .await);
             }
             ResponseAdapter::CompactFromChatCompletions => unreachable!(),
             ResponseAdapter::ImagesB64JsonFromResponses
@@ -383,13 +428,14 @@ pub(crate) fn respond_with_upstream(
                     ImagesResponseFormat::B64Json
                 };
                 let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
-                let response_body: Box<dyn std::io::Read + Send> =
-                    Box::new(ImagesFromResponsesSseReader::new(
-                        upstream,
-                        Arc::clone(&usage_collector),
-                        request_started_at,
-                        response_format,
-                    ));
+                let response_body: Box<
+                    dyn crate::http::gateway_response_body::GatewayResponseBody,
+                > = Box::new(ImagesFromResponsesSseReader::from_stream_response(
+                    upstream,
+                    Arc::clone(&usage_collector),
+                    request_started_at,
+                    response_format,
+                ));
                 return Ok(respond_passthrough_collector_stream(
                     request,
                     status,
@@ -403,12 +449,15 @@ pub(crate) fn respond_with_upstream(
                         identity_error_code: &upstream_identity_error_code,
                         content_type: &upstream_content_type,
                     },
-                ));
+                )
+                .await);
             }
             ResponseAdapter::GeminiJson | ResponseAdapter::GeminiCliJson => unreachable!(),
             ResponseAdapter::GeminiSse | ResponseAdapter::GeminiCliSse => {
                 let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
-                let response_body: Box<dyn std::io::Read + Send> = Box::new(GeminiSseReader::new(
+                let response_body: Box<
+                    dyn crate::http::gateway_response_body::GatewayResponseBody,
+                > = Box::new(GeminiSseReader::from_stream_response(
                     upstream,
                     Arc::clone(&usage_collector),
                     tool_name_restore_map.cloned(),
@@ -429,7 +478,8 @@ pub(crate) fn respond_with_upstream(
                         identity_error_code: &upstream_identity_error_code,
                         content_type: &upstream_content_type,
                     },
-                ));
+                )
+                .await);
             }
             ResponseAdapter::Passthrough => {}
         }
@@ -440,7 +490,8 @@ pub(crate) fn respond_with_upstream(
             let mut headers = copy_upstream_response_headers(upstream.headers(), trace_id);
             if !is_stream {
                 let upstream_body = upstream
-                    .bytes()
+                    .read_all_bytes_cancellable(request.cancellation_receiver())
+                    .await
                     .map_err(|err| format!("read upstream body failed: {err}"))?;
                 let detected_sse =
                     is_sse || (!is_json && looks_like_sse_payload(upstream_body.as_ref()));
@@ -497,7 +548,8 @@ pub(crate) fn respond_with_upstream(
                             upstream_auth_error.as_deref(),
                             upstream_identity_error_code.as_deref(),
                             trace_id,
-                        ));
+                        )
+                        .await);
                     }
                     if is_compact_request
                         && compact_non_success_body_should_be_normalized(
@@ -519,7 +571,8 @@ pub(crate) fn respond_with_upstream(
                             upstream_auth_error.as_deref(),
                             upstream_identity_error_code.as_deref(),
                             trace_id,
-                        ));
+                        )
+                        .await);
                     }
                     if status.0 >= 400
                         && non_success_body_should_be_normalized(
@@ -540,12 +593,16 @@ pub(crate) fn respond_with_upstream(
                             upstream_auth_error.as_deref(),
                             upstream_identity_error_code.as_deref(),
                             trace_id,
-                        ));
+                        )
+                        .await);
                     }
                     let len = Some(body.len());
-                    let response =
-                        Response::new(status, headers, std::io::Cursor::new(body), len, None);
-                    let delivery_error = request.respond(response).err().map(|err| err.to_string());
+                    let response = Response::new(status, headers, std::io::Cursor::new(body), len);
+                    let delivery_error = request
+                        .respond_async(response)
+                        .await
+                        .err()
+                        .map(|err| err.to_string());
                     return Ok(terminal_bridge_result_with_debug_meta(
                         usage,
                         delivery_error,
@@ -582,7 +639,8 @@ pub(crate) fn respond_with_upstream(
                         upstream_auth_error.as_deref(),
                         upstream_identity_error_code.as_deref(),
                         trace_id,
-                    ));
+                    )
+                    .await);
                 }
                 if is_compact_request
                     && compact_non_success_body_should_be_normalized(
@@ -604,7 +662,8 @@ pub(crate) fn respond_with_upstream(
                         upstream_auth_error.as_deref(),
                         upstream_identity_error_code.as_deref(),
                         trace_id,
-                    ));
+                    )
+                    .await);
                 }
                 if status.0 >= 400
                     && non_success_body_should_be_normalized(
@@ -625,7 +684,8 @@ pub(crate) fn respond_with_upstream(
                         upstream_auth_error.as_deref(),
                         upstream_identity_error_code.as_deref(),
                         trace_id,
-                    ));
+                    )
+                    .await);
                 }
                 let upstream_error_hint = with_upstream_debug_suffix(
                     extract_error_hint_from_body_or_headers(
@@ -663,9 +723,12 @@ pub(crate) fn respond_with_upstream(
                     headers,
                     std::io::Cursor::new(upstream_body.to_vec()),
                     len,
-                    None,
                 );
-                let delivery_error = request.respond(response).err().map(|err| err.to_string());
+                let delivery_error = request
+                    .respond_async(response)
+                    .await
+                    .err()
+                    .map(|err| err.to_string());
                 return Ok(terminal_bridge_result_with_debug_meta(
                     usage,
                     delivery_error,
@@ -679,7 +742,8 @@ pub(crate) fn respond_with_upstream(
             }
             if is_stream && !is_sse && status.0 >= 400 {
                 let upstream_body = upstream
-                    .bytes()
+                    .read_all_bytes_cancellable(request.cancellation_receiver())
+                    .await
                     .map_err(|err| format!("read upstream body failed: {err}"))?;
                 let usage = if is_json {
                     serde_json::from_slice::<Value>(upstream_body.as_ref())
@@ -706,7 +770,8 @@ pub(crate) fn respond_with_upstream(
                         upstream_auth_error.as_deref(),
                         upstream_identity_error_code.as_deref(),
                         trace_id,
-                    ));
+                    )
+                    .await);
                 }
                 let upstream_error_hint = with_upstream_debug_suffix(
                     extract_error_hint_from_body_or_headers(
@@ -729,9 +794,12 @@ pub(crate) fn respond_with_upstream(
                     headers,
                     std::io::Cursor::new(upstream_body.to_vec()),
                     len,
-                    None,
                 );
-                let delivery_error = request.respond(response).err().map(|err| err.to_string());
+                let delivery_error = request
+                    .respond_async(response)
+                    .await
+                    .err()
+                    .map(|err| err.to_string());
                 return Ok(terminal_bridge_result_with_debug_meta(
                     usage,
                     delivery_error,
@@ -745,7 +813,8 @@ pub(crate) fn respond_with_upstream(
             }
             if is_stream && !is_sse && status.0 < 400 && is_compact_request_path(request_path) {
                 let upstream_body = upstream
-                    .bytes()
+                    .read_all_bytes_cancellable(request.cancellation_receiver())
+                    .await
                     .map_err(|err| format!("read upstream body failed: {err}"))?;
                 let usage = if is_json {
                     serde_json::from_slice::<Value>(upstream_body.as_ref())
@@ -767,30 +836,33 @@ pub(crate) fn respond_with_upstream(
                     upstream_identity_error_code.as_deref(),
                     &upstream_content_type,
                     trace_id,
-                ));
+                )
+                .await);
             }
             if is_sse || is_stream {
                 let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
-                let response_body: Box<dyn std::io::Read + Send> =
-                    if request_path.starts_with("/v1/responses") {
-                        Box::new(OpenAIResponsesPassthroughSseReader::new(
-                            upstream,
-                            Arc::clone(&usage_collector),
-                            keepalive_frame,
-                            request_started_at,
-                        ))
-                    } else {
-                        Box::new(PassthroughSseUsageReader::new(
-                            upstream,
-                            Arc::clone(&usage_collector),
-                            keepalive_frame,
-                            passthrough_sse_protocol,
-                            request_started_at,
-                        ))
-                    };
+                let response_body: Box<
+                    dyn crate::http::gateway_response_body::GatewayResponseBody,
+                > = if request_path.starts_with("/v1/responses") {
+                    Box::new(OpenAIResponsesPassthroughSseReader::from_stream_response(
+                        upstream,
+                        Arc::clone(&usage_collector),
+                        keepalive_frame,
+                        request_started_at,
+                    ))
+                } else {
+                    Box::new(PassthroughSseUsageReader::from_stream_response(
+                        upstream,
+                        Arc::clone(&usage_collector),
+                        keepalive_frame,
+                        passthrough_sse_protocol,
+                        request_started_at,
+                    ))
+                };
                 force_openai_responses_stream_content_type(&mut headers, request_path, is_stream);
                 let delivery_error =
                     respond_streaming_chunked(request, status, headers, response_body)
+                        .await
                         .err()
                         .map(|err| err.to_string());
                 let collector = usage_collector
@@ -802,6 +874,7 @@ pub(crate) fn respond_with_upstream(
                     UpstreamResponseBridgeResult {
                         usage: collector.usage,
                         stream_terminal_seen: collector.saw_terminal,
+                        stream_terminal_delivered: collector.terminal_delivered,
                         stream_terminal_error: collector.terminal_error,
                         delivery_error,
                         upstream_error_hint: with_upstream_debug_suffix(
@@ -830,9 +903,16 @@ pub(crate) fn respond_with_upstream(
                 log_bridge_stream_diagnostics(response_adapter, request_path, &result);
                 return Ok(result);
             }
-            let len = upstream.content_length().map(|v| v as usize);
-            let response = Response::new(status, headers, upstream, len, None);
-            let delivery_error = request.respond(response).err().map(|err| err.to_string());
+            let upstream_body = upstream
+                .read_all_bytes_cancellable(request.cancellation_receiver())
+                .await?;
+            let len = Some(upstream_body.len());
+            let response = Response::new(status, headers, std::io::Cursor::new(upstream_body), len);
+            let delivery_error = request
+                .respond_async(response)
+                .await
+                .err()
+                .map(|err| err.to_string());
             Ok(terminal_bridge_result_with_debug_meta(
                 UpstreamResponseUsage::default(),
                 delivery_error,
@@ -848,7 +928,8 @@ pub(crate) fn respond_with_upstream(
             let status = StatusCode(upstream.status().as_u16());
             let headers = copy_upstream_response_headers(upstream.headers(), trace_id);
             let upstream_body = upstream
-                .bytes()
+                .read_all_bytes_cancellable(request.cancellation_receiver())
+                .await
                 .map_err(|err| format!("read upstream body failed: {err}"))?;
             let usage = serde_json::from_slice::<Value>(upstream_body.as_ref())
                 .ok()
@@ -872,7 +953,7 @@ pub(crate) fn respond_with_upstream(
                     )
                 })
                 .flatten();
-            let delivery_error = respond_json_bytes(request, status, headers, response_body);
+            let delivery_error = respond_json_bytes(request, status, headers, response_body).await;
             Ok(terminal_bridge_result_with_debug_meta(
                 usage,
                 delivery_error,
@@ -897,712 +978,6 @@ pub(crate) fn respond_with_upstream(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn respond_with_stream_upstream(
-    request: Request,
-    upstream: GatewayStreamResponse,
-    _inflight_guard: super::super::AccountInFlightGuard,
-    response_adapter: ResponseAdapter,
-    _passthrough_sse_protocol: Option<PassthroughSseProtocol>,
-    gemini_stream_output_mode: Option<GeminiStreamOutputMode>,
-    request_path: &str,
-    tool_name_restore_map: Option<&ToolNameRestoreMap>,
-    is_stream: bool,
-    _allow_failover_for_deactivation: bool,
-    trace_id: Option<&str>,
-    fallback_model: Option<&str>,
-    request_started_at: std::time::Instant,
-) -> Result<UpstreamResponseBridgeResult, String> {
-    let keepalive_frame = SseKeepAliveFrame::Comment;
-    let upstream_meta = upstream_response_metadata(upstream.headers());
-    let upstream_request_id = upstream_meta.request_id;
-    let upstream_cf_ray = upstream_meta.cf_ray;
-    let upstream_auth_error = upstream_meta.auth_error;
-    let upstream_identity_error_code = upstream_meta.identity_error_code;
-    let upstream_content_type = upstream_meta.content_type;
-    let is_sse = upstream_meta.is_sse;
-    let is_json = upstream_meta.is_json;
-    if response_adapter != ResponseAdapter::Passthrough {
-        let status = StatusCode(upstream.status().as_u16());
-        let mut headers = copy_upstream_response_headers(upstream.headers(), trace_id);
-
-        if !is_stream {
-            let upstream_body = upstream
-                .read_all_bytes()
-                .map_err(|err| format!("read upstream body failed: {err}"))?;
-            let detected_sse =
-                is_sse || (!is_json && looks_like_sse_payload(upstream_body.as_ref()));
-            let (body, usage) = if detected_sse {
-                let (synthesized, mut usage) =
-                    collect_non_stream_json_from_sse_bytes(upstream_body.as_ref());
-                let body = synthesized.unwrap_or_else(|| upstream_body.to_vec());
-                merge_usage_from_body_without_output_text(&mut usage, &body);
-                (body, usage)
-            } else {
-                let usage = serde_json::from_slice::<Value>(upstream_body.as_ref())
-                    .ok()
-                    .map(|value| parse_usage_from_json(&value))
-                    .unwrap_or_default();
-                (upstream_body.to_vec(), usage)
-            };
-            let response_body = if status.0 >= 400 {
-                let message = with_upstream_debug_suffix(
-                    extract_error_hint_from_body_or_headers(
-                        status.0,
-                        upstream_content_type.as_deref(),
-                        &body,
-                        upstream_cf_ray.as_deref(),
-                        upstream_auth_error.as_deref(),
-                        upstream_identity_error_code.as_deref(),
-                    )
-                    .or_else(|| extract_error_message_from_json_bytes(&body)),
-                    None,
-                    upstream_request_id.as_deref(),
-                    upstream_cf_ray.as_deref(),
-                    upstream_auth_error.as_deref(),
-                    upstream_identity_error_code.as_deref(),
-                )
-                .unwrap_or_else(|| "upstream compatibility bridge failed".to_string());
-                convert_error_body_for_adapter(response_adapter, &message)
-            } else {
-                convert_success_body_for_adapter(
-                    response_adapter,
-                    &body,
-                    request_path,
-                    tool_name_restore_map,
-                )
-                .unwrap_or_else(|| body.clone())
-            };
-            let delivery_error = respond_json_bytes(request, status, headers, response_body);
-            return Ok(terminal_bridge_result_with_debug_meta(
-                usage,
-                delivery_error,
-                None,
-                &upstream_request_id,
-                &upstream_cf_ray,
-                &upstream_auth_error,
-                &upstream_identity_error_code,
-                &upstream_content_type,
-            ));
-        }
-
-        if status.0 >= 400 && !is_sse {
-            let upstream_body = upstream
-                .read_all_bytes()
-                .map_err(|err| format!("read upstream body failed: {err}"))?;
-            let message = with_upstream_debug_suffix(
-                extract_error_hint_from_body_or_headers(
-                    status.0,
-                    upstream_content_type.as_deref(),
-                    upstream_body.as_ref(),
-                    upstream_cf_ray.as_deref(),
-                    upstream_auth_error.as_deref(),
-                    upstream_identity_error_code.as_deref(),
-                )
-                .or_else(|| extract_error_message_from_json_bytes(upstream_body.as_ref())),
-                None,
-                upstream_request_id.as_deref(),
-                upstream_cf_ray.as_deref(),
-                upstream_auth_error.as_deref(),
-                upstream_identity_error_code.as_deref(),
-            )
-            .unwrap_or_else(|| "upstream compatibility bridge failed".to_string());
-            let response_body = convert_error_body_for_adapter(response_adapter, &message);
-            let delivery_error = respond_json_bytes(request, status, headers, response_body);
-            return Ok(terminal_bridge_result_with_debug_meta(
-                UpstreamResponseUsage::default(),
-                delivery_error,
-                Some(message),
-                &upstream_request_id,
-                &upstream_cf_ray,
-                &upstream_auth_error,
-                &upstream_identity_error_code,
-                &upstream_content_type,
-            ));
-        }
-
-        replace_content_type_header(
-            &mut headers,
-            compatibility_stream_content_type(response_adapter, gemini_stream_output_mode),
-        );
-        match response_adapter {
-            ResponseAdapter::AnthropicMessagesFromResponses => {
-                let upstream_body = upstream
-                    .read_all_bytes()
-                    .map_err(|err| format!("read upstream body failed: {err}"))?;
-                let usage_collector = Arc::new(Mutex::new(UpstreamResponseUsage::default()));
-                let response_body: Box<dyn std::io::Read + Send> =
-                    Box::new(AnthropicSseReader::from_reader(
-                        std::io::Cursor::new(upstream_body.to_vec()),
-                        Arc::clone(&usage_collector),
-                        fallback_model,
-                        tool_name_restore_map.cloned(),
-                        request_started_at,
-                    ));
-                return Ok(respond_usage_collector_stream(
-                    request,
-                    status,
-                    headers,
-                    response_body,
-                    usage_collector,
-                    UpstreamDebugMetaRefs {
-                        request_id: &upstream_request_id,
-                        cf_ray: &upstream_cf_ray,
-                        auth_error: &upstream_auth_error,
-                        identity_error_code: &upstream_identity_error_code,
-                        content_type: &upstream_content_type,
-                    },
-                ));
-            }
-            ResponseAdapter::ResponsesFromAnthropicMessages => {
-                let upstream_body = upstream
-                    .read_all_bytes()
-                    .map_err(|err| format!("read upstream body failed: {err}"))?;
-                let usage_collector = Arc::new(Mutex::new(UpstreamResponseUsage::default()));
-                let response_body: Box<dyn std::io::Read + Send> =
-                    Box::new(ResponsesFromAnthropicSseReader::from_reader(
-                        std::io::Cursor::new(upstream_body.to_vec()),
-                        Arc::clone(&usage_collector),
-                        fallback_model,
-                        request_started_at,
-                    ));
-                return Ok(respond_usage_collector_stream(
-                    request,
-                    status,
-                    headers,
-                    response_body,
-                    usage_collector,
-                    UpstreamDebugMetaRefs {
-                        request_id: &upstream_request_id,
-                        cf_ray: &upstream_cf_ray,
-                        auth_error: &upstream_auth_error,
-                        identity_error_code: &upstream_identity_error_code,
-                        content_type: &upstream_content_type,
-                    },
-                ));
-            }
-            ResponseAdapter::ChatCompletionsFromResponses => {
-                let upstream_body = upstream
-                    .read_all_bytes()
-                    .map_err(|err| format!("read upstream body failed: {err}"))?;
-                let (synthesized, mut usage) =
-                    collect_non_stream_json_from_sse_bytes(upstream_body.as_ref());
-                let body = synthesized.unwrap_or_else(|| upstream_body.to_vec());
-                merge_usage_from_body_without_output_text(&mut usage, &body);
-                let chat_body =
-                    convert_responses_body_to_chat_completions(&body).unwrap_or_else(|| body);
-                let response_body = chat_completion_body_to_single_sse(&chat_body);
-                let len = Some(response_body.len());
-                let response = Response::new(
-                    status,
-                    headers,
-                    std::io::Cursor::new(response_body),
-                    len,
-                    None,
-                );
-                let delivery_error = request.respond(response).err().map(|err| err.to_string());
-                return Ok(terminal_bridge_result_with_debug_meta(
-                    usage,
-                    delivery_error,
-                    None,
-                    &upstream_request_id,
-                    &upstream_cf_ray,
-                    &upstream_auth_error,
-                    &upstream_identity_error_code,
-                    &upstream_content_type,
-                ));
-            }
-            ResponseAdapter::CompactFromChatCompletions => unreachable!(),
-            ResponseAdapter::ImagesB64JsonFromResponses
-            | ResponseAdapter::ImagesUrlFromResponses => {
-                let response_format = if response_adapter == ResponseAdapter::ImagesUrlFromResponses
-                {
-                    ImagesResponseFormat::Url
-                } else {
-                    ImagesResponseFormat::B64Json
-                };
-                let upstream_body = upstream
-                    .read_all_bytes()
-                    .map_err(|err| format!("read upstream body failed: {err}"))?;
-                let (synthesized, mut usage) =
-                    collect_non_stream_json_from_sse_bytes(upstream_body.as_ref());
-                let body = synthesized.unwrap_or_else(|| upstream_body.to_vec());
-                merge_usage_from_body_without_output_text(&mut usage, &body);
-                let response_body = images_response_body_to_sse(&body, response_format);
-                let len = Some(response_body.len());
-                let response = Response::new(
-                    status,
-                    headers,
-                    std::io::Cursor::new(response_body),
-                    len,
-                    None,
-                );
-                let delivery_error = request.respond(response).err().map(|err| err.to_string());
-                return Ok(terminal_bridge_result_with_debug_meta(
-                    usage,
-                    delivery_error,
-                    None,
-                    &upstream_request_id,
-                    &upstream_cf_ray,
-                    &upstream_auth_error,
-                    &upstream_identity_error_code,
-                    &upstream_content_type,
-                ));
-            }
-            ResponseAdapter::GeminiJson | ResponseAdapter::GeminiCliJson => unreachable!(),
-            ResponseAdapter::GeminiSse | ResponseAdapter::GeminiCliSse => {
-                let upstream_body = upstream
-                    .read_all_bytes()
-                    .map_err(|err| format!("read upstream body failed: {err}"))?;
-                let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
-                let response_body: Box<dyn std::io::Read + Send> =
-                    Box::new(GeminiSseReader::from_reader(
-                        std::io::Cursor::new(upstream_body.to_vec()),
-                        Arc::clone(&usage_collector),
-                        tool_name_restore_map.cloned(),
-                        gemini_stream_output_mode.unwrap_or(GeminiStreamOutputMode::Sse),
-                        gemini_cli_wrap_response_envelope(response_adapter),
-                        request_started_at,
-                    ));
-                return Ok(respond_passthrough_collector_stream(
-                    request,
-                    status,
-                    headers,
-                    response_body,
-                    usage_collector,
-                    UpstreamDebugMetaRefs {
-                        request_id: &upstream_request_id,
-                        cf_ray: &upstream_cf_ray,
-                        auth_error: &upstream_auth_error,
-                        identity_error_code: &upstream_identity_error_code,
-                        content_type: &upstream_content_type,
-                    },
-                ));
-            }
-            ResponseAdapter::Passthrough => {}
-        }
-    }
-
-    match response_adapter {
-        ResponseAdapter::Passthrough => {
-            let status = StatusCode(upstream.status().as_u16());
-            let mut headers = copy_upstream_response_headers(upstream.headers(), trace_id);
-
-            if !is_stream {
-                let upstream_body = upstream
-                    .read_all_bytes()
-                    .map_err(|err| format!("read upstream body failed: {err}"))?;
-                let detected_sse =
-                    is_sse || (!is_json && looks_like_sse_payload(upstream_body.as_ref()));
-                let is_compact_request = is_compact_request_path(request_path);
-                if detected_sse {
-                    let (synthesized_body, mut usage) =
-                        collect_non_stream_json_from_sse_bytes(upstream_body.as_ref());
-                    let synthesized_response = synthesized_body.is_some();
-                    let body = synthesized_body.unwrap_or_else(|| upstream_body.to_vec());
-                    merge_usage_from_body_without_output_text(&mut usage, &body);
-                    let upstream_error_hint = with_upstream_debug_suffix(
-                        extract_error_hint_from_body_or_headers(
-                            status.0,
-                            upstream_content_type.as_deref(),
-                            &body,
-                            upstream_cf_ray.as_deref(),
-                            upstream_auth_error.as_deref(),
-                            upstream_identity_error_code.as_deref(),
-                        ),
-                        None,
-                        upstream_request_id.as_deref(),
-                        upstream_cf_ray.as_deref(),
-                        upstream_auth_error.as_deref(),
-                        upstream_identity_error_code.as_deref(),
-                    );
-                    if should_suppress_deactivation_delivery(
-                        upstream_error_hint.as_deref(),
-                        _allow_failover_for_deactivation,
-                    ) {
-                        return Ok(terminal_bridge_result_with_debug_meta(
-                            usage,
-                            None,
-                            upstream_error_hint,
-                            &upstream_request_id,
-                            &upstream_cf_ray,
-                            &upstream_auth_error,
-                            &upstream_identity_error_code,
-                            &upstream_content_type,
-                        ));
-                    }
-                    if synthesized_response {
-                        replace_content_type_header(&mut headers, "application/json");
-                    }
-                    if status.0 < 400
-                        && is_compact_request
-                        && !compact_success_body_is_valid(body.as_ref())
-                    {
-                        return Ok(respond_invalid_compact_success_body(
-                            request,
-                            usage,
-                            body.as_ref(),
-                            upstream_request_id.as_deref(),
-                            upstream_cf_ray.as_deref(),
-                            upstream_auth_error.as_deref(),
-                            upstream_identity_error_code.as_deref(),
-                            trace_id,
-                        ));
-                    }
-                    if is_compact_request
-                        && compact_non_success_body_should_be_normalized(
-                            status.0,
-                            upstream_content_type.as_deref(),
-                            body.as_ref(),
-                            upstream_auth_error.as_deref(),
-                            upstream_identity_error_code.as_deref(),
-                        )
-                    {
-                        return Ok(respond_invalid_compact_non_success_body(
-                            request,
-                            status.0,
-                            usage,
-                            body.as_ref(),
-                            upstream_content_type.as_deref(),
-                            upstream_request_id.as_deref(),
-                            upstream_cf_ray.as_deref(),
-                            upstream_auth_error.as_deref(),
-                            upstream_identity_error_code.as_deref(),
-                            trace_id,
-                        ));
-                    }
-                    if status.0 >= 400
-                        && non_success_body_should_be_normalized(
-                            status.0,
-                            upstream_content_type.as_deref(),
-                            body.as_ref(),
-                            upstream_auth_error.as_deref(),
-                            upstream_identity_error_code.as_deref(),
-                        )
-                    {
-                        return Ok(respond_normalized_passthrough_non_success_body(
-                            request,
-                            usage,
-                            body.as_ref(),
-                            upstream_content_type.as_deref(),
-                            upstream_request_id.as_deref(),
-                            upstream_cf_ray.as_deref(),
-                            upstream_auth_error.as_deref(),
-                            upstream_identity_error_code.as_deref(),
-                            trace_id,
-                        ));
-                    }
-                    let len = Some(body.len());
-                    let response =
-                        Response::new(status, headers, std::io::Cursor::new(body), len, None);
-                    let delivery_error = request.respond(response).err().map(|err| err.to_string());
-                    return Ok(terminal_bridge_result_with_debug_meta(
-                        usage,
-                        delivery_error,
-                        upstream_error_hint,
-                        &upstream_request_id,
-                        &upstream_cf_ray,
-                        &upstream_auth_error,
-                        &upstream_identity_error_code,
-                        &upstream_content_type,
-                    ));
-                }
-
-                let (_, sse_usage) = collect_non_stream_json_from_sse_bytes(upstream_body.as_ref());
-                let usage = if is_json {
-                    serde_json::from_slice::<Value>(upstream_body.as_ref())
-                        .ok()
-                        .map(|value| parse_usage_from_json(&value))
-                        .unwrap_or_default()
-                } else if usage_has_signal(&sse_usage) {
-                    sse_usage
-                } else {
-                    UpstreamResponseUsage::default()
-                };
-                if status.0 >= 400
-                    && non_success_body_should_be_normalized(
-                        status.0,
-                        upstream_content_type.as_deref(),
-                        upstream_body.as_ref(),
-                        upstream_auth_error.as_deref(),
-                        upstream_identity_error_code.as_deref(),
-                    )
-                {
-                    return Ok(respond_normalized_passthrough_non_success_body(
-                        request,
-                        usage,
-                        upstream_body.as_ref(),
-                        upstream_content_type.as_deref(),
-                        upstream_request_id.as_deref(),
-                        upstream_cf_ray.as_deref(),
-                        upstream_auth_error.as_deref(),
-                        upstream_identity_error_code.as_deref(),
-                        trace_id,
-                    ));
-                }
-                let upstream_error_hint = with_upstream_debug_suffix(
-                    extract_error_hint_from_body_or_headers(
-                        status.0,
-                        upstream_content_type.as_deref(),
-                        upstream_body.as_ref(),
-                        upstream_cf_ray.as_deref(),
-                        upstream_auth_error.as_deref(),
-                        upstream_identity_error_code.as_deref(),
-                    ),
-                    None,
-                    upstream_request_id.as_deref(),
-                    upstream_cf_ray.as_deref(),
-                    upstream_auth_error.as_deref(),
-                    upstream_identity_error_code.as_deref(),
-                );
-                if should_suppress_deactivation_delivery(
-                    upstream_error_hint.as_deref(),
-                    _allow_failover_for_deactivation,
-                ) {
-                    return Ok(terminal_bridge_result_with_debug_meta(
-                        usage,
-                        None,
-                        upstream_error_hint,
-                        &upstream_request_id,
-                        &upstream_cf_ray,
-                        &upstream_auth_error,
-                        &upstream_identity_error_code,
-                        &upstream_content_type,
-                    ));
-                }
-                let len = Some(upstream_body.len());
-                let response = Response::new(
-                    status,
-                    headers,
-                    std::io::Cursor::new(upstream_body.to_vec()),
-                    len,
-                    None,
-                );
-                let delivery_error = request.respond(response).err().map(|err| err.to_string());
-                return Ok(terminal_bridge_result_with_debug_meta(
-                    usage,
-                    delivery_error,
-                    upstream_error_hint,
-                    &upstream_request_id,
-                    &upstream_cf_ray,
-                    &upstream_auth_error,
-                    &upstream_identity_error_code,
-                    &upstream_content_type,
-                ));
-            }
-
-            if is_stream && !is_sse && status.0 >= 400 {
-                let upstream_body = upstream
-                    .read_all_bytes()
-                    .map_err(|err| format!("read upstream body failed: {err}"))?;
-                let usage = UpstreamResponseUsage::default();
-                if non_success_body_should_be_normalized(
-                    status.0,
-                    upstream_content_type.as_deref(),
-                    upstream_body.as_ref(),
-                    upstream_auth_error.as_deref(),
-                    upstream_identity_error_code.as_deref(),
-                ) {
-                    return Ok(respond_normalized_passthrough_non_success_body(
-                        request,
-                        usage,
-                        upstream_body.as_ref(),
-                        upstream_content_type.as_deref(),
-                        upstream_request_id.as_deref(),
-                        upstream_cf_ray.as_deref(),
-                        upstream_auth_error.as_deref(),
-                        upstream_identity_error_code.as_deref(),
-                        trace_id,
-                    ));
-                }
-                let upstream_error_hint = with_upstream_debug_suffix(
-                    extract_error_hint_from_body_or_headers(
-                        status.0,
-                        upstream_content_type.as_deref(),
-                        upstream_body.as_ref(),
-                        upstream_cf_ray.as_deref(),
-                        upstream_auth_error.as_deref(),
-                        upstream_identity_error_code.as_deref(),
-                    ),
-                    None,
-                    upstream_request_id.as_deref(),
-                    upstream_cf_ray.as_deref(),
-                    upstream_auth_error.as_deref(),
-                    upstream_identity_error_code.as_deref(),
-                );
-                let len = Some(upstream_body.len());
-                let response = Response::new(
-                    status,
-                    headers,
-                    std::io::Cursor::new(upstream_body.to_vec()),
-                    len,
-                    None,
-                );
-                let delivery_error = request.respond(response).err().map(|err| err.to_string());
-                return Ok(terminal_bridge_result_with_debug_meta(
-                    usage,
-                    delivery_error,
-                    upstream_error_hint,
-                    &upstream_request_id,
-                    &upstream_cf_ray,
-                    &upstream_auth_error,
-                    &upstream_identity_error_code,
-                    &upstream_content_type,
-                ));
-            }
-
-            if is_stream && !is_sse && status.0 < 400 && is_compact_request_path(request_path) {
-                let upstream_body = upstream
-                    .read_all_bytes()
-                    .map_err(|err| format!("read upstream body failed: {err}"))?;
-                let usage = UpstreamResponseUsage::default();
-                return Ok(respond_compact_success_body(
-                    request,
-                    status,
-                    headers,
-                    usage,
-                    upstream_body.as_ref(),
-                    upstream_request_id.as_deref(),
-                    upstream_cf_ray.as_deref(),
-                    upstream_auth_error.as_deref(),
-                    upstream_identity_error_code.as_deref(),
-                    &upstream_content_type,
-                    trace_id,
-                ));
-            }
-
-            if is_sse || is_stream {
-                let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
-                let response_body: Box<dyn std::io::Read + Send> =
-                    if request_path.starts_with("/v1/responses") {
-                        Box::new(OpenAIResponsesPassthroughSseReader::from_stream_response(
-                            upstream,
-                            Arc::clone(&usage_collector),
-                            keepalive_frame,
-                            request_started_at,
-                        ))
-                    } else {
-                        return Err(format!(
-                            "stream upstream response is not supported for path {request_path}"
-                        ));
-                    };
-                force_openai_responses_stream_content_type(&mut headers, request_path, is_stream);
-                let delivery_error =
-                    respond_streaming_chunked(request, status, headers, response_body)
-                        .err()
-                        .map(|err| err.to_string());
-                let collector = usage_collector
-                    .lock()
-                    .map(|guard| guard.clone())
-                    .unwrap_or_default();
-                let last_sse_event_type = collector.last_event_type.clone();
-                let result = with_bridge_debug_meta(
-                    UpstreamResponseBridgeResult {
-                        usage: collector.usage,
-                        stream_terminal_seen: collector.saw_terminal,
-                        stream_terminal_error: collector.terminal_error,
-                        delivery_error,
-                        upstream_error_hint: with_upstream_debug_suffix(
-                            collector.upstream_error_hint,
-                            None,
-                            upstream_request_id.as_deref(),
-                            upstream_cf_ray.as_deref(),
-                            upstream_auth_error.as_deref(),
-                            upstream_identity_error_code.as_deref(),
-                        ),
-                        delivered_status_code: None,
-                        upstream_request_id: None,
-                        upstream_cf_ray: None,
-                        upstream_auth_error: None,
-                        upstream_identity_error_code: None,
-                        upstream_content_type: None,
-                        last_sse_event_type: None,
-                    },
-                    &upstream_request_id,
-                    &upstream_cf_ray,
-                    &upstream_auth_error,
-                    &upstream_identity_error_code,
-                    &upstream_content_type,
-                    last_sse_event_type,
-                );
-                log_bridge_stream_diagnostics(response_adapter, request_path, &result);
-                return Ok(result);
-            }
-
-            let upstream_body = upstream
-                .read_all_bytes()
-                .map_err(|err| format!("read upstream body failed: {err}"))?;
-            let len = Some(upstream_body.len());
-            let response = Response::new(
-                status,
-                headers,
-                std::io::Cursor::new(upstream_body.to_vec()),
-                len,
-                None,
-            );
-            let delivery_error = request.respond(response).err().map(|err| err.to_string());
-            Ok(terminal_bridge_result_with_debug_meta(
-                UpstreamResponseUsage::default(),
-                delivery_error,
-                None,
-                &upstream_request_id,
-                &upstream_cf_ray,
-                &upstream_auth_error,
-                &upstream_identity_error_code,
-                &upstream_content_type,
-            ))
-        }
-        ResponseAdapter::CompactFromChatCompletions => {
-            let status = StatusCode(upstream.status().as_u16());
-            let headers = copy_upstream_response_headers(upstream.headers(), trace_id);
-            let upstream_body = upstream
-                .read_all_bytes()
-                .map_err(|err| format!("read upstream body failed: {err}"))?;
-            let usage = serde_json::from_slice::<Value>(upstream_body.as_ref())
-                .ok()
-                .map(|value| parse_usage_from_json(&value))
-                .unwrap_or_default();
-            let response_body = if status.0 < 400 {
-                convert_chat_completions_body_to_compact(upstream_body.as_ref())
-                    .unwrap_or_else(|| upstream_body.to_vec())
-            } else {
-                upstream_body.to_vec()
-            };
-            let upstream_error_hint = (status.0 >= 400)
-                .then(|| {
-                    with_upstream_debug_suffix(
-                        extract_error_hint_from_body(status.0, upstream_body.as_ref()),
-                        None,
-                        upstream_request_id.as_deref(),
-                        upstream_cf_ray.as_deref(),
-                        upstream_auth_error.as_deref(),
-                        upstream_identity_error_code.as_deref(),
-                    )
-                })
-                .flatten();
-            let delivery_error = respond_json_bytes(request, status, headers, response_body);
-            Ok(terminal_bridge_result_with_debug_meta(
-                usage,
-                delivery_error,
-                upstream_error_hint,
-                &upstream_request_id,
-                &upstream_cf_ray,
-                &upstream_auth_error,
-                &upstream_identity_error_code,
-                &upstream_content_type,
-            ))
-        }
-        ResponseAdapter::AnthropicMessagesFromResponses
-        | ResponseAdapter::ResponsesFromAnthropicMessages
-        | ResponseAdapter::ChatCompletionsFromResponses
-        | ResponseAdapter::ImagesB64JsonFromResponses
-        | ResponseAdapter::ImagesUrlFromResponses
-        | ResponseAdapter::GeminiJson
-        | ResponseAdapter::GeminiCliJson
-        | ResponseAdapter::GeminiSse
-        | ResponseAdapter::GeminiCliSse => unreachable!(),
-    }
-}
-
 #[cfg(test)]
 #[path = "delivery_tests.rs"]
 mod tests;

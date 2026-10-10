@@ -232,11 +232,12 @@ fn agent_identity_invalid_task_recovery_replays_once_without_oauth_fallback() {
         }
     });
 
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let request_ctx = UpstreamRequestContext {
         request_path: "/v1/responses",
         protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
         is_fedramp: true,
+        capture: None,
     };
     let incoming_headers = IncomingHeaderSnapshot::default();
     let body = Bytes::from_static(br#"{"model":"gpt-5.5","input":"hello"}"#);
@@ -247,7 +248,7 @@ fn agent_identity_invalid_task_recovery_replays_once_without_oauth_fallback() {
         is_fedramp: true,
         account_scope_id: Some("workspace-account".to_string()),
     };
-    let upstream = super::super::transport::send_upstream_request(
+    let upstream = crate::gateway::run_upstream_io(super::super::transport::send_upstream_request(
         &client,
         &reqwest::Method::POST,
         addr.as_str(),
@@ -259,10 +260,11 @@ fn agent_identity_invalid_task_recovery_replays_once_without_oauth_fallback() {
         authorization.value.as_str(),
         &account,
         false,
-    )
+    ))
+    .expect("gateway async test runtime")
     .expect("send initial request");
 
-    let decision = process_upstream_post_retry_flow(
+    let decision = crate::gateway::run_upstream_io(process_upstream_post_retry_flow(
         &client,
         &storage,
         &reqwest::Method::POST,
@@ -286,7 +288,8 @@ fn agent_identity_invalid_task_recovery_replays_once_without_oauth_fallback() {
         false,
         upstream,
         |_, _, _| {},
-    );
+    ))
+    .expect("gateway async test runtime");
 
     join.join().expect("join server");
     let first = request_rx.recv().expect("first request");
@@ -348,17 +351,18 @@ fn chatgpt_responses_400_retries_same_path_without_session_headers() {
         }
     });
 
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let incoming_headers = codex_session_headers();
     let request_ctx = UpstreamRequestContext {
         request_path: "/v1/responses",
         protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
         is_fedramp: false,
+        capture: None,
     };
     let body = Bytes::from_static(
         br#"{"model":"gpt-5.5","input":"hello","prompt_cache_key":"thread-current"}"#,
     );
-    let upstream = super::super::transport::send_upstream_request(
+    let upstream = crate::gateway::run_upstream_io(super::super::transport::send_upstream_request(
         &client,
         &reqwest::Method::POST,
         canonical_url.as_str(),
@@ -370,11 +374,12 @@ fn chatgpt_responses_400_retries_same_path_without_session_headers() {
         auth_token.as_str(),
         &account,
         false,
-    )
+    ))
+    .expect("gateway async test runtime")
     .expect("send initial request");
 
     let authorization = oauth_authorization(auth_token.as_str());
-    let decision = process_upstream_post_retry_flow(
+    let decision = crate::gateway::run_upstream_io(process_upstream_post_retry_flow(
         &client,
         &storage,
         &reqwest::Method::POST,
@@ -398,7 +403,8 @@ fn chatgpt_responses_400_retries_same_path_without_session_headers() {
         false,
         upstream,
         |_, _, _| {},
-    );
+    ))
+    .expect("gateway async test runtime");
 
     join.join().expect("join server");
     let first = request_rx.recv().expect("first captured request");
@@ -453,17 +459,18 @@ fn chatgpt_responses_failed_stateless_retry_keeps_original_400() {
         }
     });
 
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let incoming_headers = codex_session_headers();
     let request_ctx = UpstreamRequestContext {
         request_path: "/v1/responses",
         protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
         is_fedramp: false,
+        capture: None,
     };
     let body = Bytes::from_static(
         br#"{"model":"gpt-5.5","input":"hello","prompt_cache_key":"thread-current"}"#,
     );
-    let upstream = super::super::transport::send_upstream_request(
+    let upstream = crate::gateway::run_upstream_io(super::super::transport::send_upstream_request(
         &client,
         &reqwest::Method::POST,
         canonical_url.as_str(),
@@ -475,11 +482,12 @@ fn chatgpt_responses_failed_stateless_retry_keeps_original_400() {
         auth_token.as_str(),
         &account,
         false,
-    )
+    ))
+    .expect("gateway async test runtime")
     .expect("send initial request");
 
     let authorization = oauth_authorization(auth_token.as_str());
-    let decision = process_upstream_post_retry_flow(
+    let decision = crate::gateway::run_upstream_io(process_upstream_post_retry_flow(
         &client,
         &storage,
         &reqwest::Method::POST,
@@ -503,7 +511,8 @@ fn chatgpt_responses_failed_stateless_retry_keeps_original_400() {
         false,
         upstream,
         |_, _, _| {},
-    );
+    ))
+    .expect("gateway async test runtime");
 
     join.join().expect("join server");
     assert_eq!(
@@ -565,17 +574,18 @@ fn chatgpt_responses_stripped_candidate_does_not_retry_without_session_headers_a
         }
     });
 
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let incoming_headers = codex_session_headers();
     let request_ctx = UpstreamRequestContext {
         request_path: "/v1/responses",
         protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
         is_fedramp: false,
+        capture: None,
     };
     let body = Bytes::from_static(
         br#"{"model":"gpt-5.5","input":"hello","prompt_cache_key":"thread-current"}"#,
     );
-    let upstream = super::super::transport::send_upstream_request(
+    let upstream = crate::gateway::run_upstream_io(super::super::transport::send_upstream_request(
         &client,
         &reqwest::Method::POST,
         canonical_url.as_str(),
@@ -587,11 +597,12 @@ fn chatgpt_responses_stripped_candidate_does_not_retry_without_session_headers_a
         auth_token.as_str(),
         &account,
         true,
-    )
+    ))
+    .expect("gateway async test runtime")
     .expect("send stripped candidate request");
 
     let authorization = oauth_authorization(auth_token.as_str());
-    let decision = process_upstream_post_retry_flow(
+    let decision = crate::gateway::run_upstream_io(process_upstream_post_retry_flow(
         &client,
         &storage,
         &reqwest::Method::POST,
@@ -615,7 +626,8 @@ fn chatgpt_responses_stripped_candidate_does_not_retry_without_session_headers_a
         false,
         upstream,
         |_, _, _| {},
-    );
+    ))
+    .expect("gateway async test runtime");
 
     join.join().expect("join server");
     assert_eq!(hit_count.load(Ordering::SeqCst), 1);
@@ -674,15 +686,16 @@ fn retries_server_error_once_before_final_decision() {
         }
     });
 
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let incoming_headers = IncomingHeaderSnapshot::default();
     let request_ctx = UpstreamRequestContext {
         request_path: "/v1/responses",
         protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
         is_fedramp: false,
+        capture: None,
     };
     let body = Bytes::from_static(br#"{"model":"gpt-5.3-codex","input":"hello"}"#);
-    let upstream = super::super::transport::send_upstream_request(
+    let upstream = crate::gateway::run_upstream_io(super::super::transport::send_upstream_request(
         &client,
         &reqwest::Method::POST,
         addr.as_str(),
@@ -694,11 +707,12 @@ fn retries_server_error_once_before_final_decision() {
         auth_token.as_str(),
         &account,
         false,
-    )
+    ))
+    .expect("gateway async test runtime")
     .expect("send initial request");
 
     let authorization = oauth_authorization(auth_token.as_str());
-    let decision = process_upstream_post_retry_flow(
+    let decision = crate::gateway::run_upstream_io(process_upstream_post_retry_flow(
         &client,
         &storage,
         &reqwest::Method::POST,
@@ -722,7 +736,8 @@ fn retries_server_error_once_before_final_decision() {
         true,
         upstream,
         |_, _, _| {},
-    );
+    ))
+    .expect("gateway async test runtime");
 
     join.join().expect("join server");
     assert_eq!(hit_count.load(Ordering::SeqCst), 2);
@@ -778,15 +793,16 @@ fn chatgpt_challenge_on_last_candidate_retries_without_same_account_failover() {
         }
     });
 
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let incoming_headers = IncomingHeaderSnapshot::default();
     let request_ctx = UpstreamRequestContext {
         request_path: "/v1/responses",
         protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
         is_fedramp: false,
+        capture: None,
     };
     let body = Bytes::from_static(br#"{"model":"gpt-5.3-codex","input":"hello"}"#);
-    let upstream = super::super::transport::send_upstream_request(
+    let upstream = crate::gateway::run_upstream_io(super::super::transport::send_upstream_request(
         &client,
         &reqwest::Method::POST,
         addr.as_str(),
@@ -798,11 +814,12 @@ fn chatgpt_challenge_on_last_candidate_retries_without_same_account_failover() {
         auth_token.as_str(),
         &account,
         false,
-    )
+    ))
+    .expect("gateway async test runtime")
     .expect("send initial request");
 
     let authorization = oauth_authorization(auth_token.as_str());
-    let decision = process_upstream_post_retry_flow(
+    let decision = crate::gateway::run_upstream_io(process_upstream_post_retry_flow(
         &client,
         &storage,
         &reqwest::Method::POST,
@@ -826,7 +843,8 @@ fn chatgpt_challenge_on_last_candidate_retries_without_same_account_failover() {
         false,
         upstream,
         |_, _, _| {},
-    );
+    ))
+    .expect("gateway async test runtime");
 
     join.join().expect("join server");
     assert_eq!(hit_count.load(Ordering::SeqCst), 2);
@@ -874,15 +892,16 @@ fn chatgpt_cloudflare_challenge_directly_failovers_without_same_account_retry() 
         request.respond(response).expect("respond first");
     });
 
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let incoming_headers = IncomingHeaderSnapshot::default();
     let request_ctx = UpstreamRequestContext {
         request_path: "/v1/responses",
         protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
         is_fedramp: false,
+        capture: None,
     };
     let body = Bytes::from_static(br#"{"model":"gpt-5.3-codex","input":"hello"}"#);
-    let upstream = super::super::transport::send_upstream_request(
+    let upstream = crate::gateway::run_upstream_io(super::super::transport::send_upstream_request(
         &client,
         &reqwest::Method::POST,
         addr.as_str(),
@@ -894,11 +913,12 @@ fn chatgpt_cloudflare_challenge_directly_failovers_without_same_account_retry() 
         auth_token.as_str(),
         &account,
         false,
-    )
+    ))
+    .expect("gateway async test runtime")
     .expect("send initial request");
 
     let authorization = oauth_authorization(auth_token.as_str());
-    let decision = process_upstream_post_retry_flow(
+    let decision = crate::gateway::run_upstream_io(process_upstream_post_retry_flow(
         &client,
         &storage,
         &reqwest::Method::POST,
@@ -922,7 +942,8 @@ fn chatgpt_cloudflare_challenge_directly_failovers_without_same_account_retry() 
         true,
         upstream,
         |_, _, _| {},
-    );
+    ))
+    .expect("gateway async test runtime");
 
     join.join().expect("join server");
     assert_eq!(hit_count.load(Ordering::SeqCst), 1);
@@ -969,15 +990,16 @@ fn cloudflare_cf_ray_directly_failovers_without_same_account_retry() {
         request.respond(response).expect("respond first");
     });
 
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let incoming_headers = IncomingHeaderSnapshot::default();
     let request_ctx = UpstreamRequestContext {
         request_path: "/v1/responses",
         protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
         is_fedramp: false,
+        capture: None,
     };
     let body = Bytes::from_static(br#"{"model":"gpt-5.3-codex","input":"hello"}"#);
-    let upstream = super::super::transport::send_upstream_request(
+    let upstream = crate::gateway::run_upstream_io(super::super::transport::send_upstream_request(
         &client,
         &reqwest::Method::POST,
         addr.as_str(),
@@ -989,11 +1011,12 @@ fn cloudflare_cf_ray_directly_failovers_without_same_account_retry() {
         auth_token.as_str(),
         &account,
         false,
-    )
+    ))
+    .expect("gateway async test runtime")
     .expect("send initial request");
 
     let authorization = oauth_authorization(auth_token.as_str());
-    let decision = process_upstream_post_retry_flow(
+    let decision = crate::gateway::run_upstream_io(process_upstream_post_retry_flow(
         &client,
         &storage,
         &reqwest::Method::POST,
@@ -1017,7 +1040,8 @@ fn cloudflare_cf_ray_directly_failovers_without_same_account_retry() {
         true,
         upstream,
         |_, _, _| {},
-    );
+    ))
+    .expect("gateway async test runtime");
 
     join.join().expect("join server");
     assert_eq!(hit_count.load(Ordering::SeqCst), 1);

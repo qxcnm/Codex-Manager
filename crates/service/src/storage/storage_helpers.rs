@@ -1,4 +1,5 @@
 use codexmanager_core::storage::Storage;
+use codexmanager_storage_seaorm::SeaOrmStorage;
 use rand::RngCore;
 use rusqlite::backup::Backup;
 use rusqlite::{Connection, OptionalExtension};
@@ -15,6 +16,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const DEFAULT_STORAGE_MAX_CONNECTIONS: usize = 32;
 const DEFAULT_STORAGE_MAX_IDLE_CONNECTIONS: usize = 16;
 const DEFAULT_STORAGE_ACQUIRE_TIMEOUT_MS: u64 = 30_000;
+// Legacy domain helper signatures still carry a core Storage reference. In
+// remote mode this uninitialized memory handle is only a type boundary; it
+// must never open or modify the user's SQLite database.
+const REMOTE_CONTEXT_POOL_KEY: &str = "codexmanager:remote-context";
 const ENV_STORAGE_MAX_CONNECTIONS: &str = "CODEXMANAGER_STORAGE_MAX_CONNECTIONS";
 const ENV_STORAGE_MAX_IDLE_CONNECTIONS: &str = "CODEXMANAGER_STORAGE_MAX_IDLE_CONNECTIONS";
 const ENV_STORAGE_ACQUIRE_TIMEOUT_MS: &str = "CODEXMANAGER_STORAGE_ACQUIRE_TIMEOUT_MS";
@@ -24,6 +29,8 @@ static INITIALIZED_STORAGE_PATHS: OnceLock<Mutex<HashMap<String, ()>>> = OnceLoc
 const MODEL_CATALOG_V2_MIGRATION: &str = "112_model_catalog_v2";
 const MODEL_BILLING_V2_HARDENING_MIGRATION: &str = "113_model_billing_v2_hardening";
 const MODEL_CATALOG_GPT56_PRICES_MIGRATION: &str = "114_model_catalog_gpt56_prices";
+const MODEL_CATALOG_REVISION9_MIGRATION: &str = "137_model_catalog_revision9";
+const MODEL_CATALOG_REVISION10_MIGRATION: &str = "138_model_catalog_gpt61_sol";
 
 struct ModelCatalogMigrationLock {
     path: PathBuf,
@@ -384,6 +391,18 @@ fn initialized_storage_paths() -> &'static Mutex<HashMap<String, ()>> {
     INITIALIZED_STORAGE_PATHS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[cfg(test)]
+thread_local! {
+    static OPEN_STORAGE_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Number of `open_storage` calls made by the current thread (tests assert
+/// that the request log capture hot path never acquires storage).
+#[cfg(test)]
+pub(crate) fn open_storage_calls_on_this_thread() -> u64 {
+    OPEN_STORAGE_CALLS.with(|calls| calls.get())
+}
+
 /// 函数 `open_storage`
 ///
 /// 作者: gaohongshun
@@ -396,6 +415,11 @@ fn initialized_storage_paths() -> &'static Mutex<HashMap<String, ()>> {
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn open_storage() -> Option<StorageHandle> {
+    #[cfg(test)]
+    OPEN_STORAGE_CALLS.with(|calls| calls.set(calls.get() + 1));
+    if seaorm_enabled() {
+        return open_storage_at_path(REMOTE_CONTEXT_POOL_KEY);
+    }
     // 读取数据库路径并打开存储
     let path = match std::env::var("CODEXMANAGER_DB_PATH") {
         Ok(path) => path,
@@ -405,6 +429,36 @@ pub(crate) fn open_storage() -> Option<StorageHandle> {
         }
     };
     open_storage_at_path(&path)
+}
+
+/// Whether the service is configured to use the optional SeaORM backend.
+///
+/// SQLite without a database URL retains the desktop storage layout. An
+/// explicit URL selects SeaORM for every supported backend, including SQLite.
+pub(crate) fn seaorm_enabled() -> bool {
+    let backend = std::env::var("CODEXMANAGER_STORAGE_BACKEND")
+        .unwrap_or_else(|_| "sqlite".to_owned())
+        .to_ascii_lowercase();
+    // A malformed or incomplete remote configuration must fail validation;
+    // silently choosing SQLite here would create a different data authority.
+    backend != "sqlite" || std::env::var_os("CODEXMANAGER_DATABASE_URL").is_some()
+}
+
+pub(crate) fn seaorm_block_on<T, F, Fut>(operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(SeaOrmStorage) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<T, String>> + Send + 'static,
+{
+    super::seaorm_runtime::run(operation)
+}
+
+pub(crate) fn seaorm_transaction_block_on<T, Fut>(future: Fut) -> Result<T, String>
+where
+    T: Send + 'static,
+    Fut: std::future::Future<Output = Result<T, String>> + Send + 'static,
+{
+    super::seaorm_runtime::run_transaction(future)
 }
 
 /// 函数 `open_storage_at_path`
@@ -419,10 +473,28 @@ pub(crate) fn open_storage() -> Option<StorageHandle> {
 /// # 返回
 /// 返回函数执行结果
 fn open_storage_at_path(path: &str) -> Option<StorageHandle> {
-    acquire_storage_from_pool(path).map(|storage| StorageHandle::new(path.to_string(), storage))
+    let acquire = || {
+        acquire_storage_from_pool(path).map(|storage| StorageHandle::new(path.to_string(), storage))
+    };
+    if tokio::runtime::Handle::try_current()
+        .is_ok_and(|handle| handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+    {
+        // Pool contention and opening/configuring SQLite must let the service
+        // executor continue polling network responses and returning handles.
+        tokio::task::block_in_place(acquire)
+    } else {
+        acquire()
+    }
 }
 
 fn open_fresh_storage(path: &str) -> Option<Storage> {
+    if path == REMOTE_CONTEXT_POOL_KEY {
+        return Storage::open_in_memory()
+            .map_err(|err| {
+                log::error!("could not allocate remote storage context: {err}");
+            })
+            .ok();
+    }
     if !Path::new(&path).exists() {
         log::warn!("storage path missing: {}", path);
     }
@@ -458,6 +530,16 @@ fn acquire_storage_from_pool(path: &str) -> Option<Storage> {
             let storage = open_fresh_storage(path);
             finish_storage_open(path, storage.is_some());
             return storage;
+        }
+
+        if tokio::runtime::Handle::try_current().is_ok_and(|handle| {
+            handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::CurrentThread
+        }) {
+            // A single-thread executor cannot wait for a handle held by a
+            // different future on that same executor. Async domains can retry
+            // or move this short acquisition into a bounded blocking phase.
+            log::warn!("storage pool is busy on a single-thread executor");
+            return None;
         }
 
         let elapsed = started_at.elapsed();
@@ -603,6 +685,8 @@ fn model_catalog_v2_migration_needed(db_path: &Path) -> Result<bool, String> {
         MODEL_CATALOG_V2_MIGRATION,
         MODEL_BILLING_V2_HARDENING_MIGRATION,
         MODEL_CATALOG_GPT56_PRICES_MIGRATION,
+        MODEL_CATALOG_REVISION9_MIGRATION,
+        MODEL_CATALOG_REVISION10_MIGRATION,
     ] {
         let applied = conn
             .query_row(
@@ -735,6 +819,13 @@ fn restore_model_catalog_database(db_path: &Path, backup_path: &Path) -> Result<
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn initialize_storage() -> Result<(), String> {
+    let config =
+        codexmanager_storage_seaorm::StorageConfig::from_env().map_err(|err| err.to_string())?;
+    if seaorm_enabled() {
+        config.validate().map_err(|err| err.to_string())?;
+        crate::app_settings::initialize_remote_settings()?;
+        return Ok(());
+    }
     let path = std::env::var("CODEXMANAGER_DB_PATH")
         .map_err(|_| "CODEXMANAGER_DB_PATH not set".to_string())?;
     {

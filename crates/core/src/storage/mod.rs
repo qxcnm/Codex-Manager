@@ -1,13 +1,17 @@
 use rusqlite::{Connection, Result};
-use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+mod traits;
+pub use traits::*;
 
 mod account_manager;
 mod account_metadata;
 mod account_proxy_settings;
+mod account_reset_warmups;
 mod account_subscriptions;
 mod accounts;
 mod accounts_sql;
@@ -31,22 +35,46 @@ mod proxy_profiles;
 mod proxy_tests;
 mod quota_pools;
 mod request_log_filters;
-mod request_log_query;
+mod request_log_payload_batch;
+mod request_log_payload_purge;
+mod request_log_payload_store;
+pub mod request_log_query;
 mod request_logs;
+mod storage_space;
+pub use request_log_payload_purge::RequestLogPayloadPurgeProgress;
+use request_log_payload_purge::REQUEST_LOG_PAYLOAD_GENERATION_TABLES;
+pub use storage_space::{
+    wal_checkpoint_pending, DatabaseSpaceUsage, WalCheckpointOutcome, AUTO_VACUUM_FULL,
+    AUTO_VACUUM_INCREMENTAL, AUTO_VACUUM_NONE,
+};
 mod request_token_stats;
+mod reset_credit_operations;
 mod settings;
 mod tokens;
 mod usage;
 
+pub use account_reset_warmups::AccountResetWarmupTarget;
 pub use model_billing_v2::{
-    ChargeComputationV2, ChargeSnapshotInputV2, ChargeSnapshotV2, ModelPriceTierV2,
+    compute_charge_v2, ChargeComputationV2, ChargeSnapshotInputV2, ChargeSnapshotV2,
+    ModelPriceTierV2,
 };
 pub use model_catalog_v2::{
-    ManagedModelBatchStateV2Update, ManagedModelRouteEnsureResultV2, ManagedModelRouteEnsureV2,
+    validate_managed_model_price_v2, validate_managed_model_v2, ManagedModelBatchStateV2Update,
+    ManagedModelPriceV2Update, ManagedModelRouteEnsureResultV2, ManagedModelRouteEnsureV2,
     ManagedModelStateV2Update, ManagedModelV2, ManagedModelV2Upsert, ModelCatalogV2Stats,
     ModelFastPolicyV2, ModelPriceV2, ModelRouteV2,
 };
 pub use proxy_profiles::derive_proxy_profile_url_metadata;
+pub use request_log_payload_batch::{is_sqlite_busy_error, RequestLogPayloadBatch};
+pub use request_log_payload_store::{
+    RequestLogPayloadFull, RequestLogPayloadManifest, RequestLogPayloadManifestInput,
+    RequestLogPayloadManifestWrite, RequestLogPayloadParentHint, RequestLogPayloadPart,
+    RequestLogUpstreamAttempt,
+};
+pub use reset_credit_operations::{
+    ResetCreditOperation, ResetCreditOperationClaim, ResetCreditOperationStatus,
+    ResetCreditOperationUpdate,
+};
 
 #[derive(Debug, Clone)]
 pub struct Account {
@@ -795,6 +823,32 @@ pub struct CodexSkillRepositoryCatalogSnapshot {
     pub repositories: Vec<CodexSkillRepositoryRecord>,
     pub skills: Vec<CodexSkillRepositorySkillRecord>,
 }
+
+/// Request payload preview attached to a gateway trace for the request log
+/// detail view (preview storage mode). `payload_bytes` records the original
+/// body size before the ingest-time size cap was applied; `redacted` records
+/// whether credential-like keys were masked before storing.
+///
+/// `stage` is [`PAYLOAD_STAGE_CLIENT`] (body as received) or
+/// [`PAYLOAD_STAGE_UPSTREAM`] (body actually forwarded upstream);
+/// `body_hash` identifies the stored text so the upstream row can be skipped
+/// when the gateway did not rewrite the body.
+#[derive(Debug, Clone, Default)]
+pub struct RequestLogPayload {
+    pub trace_id: String,
+    pub stage: String,
+    pub payload: String,
+    pub payload_bytes: i64,
+    pub payload_truncated: bool,
+    pub redacted: bool,
+    pub body_hash: String,
+    pub created_at: i64,
+}
+
+/// Body as received from the client.
+pub const PAYLOAD_STAGE_CLIENT: &str = "client";
+/// Body actually sent upstream after local rewriting.
+pub const PAYLOAD_STAGE_UPSTREAM: &str = "upstream";
 
 #[derive(Debug, Clone, Default)]
 pub struct RequestLog {
@@ -1623,15 +1677,29 @@ pub struct ModelCatalogStorageSnapshot {
 #[derive(Debug)]
 pub struct Storage {
     conn: Connection,
-    applied_migrations: RefCell<Option<HashSet<String>>>,
+    applied_migrations: Mutex<Option<HashSet<String>>>,
 }
 
 impl Storage {
+    /// Shares the existing database pool without opening a new database or
+    /// checking out a connection. Async completion tasks can own this handle
+    /// after their caller is cancelled, including for an in-memory database.
+    pub fn shared_handle(&self) -> Self {
+        Self {
+            conn: self.conn.clone(),
+            applied_migrations: Mutex::new(self.migration_cache().clone()),
+        }
+    }
+
     fn configure_connection(conn: &Connection) -> Result<()> {
         // 中文注释：并发写入时给 SQLite 一点等待时间，避免瞬时 lock 导致请求直接失败。
         conn.busy_timeout(Duration::from_millis(3000))?;
         // 中文注释：复杂筛选/聚合的临时 B-tree 优先走内存，减少报表查询落盘开销。
-        conn.execute_batch("PRAGMA temp_store=MEMORY; PRAGMA foreign_keys=ON;")?;
+        // journal_size_limit caps the WAL file left behind after a checkpoint, so
+        // a large purge does not keep a multi-GB WAL file around afterwards.
+        conn.execute_batch(
+            "PRAGMA temp_store=MEMORY; PRAGMA foreign_keys=ON; PRAGMA journal_size_limit=67108864;",
+        )?;
         Ok(())
     }
 
@@ -1662,7 +1730,7 @@ impl Storage {
         Self::configure_file_connection(&conn)?;
         Ok(Self {
             conn,
-            applied_migrations: RefCell::new(None),
+            applied_migrations: Mutex::new(None),
         })
     }
 
@@ -1682,7 +1750,7 @@ impl Storage {
         Self::configure_connection(&conn)?;
         Ok(Self {
             conn,
-            applied_migrations: RefCell::new(None),
+            applied_migrations: Mutex::new(None),
         })
     }
 
@@ -1698,8 +1766,9 @@ impl Storage {
     /// # 返回
     /// 返回函数执行结果
     pub fn init(&self) -> Result<()> {
+        self.prefer_incremental_auto_vacuum_for_new_database()?;
         self.ensure_migrations_table()?;
-        *self.applied_migrations.borrow_mut() = None;
+        *self.migration_cache() = None;
 
         self.apply_sql_migration("001_init", include_str!("../../migrations/001_init.sql"))?;
         self.apply_sql_migration(
@@ -2285,6 +2354,46 @@ impl Storage {
             include_str!("../../migrations/133_aggregate_api_user_agent.sql"),
             |s| s.ensure_aggregate_apis_table(),
         )?;
+        self.apply_sql_migration(
+            "134_account_reset_warmups",
+            include_str!("../../migrations/134_account_reset_warmups.sql"),
+        )?;
+        self.apply_sql_migration(
+            "135_reset_credit_operations",
+            include_str!("../../migrations/135_reset_credit_operations.sql"),
+        )?;
+        self.apply_sql_migration(
+            "136_reset_credit_operation_accounts",
+            include_str!("../../migrations/136_reset_credit_operation_accounts.sql"),
+        )?;
+        self.apply_model_catalog_revision9_migration()?;
+        self.apply_model_catalog_revision10_migration()?;
+        self.apply_sql_migration(
+            "139_request_log_payloads",
+            include_str!("../../migrations/139_request_log_payloads.sql"),
+        )?;
+        self.apply_sql_migration(
+            "140_request_log_payload_store",
+            include_str!("../../migrations/140_request_log_payload_store.sql"),
+        )?;
+        self.apply_sql_migration(
+            "141_request_log_response_links",
+            include_str!("../../migrations/141_request_log_response_links.sql"),
+        )?;
+        self.apply_sql_migration(
+            "142_request_log_payload_purges",
+            include_str!("../../migrations/142_request_log_payload_purges.sql"),
+        )?;
+        self.apply_sql_or_compat_migration(
+            "143_request_log_payload_purge_generation",
+            include_str!("../../migrations/143_request_log_payload_purge_generation.sql"),
+            |storage| {
+                for table in REQUEST_LOG_PAYLOAD_GENERATION_TABLES {
+                    storage.ensure_column(table, "generation", "INTEGER")?;
+                }
+                Ok(())
+            },
+        )?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_api_key_account_group_filter_column()?;
         self.ensure_aggregate_apis_table()?;
@@ -2533,6 +2642,31 @@ impl Storage {
         Ok(changed == 1)
     }
 
+    /// Finish only the completion that still owns this exact PKCE session.
+    /// A dropped async request must not clear a replaced verifier or terminal state.
+    pub fn finish_claimed_login_session(
+        &self,
+        expected: &LoginSession,
+        status: &str,
+        error: Option<&str>,
+    ) -> Result<bool> {
+        let changed = self.conn.execute(
+            "UPDATE login_sessions SET status = ?1, error = ?2, code_verifier = '', updated_at = ?3
+             WHERE login_id = ?4 AND status = 'completing' AND state = ?5
+               AND code_verifier = ?6 AND created_at = ?7",
+            (
+                status,
+                error,
+                now_ts(),
+                expected.login_id.as_str(),
+                expected.state.as_str(),
+                expected.code_verifier.as_str(),
+                expected.created_at,
+            ),
+        )?;
+        Ok(changed == 1)
+    }
+
     /// Fails a session only before a completion worker has claimed ownership.
     ///
     /// OAuth error callbacks use this narrower transition so a second browser
@@ -2665,15 +2799,20 @@ impl Storage {
     /// # 返回
     /// 返回函数执行结果
     fn has_migration(&self, version: &str) -> Result<bool> {
-        if self.applied_migrations.borrow().is_none() {
+        let mut cache = self.migration_cache();
+        if cache.is_none() {
             let migrations = self.load_applied_migrations()?;
-            *self.applied_migrations.borrow_mut() = Some(migrations);
+            *cache = Some(migrations);
         }
-        Ok(self
-            .applied_migrations
-            .borrow()
+        Ok(cache
             .as_ref()
             .is_some_and(|migrations| migrations.contains(version)))
+    }
+
+    fn migration_cache(&self) -> MutexGuard<'_, Option<HashSet<String>>> {
+        self.applied_migrations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn load_applied_migrations(&self) -> Result<HashSet<String>> {
@@ -2703,7 +2842,7 @@ impl Storage {
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
             (version, now_ts()),
         )?;
-        if let Some(migrations) = self.applied_migrations.borrow_mut().as_mut() {
+        if let Some(migrations) = self.migration_cache().as_mut() {
             migrations.insert(version.to_string());
         }
         Ok(())
@@ -2881,6 +3020,42 @@ mod login_session_query_plan_tests {
 #[cfg(test)]
 #[path = "../../tests/storage/migration_tests.rs"]
 mod migration_tests;
+
+#[cfg(test)]
+mod async_storage_contract_tests {
+    use super::Storage;
+
+    #[test]
+    fn shared_handle_keeps_the_same_in_memory_database_alive() {
+        let storage = Storage::open_in_memory().unwrap();
+        storage.conn.execute_batch("CREATE TABLE shared_completion (value TEXT); INSERT INTO shared_completion VALUES ('kept');").unwrap();
+        let completion = storage.shared_handle();
+        drop(storage);
+        let value: String = completion
+            .conn
+            .query_row("SELECT value FROM shared_completion", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(value, "kept");
+    }
+
+    #[test]
+    fn shared_storage_keeps_migration_cache_consistent() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Storage>();
+        let storage = Storage::open_in_memory().unwrap();
+        storage.init().unwrap();
+        storage.migration_cache().take();
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let storage = &storage;
+                scope.spawn(move || {
+                    assert!(storage.has_migration("001_init").unwrap());
+                    assert!(!storage.has_migration("missing_migration").unwrap());
+                });
+            }
+        });
+    }
+}
 
 /// 函数 `now_ts`
 ///

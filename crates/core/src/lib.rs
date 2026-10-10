@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod request_log_spill;
 pub mod rpc;
 pub mod storage;
 pub mod usage;

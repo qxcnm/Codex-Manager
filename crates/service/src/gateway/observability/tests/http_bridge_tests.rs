@@ -768,6 +768,29 @@ fn collect_non_stream_json_from_sse_bytes_synthesizes_chat_completion_chunks() {
 }
 
 #[test]
+fn synthesized_bodies_use_current_default_when_upstream_omits_model() {
+    let responses_sse = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_without_model\",\"created\":1}}\n\n",
+        "data: {\"type\":\"response.output_text.delta\",\"response_id\":\"resp_without_model\",\"delta\":\"ok\"}\n\n",
+        "data: {\"type\":\"response.completed\",\"response_id\":\"resp_without_model\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let (body, _) = collect_non_stream_json_from_sse_bytes(responses_sse.as_bytes());
+    let value: serde_json::Value =
+        serde_json::from_slice(&body.expect("synthesized response json")).unwrap();
+    assert_eq!(value["model"], "gpt-6-sol");
+
+    let chat_sse = concat!(
+        "data: {\"id\":\"chat_without_model\",\"object\":\"chat.completion.chunk\",\"created\":1,\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let (body, _) = collect_non_stream_json_from_sse_bytes(chat_sse.as_bytes());
+    let value: serde_json::Value =
+        serde_json::from_slice(&body.expect("synthesized chat completion json")).unwrap();
+    assert_eq!(value["model"], "gpt-6-sol");
+}
+
+#[test]
 fn chat_completions_reader_converts_responses_sse_to_chat_sse() {
     let sse = concat!(
         "data: {\"type\":\"response.output_text.delta\",\"delta\":\"你\"}\n\n",

@@ -71,6 +71,7 @@ pub(crate) fn wildcard_matches(pattern: &str, value: &str) -> bool {
 }
 
 pub(crate) fn load_catalog_prices(storage: &Storage) -> Result<Vec<CatalogModelPrice>, String> {
+    let storage = crate::account::remote_storage::AccountStorage::new(storage);
     storage
         .list_managed_models_v2(true)
         .map_err(|err| format!("list model catalog V2 prices failed: {err}"))

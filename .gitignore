@@ -40,6 +40,8 @@
 *.db
 *.sqlite
 codexmanager.rpc-token
+config/production/codexmanager.env
+config/production/*.local.*
 codex resume*.txt
 .tmp_stage_ps/
 .tmp_stage_sh/

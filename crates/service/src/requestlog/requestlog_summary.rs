@@ -28,6 +28,18 @@ pub(crate) fn read_request_log_filter_summary_with_storage(
     params: RequestLogListParams,
 ) -> Result<RequestLogFilterSummaryResult, String> {
     let params = NormalizedRequestLogParams::from_params(params);
+    if crate::storage_helpers::seaorm_enabled() {
+        let filter = super::seaorm::filter(&params, None);
+        let filtered = super::seaorm::summary(filter.clone())?;
+        let total = if params.status_filter.is_some() {
+            let mut all = filter;
+            all.status = None;
+            super::seaorm::count(all)?
+        } else {
+            filtered.count
+        };
+        return Ok(map_filter_summary(total, filtered));
+    }
     let filtered = storage
         .summarize_request_logs_filtered(
             params.query.as_deref(),
@@ -57,6 +69,18 @@ pub(crate) fn read_request_log_filter_summary_for_key_ids_with_storage(
     key_ids: &[String],
 ) -> Result<RequestLogFilterSummaryResult, String> {
     let params = NormalizedRequestLogParams::from_params(params);
+    if crate::storage_helpers::seaorm_enabled() {
+        let filter = super::seaorm::filter(&params, Some(key_ids));
+        let filtered = super::seaorm::summary(filter.clone())?;
+        let total = if params.status_filter.is_some() {
+            let mut all = filter;
+            all.status = None;
+            super::seaorm::count(all)?
+        } else {
+            filtered.count
+        };
+        return Ok(map_filter_summary(total, filtered));
+    }
     if key_ids.is_empty() {
         return Ok(RequestLogFilterSummaryResult::default());
     }

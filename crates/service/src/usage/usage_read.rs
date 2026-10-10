@@ -101,6 +101,7 @@ fn classify_availability_status(snap: &UsageSnapshotRecord) -> &'static str {
 pub(crate) fn read_usage_snapshot(account_id: Option<&str>) -> Option<UsageSnapshotResult> {
     // 读取最新用量快照
     let storage = open_storage()?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let snap = match account_id {
         Some(account_id) => storage
             .latest_usage_snapshot_for_account(account_id)

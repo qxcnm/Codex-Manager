@@ -1,15 +1,10 @@
 use codexmanager_core::rpc::types::ProxyProfileUrlTestEntry;
-use std::future::Future;
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-use tokio::runtime::{Builder, Runtime};
 
 use super::errors::{
     map_proxy_test_reqwest_error, proxy_test_result_error_code, proxy_test_result_status,
     ProxyTestError,
 };
-
-static PROXY_TEST_RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 pub(crate) struct ProxyLatencyTestOutcome {
@@ -65,12 +60,12 @@ async fn measure_single_latency(
     Err(format!("HTTP status error: {}", status))
 }
 
-pub(crate) fn run_proxy_latency_test(
+pub(crate) async fn run_proxy_latency_test_async(
     proxy_url: &str,
     target_url: &str,
     expect_http_204: bool,
 ) -> ProxyLatencyTestOutcome {
-    run_proxy_test_future(async move {
+    async move {
         let (client, _) = match super::client::build_proxy_test_client(
             proxy_url,
             super::client::ProxyTestRedirectPolicy::None,
@@ -184,7 +179,8 @@ pub(crate) fn run_proxy_latency_test(
             error_code: None,
             error: None,
         }
-    })
+    }
+    .await
 }
 
 #[allow(dead_code)]
@@ -204,24 +200,6 @@ pub(crate) fn proxy_profile_url_test_entry(
         error_code: test.error_code,
         error: test.error,
     }
-}
-
-fn proxy_test_runtime() -> &'static Runtime {
-    PROXY_TEST_RUNTIME.get_or_init(|| {
-        Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .thread_name("proxy-test-http")
-            .build()
-            .unwrap_or_else(|err| panic!("build proxy test runtime failed: {err}"))
-    })
-}
-
-fn run_proxy_test_future<F>(future: F) -> F::Output
-where
-    F: Future,
-{
-    proxy_test_runtime().block_on(future)
 }
 
 fn builder_error_to_outcome(target_url: &str, err: ProxyTestError) -> ProxyLatencyTestOutcome {
@@ -328,25 +306,27 @@ mod tests {
     fn start_fake_proxy_response(
         response: &'static str,
     ) -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
-        use std::time::{Duration, Instant};
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake proxy");
         let addr = listener.local_addr().expect("fake proxy addr");
         let proxy_url = format!("http://{addr}");
         let (tx, rx) = mpsc::channel();
         let handle = thread::spawn(move || {
-            let _ = listener.set_nonblocking(true);
-            for _ in 0..10 {
-                let mut stream_opt = None;
-                let start_wait = Instant::now();
-                while start_wait.elapsed() < Duration::from_millis(500) {
-                    if let Ok((stream, _)) = listener.accept() {
-                        stream_opt = Some(stream);
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(10));
-                }
-
-                let Some(mut stream) = stream_opt else {
+            // The redirect case returns after its warmup request, while the
+            // 204 case performs one warmup plus ten samples. Blocking accepts
+            // keep a busy full-suite runner from racing a short polling
+            // window and closing the fixture before the client connects.
+            let expected_requests = if response
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .is_some_and(|status| status.starts_with('3'))
+            {
+                1
+            } else {
+                11
+            };
+            for _ in 0..expected_requests {
+                let Ok((mut stream, _)) = listener.accept() else {
                     break;
                 };
 
@@ -362,4 +342,19 @@ mod tests {
         });
         (proxy_url, rx, handle)
     }
+}
+
+#[cfg(test)]
+pub(crate) fn run_proxy_latency_test(
+    proxy_url: &str,
+    target_url: &str,
+    expect_http_204: bool,
+) -> ProxyLatencyTestOutcome {
+    crate::account::background::runtime()
+        .unwrap()
+        .block_on(run_proxy_latency_test_async(
+            proxy_url,
+            target_url,
+            expect_http_204,
+        ))
 }

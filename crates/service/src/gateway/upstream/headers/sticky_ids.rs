@@ -1,5 +1,5 @@
+use crate::http::gateway_request::GatewayRequest as Request;
 use sha2::{Digest, Sha256};
-use tiny_http::Request;
 
 use crate::gateway::IncomingHeaderSnapshot;
 
@@ -19,7 +19,7 @@ pub(crate) fn find_incoming_header<'a>(request: &'a Request, name: &str) -> Opti
     request
         .headers()
         .iter()
-        .find(|header| header.field.as_str().as_str().eq_ignore_ascii_case(name))
+        .find(|header| header.field.as_str().eq_ignore_ascii_case(name))
         .map(|header| header.value.as_str().trim())
         .filter(|value| !value.is_empty())
 }

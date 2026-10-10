@@ -1,6 +1,56 @@
 use super::*;
 use base64::Engine as _;
 
+#[test]
+fn stale_api_key_exchange_keeps_the_rotated_token_from_another_writer() {
+    let _guard = crate::test_env_guard();
+    let storage = Storage::open_in_memory().unwrap();
+    storage.init().unwrap();
+    let account = Account {
+        id: "stale-api-key-exchange".into(),
+        label: "fixture".into(),
+        issuer: "https://auth.openai.com".into(),
+        chatgpt_account_id: None,
+        workspace_id: None,
+        group_name: None,
+        sort: 0,
+        status: "active".into(),
+        created_at: now_ts(),
+        updated_at: now_ts(),
+    };
+    storage.insert_account(&account).unwrap();
+    let original = Token {
+        account_id: account.id,
+        id_token: "old-id".into(),
+        access_token: "old-access".into(),
+        refresh_token: "old-refresh".into(),
+        api_key_access_token: None,
+        last_refresh: now_ts(),
+    };
+    storage.insert_token(&original).unwrap();
+    let mut winner = original.clone();
+    winner.access_token = "rotated-access".into();
+    winner.refresh_token = "rotated-refresh".into();
+    winner.api_key_access_token = Some("rotated-api-key".into());
+    storage.insert_token(&winner).unwrap();
+    let mut stale_result = original.clone();
+    stale_result.api_key_access_token = Some("stale-api-key".into());
+    let resolved = persist_token_if_current(&storage, &original, &stale_result).unwrap();
+    assert_eq!(resolved.refresh_token, "rotated-refresh");
+    assert_eq!(
+        resolved.api_key_access_token.as_deref(),
+        Some("rotated-api-key")
+    );
+    assert_eq!(
+        storage
+            .find_token_by_account_id(&original.account_id)
+            .unwrap()
+            .unwrap()
+            .access_token,
+        "rotated-access"
+    );
+}
+
 /// 函数 `same_account_reuses_exchange_lock`
 ///
 /// 作者: gaohongshun

@@ -40,6 +40,28 @@ pub(crate) fn update_api_key_model(
     if key_id.is_empty() {
         return Err("key id required".to_string());
     }
+    if crate::storage_helpers::seaorm_enabled() {
+        return super::remote::update(
+            key_id,
+            name,
+            has_name,
+            model_slug,
+            reasoning_effort,
+            service_tier,
+            protocol_type,
+            upstream_base_url,
+            static_headers_json,
+            rotation_strategy,
+            aggregate_api_id,
+            account_plan_filter,
+            account_group_filter,
+            update_model_config,
+            update_routing_config,
+            update_account_group_filter,
+            has_quota_limit_tokens,
+            quota_limit_tokens,
+        );
+    }
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     if update_model_config {
         crate::models_v2::ensure_text_generation_model(&storage, model_slug.as_deref())?;

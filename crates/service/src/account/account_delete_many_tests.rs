@@ -58,8 +58,6 @@ fn delete_accounts_dedupes_ids_and_reports_missing_accounts() {
     let _lock = test_env_guard();
     let dir = new_test_dir("delete-many-accounts");
     let db_path = dir.join("codexmanager.db");
-    let _guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
-
     let storage = Storage::open(&db_path).expect("open db");
     storage.init().expect("init db");
     storage
@@ -68,6 +66,10 @@ fn delete_accounts_dedupes_ids_and_reports_missing_accounts() {
     storage
         .insert_account(&account("acc-keep", 2))
         .expect("insert keep target");
+
+    // Publish only the fully initialized fixture: existing background workers
+    // may open the process-wide database path as soon as it changes.
+    let _guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
 
     let result = delete_accounts(vec![
         " acc-delete ".to_string(),

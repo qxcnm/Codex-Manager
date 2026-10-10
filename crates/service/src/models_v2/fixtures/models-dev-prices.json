@@ -1,0 +1,35 @@
+{
+  "openai": {
+    "id": "openai",
+    "name": "OpenAI",
+    "models": {
+      "gpt-alpha": {
+        "cost": { "input": 9, "output": 18 }
+      },
+      "fallback-candidate": {
+        "cost": { "input": 0.2, "output": 1 }
+      },
+      "cny-model": {
+        "cost": { "input": 99, "output": 199 }
+      }
+    }
+  },
+  "aggregator": {
+    "id": "aggregator",
+    "name": "Aggregator",
+    "models": {
+      "gpt-alpha": {
+        "cost": { "input": 7, "output": 14 }
+      }
+    }
+  },
+  "mistral": {
+    "id": "mistral",
+    "name": "Mistral AI",
+    "models": {
+      "route-only": {
+        "cost": { "input": 0.4, "output": 2, "cache_read": 0.1 }
+      }
+    }
+  }
+}

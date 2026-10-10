@@ -1,4 +1,4 @@
-use reqwest::blocking::Client;
+use reqwest::Client;
 use serde::Deserialize;
 use std::time::Instant;
 use url::{Host, Url};
@@ -109,9 +109,9 @@ pub(crate) struct ProxyHealthCheckResult {
     pub geo: Option<ProxyGeoInfo>,
 }
 
-pub(crate) fn check_account_proxy<'a>(
+pub(crate) async fn check_account_proxy_async<'a>(
     proxy_url: &str,
-    cached_flag_lookup: impl Fn(&str) -> Option<String> + 'a,
+    cached_flag_lookup: impl Fn(&str) -> Option<String> + Send + Sync + 'a,
 ) -> ProxyHealthCheckResult {
     check_account_proxy_with_options(
         proxy_url,
@@ -119,40 +119,41 @@ pub(crate) fn check_account_proxy<'a>(
         false,
         &cached_flag_lookup,
     )
+    .await
 }
 
-fn check_account_proxy_with_options<'a>(
+async fn check_account_proxy_with_options<'a>(
     proxy_url: &str,
     targets: &[&str],
     accept_invalid_certs: bool,
-    cached_flag_lookup: &(dyn Fn(&str) -> Option<String> + 'a),
+    cached_flag_lookup: &(dyn Fn(&str) -> Option<String> + Sync + 'a),
 ) -> ProxyHealthCheckResult {
-    let (client, context) =
-        match crate::account::proxy_testing::client::build_blocking_proxy_test_client(
-            proxy_url,
-            crate::account::proxy_testing::client::ProxyTestRedirectPolicy::Limited(10),
-            accept_invalid_certs,
-        ) {
-            Ok(result) => result,
-            Err(err) => {
-                return ProxyHealthCheckResult {
-                    status: STATUS_INVALID_URL,
-                    latency_ms: None,
-                    last_error: Some(err.message),
-                    geo: None,
-                };
-            }
-        };
+    let (client, context) = match crate::account::proxy_testing::client::build_proxy_test_client(
+        proxy_url,
+        crate::account::proxy_testing::client::ProxyTestRedirectPolicy::Limited(10),
+        accept_invalid_certs,
+    ) {
+        Ok(result) => result,
+        Err(err) => {
+            return ProxyHealthCheckResult {
+                status: STATUS_INVALID_URL,
+                latency_ms: None,
+                last_error: Some(err.message),
+                geo: None,
+            };
+        }
+    };
 
     let mut retrieved_geo = None;
-    let mut geo_error = match check_proxy_geo(&client, proxy_url, cached_flag_lookup) {
+    let mut geo_error = match check_proxy_geo(&client, proxy_url, cached_flag_lookup).await {
         Ok((geo, _ipwhois_latency_ms)) => {
             // Measure actual latency to Cloudflare CDN instead of using the ipwhois response time
-            let latency_outcome = super::proxy_testing::latency::run_proxy_latency_test(
+            let latency_outcome = super::proxy_testing::latency::run_proxy_latency_test_async(
                 proxy_url,
                 "http://cp.cloudflare.com/generate_204",
                 true,
-            );
+            )
+            .await;
             if latency_outcome.status == "ok" {
                 return ProxyHealthCheckResult {
                     status: STATUS_OK,
@@ -174,7 +175,7 @@ fn check_account_proxy_with_options<'a>(
         .filter(|value| !value.trim().is_empty())
     {
         let started_at = Instant::now();
-        match client.get(target).send() {
+        match client.get(target).send().await {
             Ok(response) if response.status().is_success() => {
                 let geo_to_return = if let Some(geo) = retrieved_geo.clone() {
                     Some(geo)
@@ -260,31 +261,35 @@ fn proxy_geo_endpoint() -> String {
         .unwrap_or_else(|| IPWHOIS_ENDPOINT.to_string())
 }
 
-fn check_proxy_geo<'a>(
+async fn check_proxy_geo<'a>(
     client: &Client,
     proxy_url: &str,
-    cached_flag_lookup: &(dyn Fn(&str) -> Option<String> + 'a),
+    cached_flag_lookup: &(dyn Fn(&str) -> Option<String> + Sync + 'a),
 ) -> Result<(ProxyGeoInfo, i64), String> {
     match proxy_geo_provider().as_str() {
-        "ipwhois" => check_ipwhois_geo(client, proxy_url, cached_flag_lookup),
+        "ipwhois" => check_ipwhois_geo(client, proxy_url, cached_flag_lookup).await,
         other => Err(format!("unsupported proxy geo provider: {other}")),
     }
 }
 
-fn check_ipwhois_geo<'a>(
+async fn check_ipwhois_geo<'a>(
     client: &Client,
     proxy_url: &str,
-    cached_flag_lookup: &(dyn Fn(&str) -> Option<String> + 'a),
+    cached_flag_lookup: &(dyn Fn(&str) -> Option<String> + Sync + 'a),
 ) -> Result<(ProxyGeoInfo, i64), String> {
     let started_at = Instant::now();
-    let response = client.get(proxy_geo_endpoint()).send().map_err(|err| {
-        let mapped = crate::account::proxy_testing::errors::map_proxy_test_reqwest_error(
-            "ipwho.is request",
-            proxy_url,
-            err,
-        );
-        format!("[{}] {}", mapped.code.as_str(), mapped.message)
-    })?;
+    let response = client
+        .get(proxy_geo_endpoint())
+        .send()
+        .await
+        .map_err(|err| {
+            let mapped = crate::account::proxy_testing::errors::map_proxy_test_reqwest_error(
+                "ipwho.is request",
+                proxy_url,
+                err,
+            );
+            format!("[{}] {}", mapped.code.as_str(), mapped.message)
+        })?;
 
     let status = response.status();
     if !status.is_success() {
@@ -293,6 +298,7 @@ fn check_ipwhois_geo<'a>(
 
     let payload = response
         .json::<IpWhoIsResponse>()
+        .await
         .map_err(|err| format!("parse ipwho.is response failed: {err}"))?;
 
     let latency_ms = started_at.elapsed().as_millis().min(i64::MAX as u128) as i64;
@@ -320,9 +326,9 @@ fn check_ipwhois_geo<'a>(
         if let Some(cached) = cached_flag_lookup(code) {
             Some(cached)
         } else if let Some(url) = flag.and_then(|f| normalize_optional_text(f.img.clone())) {
-            match client.get(&url).send() {
+            match client.get(&url).send().await {
                 Ok(res) if res.status().is_success() => {
-                    if let Ok(bytes) = res.bytes() {
+                    if let Ok(bytes) = res.bytes().await {
                         use base64::{engine::general_purpose, Engine as _};
                         let b64 = general_purpose::STANDARD.encode(&bytes);
                         Some(format!("data:image/svg+xml;base64,{}", b64))
@@ -408,8 +414,8 @@ fn is_loopback_proxy_url(proxy_url: &Url) -> bool {
 mod tests {
     use super::STATUS_RUNTIME_ERROR;
 
-    #[test]
-    fn proxy_health_check_marks_loopback_connect_refused_as_runtime_error() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn proxy_health_check_marks_loopback_connect_refused_as_runtime_error() {
         let free_port = reserve_free_port();
         let proxy_url = format!("http://127.0.0.1:{free_port}");
 
@@ -418,7 +424,8 @@ mod tests {
             &["https://www.gstatic.com/generate_204"],
             true,
             &|_| None,
-        );
+        )
+        .await;
 
         assert_eq!(result.status, STATUS_RUNTIME_ERROR);
         assert_eq!(result.latency_ms, None);

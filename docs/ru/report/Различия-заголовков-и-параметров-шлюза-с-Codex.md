@@ -6,7 +6,7 @@
 
 1. Входящий HTTP-запрос сначала поступает в `crates/service/src/gateway/request/incoming_headers.rs`, где делается только снимок заголовка и запрос не перезаписывается напрямую.
 2. Привязка сеансов рассчитывается равномерно по `crates/service/src/gateway/request/session_affinity.rs`, что дает `incoming_session_id`, `incoming_client_request_id` и `fallback_session_id`.
-3. Тело запроса вступает в процесс перезаписи в `crates/service/src/gateway/request/request_rewrite.rs`, а затем поле совместимости ответов обрабатывается в `request_rewrite_responses.rs`.
+3. Тело запроса вступает в процесс перезаписи в `crates/service/src/gateway/request/request_rewrite.rs`, а затем поля совместимости Responses обрабатываются в `official_responses_http.rs`.
 4. Окончательный исходящий заголовок формируется с помощью `crates/service/src/gateway/upstream/headers/codex_headers.rs`.
 5. Перед фактической отправкой в ​​восходящий поток заголовки + тело передаются запросу в соответствии с `crates/service/src/gateway/upstream/attempt_flow/transport.rs`.
 
@@ -57,7 +57,7 @@
 - `crates/service/src/gateway/request/incoming_headers.rs`
 - `crates/service/src/gateway/request/session_affinity.rs`
 - `crates/service/src/gateway/request/request_rewrite.rs`
-- `crates/service/src/gateway/request/request_rewrite_responses.rs`
+- `crates/service/src/gateway/request/official_responses_http.rs`
 - `crates/service/src/gateway/upstream/headers/codex_headers.rs`
 - `crates/service/src/gateway/upstream/attempt_flow/transport.rs`
 - `crates/service/src/gateway/core/runtime_config.rs`

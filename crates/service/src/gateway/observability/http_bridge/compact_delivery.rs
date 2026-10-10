@@ -1,4 +1,5 @@
-use tiny_http::{Header, Request, Response, StatusCode};
+use crate::http::gateway_request::GatewayRequest as Request;
+use crate::http::gateway_response::{Header, Response, StatusCode};
 
 use super::compact_errors::{
     build_invalid_compact_success_message, build_passthrough_non_success_message,
@@ -7,7 +8,7 @@ use super::compact_errors::{
 use super::metadata::with_bridge_debug_meta;
 use super::{UpstreamResponseBridgeResult, UpstreamResponseUsage};
 
-fn respond_synthesized_compact_error_body(
+async fn respond_synthesized_compact_error_body(
     request: Request,
     status_code: u16,
     usage: UpstreamResponseUsage,
@@ -17,7 +18,7 @@ fn respond_synthesized_compact_error_body(
     trace_id: Option<&str>,
 ) -> UpstreamResponseBridgeResult {
     let response_message = crate::gateway::error_message_for_client(
-        crate::gateway::prefers_raw_errors_for_tiny_http_request(&request),
+        crate::gateway::prefers_raw_errors_for_gateway_request(&request),
         message.as_str(),
     );
     let response = crate::gateway::error_response::terminal_text_response(
@@ -25,10 +26,15 @@ fn respond_synthesized_compact_error_body(
         response_message,
         trace_id,
     );
-    let delivery_error = request.respond(response).err().map(|err| err.to_string());
+    let delivery_error = request
+        .respond_async(response)
+        .await
+        .err()
+        .map(|err| err.to_string());
     UpstreamResponseBridgeResult {
         usage,
         stream_terminal_seen: true,
+        stream_terminal_delivered: false,
         stream_terminal_error: None,
         delivery_error,
         upstream_error_hint: Some(message),
@@ -42,7 +48,7 @@ fn respond_synthesized_compact_error_body(
     }
 }
 
-pub(super) fn respond_invalid_compact_success_body(
+pub(super) async fn respond_invalid_compact_success_body(
     request: Request,
     usage: UpstreamResponseUsage,
     body: &[u8],
@@ -67,7 +73,8 @@ pub(super) fn respond_invalid_compact_success_body(
             request_id,
             cf_ray,
             trace_id,
-        ),
+        )
+        .await,
         &request_id.map(str::to_string),
         &cf_ray.map(str::to_string),
         &auth_error.map(str::to_string),
@@ -77,7 +84,7 @@ pub(super) fn respond_invalid_compact_success_body(
     )
 }
 
-pub(super) fn respond_compact_success_body(
+pub(super) async fn respond_compact_success_body(
     request: Request,
     status: StatusCode,
     headers: Vec<Header>,
@@ -100,22 +107,22 @@ pub(super) fn respond_compact_success_body(
             auth_error,
             identity_error_code,
             trace_id,
-        );
+        )
+        .await;
     }
 
     let len = Some(body.len());
-    let response = Response::new(
-        status,
-        headers,
-        std::io::Cursor::new(body.to_vec()),
-        len,
-        None,
-    );
-    let delivery_error = request.respond(response).err().map(|err| err.to_string());
+    let response = Response::new(status, headers, std::io::Cursor::new(body.to_vec()), len);
+    let delivery_error = request
+        .respond_async(response)
+        .await
+        .err()
+        .map(|err| err.to_string());
     with_bridge_debug_meta(
         UpstreamResponseBridgeResult {
             usage,
             stream_terminal_seen: true,
+            stream_terminal_delivered: false,
             stream_terminal_error: None,
             delivery_error,
             upstream_error_hint: None,
@@ -136,7 +143,7 @@ pub(super) fn respond_compact_success_body(
     )
 }
 
-pub(super) fn respond_invalid_compact_non_success_body(
+pub(super) async fn respond_invalid_compact_non_success_body(
     request: Request,
     status_code: u16,
     usage: UpstreamResponseUsage,
@@ -167,7 +174,8 @@ pub(super) fn respond_invalid_compact_non_success_body(
             request_id,
             cf_ray,
             trace_id,
-        ),
+        )
+        .await,
         &request_id.map(str::to_string),
         &cf_ray.map(str::to_string),
         &auth_error.map(str::to_string),
@@ -177,7 +185,7 @@ pub(super) fn respond_invalid_compact_non_success_body(
     )
 }
 
-pub(super) fn respond_normalized_passthrough_non_success_body(
+pub(super) async fn respond_normalized_passthrough_non_success_body(
     request: Request,
     usage: UpstreamResponseUsage,
     body: &[u8],
@@ -200,7 +208,8 @@ pub(super) fn respond_normalized_passthrough_non_success_body(
     with_bridge_debug_meta(
         respond_synthesized_compact_error_body(
             request, 502, usage, message, request_id, cf_ray, trace_id,
-        ),
+        )
+        .await,
         &request_id.map(str::to_string),
         &cf_ray.map(str::to_string),
         &auth_error.map(str::to_string),

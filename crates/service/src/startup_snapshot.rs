@@ -46,6 +46,7 @@ pub(crate) fn read_startup_snapshot(
     let request_log_limit = normalize_startup_request_log_limit(request_log_limit);
     let storage =
         storage_helpers::open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let db_path = std::env::var("CODEXMANAGER_DB_PATH").unwrap_or_else(|_| "<unset>".to_string());
     let account_summary = storage
         .account_quota_overview_stats()
@@ -180,6 +181,7 @@ pub(crate) fn read_startup_snapshot_for_actor(
         .ok_or_else(|| "permission_denied: startup requires user session".to_string())?;
     let storage =
         storage_helpers::open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let key_ids = storage
         .list_api_key_ids_for_user(user_id)
         .map_err(|err| format!("list api key ids for user failed: {err}"))?;

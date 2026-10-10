@@ -12,12 +12,19 @@ use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
-use std::io::Read;
-use std::time::Instant;
 
 use crate::apikey_profile::normalize_upstream_base_url;
 use crate::gateway;
 use crate::storage_helpers::{generate_aggregate_api_id, open_storage};
+
+mod network;
+mod operations;
+#[cfg(test)]
+use network::{probe_claude_endpoint, probe_codex_endpoint, query_generic_balance_path};
+pub(crate) use operations::{
+    fetch_aggregate_api_models_async, refresh_aggregate_api_balance_async, run_aggregate_future,
+    run_aggregate_storage, test_aggregate_api_connection_async,
+};
 
 pub(crate) const AGGREGATE_API_PROVIDER_CODEX: &str = "codex";
 pub(crate) const AGGREGATE_API_PROVIDER_CLAUDE: &str = "claude";
@@ -445,23 +452,6 @@ pub(crate) fn resolved_aggregate_api_user_agent(api: &AggregateApi) -> Result<St
         .unwrap_or_else(gateway::current_gateway_user_agent))
 }
 
-fn send_aggregate_api_request(
-    client: &reqwest::blocking::Client,
-    builder: reqwest::blocking::RequestBuilder,
-    api: &AggregateApi,
-) -> Result<reqwest::blocking::Response, String> {
-    let user_agent = resolved_aggregate_api_user_agent(api)?;
-    let mut request = builder
-        .build()
-        .map_err(|err| format!("build aggregate api request failed: {err}"))?;
-    request.headers_mut().insert(
-        reqwest::header::USER_AGENT,
-        HeaderValue::from_str(user_agent.as_str())
-            .map_err(|_| "aggregate api user agent is not a valid HTTP header value".to_string())?,
-    );
-    client.execute(request).map_err(|err| err.to_string())
-}
-
 fn normalize_auth_params_json(
     auth_type: &str,
     enabled: Option<bool>,
@@ -599,81 +589,6 @@ fn with_query_param(url: &str, name: &str, value: &str) -> String {
     parsed.to_string()
 }
 
-fn apply_probe_auth(
-    mut builder: reqwest::blocking::RequestBuilder,
-    mut url: String,
-    api: &AggregateApi,
-    secret: &str,
-) -> Result<(reqwest::blocking::RequestBuilder, String), String> {
-    let auth_type = normalize_auth_type(Some(api.auth_type.clone()))?;
-    let auth_params = api
-        .auth_params_json
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-
-    if auth_type == AGGREGATE_API_AUTH_USERPASS {
-        let parsed: UserPassSecret = serde_json::from_str(secret.trim())
-            .map_err(|_| "invalid aggregate api secret".to_string())?;
-        if let Some(raw) = auth_params {
-            let params: UserPassAuthParams =
-                serde_json::from_str(raw).map_err(|_| "invalid authParams".to_string())?;
-            let mode = params.mode.trim().to_ascii_lowercase();
-            if mode == "headerpair" {
-                let username_name = params.username_name.as_deref().unwrap_or("username").trim();
-                let password_name = params.password_name.as_deref().unwrap_or("password").trim();
-                builder = builder
-                    .header(username_name, parsed.username.as_str())
-                    .header(password_name, parsed.password.as_str());
-                return Ok((builder, url));
-            }
-            if mode == "querypair" {
-                let username_name = params.username_name.as_deref().unwrap_or("username").trim();
-                let password_name = params.password_name.as_deref().unwrap_or("password").trim();
-                url = with_query_param(url.as_str(), username_name, parsed.username.as_str());
-                url = with_query_param(url.as_str(), password_name, parsed.password.as_str());
-                return Ok((builder, url));
-            }
-        }
-        builder = builder.basic_auth(parsed.username, Some(parsed.password));
-        return Ok((builder, url));
-    }
-
-    if let Some(raw) = auth_params {
-        let params: ApiKeyAuthParams =
-            serde_json::from_str(raw).map_err(|_| "invalid authParams".to_string())?;
-        let location = params.location.trim().to_ascii_lowercase();
-        if location == "query" {
-            url = with_query_param(url.as_str(), params.name.trim(), secret.trim());
-            return Ok((builder, url));
-        }
-        let value_format = params
-            .header_value_format
-            .as_deref()
-            .unwrap_or("bearer")
-            .trim()
-            .to_ascii_lowercase();
-        let header_value = if value_format == "raw" {
-            secret.trim().to_string()
-        } else {
-            format!("Bearer {}", secret.trim())
-        };
-        builder = builder.header(params.name.trim(), header_value);
-        return Ok((builder, url));
-    }
-
-    let auth_value = format!("Bearer {}", secret.trim());
-    builder = builder
-        .header(
-            HeaderName::from_static("authorization"),
-            HeaderValue::from_str(auth_value.as_str())
-                .map_err(|_| "invalid aggregate api key".to_string())?,
-        )
-        .header("x-api-key", secret.trim())
-        .header("api-key", secret.trim());
-    Ok((builder, url))
-}
-
 /// 函数 `normalize_provider_type`
 ///
 /// 作者: gaohongshun
@@ -775,27 +690,6 @@ fn normalize_probe_url(base_url: &str, suffix: &str) -> String {
     }
 }
 
-/// 函数 `read_first_chunk`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - response: 参数 response
-///
-/// # 返回
-/// 返回函数执行结果
-fn read_first_chunk(mut response: reqwest::blocking::Response) -> Result<(), String> {
-    let mut buf = [0u8; 16];
-    let read = response.read(&mut buf).map_err(|err| err.to_string())?;
-    if read > 0 {
-        Ok(())
-    } else {
-        Err("No response data received".to_string())
-    }
-}
-
 fn join_api_path(base_url: &str, path: &str) -> String {
     let base = base_url.trim().trim_end_matches('/');
     let suffix = if path.starts_with('/') {
@@ -834,46 +728,12 @@ fn balance_query_usage_base_url(api: &AggregateApi) -> String {
     base
 }
 
-fn apply_balance_auth(
-    client: &reqwest::blocking::Client,
-    url: String,
-    api: &AggregateApi,
-    secret: &str,
-) -> Result<reqwest::blocking::RequestBuilder, String> {
-    let builder = client.get(url.as_str());
-    let (builder, updated_url) = apply_probe_auth(builder, url.clone(), api, secret)?;
-    if updated_url == url {
-        return Ok(builder);
-    }
-    let rebuilt = client.get(updated_url.as_str());
-    let (rebuilt, _) = apply_probe_auth(rebuilt, updated_url, api, secret)?;
-    Ok(rebuilt)
-}
-
 fn short_error_body(body: &str) -> String {
     let compact = body.split_whitespace().collect::<Vec<_>>().join(" ");
     if compact.chars().count() <= 240 {
         return compact;
     }
     compact.chars().take(240).collect::<String>()
-}
-
-fn read_json_response(response: reqwest::blocking::Response) -> Result<serde_json::Value, String> {
-    let status = response.status();
-    let bytes = response.bytes().map_err(|err| err.to_string())?;
-    let body = String::from_utf8_lossy(bytes.as_ref()).to_string();
-    if !status.is_success() {
-        let detail = short_error_body(body.as_str());
-        if detail.is_empty() {
-            return Err(format!("balance query http_status={}", status.as_u16()));
-        }
-        return Err(format!(
-            "balance query http_status={}; {detail}",
-            status.as_u16()
-        ));
-    }
-    serde_json::from_str(body.as_str())
-        .map_err(|_| "balance response is not valid JSON".to_string())
 }
 
 fn json_path<'a>(value: &'a serde_json::Value, path: &[&str]) -> Option<&'a serde_json::Value> {
@@ -1150,45 +1010,12 @@ fn extract_custom_balance(
     })
 }
 
-fn query_generic_balance_path(
-    client: &reqwest::blocking::Client,
-    api: &AggregateApi,
-    secret: &str,
-    base_url: &str,
-    path: &str,
-) -> Result<AggregateApiBalanceSnapshot, String> {
-    let url = join_api_path(base_url, path);
-    let builder = apply_balance_auth(client, url, api, secret)?
-        .header("accept", "application/json")
-        .header("accept-encoding", "identity");
-    let response = send_aggregate_api_request(client, builder, api)?;
-    let value = read_json_response(response)?;
-    extract_generic_balance(&value)
-}
-
 fn should_try_usage_balance_fallback(error: &str) -> bool {
     error.contains("http_status=404")
         || error.contains("http_status=405")
         || error.contains("http_status=501")
         || error.contains("balance response is not valid JSON")
         || error.contains("balance response missing remaining field")
-}
-
-fn query_generic_balance(
-    client: &reqwest::blocking::Client,
-    api: &AggregateApi,
-    secret: &str,
-) -> Result<AggregateApiBalanceSnapshot, String> {
-    let base_url = balance_query_base_url(api, AGGREGATE_API_BALANCE_TEMPLATE_GENERIC);
-    match query_generic_balance_path(client, api, secret, base_url.as_str(), "/user/balance") {
-        Ok(snapshot) => Ok(snapshot),
-        Err(err) if should_try_usage_balance_fallback(err.as_str()) => {
-            let usage_base_url = balance_query_usage_base_url(api);
-            query_generic_balance_path(client, api, secret, usage_base_url.as_str(), "/v1/usage")
-                .map_err(|fallback_err| format!("{err}; fallback /v1/usage failed: {fallback_err}"))
-        }
-        Err(err) => Err(err),
-    }
 }
 
 fn parse_custom_balance_query_config(
@@ -1198,88 +1025,6 @@ fn parse_custom_balance_query_config(
         .ok_or_else(|| "custom balance query config is required".to_string())?;
     serde_json::from_str(normalized.as_str())
         .map_err(|_| "custom balance query config is invalid JSON".to_string())
-}
-
-fn query_custom_balance(
-    client: &reqwest::blocking::Client,
-    api: &AggregateApi,
-    provider_secret: &str,
-    balance_secret: Option<String>,
-) -> Result<AggregateApiBalanceSnapshot, String> {
-    let config = parse_custom_balance_query_config(api.balance_query_config_json.as_deref())?;
-    let base_url = balance_query_base_url(api, AGGREGATE_API_BALANCE_TEMPLATE_CUSTOM);
-    let url = join_api_path(base_url.as_str(), config.path.as_str());
-    let method = config.method.as_deref().unwrap_or("GET");
-    let mut builder = if method == "POST" {
-        client.post(url.as_str())
-    } else {
-        client.get(url.as_str())
-    }
-    .header("accept", "application/json")
-    .header("accept-encoding", "identity");
-    match config
-        .auth
-        .as_deref()
-        .unwrap_or(CUSTOM_BALANCE_AUTH_PROVIDER_BEARER)
-    {
-        CUSTOM_BALANCE_AUTH_NONE => {}
-        CUSTOM_BALANCE_AUTH_BALANCE_BEARER => {
-            let access_token = balance_secret
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| provider_secret.trim());
-            if access_token.is_empty() {
-                return Err("custom balance access token is required".to_string());
-            }
-            builder = builder.bearer_auth(access_token);
-        }
-        _ => {
-            let access_token = provider_secret.trim();
-            if access_token.is_empty() {
-                return Err("aggregate api secret is required".to_string());
-            }
-            builder = builder.bearer_auth(access_token);
-        }
-    }
-    let response = send_aggregate_api_request(client, builder, api)?;
-    let value = read_json_response(response)?;
-    extract_custom_balance(&value, &config)
-}
-
-fn query_new_api_balance(
-    client: &reqwest::blocking::Client,
-    api: &AggregateApi,
-    provider_secret: &str,
-    balance_secret: Option<String>,
-) -> Result<AggregateApiBalanceSnapshot, String> {
-    let base_url = balance_query_base_url(api, AGGREGATE_API_BALANCE_TEMPLATE_NEW_API);
-    let url = join_api_path(base_url.as_str(), "/api/user/self");
-    let access_token = balance_secret
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| provider_secret.trim());
-    if access_token.is_empty() {
-        return Err("balance access token is required".to_string());
-    }
-    let mut builder = client
-        .get(url.as_str())
-        .header("content-type", "application/json")
-        .header("accept", "application/json")
-        .header("accept-encoding", "identity")
-        .bearer_auth(access_token);
-    if let Some(user_id) = api
-        .balance_query_user_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        builder = builder.header("New-Api-User", user_id);
-    }
-    let response = send_aggregate_api_request(client, builder, api)?;
-    let value = read_json_response(response)?;
-    extract_new_api_balance(&value)
 }
 
 /// 函数 `build_claude_probe_body`
@@ -1331,23 +1076,6 @@ fn build_codex_probe_body(model: &str) -> serde_json::Value {
     })
 }
 
-fn probe_http_error(
-    probe: &str,
-    status_code: u16,
-    response: reqwest::blocking::Response,
-) -> String {
-    let detail = response.bytes().ok().and_then(|body| {
-        gateway::summarize_upstream_error_hint_from_body(status_code, body.as_ref()).or_else(|| {
-            let detail = short_error_body(String::from_utf8_lossy(body.as_ref()).as_ref());
-            (!detail.is_empty()).then_some(detail)
-        })
-    });
-    match detail {
-        Some(detail) => format!("{probe} probe http_status={status_code}; {detail}"),
-        None => format!("{probe} probe http_status={status_code}"),
-    }
-}
-
 fn is_minimax_aggregate_api(api: &AggregateApi) -> bool {
     if api
         .supplier_name
@@ -1378,208 +1106,6 @@ fn build_gemini_probe_body() -> serde_json::Value {
     })
 }
 
-/// 函数 `add_codex_probe_headers`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - builder: 参数 builder
-/// - secret: 参数 secret
-///
-/// # 返回
-/// 返回函数执行结果
-fn add_codex_probe_headers(
-    mut builder: reqwest::blocking::RequestBuilder,
-) -> Result<reqwest::blocking::RequestBuilder, String> {
-    let request_id = gateway::next_trace_id();
-    builder = builder
-        .header("originator", gateway::current_wire_originator())
-        .header("session-id", request_id.as_str())
-        .header("thread-id", request_id.as_str())
-        .header("x-client-request-id", request_id.as_str())
-        .header("x-codex-window-id", format!("{request_id}:0"));
-    Ok(builder
-        .header("accept", "application/json")
-        .header("accept-encoding", "identity"))
-}
-
-/// 函数 `probe_codex_responses_endpoint`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - client: 参数 client
-/// - base_url: 参数 base_url
-/// - secret: 参数 secret
-///
-/// # 返回
-/// 返回函数执行结果
-fn probe_codex_responses_endpoint(
-    client: &reqwest::blocking::Client,
-    api: &AggregateApi,
-    secret: &str,
-    model: &str,
-) -> Result<i64, String> {
-    let action_hint = api
-        .action
-        .as_deref()
-        .map(str::trim)
-        .unwrap_or("/responses")
-        .to_ascii_lowercase();
-    let default_path = if action_hint.contains("chat/completions") {
-        "/chat/completions"
-    } else {
-        "/responses"
-    };
-    let probe_path = action_path_or_default(api, default_path);
-    let url = normalize_probe_url(api.url.as_str(), probe_path.as_str());
-    let builder = client.post(url.as_str());
-    let (builder, updated_url) = apply_probe_auth(builder, url.clone(), api, secret)?;
-    let builder = if updated_url != url {
-        let rebuilt = client.post(updated_url.as_str());
-        let (rebuilt, _) = apply_probe_auth(rebuilt, updated_url, api, secret)?;
-        rebuilt
-    } else {
-        builder
-    };
-    let request_body = if probe_path.to_ascii_lowercase().contains("chat/completions") {
-        json!({
-            "model": model,
-            "messages": [{"role":"user","content":"hi"}],
-            "stream": false
-        })
-    } else if is_minimax_aggregate_api(api) {
-        json!({
-            "model": model,
-            "input": "Who are you?",
-            "stream": false
-        })
-    } else {
-        build_codex_probe_body(model)
-    };
-    let builder = add_codex_probe_headers(builder)?
-        .header("content-type", "application/json")
-        .header("accept", "text/event-stream")
-        .json(&request_body);
-    let response = send_aggregate_api_request(client, builder, api)?;
-
-    let status_code = response.status().as_u16() as i64;
-    if !response.status().is_success() {
-        return Err(probe_http_error("codex", status_code as u16, response));
-    }
-    read_first_chunk(response)?;
-    Ok(status_code)
-}
-
-/// 函数 `probe_codex_endpoint`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - client: 参数 client
-/// - base_url: 参数 base_url
-/// - secret: 参数 secret
-///
-/// # 返回
-/// 返回函数执行结果
-fn probe_codex_endpoint(
-    client: &reqwest::blocking::Client,
-    api: &AggregateApi,
-    secret: &str,
-    model: &str,
-) -> Result<i64, String> {
-    probe_codex_responses_endpoint(client, api, secret, model)
-}
-
-/// 函数 `probe_claude_endpoint`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - client: 参数 client
-/// - base_url: 参数 base_url
-/// - secret: 参数 secret
-///
-/// # 返回
-/// 返回函数执行结果
-fn probe_claude_endpoint(
-    client: &reqwest::blocking::Client,
-    api: &AggregateApi,
-    secret: &str,
-    model: &str,
-) -> Result<i64, String> {
-    let probe_path = action_path_or_default(api, "/messages?beta=true");
-    let url = normalize_probe_url(api.url.as_str(), probe_path.as_str());
-    let builder = client.post(url.as_str());
-    let (builder, updated_url) = apply_probe_auth(builder, url.clone(), api, secret)?;
-    let builder = if updated_url != url {
-        let rebuilt = client.post(updated_url.as_str());
-        let (rebuilt, _) = apply_probe_auth(rebuilt, updated_url, api, secret)?;
-        rebuilt
-    } else {
-        builder
-    };
-    let builder = builder
-        .header("anthropic-version", "2023-06-01")
-        .header(
-            "anthropic-beta",
-            "claude-code-20250219,interleaved-thinking-2025-05-14",
-        )
-        .header("content-type", "application/json")
-        .header("accept", "application/json")
-        .header("accept-encoding", "identity")
-        .header("x-app", "cli")
-        .json(&build_claude_probe_body(model));
-    let response = send_aggregate_api_request(client, builder, api)?;
-    let status_code = response.status().as_u16() as i64;
-    if !response.status().is_success() {
-        return Err(probe_http_error("claude", status_code as u16, response));
-    }
-    read_first_chunk(response)?;
-    Ok(status_code)
-}
-
-fn probe_gemini_endpoint(
-    client: &reqwest::blocking::Client,
-    api: &AggregateApi,
-    secret: &str,
-    model: &str,
-) -> Result<i64, String> {
-    let default_path = format!("/v1beta/models/{model}:generateContent");
-    let probe_path = action_path_or_default(api, default_path.as_str());
-    let url = normalize_probe_url(api.url.as_str(), probe_path.as_str());
-    let builder = client.post(url.as_str());
-    let (builder, updated_url) = apply_probe_auth(builder, url.clone(), api, secret)?;
-    let builder = if updated_url != url {
-        let rebuilt = client.post(updated_url.as_str());
-        let (rebuilt, _) = apply_probe_auth(rebuilt, updated_url, api, secret)?;
-        rebuilt
-    } else {
-        builder
-    };
-    let builder = builder
-        .header("content-type", "application/json")
-        .header("accept", "application/json")
-        .header("accept-encoding", "identity")
-        .json(&build_gemini_probe_body());
-    let response = send_aggregate_api_request(client, builder, api)?;
-
-    let status_code = response.status().as_u16() as i64;
-    if !response.status().is_success() {
-        return Err(probe_http_error("gemini", status_code as u16, response));
-    }
-    read_first_chunk(response)?;
-    Ok(status_code)
-}
-
 /// 函数 `list_aggregate_apis`
 ///
 /// 作者: gaohongshun
@@ -1593,6 +1119,7 @@ fn probe_gemini_endpoint(
 /// 返回函数执行结果
 pub(crate) fn list_aggregate_apis() -> Result<Vec<AggregateApiSummary>, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let items = storage
         .list_aggregate_api_summaries()
         .map_err(|err| format!("load aggregate api list failed: {err}"))?;
@@ -1684,6 +1211,7 @@ pub(crate) fn create_aggregate_api(
     balance_query_config_json: Option<String>,
 ) -> Result<AggregateApiCreateResult, String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let normalized_provider_type = normalize_provider_type(provider_type)?;
     let normalized_supplier_name = normalize_supplier_name(supplier_name)?;
     let normalized_sort = normalize_sort(sort);
@@ -1825,6 +1353,7 @@ pub(crate) fn update_aggregate_api(
         return Err("aggregate api id required".to_string());
     }
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let existing = storage
         .find_aggregate_api_update_config_by_id(api_id)
         .map_err(|err| err.to_string())?
@@ -2041,6 +1570,7 @@ pub(crate) fn delete_aggregate_api(api_id: &str) -> Result<(), String> {
         return Err("aggregate api id required".to_string());
     }
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     storage
         .delete_aggregate_api(api_id)
         .map_err(|err| err.to_string())
@@ -2062,6 +1592,7 @@ pub(crate) fn read_aggregate_api_secret(api_id: &str) -> Result<AggregateApiSecr
         return Err("aggregate api id required".to_string());
     }
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let config = storage
         .find_aggregate_api_secret_config_by_id(api_id)
         .map_err(|err| err.to_string())?
@@ -2159,32 +1690,6 @@ fn parse_fetched_models(body: &Value, gemini: bool) -> Vec<(String, Option<Strin
     items
 }
 
-fn read_models_response(response: reqwest::blocking::Response) -> Result<Value, String> {
-    let status = response.status();
-    if response
-        .content_length()
-        .is_some_and(|length| length as usize > MAX_MODELS_RESPONSE_BYTES)
-    {
-        return Err("models response is too large".to_string());
-    }
-    let bytes = response
-        .bytes()
-        .map_err(|err| format!("models request failed: {err}"))?;
-    if bytes.len() > MAX_MODELS_RESPONSE_BYTES {
-        return Err("models response is too large".to_string());
-    }
-    if !status.is_success() {
-        let detail = short_error_body(String::from_utf8_lossy(bytes.as_ref()).as_ref());
-        return if detail.is_empty() {
-            Err(format!("models http_status={}", status.as_u16()))
-        } else {
-            Err(format!("models http_status={}; {detail}", status.as_u16()))
-        };
-    }
-    serde_json::from_slice(bytes.as_ref())
-        .map_err(|_| "models response is not valid JSON".to_string())
-}
-
 fn models_endpoint(api: &AggregateApi, provider_type: &str) -> String {
     let suffix = "/models";
     if provider_type == AGGREGATE_API_PROVIDER_GEMINI {
@@ -2206,63 +1711,7 @@ fn models_endpoint(api: &AggregateApi, provider_type: &str) -> String {
 pub(crate) fn fetch_aggregate_api_models(
     api_id: &str,
 ) -> Result<AggregateApiFetchModelsResult, String> {
-    if api_id.trim().is_empty() {
-        return Err("aggregate api id required".to_string());
-    }
-    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let api_with_secrets = storage
-        .find_aggregate_api_with_secrets_by_id(api_id)
-        .map_err(|err| err.to_string())?
-        .ok_or_else(|| "aggregate api not found".to_string())?;
-    let api = api_with_secrets.api;
-    let secret = api_with_secrets
-        .secret_value
-        .ok_or_else(|| "aggregate api secret not found".to_string())?;
-    let provider_type = normalize_provider_type_value(api.provider_type.as_str());
-    let client = gateway::upstream_client_for_aggregate_url(api.url.as_str());
-    let url = models_endpoint(&api, provider_type.as_str());
-    let builder = client.get(url.as_str());
-    let (builder, updated_url) = apply_probe_auth(builder, url.clone(), &api, secret.as_str())?;
-    let response = if updated_url == url {
-        send_aggregate_api_request(&client, builder.header("accept", "application/json"), &api)
-    } else {
-        let rebuilt = client.get(updated_url.as_str());
-        let (rebuilt, _) = apply_probe_auth(rebuilt, updated_url, &api, secret.as_str())?;
-        send_aggregate_api_request(&client, rebuilt.header("accept", "application/json"), &api)
-    }
-    .map_err(|err| format!("models request failed: {err}"))?;
-    let body = read_models_response(response)?;
-    let parsed = parse_fetched_models(&body, provider_type == AGGREGATE_API_PROVIDER_GEMINI);
-    let existing = storage
-        .list_managed_models_v2(true)
-        .map_err(|err| format!("read model catalog V2 failed: {err}"))?;
-    let mut items = Vec::with_capacity(parsed.len());
-    for (upstream_model, display_name) in parsed {
-        let model = existing
-            .iter()
-            .find(|model| model.slug.eq_ignore_ascii_case(upstream_model.as_str()));
-        let already_linked = model.is_some_and(|model| {
-            model.routes.iter().any(|route| {
-                route.source_kind == "aggregate_api"
-                    && route.source_id == api_id
-                    && route
-                        .upstream_model
-                        .eq_ignore_ascii_case(upstream_model.as_str())
-            })
-        });
-        items.push(AggregateApiFetchedModel {
-            upstream_model,
-            display_name,
-            existing_model_slug: model.map(|model| model.slug.clone()),
-            already_linked,
-        });
-    }
-    Ok(AggregateApiFetchModelsResult {
-        api_id: api_id.to_string(),
-        provider_type,
-        fetched_at: now_ts(),
-        items,
-    })
+    operations::run_aggregate_future(fetch_aggregate_api_models_async(api_id))
 }
 
 pub(crate) fn associate_aggregate_api_models(
@@ -2274,6 +1723,7 @@ pub(crate) fn associate_aggregate_api_models(
         return Err("aggregate api id required".to_string());
     }
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let api = storage
         .find_aggregate_api_by_id(api_id)
         .map_err(|err| err.to_string())?
@@ -2422,6 +1872,7 @@ fn configured_aggregate_probe_model(
     storage: &codexmanager_core::storage::Storage,
     api_id: &str,
 ) -> Result<String, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let mut routes = storage
         .list_managed_models_v2(true)
         .map_err(|err| format!("read model catalog V2 routes failed: {err}"))?
@@ -2456,125 +1907,11 @@ fn configured_aggregate_probe_model(
 pub(crate) fn test_aggregate_api_connection(
     api_id: &str,
 ) -> Result<AggregateApiTestResult, String> {
-    if api_id.is_empty() {
-        return Err("aggregate api id required".to_string());
-    }
-    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let api_with_secrets = storage
-        .find_aggregate_api_with_secrets_by_id(api_id)
-        .map_err(|err| err.to_string())?
-        .ok_or_else(|| "aggregate api not found".to_string())?;
-    let api = api_with_secrets.api;
-    let secret = api_with_secrets
-        .secret_value
-        .ok_or_else(|| "aggregate api secret not found".to_string())?;
-    let probe_model = configured_aggregate_probe_model(&storage, api_id)?;
-    let client = gateway::upstream_client_for_aggregate_url(api.url.as_str());
-    let started_at = Instant::now();
-    let provider_type = normalize_provider_type_value(api.provider_type.as_str());
-    let result = match provider_type.as_str() {
-        AGGREGATE_API_PROVIDER_CLAUDE => {
-            probe_claude_endpoint(&client, &api, &secret, probe_model.as_str())
-        }
-        AGGREGATE_API_PROVIDER_GEMINI => {
-            probe_gemini_endpoint(&client, &api, &secret, probe_model.as_str())
-        }
-        _ => probe_codex_endpoint(&client, &api, &secret, probe_model.as_str()),
-    };
-    let (ok, status_code, last_error) = match result {
-        Ok(code) => (true, Some(code), None),
-        Err(err) => (false, None, Some(err)),
-    };
-    let message =
-        last_error.map(|err| format!("provider={provider_type}; model={probe_model}; {err}"));
-
-    let _ = storage.update_aggregate_api_test_result(api_id, ok, status_code, message.as_deref());
-    Ok(AggregateApiTestResult {
-        id: api_id.to_string(),
-        ok,
-        status_code,
-        message,
-        tested_at: now_ts(),
-        latency_ms: started_at.elapsed().as_millis() as i64,
-    })
+    operations::run_aggregate_future(test_aggregate_api_connection_async(api_id))
 }
 
 pub(crate) fn refresh_aggregate_api_balance(
     api_id: &str,
 ) -> Result<AggregateApiBalanceRefreshResult, String> {
-    if api_id.is_empty() {
-        return Err("aggregate api id required".to_string());
-    }
-    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let api_with_secrets = storage
-        .find_aggregate_api_with_secrets_by_id(api_id)
-        .map_err(|err| err.to_string())?
-        .ok_or_else(|| "aggregate api not found".to_string())?;
-    let api = api_with_secrets.api;
-    if !api.balance_query_enabled {
-        return Err("aggregate api balance query is disabled".to_string());
-    }
-    let provider_secret = api_with_secrets
-        .secret_value
-        .ok_or_else(|| "aggregate api secret not found".to_string())?;
-    let balance_secret = api_with_secrets.balance_access_token;
-    let template = default_balance_query_template(normalize_balance_query_template(
-        api.balance_query_template.clone(),
-    )?);
-    let client = gateway::upstream_client_for_aggregate_url(api.url.as_str());
-    let started_at = Instant::now();
-    let result = match template.as_str() {
-        AGGREGATE_API_BALANCE_TEMPLATE_NEW_API => {
-            query_new_api_balance(&client, &api, &provider_secret, balance_secret)
-        }
-        AGGREGATE_API_BALANCE_TEMPLATE_CUSTOM => {
-            query_custom_balance(&client, &api, &provider_secret, balance_secret)
-        }
-        _ => query_generic_balance(&client, &api, &provider_secret),
-    };
-    let queried_at = now_ts();
-    let latency_ms = started_at.elapsed().as_millis() as i64;
-
-    match result {
-        Ok(snapshot) => {
-            let ok = snapshot.is_valid;
-            let message = if ok {
-                None
-            } else {
-                snapshot
-                    .invalid_message
-                    .clone()
-                    .or_else(|| Some("balance query returned invalid account".to_string()))
-            };
-            let balance_json = serde_json::to_string(&snapshot)
-                .map_err(|_| "serialize balance result failed".to_string())?;
-            let _ = storage.update_aggregate_api_balance_result(
-                api_id,
-                ok,
-                Some(balance_json.as_str()),
-                message.as_deref(),
-            );
-            Ok(AggregateApiBalanceRefreshResult {
-                id: api_id.to_string(),
-                ok,
-                balance: Some(snapshot),
-                message,
-                queried_at,
-                latency_ms,
-            })
-        }
-        Err(err) => {
-            let message = format!("template={template}; {err}");
-            let _ =
-                storage.update_aggregate_api_balance_result(api_id, false, None, Some(&message));
-            Ok(AggregateApiBalanceRefreshResult {
-                id: api_id.to_string(),
-                ok: false,
-                balance: None,
-                message: Some(message),
-                queried_at,
-                latency_ms,
-            })
-        }
-    }
+    operations::run_aggregate_future(refresh_aggregate_api_balance_async(api_id))
 }

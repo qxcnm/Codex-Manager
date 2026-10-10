@@ -50,18 +50,13 @@ use super::{
 
 const DEFAULT_FREE_ACCOUNT_MAX_MODEL_OPTIONS: &[&str] = &[
     "auto",
-    "gpt-5",
-    "gpt-5-codex",
-    "gpt-5-codex-mini",
-    "gpt-5.1",
-    "gpt-5.1-codex",
-    "gpt-5.1-codex-max",
-    "gpt-5.1-codex-mini",
-    "gpt-5.2",
-    "gpt-5.2-codex",
-    "gpt-5.3-codex",
-    "gpt-5.4-mini",
-    "gpt-5.4",
+    "gpt-6-astra",
+    "gpt-6-sol",
+    "gpt-6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
 ];
 
 /// 函数 `normalize_service_bind_mode_value`
@@ -167,7 +162,7 @@ fn current_app_settings_value_inner(
     let remove_requires_openai_auth = setting_bool(
         &settings,
         APP_SETTING_CODEX_PROFILE_REMOVE_REQUIRES_OPENAI_AUTH_KEY,
-        false,
+        true,
     );
     let show_main_window_on_startup =
         setting_bool(&settings, APP_SETTING_SHOW_MAIN_WINDOW_ON_STARTUP_KEY, true);
@@ -360,7 +355,7 @@ fn current_app_settings_value_inner(
         "theme": theme,
         "appearancePreset": appearance_preset,
         "locale": locale,
-        "localeOptions": ["zh-CN", "en", "ru", "ko"],
+        "localeOptions": ["auto", "zh-CN", "en", "ru", "ko"],
         "serviceAddr": service_addr,
         "serviceListenMode": service_listen_mode,
         "serviceListenModeOptions": [
@@ -422,6 +417,14 @@ fn current_app_settings_value_inner(
         object.insert(
             "threadAwareAccountDistributionEnabled".to_string(),
             thread_aware_account_distribution_enabled.into(),
+        );
+        object.insert(
+            "requestLogPayloadRedactionEnabled".to_string(),
+            super::super::gateway::current_gateway_request_log_payload_redaction_enabled().into(),
+        );
+        object.insert(
+            "requestLogPayloadPreviewEnabled".to_string(),
+            super::super::gateway::current_gateway_request_log_payload_preview_enabled().into(),
         );
         object.insert(
             "upstreamProxyBypassHosts".to_string(),
@@ -507,7 +510,11 @@ pub(super) fn current_author_content_value() -> Result<Value, String> {
 /// 返回函数执行结果
 fn load_free_account_max_model_options(current: &str) -> Vec<String> {
     let catalog = crate::storage_helpers::open_storage()
-        .and_then(|storage| storage.list_api_models_v2().ok())
+        .and_then(|storage| {
+            crate::account::remote_storage::AccountStorage::new(&storage)
+                .list_api_models_v2()
+                .ok()
+        })
         .unwrap_or_default();
     let known_current_is_non_text = catalog.iter().any(|model| {
         model.slug.eq_ignore_ascii_case(current.trim())
@@ -583,7 +590,10 @@ fn collect_free_account_max_model_options(current: &str, cached: &[String]) -> V
 /// 返回函数执行结果
 fn is_free_account_max_model_option(slug: &str) -> bool {
     let normalized = slug.trim().to_ascii_lowercase();
-    !normalized.is_empty() && normalized.starts_with("gpt-") && normalized != "gpt-5.4-pro"
+    !normalized.is_empty()
+        && normalized.starts_with("gpt-")
+        && normalized != "gpt-5.4-pro"
+        && !crate::gateway::is_obsolete_free_account_max_model(&normalized)
 }
 
 /// 函数 `persist_current_snapshot`

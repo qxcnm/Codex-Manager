@@ -7,16 +7,15 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
 use reqwest::header::{CACHE_CONTROL, PRAGMA};
 use reqwest::{Client, Proxy, Url};
 use std::collections::HashMap;
+#[cfg(test)]
 use std::future::Future;
 use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
-use tokio::runtime::{Builder, Runtime};
 
 use crate::account_plan::normalize_account_plan_value;
 
 static USAGE_HTTP_CLIENT: OnceLock<RwLock<Client>> = OnceLock::new();
 static SUBSCRIPTION_HTTP_CLIENT: OnceLock<RwLock<Client>> = OnceLock::new();
-static USAGE_HTTP_RUNTIME: OnceLock<Runtime> = OnceLock::new();
 const USAGE_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const ENV_UPSTREAM_PROXY_URL: &str = "CODEXMANAGER_UPSTREAM_PROXY_URL";
 const USAGE_HTTP_TOTAL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -50,9 +49,32 @@ pub(crate) struct UsageActionHttpError {
     pub(crate) message: String,
 }
 
+impl From<String> for UsageActionHttpError {
+    fn from(message: String) -> Self {
+        Self {
+            status: None,
+            message,
+        }
+    }
+}
+
 impl UsageActionHttpError {
     pub(crate) fn is_unauthorized(&self) -> bool {
         self.status == Some(reqwest::StatusCode::UNAUTHORIZED.as_u16())
+    }
+
+    /// A non-success response from a non-idempotent POST can still be emitted
+    /// after the upstream accepted the request. Keep the durable operation
+    /// pending for transport failures and retryable server responses.
+    pub(crate) fn is_ambiguous_non_idempotent(&self) -> bool {
+        match self.status {
+            None => true,
+            Some(status) => {
+                status == reqwest::StatusCode::REQUEST_TIMEOUT.as_u16()
+                    || status == reqwest::StatusCode::TOO_MANY_REQUESTS.as_u16()
+                    || status >= 500
+            }
+        }
     }
 }
 
@@ -183,28 +205,6 @@ struct AccountsCheckEntitlement {
     has_active_subscription: Option<bool>,
 }
 
-/// 函数 `usage_http_runtime`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// 无
-///
-/// # 返回
-/// 返回函数执行结果
-fn usage_http_runtime() -> &'static Runtime {
-    USAGE_HTTP_RUNTIME.get_or_init(|| {
-        Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .thread_name("usage-http")
-            .build()
-            .unwrap_or_else(|err| panic!("build usage http runtime failed: {err}"))
-    })
-}
-
 /// 函数 `run_usage_future`
 ///
 /// 作者: gaohongshun
@@ -216,11 +216,14 @@ fn usage_http_runtime() -> &'static Runtime {
 ///
 /// # 返回
 /// 返回函数执行结果
-fn run_usage_future<F>(future: F) -> F::Output
+#[cfg(test)]
+fn run_usage_future<F, T, E>(future: F) -> Result<T, E>
 where
-    F: Future,
+    F: Future<Output = Result<T, E>> + Send,
+    T: Send,
+    E: From<String> + Send,
 {
-    usage_http_runtime().block_on(future)
+    crate::runtime::service_runtime::run_sync(future).map_err(E::from)?
 }
 
 /// 函数 `extract_refresh_token_error_code`
@@ -1063,6 +1066,7 @@ fn current_upstream_proxy_url() -> Option<String> {
 ///
 /// # 返回
 /// 返回函数执行结果
+#[cfg(test)]
 pub(crate) fn fetch_usage_snapshot(
     base_url: &str,
     bearer: &str,
@@ -1071,6 +1075,7 @@ pub(crate) fn fetch_usage_snapshot(
     fetch_usage_snapshot_with_auth_context(base_url, bearer, chatgpt_account_id, false)
 }
 
+#[cfg(test)]
 pub(crate) fn fetch_usage_snapshot_with_auth_context(
     base_url: &str,
     auth_token: &str,
@@ -1086,6 +1091,7 @@ pub(crate) fn fetch_usage_snapshot_with_auth_context(
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn fetch_usage_snapshot_with_explicit_proxy(
     base_url: &str,
     bearer: &str,
@@ -1101,6 +1107,7 @@ pub(crate) fn fetch_usage_snapshot_with_explicit_proxy(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn fetch_usage_snapshot_with_auth_context_and_explicit_proxy(
     base_url: &str,
     auth_token: &str,
@@ -1118,6 +1125,7 @@ pub(crate) fn fetch_usage_snapshot_with_auth_context_and_explicit_proxy(
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn fetch_reset_credits_snapshot(
     base_url: &str,
     bearer: &str,
@@ -1131,6 +1139,7 @@ pub(crate) fn fetch_reset_credits_snapshot(
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn fetch_reset_credits_snapshot_with_explicit_proxy(
     base_url: &str,
     bearer: &str,
@@ -1150,6 +1159,7 @@ pub(crate) fn fetch_reset_credits_snapshot_with_explicit_proxy(
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn consume_reset_credit_request(
     base_url: &str,
     bearer: &str,
@@ -1165,6 +1175,7 @@ pub(crate) fn consume_reset_credit_request(
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn consume_reset_credit_request_with_explicit_proxy(
     base_url: &str,
     bearer: &str,
@@ -1229,7 +1240,7 @@ fn reset_credit_request_headers(
     Ok(headers)
 }
 
-async fn fetch_reset_credits_snapshot_async(
+pub(crate) async fn fetch_reset_credits_snapshot_async(
     base_url: &str,
     bearer: &str,
     chatgpt_account_id: Option<&str>,
@@ -1291,7 +1302,7 @@ async fn fetch_reset_credits_snapshot_async(
     Ok(parse_reset_credits_snapshot(&value))
 }
 
-async fn consume_reset_credit_request_async(
+pub(crate) async fn consume_reset_credit_request_async(
     base_url: &str,
     bearer: &str,
     chatgpt_account_id: Option<&str>,
@@ -1313,26 +1324,17 @@ async fn consume_reset_credit_request_async(
             message,
         }
     })?;
-    let response = match build_request(client).send().await {
-        Ok(response) => response,
-        Err(first_error) => {
-            let retry_client =
-                refresh_usage_http_client_for_proxy(explicit_proxy_url).map_err(|message| {
-                    UsageActionHttpError {
-                        status: None,
-                        message,
-                    }
-                })?;
-            build_request(retry_client).send().await.map_err(|second_error| {
-                UsageActionHttpError {
-                    status: None,
-                    message: format!(
-                        "request reset credit consume failed: {first_error}; retry_after_client_rebuild: {second_error}"
-                    ),
-                }
-            })?
-        }
-    };
+    // This POST is non-idempotent. A reqwest send error does not prove that the
+    // request stayed local; retrying with a rebuilt client could redeem the same
+    // credit twice. Leave the durable operation pending so the caller can report
+    // an unknown outcome and reconcile it before attempting another operation.
+    let response = build_request(client)
+        .send()
+        .await
+        .map_err(|error| UsageActionHttpError {
+            status: None,
+            message: format!("request reset credit consume failed: {error}"),
+        })?;
     let status = response.status();
     let headers = response.headers().clone();
     let body = read_response_text(response, USAGE_HTTP_TOTAL_TIMEOUT).await;
@@ -1370,6 +1372,7 @@ async fn consume_reset_credit_request_async(
 ///
 /// # 返回
 /// 返回函数执行结果
+#[cfg(test)]
 pub(crate) fn fetch_account_subscription(
     base_url: &str,
     bearer: &str,
@@ -1385,6 +1388,7 @@ pub(crate) fn fetch_account_subscription(
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn fetch_account_subscription_with_explicit_proxy(
     base_url: &str,
     bearer: &str,
@@ -1415,7 +1419,7 @@ pub(crate) fn fetch_account_subscription_with_explicit_proxy(
 ///
 /// # 返回
 /// 返回函数执行结果
-async fn fetch_usage_snapshot_async(
+pub(crate) async fn fetch_usage_snapshot_async(
     base_url: &str,
     auth_token: &str,
     chatgpt_account_id: Option<&str>,
@@ -1558,7 +1562,7 @@ async fn fetch_accounts_check_response_async(
 ///
 /// # 返回
 /// 返回函数执行结果
-async fn fetch_account_subscription_async(
+pub(crate) async fn fetch_account_subscription_async(
     base_url: &str,
     bearer: &str,
     account_id: &str,
@@ -1620,6 +1624,7 @@ async fn fetch_account_subscription_async(
 ///
 /// # 返回
 /// 返回函数执行结果
+#[cfg(test)]
 pub(crate) fn refresh_access_token(
     issuer: &str,
     client_id: &str,
@@ -1633,6 +1638,7 @@ pub(crate) fn refresh_access_token(
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn refresh_access_token_with_explicit_proxy(
     issuer: &str,
     client_id: &str,
@@ -1661,7 +1667,7 @@ pub(crate) fn refresh_access_token_with_explicit_proxy(
 ///
 /// # 返回
 /// 返回函数执行结果
-async fn refresh_access_token_async(
+pub(crate) async fn refresh_access_token_async(
     issuer: &str,
     client_id: &str,
     refresh_token: &str,
@@ -1711,21 +1717,19 @@ async fn refresh_access_token_async(
 }
 
 fn usage_http_client_for_proxy(explicit_proxy_url: Option<&str>) -> Result<Client, String> {
-    match explicit_proxy_url
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(proxy_url) => build_usage_http_client_with_explicit_proxy(proxy_url),
+    match explicit_proxy_url {
+        Some(proxy_url) => {
+            build_usage_http_client_with_explicit_proxy(&normalize_explicit_proxy_url(proxy_url)?)
+        }
         None => Ok(usage_http_client()),
     }
 }
 
 fn refresh_usage_http_client_for_proxy(explicit_proxy_url: Option<&str>) -> Result<Client, String> {
-    match explicit_proxy_url
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(proxy_url) => build_usage_http_client_with_explicit_proxy(proxy_url),
+    match explicit_proxy_url {
+        Some(proxy_url) => {
+            build_usage_http_client_with_explicit_proxy(&normalize_explicit_proxy_url(proxy_url)?)
+        }
         None => {
             rebuild_usage_http_client();
             Ok(usage_http_client())
@@ -1734,11 +1738,10 @@ fn refresh_usage_http_client_for_proxy(explicit_proxy_url: Option<&str>) -> Resu
 }
 
 fn subscription_http_client_for_proxy(explicit_proxy_url: Option<&str>) -> Result<Client, String> {
-    match explicit_proxy_url
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(proxy_url) => build_subscription_http_client_with_explicit_proxy(proxy_url),
+    match explicit_proxy_url {
+        Some(proxy_url) => build_subscription_http_client_with_explicit_proxy(
+            &normalize_explicit_proxy_url(proxy_url)?,
+        ),
         None => Ok(subscription_http_client()),
     }
 }
@@ -1746,11 +1749,10 @@ fn subscription_http_client_for_proxy(explicit_proxy_url: Option<&str>) -> Resul
 fn refresh_subscription_http_client_for_proxy(
     explicit_proxy_url: Option<&str>,
 ) -> Result<Client, String> {
-    match explicit_proxy_url
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(proxy_url) => build_subscription_http_client_with_explicit_proxy(proxy_url),
+    match explicit_proxy_url {
+        Some(proxy_url) => build_subscription_http_client_with_explicit_proxy(
+            &normalize_explicit_proxy_url(proxy_url)?,
+        ),
         None => {
             rebuild_subscription_http_client();
             Ok(subscription_http_client())

@@ -99,3 +99,87 @@ fn sync_gateway_user_agent_version_from_codex_latest_persists_runtime_version() 
     );
     let _ = std::fs::remove_file(db_path);
 }
+
+#[test]
+fn native_latest_registry_waits_yield_and_preserve_payload_errors() {
+    let _guard = crate::test_env_guard();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let (entered, mut started) = tokio::sync::mpsc::channel(4);
+            let app = axum::Router::new()
+                .route(
+                    "/slow",
+                    axum::routing::get(move || {
+                        let entered = entered.clone();
+                        async move {
+                            entered.send(()).await.unwrap();
+                            std::future::pending::<String>().await
+                        }
+                    }),
+                )
+                .route(
+                    "/latest",
+                    axum::routing::get(|| async {
+                        axum::Json(serde_json::json!({"version": " 0.128.0 "}))
+                    }),
+                )
+                .route(
+                    "/missing",
+                    axum::routing::get(|| async { axum::Json(serde_json::json!({})) }),
+                )
+                .route(
+                    "/error",
+                    axum::routing::get(|| async { axum::http::StatusCode::BAD_GATEWAY }),
+                );
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+            let mut slow_requests = Vec::new();
+            for _ in 0..4 {
+                let url = format!("{base}/slow");
+                slow_requests.push(tokio::spawn(async move {
+                    super::fetch_codex_latest_version_from_url_async(&url).await
+                }));
+            }
+            for _ in 0..4 {
+                tokio::time::timeout(std::time::Duration::from_secs(2), started.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+            let latest_url = format!("{base}/latest");
+            let latest = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                super::fetch_codex_latest_version_from_url_async(&latest_url),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(latest.package_name, "@openai/codex");
+            assert_eq!(latest.version, "0.128.0");
+            assert_eq!(latest.dist_tag, "latest");
+            assert_eq!(latest.registry_url, latest_url);
+            assert!(
+                super::fetch_codex_latest_version_from_url_async(&format!("{base}/missing"))
+                    .await
+                    .unwrap_err()
+                    .contains("缺少 version")
+            );
+            assert!(
+                super::fetch_codex_latest_version_from_url_async(&format!("{base}/error"))
+                    .await
+                    .unwrap_err()
+                    .contains("502")
+            );
+            for request in slow_requests {
+                request.abort();
+                assert!(request.await.unwrap_err().is_cancelled());
+            }
+            server.abort();
+        });
+}

@@ -67,6 +67,7 @@ fn usage_identity_sha256(
     local_account_id: &str,
     value: &Value,
 ) -> rusqlite::Result<UsageIdentity> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let (payload_account_id, payload_user_id) = payload_identity(value);
     let payload_sha256 = (payload_account_id.is_some() || payload_user_id.is_some()).then(|| {
         sha256_json(&serde_json::json!({
@@ -286,6 +287,7 @@ pub(crate) fn apply_status_from_snapshot(
     storage: &Storage,
     record: &UsageSnapshotRecord,
 ) -> Availability {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     apply_status_from_snapshot_with_change(storage, record).0
 }
 
@@ -293,6 +295,7 @@ fn apply_status_from_snapshot_with_change(
     storage: &Storage,
     record: &UsageSnapshotRecord,
 ) -> (Availability, bool) {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let availability = evaluate_snapshot(record);
     let context = load_account_status_context(storage, &record.account_id);
 
@@ -338,6 +341,7 @@ pub(crate) fn store_usage_snapshot(
     account_id: &str,
     value: serde_json::Value,
 ) -> Result<UsageSnapshotRecord, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     store_usage_snapshot_at(
         storage,
         account_id,
@@ -354,6 +358,7 @@ fn store_usage_snapshot_at(
     captured_at: i64,
     retain: usize,
 ) -> Result<UsageSnapshotRecord, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     store_usage_snapshot_at_with_previous_observer(
         storage,
         account_id,
@@ -375,6 +380,7 @@ fn store_usage_snapshot_at_with_previous_observer<F>(
 where
     F: FnOnce(),
 {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     // 解析并写入用量快照
     let parsed = parse_usage_snapshot(&value);
     let declares_extra_rate_limits = usage_payload_declares_extra_rate_limits(&value);

@@ -49,6 +49,8 @@ pub(super) struct AppSettingsPatch {
     compact_model_forward_rules: Option<String>,
     account_max_inflight: Option<usize>,
     thread_aware_account_distribution_enabled: Option<bool>,
+    request_log_payload_redaction_enabled: Option<bool>,
+    request_log_payload_preview_enabled: Option<bool>,
     gateway_originator: Option<String>,
     gateway_user_agent: Option<String>,
     gateway_user_agent_version: Option<String>,
@@ -167,6 +169,12 @@ pub(super) fn apply_app_settings_patch(patch: AppSettingsPatch) -> Result<(), St
     }
     if let Some(enabled) = patch.thread_aware_account_distribution_enabled {
         let _ = set_gateway_thread_aware_account_distribution_enabled(enabled)?;
+    }
+    if let Some(enabled) = patch.request_log_payload_redaction_enabled {
+        let _ = super::super::gateway::set_gateway_request_log_payload_redaction_enabled(enabled)?;
+    }
+    if let Some(enabled) = patch.request_log_payload_preview_enabled {
+        let _ = super::super::gateway::set_gateway_request_log_payload_preview_enabled(enabled)?;
     }
     if let Some(originator) = patch.gateway_originator {
         let _ = set_gateway_originator(&originator)?;

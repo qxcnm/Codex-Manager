@@ -1,6 +1,6 @@
 use super::super::ResponseAdapter;
 use super::{UpstreamResponseBridgeResult, UpstreamResponseUsage};
-use tiny_http::Header;
+use crate::http::gateway_response::Header;
 
 pub(super) const REQUEST_ID_HEADER_CANDIDATES: &[&str] = &["x-request-id", "x-oai-request-id"];
 pub(super) const CF_RAY_HEADER_NAME: &str = "cf-ray";
@@ -120,6 +120,7 @@ pub(super) fn terminal_bridge_result_with_debug_meta(
         UpstreamResponseBridgeResult {
             usage,
             stream_terminal_seen: true,
+            stream_terminal_delivered: false,
             delivery_error,
             upstream_error_hint,
             ..UpstreamResponseBridgeResult::default()
@@ -146,10 +147,11 @@ pub(super) fn log_bridge_stream_diagnostics(
     }
 
     log::warn!(
-        "event=gateway_bridge_stream_diagnostics adapter={:?} path={} stream_terminal_seen={} stream_terminal_error={} delivery_error={} upstream_error_hint={} last_sse_event_type={} upstream_request_id={} upstream_cf_ray={} upstream_content_type={}",
+        "event=gateway_bridge_stream_diagnostics adapter={:?} path={} stream_terminal_seen={} stream_terminal_delivered={} stream_terminal_error={} delivery_error={} upstream_error_hint={} last_sse_event_type={} upstream_request_id={} upstream_cf_ray={} upstream_content_type={}",
         response_adapter,
         request_path,
         if result.stream_terminal_seen { "true" } else { "false" },
+        if result.stream_terminal_delivered { "true" } else { "false" },
         result.stream_terminal_error.as_deref().unwrap_or("-"),
         result.delivery_error.as_deref().unwrap_or("-"),
         result.upstream_error_hint.as_deref().unwrap_or("-"),

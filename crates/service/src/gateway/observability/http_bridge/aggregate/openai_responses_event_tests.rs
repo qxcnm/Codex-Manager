@@ -1,6 +1,33 @@
 use super::{OpenAIResponsesEvent, SseTerminal};
 
 #[test]
+fn response_id_only_comes_from_successful_completed_event() {
+    let parsed = |kind: &str, id: &str| {
+        let event = format!("data: {{\"type\":\"{kind}\",\"response\":{{\"id\":\"{id}\"}}}}\n");
+        OpenAIResponsesEvent::parse(&[event, "\n".to_string()]).unwrap()
+    };
+    assert_eq!(
+        parsed("response.completed", "resp_real_1")
+            .usage
+            .response_id
+            .as_deref(),
+        Some("resp_real_1")
+    );
+    assert!(parsed("response.failed", "resp_real_1")
+        .usage
+        .response_id
+        .is_none());
+    assert!(parsed("response.created", "resp_real_1")
+        .usage
+        .response_id
+        .is_none());
+    assert!(parsed("response.completed", "resp_proxy")
+        .usage
+        .response_id
+        .is_none());
+}
+
+#[test]
 fn parse_openai_responses_event_maps_bare_incomplete_to_user_friendly_terminal() {
     let lines = vec![
         "event: response.incomplete\n".to_string(),

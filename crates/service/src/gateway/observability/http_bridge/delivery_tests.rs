@@ -12,9 +12,31 @@ use super::{
     response_adapter_uses_manual_chunked_streaming, write_streaming_chunked_response,
     ImagesResponseFormat, ResponseAdapter, StatusCode,
 };
+use crate::http::gateway_response::Header;
 use serde_json::json;
 use std::io::{Read, Write};
-use tiny_http::{HTTPVersion, Header};
+use tiny_http::HTTPVersion;
+
+#[test]
+fn non_stream_json_only_links_real_completed_responses_id() {
+    let mut usage = super::UpstreamResponseUsage::default();
+    merge_usage_from_body_without_output_text(
+        &mut usage,
+        br#"{"object":"response","id":"resp_direct_ok","status":"completed"}"#,
+    );
+    assert_eq!(usage.response_id.as_deref(), Some("resp_direct_ok"));
+    merge_usage_from_body_without_output_text(
+        &mut usage,
+        br#"{"object":"response","id":"resp_proxy","status":"completed"}"#,
+    );
+    assert_eq!(usage.response_id.as_deref(), Some("resp_direct_ok"));
+    let mut failed = super::UpstreamResponseUsage::default();
+    merge_usage_from_body_without_output_text(
+        &mut failed,
+        br#"{"object":"response","id":"resp_failed","status":"failed"}"#,
+    );
+    assert!(failed.response_id.is_none());
+}
 
 struct ChunkedTestReader {
     chunks: Vec<&'static [u8]>,
@@ -78,7 +100,9 @@ fn streaming_chunked_response_flushes_each_read_chunk() {
 
     let output = String::from_utf8(writer.bytes).expect("utf8 response");
     assert!(output.contains("HTTP/1.1 200 OK\r\n"));
-    assert!(output.contains("Content-Type: text/event-stream\r\n"));
+    assert!(output
+        .to_ascii_lowercase()
+        .contains("content-type: text/event-stream\r\n"));
     assert!(output.contains("X-Accel-Buffering: no\r\n"));
     assert!(output.contains("Transfer-Encoding: chunked\r\n"));
     assert!(!output.to_ascii_lowercase().contains("content-length: 999"));
@@ -294,18 +318,12 @@ fn streaming_responses_passthrough_forces_sse_content_type() {
 
     let content_type = headers
         .iter()
-        .find(|header| {
-            header
-                .field
-                .as_str()
-                .as_str()
-                .eq_ignore_ascii_case("Content-Type")
-        })
+        .find(|header| header.field.as_str().eq_ignore_ascii_case("Content-Type"))
         .map(|header| header.value.as_str());
     assert_eq!(content_type, Some("text/event-stream"));
     assert!(headers
         .iter()
-        .any(|header| header.field.as_str().as_str() == "x-request-id"));
+        .any(|header| header.field.as_str() == "x-request-id"));
 }
 
 #[test]

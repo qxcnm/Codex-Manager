@@ -105,6 +105,7 @@ pub(crate) fn get_account_proxy_settings(
     account_id: &str,
 ) -> Result<AccountProxySettingsResponse, String> {
     let storage = open_storage_for_account(account_id)?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let account_id = normalize_account_id(account_id)?;
     ensure_account_exists(&storage, account_id)?;
     read_or_default_response(&storage, account_id)
@@ -128,6 +129,7 @@ pub(crate) fn set_account_proxy_settings(
     geo_error: Option<&str>,
 ) -> Result<AccountProxySettingsResponse, String> {
     let storage = open_storage_for_account(account_id)?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let account_id = normalize_account_id(account_id)?;
     ensure_account_exists(&storage, account_id)?;
 
@@ -300,16 +302,19 @@ pub(crate) fn set_account_proxy_settings(
 
     if enabled && status.is_none() {
         let account_id_clone = account_id.to_string();
-        std::thread::spawn(move || {
-            if let Err(err) = test_account_proxy_settings(&account_id_clone, None, None, None, None)
+        if let Err(error) = crate::account::background::spawn("account-proxy-check", async move {
+            static CHECK_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+            let Ok(_permit) = CHECK_WORKERS.acquire().await else {
+                return;
+            };
+            if let Err(error) =
+                test_account_proxy_settings_async(&account_id_clone, None, None, None, None).await
             {
-                log::error!(
-                    "background proxy check failed for account {}: {}",
-                    account_id_clone,
-                    err
-                );
+                log::error!("background account proxy check failed: {error}");
             }
-        });
+        }) {
+            log::warn!("background account proxy check was not scheduled: {error}");
+        }
     }
 
     read_or_default_response(&storage, account_id)
@@ -319,6 +324,7 @@ pub(crate) fn clear_account_proxy_settings(
     account_id: &str,
 ) -> Result<AccountProxySettingsResponse, String> {
     let storage = open_storage_for_account(account_id)?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let account_id = normalize_account_id(account_id)?;
     ensure_account_exists(&storage, account_id)?;
     storage
@@ -335,38 +341,52 @@ pub(crate) fn test_account_proxy_settings(
     proxy_profile_id: Option<&str>,
     proxy_url: Option<&str>,
 ) -> Result<AccountProxySettingsResponse, String> {
-    let storage = open_storage_for_account(account_id)?;
+    crate::gateway::run_upstream_io(test_account_proxy_settings_async(
+        account_id,
+        enabled,
+        source,
+        proxy_profile_id,
+        proxy_url,
+    ))?
+}
+
+pub(crate) async fn test_account_proxy_settings_async(
+    account_id: &str,
+    enabled: Option<bool>,
+    source: Option<&str>,
+    proxy_profile_id: Option<&str>,
+    proxy_url: Option<&str>,
+) -> Result<AccountProxySettingsResponse, String> {
+    let storage = open_storage_for_account(account_id).map(|pooled| pooled.shared_handle())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let account_id = normalize_account_id(account_id)?;
     ensure_account_exists(&storage, account_id)?;
+    let checker = |proxy_url: String| async move {
+        crate::account::proxy_health::check_account_proxy_async(&proxy_url, |country_code| {
+            storage
+                .find_cached_proxy_flag_by_country(country_code)
+                .unwrap_or(None)
+        })
+        .await
+    };
     if enabled.is_some() || source.is_some() || proxy_profile_id.is_some() || proxy_url.is_some() {
-        return test_account_proxy_draft_with_checker(
+        return test_account_proxy_draft_with_checker_async(
             &storage,
             account_id,
             enabled.unwrap_or(true),
             source,
             proxy_profile_id,
             proxy_url,
-            |proxy_url| {
-                crate::account::proxy_health::check_account_proxy(proxy_url, |country_code| {
-                    storage
-                        .find_cached_proxy_flag_by_country(country_code)
-                        .unwrap_or(None)
-                })
-            },
-        );
+            checker,
+        )
+        .await;
     }
-
-    test_account_proxy_settings_with_checker(&storage, account_id, |proxy_url| {
-        crate::account::proxy_health::check_account_proxy(proxy_url, |country_code| {
-            storage
-                .find_cached_proxy_flag_by_country(country_code)
-                .unwrap_or(None)
-        })
-    })
+    test_account_proxy_settings_with_checker_async(&storage, account_id, checker).await
 }
 
 pub(crate) fn test_account_proxy_latency(account_id: &str) -> Result<JobState, String> {
     let storage = open_storage_for_account(account_id)?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let account_id = normalize_account_id(account_id)?;
     ensure_account_exists(&storage, account_id)?;
 
@@ -387,6 +407,7 @@ pub(crate) fn test_account_proxy_speed(
     diagnostic_file_size_id: Option<&str>,
 ) -> Result<JobState, String> {
     let storage = open_storage_for_account(account_id)?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let account_id = normalize_account_id(account_id)?;
     ensure_account_exists(&storage, account_id)?;
 
@@ -408,6 +429,7 @@ pub(crate) fn test_account_proxy_cloudflare_style_speed(
     config: CfStyleConfig,
 ) -> Result<JobState, String> {
     let storage = open_storage_for_account(account_id)?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let account_id = normalize_account_id(account_id)?;
     ensure_account_exists(&storage, account_id)?;
 
@@ -426,6 +448,7 @@ pub(crate) fn get_account_proxy_test_job(
     job_id: &str,
 ) -> Result<JobState, String> {
     let storage = open_storage_for_account(account_id)?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let account_id = normalize_account_id(account_id)?;
     ensure_account_exists(&storage, account_id)?;
 
@@ -452,7 +475,7 @@ pub(crate) fn cancel_account_proxy_test_job(account_id: &str, job_id: &str) -> R
     }
 }
 
-fn test_account_proxy_draft_with_checker<F>(
+async fn test_account_proxy_draft_with_checker_async<F, Fut>(
     storage: &Storage,
     account_id: &str,
     enabled: bool,
@@ -462,7 +485,8 @@ fn test_account_proxy_draft_with_checker<F>(
     checker: F,
 ) -> Result<AccountProxySettingsResponse, String>
 where
-    F: FnOnce(&str) -> ProxyHealthCheckResult,
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = ProxyHealthCheckResult>,
 {
     let draft_source = resolve_requested_source(source, proxy_profile_id, proxy_url, None);
     let normalized_profile_id =
@@ -573,7 +597,7 @@ where
         },
     };
 
-    let outcome = checker(normalized_proxy_url.as_str());
+    let outcome = checker(normalized_proxy_url).await;
     Ok(response_from_parts(
         account_id,
         enabled,
@@ -650,6 +674,7 @@ pub(crate) fn resolve_account_proxy_mode_from_storage(
     storage: &Storage,
     account_id: &str,
 ) -> AccountProxyMode {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let settings = match storage.find_account_proxy_settings(account_id) {
         Ok(settings) => settings,
         Err(err) => {
@@ -736,6 +761,7 @@ pub(crate) fn resolve_account_proxy_mode_from_storage(
 }
 
 fn ensure_account_exists(storage: &Storage, account_id: &str) -> Result<(), String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let found = storage
         .find_account_by_id(account_id)
         .map_err(|err| format!("read account failed: {err}"))?
@@ -838,6 +864,7 @@ fn load_proxy_profile(
     storage: &Storage,
     proxy_profile_id: Option<&str>,
 ) -> Result<Option<ProxyProfile>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let Some(proxy_profile_id) = proxy_profile_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -854,6 +881,7 @@ fn resolve_profile_proxy_url(
     account_id: &str,
     proxy_profile_id: &str,
 ) -> Result<(ProxyProfile, String), String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let profile = load_proxy_profile(storage, Some(proxy_profile_id))?.ok_or_else(|| {
         format!(
             "account proxy profile for {} is missing and fail-closed: {}",
@@ -880,6 +908,7 @@ fn resolve_stored_account_proxy_test_target(
     storage: &Storage,
     account_id: &str,
 ) -> Result<AccountProxyTestTarget, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let settings = storage
         .find_account_proxy_settings(account_id)
         .map_err(|err| format!("read account proxy settings failed: {err}"))?
@@ -933,14 +962,55 @@ pub(crate) fn normalize_supported_proxy_url(proxy_url: &str) -> Result<String, S
     }
 }
 
-fn test_account_proxy_settings_with_checker<F>(
+struct ProxyCheckCancellationGuard<'a> {
+    storage: &'a Storage,
+    expected: AccountProxySettings,
+    geo: ProxyGeoInfo,
+    armed: bool,
+}
+
+impl Drop for ProxyCheckCancellationGuard<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let storage = crate::account::remote_storage::AccountStorage::new(self.storage);
+        let Ok(Some(current)) = storage.find_account_proxy_settings(&self.expected.account_id)
+        else {
+            return;
+        };
+        if current.status != STATUS_CHECKING
+            || current.enabled != self.expected.enabled
+            || current.proxy_source != self.expected.proxy_source
+            || current.proxy_profile_id != self.expected.proxy_profile_id
+            || current.proxy_url != self.expected.proxy_url
+        {
+            return;
+        }
+        if let Err(error) = persist_check_status(
+            self.storage,
+            &self.expected.account_id,
+            "failed",
+            None,
+            Some("proxy check cancelled"),
+            Some(&self.geo),
+        ) {
+            log::warn!("could not persist cancelled proxy check: {error}");
+        }
+        crate::gateway::invalidate_account_proxy_cache(&self.expected.account_id);
+    }
+}
+
+async fn test_account_proxy_settings_with_checker_async<F, Fut>(
     storage: &Storage,
     account_id: &str,
     checker: F,
 ) -> Result<AccountProxySettingsResponse, String>
 where
-    F: FnOnce(&str) -> ProxyHealthCheckResult,
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = ProxyHealthCheckResult>,
 {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let settings = storage
         .find_account_proxy_settings(account_id)
         .map_err(|err| format!("read account proxy settings failed: {err}"))?;
@@ -1039,7 +1109,17 @@ where
         None,
         Some(&current_geo),
     )?;
-    let outcome = checker(normalized_proxy_url.as_str());
+    let mut expected = settings;
+    if source == AccountProxySource::Custom {
+        expected.proxy_url = Some(normalized_proxy_url.clone());
+    }
+    let mut cancellation = ProxyCheckCancellationGuard {
+        storage,
+        expected,
+        geo: current_geo,
+        armed: true,
+    };
+    let outcome = checker(normalized_proxy_url).await;
     persist_check_status(
         storage,
         account_id,
@@ -1048,6 +1128,7 @@ where
         outcome.last_error.as_deref(),
         outcome.geo.as_ref(),
     )?;
+    cancellation.armed = false;
     crate::gateway::invalidate_account_proxy_cache(account_id);
     read_or_default_response(storage, account_id)
 }
@@ -1060,6 +1141,7 @@ fn persist_check_status(
     last_error: Option<&str>,
     geo: Option<&ProxyGeoInfo>,
 ) -> Result<(), String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     storage
         .update_account_proxy_check_status(
             account_id,
@@ -1091,6 +1173,7 @@ fn read_or_default_response(
     storage: &Storage,
     account_id: &str,
 ) -> Result<AccountProxySettingsResponse, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let settings = storage
         .find_account_proxy_settings(account_id)
         .map_err(|err| format!("read account proxy settings failed: {err}"))?;
@@ -1122,6 +1205,7 @@ fn account_proxy_settings_response(
     storage: &Storage,
     settings: AccountProxySettings,
 ) -> Result<AccountProxySettingsResponse, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let source = account_proxy_source_from_settings(&settings);
     let proxy_profile = load_proxy_profile(storage, settings.proxy_profile_id.as_deref())?;
     if source == AccountProxySource::Profile && proxy_profile.is_some() {
@@ -1267,6 +1351,7 @@ pub(crate) fn get_account_proxy_speed_test_history(
     limit: Option<usize>,
 ) -> Result<ProxySpeedTestListResult, String> {
     let storage = open_storage_for_account(account_id)?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let account_id = normalize_account_id(account_id)?;
     ensure_account_exists(&storage, account_id)?;
 
@@ -1305,6 +1390,7 @@ pub(crate) fn get_account_proxy_latency_test_history(
     limit: Option<usize>,
 ) -> Result<AccountProxyUrlTestListResult, String> {
     let storage = open_storage_for_account(account_id)?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let account_id = normalize_account_id(account_id)?;
     ensure_account_exists(&storage, account_id)?;
 
@@ -1337,6 +1423,7 @@ pub(crate) fn get_account_proxy_diagnostics_history(
     limit: Option<usize>,
 ) -> Result<ProxyDiagnosticTestListResult, String> {
     let storage = open_storage_for_account(account_id)?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let account_id = normalize_account_id(account_id)?;
     ensure_account_exists(&storage, account_id)?;
 
@@ -1363,4 +1450,154 @@ pub(crate) fn get_account_proxy_diagnostics_history(
         })
         .collect();
     Ok(ProxyDiagnosticTestListResult { items: entries })
+}
+
+#[cfg(test)]
+mod storage_authority_tests {
+    use super::*;
+
+    struct RestoreEnv(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+    impl Drop for RestoreEnv {
+        fn drop(&mut self) {
+            for (key, value) in self.0.drain(..) {
+                if let Some(value) = value {
+                    std::env::set_var(key, value);
+                } else {
+                    std::env::remove_var(key);
+                }
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancelled_proxy_check_clears_persisted_checking_without_recreating_deleted_settings() {
+        let _guard = crate::test_env_guard();
+        let _restore = RestoreEnv(
+            ["CODEXMANAGER_STORAGE_BACKEND", "CODEXMANAGER_DATABASE_URL"]
+                .into_iter()
+                .map(|key| (key, std::env::var_os(key)))
+                .collect(),
+        );
+        std::env::set_var("CODEXMANAGER_STORAGE_BACKEND", "sqlite");
+        std::env::remove_var("CODEXMANAGER_DATABASE_URL");
+        let storage = Storage::open_in_memory().unwrap();
+        storage.init().unwrap();
+        let account_id = "cancelled-proxy-health";
+        storage
+            .insert_account(&codexmanager_core::storage::Account {
+                id: account_id.into(),
+                label: "Proxy test".into(),
+                issuer: "test".into(),
+                chatgpt_account_id: None,
+                workspace_id: None,
+                group_name: None,
+                sort: 0,
+                status: "active".into(),
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+        for deleted in [false, true] {
+            storage
+                .upsert_account_proxy_settings(
+                    account_id,
+                    true,
+                    Some(SOURCE_CUSTOM),
+                    None,
+                    Some("http://127.0.0.1:8080"),
+                    STATUS_UNCHECKED,
+                    None,
+                    None,
+                    None,
+                    Some("192.0.2.1"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+            let entered = tokio::sync::Notify::new();
+            let mut operation = Box::pin(test_account_proxy_settings_with_checker_async(
+                &storage,
+                account_id,
+                |_| async {
+                    entered.notify_one();
+                    std::future::pending::<ProxyHealthCheckResult>().await
+                },
+            ));
+            tokio::select! {
+                _ = entered.notified() => {}
+                _ = &mut operation => panic!("health checker must remain pending"),
+            }
+            assert_eq!(
+                storage
+                    .find_account_proxy_settings(account_id)
+                    .unwrap()
+                    .unwrap()
+                    .status,
+                STATUS_CHECKING
+            );
+            if deleted {
+                storage.clear_account_proxy_settings(account_id).unwrap();
+            }
+            drop(operation);
+            let settings = storage.find_account_proxy_settings(account_id).unwrap();
+            if deleted {
+                assert!(
+                    settings.is_none(),
+                    "cancel cleanup cannot recreate removed settings"
+                );
+            } else {
+                let settings = settings.unwrap();
+                assert_eq!(settings.status, "failed");
+                assert_eq!(
+                    settings.last_error.as_deref(),
+                    Some("proxy check cancelled")
+                );
+                assert_eq!(settings.ip.as_deref(), Some("192.0.2.1"));
+            }
+        }
+    }
+
+    #[test]
+    fn stored_proxy_test_does_not_read_sqlite_when_remote_configuration_is_incomplete() {
+        let _guard = crate::test_env_guard();
+        let _restore = RestoreEnv(
+            ["CODEXMANAGER_STORAGE_BACKEND", "CODEXMANAGER_DATABASE_URL"]
+                .into_iter()
+                .map(|key| (key, std::env::var_os(key)))
+                .collect(),
+        );
+        let sqlite = Storage::open_in_memory().unwrap();
+        sqlite.init().unwrap();
+        std::env::set_var("CODEXMANAGER_STORAGE_BACKEND", "mysql");
+        std::env::set_var("CODEXMANAGER_DATABASE_URL", "");
+
+        // A direct SQLite read would return a successful "not configured"
+        // response here, hiding the remote database configuration failure.
+        let error = crate::gateway::run_upstream_io(
+            test_account_proxy_settings_with_checker_async(&sqlite, "remote-only", |_| async {
+                panic!("a failed remote read must not start a proxy request")
+            }),
+        )
+        .unwrap()
+        .unwrap_err();
+        assert!(error.contains("database URL is required"), "{error}");
+        assert!(sqlite
+            .find_account_proxy_settings("remote-only")
+            .unwrap()
+            .is_none());
+    }
 }

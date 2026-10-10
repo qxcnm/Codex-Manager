@@ -1,6 +1,6 @@
 use super::{terminal_text_response, with_trace_id_header};
+use crate::http::gateway_response::Response;
 use std::io::Read;
-use tiny_http::Response;
 
 /// 函数 `terminal_text_response_sets_error_code_header`
 ///
@@ -20,19 +20,13 @@ fn terminal_text_response_sets_error_code_header() {
     let content_type = response
         .headers()
         .iter()
-        .find(|item| {
-            item.field
-                .as_str()
-                .as_str()
-                .eq_ignore_ascii_case("Content-Type")
-        })
+        .find(|item| item.field.as_str().eq_ignore_ascii_case("Content-Type"))
         .map(|item| item.value.as_str().to_string());
     let header = response
         .headers()
         .iter()
         .find(|item| {
             item.field
-                .as_str()
                 .as_str()
                 .eq_ignore_ascii_case(crate::error_codes::ERROR_CODE_HEADER_NAME)
         })
@@ -48,7 +42,6 @@ fn terminal_text_response_sets_error_code_header() {
         .iter()
         .find(|item| {
             item.field
-                .as_str()
                 .as_str()
                 .eq_ignore_ascii_case(crate::error_codes::TRACE_ID_HEADER_NAME)
         })
@@ -89,7 +82,6 @@ fn with_trace_id_header_appends_trace_header() {
         .iter()
         .find(|item| {
             item.field
-                .as_str()
                 .as_str()
                 .eq_ignore_ascii_case(crate::error_codes::TRACE_ID_HEADER_NAME)
         })

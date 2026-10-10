@@ -24,8 +24,8 @@ pub(super) enum PrimaryAttemptResult {
 /// # 返回
 /// 返回函数执行结果
 #[allow(clippy::too_many_arguments)]
-pub(super) fn run_primary_upstream_attempt<F>(
-    client: &reqwest::blocking::Client,
+pub(super) async fn run_primary_upstream_attempt<F>(
+    client: &reqwest::Client,
     method: &reqwest::Method,
     url: &str,
     request_deadline: Option<Instant>,
@@ -61,7 +61,9 @@ where
         auth_token,
         account,
         strip_session_affinity,
-    ) {
+    )
+    .await
+    {
         Ok(resp) => PrimaryAttemptResult::Upstream(resp),
         Err(err) => {
             let err_msg = err.to_string();

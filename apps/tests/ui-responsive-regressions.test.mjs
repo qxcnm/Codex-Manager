@@ -29,10 +29,10 @@ test("shell preserves page titles and compacts header controls by content width"
 
   assert.match(
     headerSource,
-    /gap-2 glass-header px-2[\s\S]*sm:gap-3 sm:px-4/,
+    /gap-2 glass-header px-3[\s\S]*sm:gap-3 sm:px-4/,
   );
   assert.match(headerSource, /flex min-w-0 flex-1[\s\S]*overflow-hidden/);
-  assert.match(headerSource, /truncate text-lg[\s\S]*sm:text-\[21px\]/);
+  assert.match(headerSource, /truncate text-sm font-medium text-muted-foreground/);
   assert.match(
     headerSource,
     /triggerClassName="w-\[124px\] min-w-\[124px\] gap-2 px-2\.5"/,
@@ -46,20 +46,20 @@ test("shell preserves page titles and compacts header controls by content width"
   assert.match(languageSource, /<SelectValue className="min-w-0 truncate">/);
   assert.match(appFrameSource, /data-slot="app-main-column"/);
   assert.match(stylesSource, /\[data-slot="app-main-column"\][\s\S]*container-type: inline-size;/);
-  assert.match(headerSource, /header-page-date[^\n]*whitespace-nowrap/);
+  assert.doesNotMatch(headerSource, /header-page-date/);
   assert.match(headerSource, /header-service-port-label/);
-  assert.match(headerSource, /header-refresh-label/);
+  assert.match(headerSource, /aria-label=\{t\("刷新数据"\)\}/);
   assert.match(headerSource, /className="header-language-switcher"/);
   assert.match(stylesSource, /@container \(max-width: 1320px\)/);
   assert.match(
     stylesSource,
-    /\.header-title-group \.header-page-date,[\s\S]*\.header-service-port \.header-service-port-label,[\s\S]*\.header-service-strip \.header-refresh-label[\s\S]*display: none;/,
+    /\.header-service-port \.header-service-port-label[\s\S]*display: none;/,
   );
   assert.match(
     stylesSource,
     /@container \(max-width: 760px\)[\s\S]*\.header-disclaimer \.header-disclaimer-label,[\s\S]*\.header-language-switcher \[data-slot="select-trigger"\][\s\S]*width: 2\.5rem;/,
   );
-  assert.match(workspaceSource, /line-clamp-2[\s\S]*sm:line-clamp-1/);
+  assert.match(workspaceSource, /max-w-3xl text-sm leading-5/);
 });
 
 test("mobile management toolbars wrap without hidden page overflow", async () => {
@@ -75,7 +75,7 @@ test("mobile management toolbars wrap without hidden page overflow", async () =>
   assert.match(accountsSource, /flex flex-col gap-3 px-2 sm:flex-row/);
   assert.match(pluginsSource, /w-full min-w-0[\s\S]*whitespace-normal/);
   assert.match(skillsSource, /grid-cols-3[\s\S]*sm:flex/);
-  assert.match(settingsSource, /grid-cols-3[\s\S]*lg:flex/);
+  assert.match(settingsSource, /TabsList variant="line"[\s\S]*overflow-x-auto/);
 });
 
 test("wide tables retain reachable actions and visible empty states", async () => {

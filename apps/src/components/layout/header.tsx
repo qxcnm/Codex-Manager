@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarDays, Gauge, LogOut, RefreshCw } from "lucide-react";
+import { Gauge, LogOut, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { useAppStore } from "@/lib/store/useAppStore";
 import { Switch } from "@/components/ui/switch";
@@ -20,7 +20,7 @@ import {
   normalizeServiceAddr,
 } from "@/lib/utils/service";
 import { getTopLevelRouteLabel } from "@/lib/app-shell/top-level-routes";
-import { isAdminRole, resolveSessionRole, useAppSession } from "@/hooks/useAppSession";
+import { resolveSessionRole, useAppSession } from "@/hooks/useAppSession";
 
 const DEFAULT_SERVICE_ADDR = "localhost:48760";
 
@@ -43,14 +43,13 @@ export function Header() {
   const currentShellPath = useAppStore((state) => state.currentShellPath);
   const setServiceStatus = useAppStore((state) => state.setServiceStatus);
   const setAppSettings = useAppStore((state) => state.setAppSettings);
-  const { locale, t } = useI18n();
+  const { t } = useI18n();
   const [isToggling, setIsToggling] = useState(false);
   const [portInput, setPortInput] = useState("48760");
   const { canManageService, isDesktopRuntime, mode } = useRuntimeCapabilities();
   const { data: session, isLoading: isSessionLoading } = useAppSession();
   const role = resolveSessionRole(session, isSessionLoading, isDesktopRuntime);
   const routeAccess = { role, mode: session?.mode ?? null, isDesktopRuntime };
-  const isCommandCenter = currentShellPath === "/" && isAdminRole(role);
 
   useEffect(() => {
     const current = String(serviceStatus.addr || DEFAULT_SERVICE_ADDR);
@@ -72,16 +71,8 @@ export function Header() {
    * 返回函数执行结果
    */
   const getPageTitle = () => {
-    if (currentShellPath === "/" && isAdminRole(role)) {
-      return t("仪表盘");
-    }
     return t(getTopLevelRouteLabel(currentShellPath, routeAccess));
   };
-
-  const currentDate = new Intl.DateTimeFormat(
-    locale === "en" ? "en-US" : locale === "ru" ? "ru-RU" : locale === "ko" ? "ko-KR" : "zh-CN",
-    { year: "numeric", month: "long", day: "numeric" },
-  ).format(new Date());
 
   const canLogoutWebSession =
     mode === "web-gateway" &&
@@ -178,43 +169,45 @@ export function Header() {
 
   return (
     <>
-      <header className="sticky top-0 z-30 flex min-h-[68px] items-center justify-between gap-2 glass-header px-2 sm:gap-3 sm:px-4 xl:min-h-[96px] xl:gap-5 xl:pl-9 xl:pr-[45px]">
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
-        <div className="header-title-group flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-4 xl:gap-5">
-          <h1 className="header-page-title min-w-0 truncate text-lg font-semibold tracking-[-0.015em] text-foreground sm:text-[21px] xl:text-[27px]">
+      <header className="sticky top-0 z-30 flex min-h-[50px] items-center justify-between gap-2 glass-header px-3 sm:gap-3 sm:px-4 lg:px-6">
+        <div className="header-title-group flex min-w-0 flex-1 items-center overflow-hidden">
+          <h1 className="header-page-title min-w-0 truncate text-sm font-medium text-muted-foreground">
             {getPageTitle()}
           </h1>
-          <span className="header-page-date hidden shrink-0 items-center gap-2 whitespace-nowrap text-sm text-muted-foreground md:flex xl:text-[15px]" suppressHydrationWarning>
-            {!isCommandCenter ? <CalendarDays className="h-3.5 w-3.5" /> : null}
-            {currentDate}
-          </span>
         </div>
 
         <div className="header-action-cluster ml-auto flex max-w-full min-w-0 shrink-0 items-center gap-1.5 sm:gap-2">
-          <div className={`header-service-strip hidden h-10 min-w-0 items-center rounded-full border border-border/55 bg-background/70 px-1.5 shadow-[0_14px_30px_-22px_rgb(15_23_42/0.45)] backdrop-blur-2xl sm:flex xl:h-12 xl:px-2 ${isCommandCenter ? "min-w-[320px] justify-center xl:min-w-[430px]" : ""}`}>
+          <span
+            className="flex size-8 items-center justify-center sm:hidden"
+            title={serviceStatus.connected ? t("服务已连接") : t("服务未连接")}
+            aria-label={serviceStatus.connected ? t("服务已连接") : t("服务未连接")}
+          >
+            <span className={serviceStatus.connected ? "size-2 rounded-full bg-emerald-500" : "size-2 rounded-full bg-rose-500"} />
+          </span>
+          <div className="header-service-strip hidden h-9 min-w-0 items-center rounded-md border border-border/60 bg-background/60 px-1 sm:flex">
             <Badge
               variant="secondary"
-              className="header-service-badge h-8 shrink-0 rounded-full border-0 bg-transparent px-2.5 text-xs font-medium text-foreground shadow-none xl:h-9 xl:px-3.5 xl:text-sm"
+              className="header-service-badge h-8 shrink-0 rounded-md border-0 bg-transparent px-2 text-xs font-medium text-foreground shadow-none"
             >
-              <span className={serviceStatus.connected ? "mr-2 h-2 w-2 rounded-full bg-emerald-500" : "mr-2 h-2 w-2 rounded-full bg-rose-500"} />
+              <span className={serviceStatus.connected ? "mr-2 size-2 rounded-full bg-emerald-500" : "mr-2 size-2 rounded-full bg-rose-500"} />
               <span className="header-service-status-label">
                 {serviceStatus.connected ? t("服务已连接") : t("服务未连接")}
               </span>
               {serviceStatus.version ? (
-                <span className="header-service-version ml-2 border-l border-border/70 pl-2 font-mono text-[10px] text-muted-foreground xl:text-xs">
+                <span className="header-service-version ml-2 border-l border-border/70 pl-2 font-mono text-xs text-muted-foreground">
                   v{serviceStatus.version}
                 </span>
               ) : null}
             </Badge>
 
             {canManageService ? (
-              <div className="header-service-port flex h-7 shrink-0 items-center gap-2 border-l border-border/60 px-3 xl:h-8 xl:gap-2.5 xl:px-4">
-                <span className="flex items-center gap-1.5 text-xs text-muted-foreground xl:text-sm">
-                <Gauge className="h-3.5 w-3.5 text-primary" />
+              <div className="header-service-port flex h-7 shrink-0 items-center gap-1.5 border-l border-border/60 px-2">
+                <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Gauge className="size-3.5 text-primary" />
                   <span className="header-service-port-label hidden lg:inline">{t("端口")}</span>
                 </span>
                 <Input
-                  className="h-7 w-12 border-0 bg-transparent p-0 font-mono text-xs text-foreground focus-visible:ring-0 xl:h-8 xl:w-14 xl:text-sm"
+                  className="h-7 w-12 border-0 bg-transparent p-0 font-mono text-xs text-foreground focus-visible:ring-0"
                   placeholder="48760"
                   value={portInput}
                   onChange={(event) => {
@@ -232,18 +225,18 @@ export function Header() {
                 />
               </div>
             ) : null}
-
-            <Button
-              variant="ghost"
-              size="sm"
-              className="header-service-refresh h-8 gap-1.5 rounded-full border-l border-border/60 px-3 text-xs text-muted-foreground hover:bg-primary/5 hover:text-foreground xl:h-9 xl:gap-2 xl:px-4 xl:text-sm"
-              onClick={() => window.location.reload()}
-              title={t("刷新数据")}
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              <span className="header-refresh-label hidden lg:inline">{t("刚刚更新")}</span>
-            </Button>
           </div>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            className="header-service-refresh hidden size-9 text-muted-foreground hover:text-foreground sm:inline-flex"
+            onClick={() => window.location.reload()}
+            title={t("刷新数据")}
+            aria-label={t("刷新数据")}
+          >
+            <RefreshCw />
+          </Button>
 
           <DisclaimerTicker compact />
           <LanguageSwitcher

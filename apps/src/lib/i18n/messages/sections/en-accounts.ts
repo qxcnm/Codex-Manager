@@ -3,6 +3,18 @@
 import type { MessageCatalog } from "../types";
 
 export const EN_ACCOUNTS_MESSAGES: MessageCatalog = {
+  "额度重置自动唤醒": "Auto wake on quota reset",
+  "自动唤醒：开": "Auto wake: on",
+  "自动唤醒：关": "Auto wake: off",
+  "开启额度重置自动唤醒": "Enable auto wake on quota reset",
+  "关闭额度重置自动唤醒": "Disable auto wake on quota reset",
+  "批量开启自动唤醒": "Enable auto wake for selected accounts",
+  "批量关闭自动唤醒": "Disable auto wake for selected accounts",
+  "已为 {count} 个账号开启额度重置自动唤醒": "Enabled auto wake on quota reset for {count} accounts",
+  "已为 {count} 个账号关闭额度重置自动唤醒": "Disabled auto wake on quota reset for {count} accounts",
+  "更新额度重置自动唤醒失败: {error}": "Failed to update auto wake on quota reset: {error}",
+  "5 小时额度用尽后，在重置时间到达时自动发送一条预热消息，提前启动下一轮额度周期。默认开启，可单独或批量关闭。":
+    "After the 5-hour quota is exhausted, send a warmup message when the reset time arrives to start the next quota cycle sooner. Enabled by default; disable it per account or in bulk.",
   "边缘中继": "Edge relay",
   "代理设置": "Proxy settings",
   "分": "min",

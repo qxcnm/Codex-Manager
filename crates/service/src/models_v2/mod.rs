@@ -1,6 +1,8 @@
 pub(crate) mod fast_policy;
 mod import;
 pub(crate) mod instructions;
+mod pricing_sync;
+mod seaorm;
 
 use codexmanager_core::rpc::types::{
     ModelInfo, ModelReasoningLevel, ModelServiceTier, ModelTruncationPolicy, ModelsResponse,
@@ -16,6 +18,7 @@ pub(crate) use import::{
     commit_import, preview_import, ManagedModelImportCommitV2Params,
     ManagedModelImportPreviewV2Params, ManagedModelImportPreviewV2Result,
 };
+pub(crate) use pricing_sync::{sync_prices, ManagedModelPriceSyncV2Params};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +28,9 @@ pub(crate) struct ManagedModelListV2Result {
 }
 
 pub(crate) fn list(include_hidden: bool) -> Result<ManagedModelListV2Result, String> {
+    if crate::storage_helpers::seaorm_enabled() {
+        return seaorm::list(include_hidden);
+    }
     let storage =
         crate::storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     list_with_storage(&storage, include_hidden)
@@ -34,6 +40,9 @@ pub(crate) fn list_with_storage(
     storage: &codexmanager_core::storage::Storage,
     include_hidden: bool,
 ) -> Result<ManagedModelListV2Result, String> {
+    if crate::storage_helpers::seaorm_enabled() {
+        return seaorm::list(include_hidden);
+    }
     Ok(ManagedModelListV2Result {
         items: storage
             .list_managed_models_v2(include_hidden)
@@ -45,6 +54,9 @@ pub(crate) fn list_with_storage(
 }
 
 pub(crate) fn get(slug: &str) -> Result<ManagedModelV2, String> {
+    if crate::storage_helpers::seaorm_enabled() {
+        return seaorm::get(slug)?.ok_or_else(|| "model_not_found".into());
+    }
     let storage =
         crate::storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     storage
@@ -54,57 +66,197 @@ pub(crate) fn get(slug: &str) -> Result<ManagedModelV2, String> {
 }
 
 pub(crate) fn upsert(input: ManagedModelV2Upsert) -> Result<ManagedModelV2, String> {
+    let changes = selection_changes_for_upserts(std::slice::from_ref(&input));
+    if crate::storage_helpers::seaorm_enabled() {
+        let model = seaorm::upsert_many(vec![input])?
+            .pop()
+            .ok_or_else(|| "model_not_found".to_string())?;
+        sync_active_gateway_catalog_for_current_backend_best_effort(changes);
+        return Ok(model);
+    }
     let storage =
         crate::storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     let model = storage
         .upsert_managed_model_v2(&input)
         .map_err(|err| format!("save managed model V2 failed: {err}"))?;
-    sync_active_gateway_catalog_best_effort(&storage);
+    sync_active_gateway_catalog_after_model_changes_best_effort(&storage, changes);
     Ok(model)
 }
 
 pub(crate) fn update_state(input: ManagedModelStateV2Update) -> Result<ManagedModelV2, String> {
+    let changes = selection_changes_for_state(&input);
+    if crate::storage_helpers::seaorm_enabled() {
+        let model = seaorm::update_states(ManagedModelBatchStateV2Update {
+            slugs: vec![input.slug],
+            enabled: input.enabled,
+            visibility: input.visibility,
+        })?
+        .pop()
+        .ok_or_else(|| "model_not_found".to_string())?;
+        sync_active_gateway_catalog_for_current_backend_best_effort(changes);
+        return Ok(model);
+    }
     let storage =
         crate::storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     let model = storage
         .update_managed_model_state_v2(&input)
         .map_err(|err| format!("update managed model V2 state failed: {err}"))?;
-    sync_active_gateway_catalog_best_effort(&storage);
+    sync_active_gateway_catalog_after_model_changes_best_effort(&storage, changes);
     Ok(model)
 }
 
 pub(crate) fn batch_update_state(
     input: ManagedModelBatchStateV2Update,
 ) -> Result<Vec<ManagedModelV2>, String> {
+    let changes = selection_changes_for_batch_state(&input);
+    if crate::storage_helpers::seaorm_enabled() {
+        let models = seaorm::update_states(input)?;
+        sync_active_gateway_catalog_for_current_backend_best_effort(changes);
+        return Ok(models);
+    }
     let storage =
         crate::storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     let models = storage
         .update_managed_models_state_v2(&input)
         .map_err(|err| format!("batch update managed model V2 state failed: {err}"))?;
-    sync_active_gateway_catalog_best_effort(&storage);
+    sync_active_gateway_catalog_after_model_changes_best_effort(&storage, changes);
     Ok(models)
 }
 
 pub(crate) fn delete(slug: &str) -> Result<(), String> {
+    let changes = vec![crate::codex_profile::ManagedModelSelectionChange::remove(
+        slug,
+    )];
+    if crate::storage_helpers::seaorm_enabled() {
+        seaorm::delete(slug)?;
+        sync_active_gateway_catalog_for_current_backend_best_effort(changes);
+        return Ok(());
+    }
     let storage =
         crate::storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     storage
         .delete_managed_model_v2(slug)
         .map_err(|err| format!("delete managed model V2 failed: {err}"))?;
-    sync_active_gateway_catalog_best_effort(&storage);
+    sync_active_gateway_catalog_after_model_changes_best_effort(&storage, changes);
     Ok(())
 }
 
+// Kept as a compatibility shim for callers that do not have a change list yet.
+#[allow(dead_code)]
 pub(super) fn sync_active_gateway_catalog_best_effort(
     storage: &codexmanager_core::storage::Storage,
 ) {
-    if let Err(err) = crate::codex_profile::sync_active_gateway_profile_from_storage(storage) {
+    sync_active_gateway_catalog_after_model_changes_best_effort(storage, Vec::new());
+}
+
+pub(super) fn sync_active_gateway_catalog_after_model_changes_best_effort(
+    storage: &codexmanager_core::storage::Storage,
+    changes: Vec<crate::codex_profile::ManagedModelSelectionChange>,
+) {
+    if let Err(err) =
+        crate::codex_profile::sync_active_gateway_profile_after_model_changes(storage, changes)
+    {
         log::warn!("event=sync_active_gateway_profile_failed error={err}");
+    }
+}
+
+pub(super) fn sync_active_gateway_catalog_for_current_backend_best_effort(
+    changes: Vec<crate::codex_profile::ManagedModelSelectionChange>,
+) {
+    let Some(storage) = crate::storage_helpers::open_storage() else {
+        log::warn!("event=sync_active_gateway_profile_failed error=storage unavailable");
+        return;
+    };
+    sync_active_gateway_catalog_after_model_changes_best_effort(&storage, changes);
+}
+
+pub(super) fn selection_changes_for_upserts(
+    inputs: &[ManagedModelV2Upsert],
+) -> Vec<crate::codex_profile::ManagedModelSelectionChange> {
+    inputs
+        .iter()
+        .filter_map(|input| {
+            let previous_slug = input
+                .previous_slug
+                .as_deref()
+                .unwrap_or(input.model.slug.as_str());
+            if input.model.visibility.eq_ignore_ascii_case("hide") {
+                return Some(crate::codex_profile::ManagedModelSelectionChange::remove(
+                    previous_slug,
+                ));
+            }
+            (!previous_slug.eq_ignore_ascii_case(&input.model.slug)).then(|| {
+                crate::codex_profile::ManagedModelSelectionChange::rename(
+                    previous_slug,
+                    input.model.slug.clone(),
+                )
+            })
+        })
+        .collect()
+}
+
+fn selection_changes_for_state(
+    input: &ManagedModelStateV2Update,
+) -> Vec<crate::codex_profile::ManagedModelSelectionChange> {
+    if input.visibility.eq_ignore_ascii_case("hide") {
+        vec![crate::codex_profile::ManagedModelSelectionChange::remove(
+            input.slug.clone(),
+        )]
+    } else {
+        Vec::new()
+    }
+}
+
+fn selection_changes_for_batch_state(
+    input: &ManagedModelBatchStateV2Update,
+) -> Vec<crate::codex_profile::ManagedModelSelectionChange> {
+    if input.visibility.eq_ignore_ascii_case("hide") {
+        input
+            .slugs
+            .iter()
+            .cloned()
+            .map(crate::codex_profile::ManagedModelSelectionChange::remove)
+            .collect()
+    } else {
+        Vec::new()
     }
 }
 
 fn capability<'a>(model: &'a ManagedModelV2, keys: &[&str]) -> Option<&'a Value> {
     keys.iter().find_map(|key| model.capabilities.get(*key))
+}
+
+pub(crate) fn managed_model(
+    storage: &codexmanager_core::storage::Storage,
+    slug: &str,
+) -> rusqlite::Result<Option<ManagedModelV2>> {
+    if crate::storage_helpers::seaorm_enabled() {
+        return seaorm::get(slug).map_err(|e| rusqlite::Error::SqliteFailure((), Some(e)));
+    }
+    storage.get_managed_model_v2(slug)
+}
+
+pub(crate) fn enabled_model(
+    storage: &codexmanager_core::storage::Storage,
+    slug: &str,
+) -> rusqlite::Result<Option<ManagedModelV2>> {
+    managed_model(storage, slug).map(|model| model.filter(|m| m.enabled && m.supported_in_api))
+}
+
+pub(crate) fn api_models(
+    storage: &codexmanager_core::storage::Storage,
+) -> rusqlite::Result<Vec<ManagedModelV2>> {
+    if crate::storage_helpers::seaorm_enabled() {
+        return seaorm::list(false)
+            .map(|r| {
+                r.items
+                    .into_iter()
+                    .filter(|m| m.enabled && m.supported_in_api)
+                    .collect()
+            })
+            .map_err(|e| rusqlite::Error::SqliteFailure((), Some(e)));
+    }
+    storage.list_api_models_v2()
 }
 
 pub(crate) fn policy_catalog_slug(model_slug: &str) -> &str {
@@ -114,6 +266,41 @@ pub(crate) fn policy_catalog_slug(model_slug: &str) -> &str {
     } else {
         model_slug
     }
+}
+
+pub(crate) fn request_exceeds_model_ceiling(
+    storage: &codexmanager_core::storage::Storage,
+    request_model: Option<&str>,
+    configured_ceiling: &str,
+) -> rusqlite::Result<bool> {
+    let ceiling = configured_ceiling.trim();
+    let Some(request_model) = request_model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(false);
+    };
+    if ceiling.is_empty() || ceiling.eq_ignore_ascii_case("auto") {
+        return Ok(false);
+    }
+
+    let ceiling_catalog_slug = policy_catalog_slug(ceiling);
+    let request_catalog_slug = policy_catalog_slug(request_model);
+    if ceiling_catalog_slug.eq_ignore_ascii_case(request_catalog_slug) {
+        return Ok(false);
+    }
+
+    let ceiling_model = enabled_model(storage, ceiling_catalog_slug)?;
+    let request_model = enabled_model(storage, request_catalog_slug)?;
+
+    // The catalog is ordered from highest to lowest priority. Unknown models
+    // cannot be proven to stay within a concrete ceiling, so fail closed.
+    Ok(match (request_model, ceiling_model) {
+        (Some(request_model), Some(ceiling_model)) => {
+            request_model.sort_order < ceiling_model.sort_order
+        }
+        _ => true,
+    })
 }
 
 pub(crate) fn should_preserve_luna_reserve_alias(
@@ -127,7 +314,7 @@ pub(crate) fn should_preserve_luna_reserve_alias(
         .map(str::trim)
         .filter(|model| !model.is_empty())
         .is_none_or(|model| {
-            model.eq_ignore_ascii_case(codexmanager_core::usage::LUNA_MODEL_SLUG)
+            codexmanager_core::usage::is_luna_catalog_model(Some(model))
                 || codexmanager_core::usage::is_luna_reserve_model(Some(model))
         })
 }
@@ -157,8 +344,7 @@ pub(crate) fn ensure_text_generation_model(
     let Some(slug) = slug.map(str::trim).filter(|slug| !slug.is_empty()) else {
         return Ok(());
     };
-    let Some(model) = storage
-        .get_managed_model_v2(policy_catalog_slug(slug))
+    let Some(model) = managed_model(storage, policy_catalog_slug(slug))
         .map_err(|err| format!("read managed model V2 failed: {err}"))?
     else {
         // Preserve existing behavior for external or not-yet-cataloged model slugs.
@@ -190,6 +376,8 @@ fn service_tier_description(model_slug: &str, id: &str) -> &'static str {
         if model_slug.eq_ignore_ascii_case("gpt-6-astra") {
             "2x speed, increased usage"
         } else if [
+            "gpt-6-sol",
+            "gpt-6-luna",
             "gpt-5.4",
             "gpt-5.5",
             "gpt-5.6-sol",
@@ -256,6 +444,9 @@ pub(crate) fn model_info(model: &ManagedModelV2) -> ModelInfo {
         });
     let output_modalities = string_list(&["output_modalities", "outputModalities"]);
     let supported_endpoints = string_list(&["supported_endpoints", "supportedEndpoints"]);
+    let experimental_supported_tools =
+        string_list(&["experimental_supported_tools", "experimentalSupportedTools"]);
+    let available_in_plans = string_list(&["available_in_plans", "availableInPlans"]);
     let extra = std::collections::BTreeMap::from([
         (
             "output_modalities".to_string(),
@@ -268,6 +459,88 @@ pub(crate) fn model_info(model: &ManagedModelV2) -> ModelInfo {
         (
             "supports_text_generation".to_string(),
             serde_json::json!(supports_text_generation(model)),
+        ),
+        (
+            "supports_image_generation".to_string(),
+            serde_json::json!(supports_image_generation(model)),
+        ),
+        (
+            "supports_image_editing".to_string(),
+            capability(model, &["supports_image_editing", "supportsImageEditing"])
+                .and_then(Value::as_bool)
+                .map(Value::Bool)
+                .unwrap_or(Value::Bool(false)),
+        ),
+        (
+            "supports_transparent_background".to_string(),
+            capability(
+                model,
+                &[
+                    "supports_transparent_background",
+                    "supportsTransparentBackground",
+                ],
+            )
+            .and_then(Value::as_bool)
+            .map(Value::Bool)
+            .unwrap_or(Value::Bool(false)),
+        ),
+        (
+            "api_context_window".to_string(),
+            capability(model, &["api_context_window", "apiContextWindow"])
+                .cloned()
+                .unwrap_or(Value::Null),
+        ),
+        (
+            "max_output_tokens".to_string(),
+            capability(model, &["max_output_tokens", "maxOutputTokens"])
+                .cloned()
+                .unwrap_or(Value::Null),
+        ),
+        (
+            "prefer_websockets".to_string(),
+            capability(model, &["prefer_websockets", "preferWebsockets"])
+                .and_then(Value::as_bool)
+                .map(Value::Bool)
+                .unwrap_or(Value::Bool(false)),
+        ),
+        (
+            "reasoning_summary_format".to_string(),
+            capability(
+                model,
+                &["reasoning_summary_format", "reasoningSummaryFormat"],
+            )
+            .cloned()
+            .unwrap_or(Value::Null),
+        ),
+        (
+            "multi_agent_reasoning_effort".to_string(),
+            capability(
+                model,
+                &["multi_agent_reasoning_effort", "multiAgentReasoningEffort"],
+            )
+            .cloned()
+            .unwrap_or(Value::Null),
+        ),
+        (
+            "quality_settings".to_string(),
+            capability(model, &["quality_settings", "qualitySettings"])
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([])),
+        ),
+        (
+            "snapshot".to_string(),
+            capability(model, &["snapshot"])
+                .cloned()
+                .unwrap_or(Value::Null),
+        ),
+        (
+            "auto_review_model_override".to_string(),
+            capability(
+                model,
+                &["auto_review_model_override", "autoReviewModelOverride"],
+            )
+            .cloned()
+            .unwrap_or(Value::Null),
         ),
         (
             "max_context_window".to_string(),
@@ -388,6 +661,11 @@ pub(crate) fn model_info(model: &ManagedModelV2) -> ModelInfo {
         )
         .and_then(Value::as_bool),
         context_window: model.context_window,
+        auto_compact_token_limit: capability(
+            model,
+            &["auto_compact_token_limit", "autoCompactTokenLimit"],
+        )
+        .and_then(Value::as_i64),
         effective_context_window_percent: capability(
             model,
             &[
@@ -397,9 +675,16 @@ pub(crate) fn model_info(model: &ManagedModelV2) -> ModelInfo {
         )
         .and_then(Value::as_i64)
         .or(Some(95)),
+        experimental_supported_tools,
         input_modalities: string_list(&["input_modalities", "inputModalities"]),
+        minimal_client_version: capability(
+            model,
+            &["minimal_client_version", "minimalClientVersion"],
+        )
+        .cloned(),
         supports_search_tool: capability(model, &["supports_search_tool", "supportsSearchTool"])
             .and_then(Value::as_bool),
+        available_in_plans,
         extra,
         ..Default::default()
     }
@@ -409,8 +694,7 @@ pub(crate) fn models_response_with_storage(
     storage: &codexmanager_core::storage::Storage,
 ) -> Result<ModelsResponse, String> {
     Ok(ModelsResponse {
-        models: storage
-            .list_api_models_v2()
+        models: api_models(storage)
             .map_err(|err| format!("list API models V2 failed: {err}"))?
             .iter()
             .map(model_info)
@@ -423,8 +707,7 @@ pub(crate) fn text_generation_models_response_with_storage(
     storage: &codexmanager_core::storage::Storage,
 ) -> Result<ModelsResponse, String> {
     Ok(ModelsResponse {
-        models: storage
-            .list_api_models_v2()
+        models: api_models(storage)
             .map_err(|err| format!("list API models V2 failed: {err}"))?
             .iter()
             .filter(|model| supports_text_generation(model))
@@ -440,8 +723,37 @@ mod tests {
     use codexmanager_core::storage::Storage;
 
     #[test]
+    fn sol61_is_available_in_managed_and_codex_text_catalogs() {
+        let storage = Storage::open_in_memory().unwrap();
+        storage.init().unwrap();
+        for catalog in [
+            models_response_with_storage(&storage).unwrap(),
+            text_generation_models_response_with_storage(&storage).unwrap(),
+        ] {
+            let sol = catalog
+                .models
+                .iter()
+                .find(|m| m.slug == "gpt-6.1-sol")
+                .unwrap();
+            assert_eq!(sol.default_reasoning_level.as_deref(), Some("medium"));
+            assert_eq!(
+                sol.supported_reasoning_levels
+                    .iter()
+                    .map(|level| level.effort.as_str())
+                    .collect::<Vec<_>>(),
+                ["low", "medium", "high", "xhigh", "max"]
+            );
+            assert_eq!(sol.input_modalities, ["text", "image"]);
+            assert_eq!(sol.extra["api_context_window"], 1_050_000);
+            assert_eq!(sol.extra["max_output_tokens"], 128_000);
+            assert_eq!(sol.service_tiers.len(), 1);
+            assert_eq!(sol.service_tiers[0].id, "priority");
+        }
+    }
+
+    #[test]
     fn policy_catalog_slug_normalizes_reserve_alias_and_whitespace() {
-        assert_eq!(policy_catalog_slug(" GPT-RESERVE "), "gpt-5.6-luna");
+        assert_eq!(policy_catalog_slug(" GPT-RESERVE "), "gpt-6-luna");
         assert_eq!(policy_catalog_slug(" gpt-5.4 "), "gpt-5.4");
     }
 
@@ -454,43 +766,78 @@ mod tests {
         let text_model = all
             .models
             .iter()
-            .find(|model| model.slug == "gpt-5.6-sol")
+            .find(|model| model.slug == "gpt-6-sol")
             .expect("text model");
-        assert_eq!(text_model.shell_type.as_deref(), Some("unified_exec"));
+        assert_eq!(text_model.shell_type.as_deref(), Some("shell_command"));
         assert_eq!(text_model.base_instructions.as_deref(), Some(""));
         assert_eq!(text_model.effective_context_window_percent, Some(95));
         assert_eq!(text_model.extra["max_context_window"], 872_000);
         assert_eq!(text_model.extra["comp_hash"], "3000");
         assert_eq!(text_model.extra["tool_mode"], "code_mode_only");
         assert_eq!(text_model.extra["multi_agent_version"], "v2");
+        assert_eq!(text_model.extra["api_context_window"], 1_050_000);
+        assert_eq!(text_model.extra["max_output_tokens"], 128_000);
+        assert_eq!(text_model.extra["prefer_websockets"], true);
+        assert_eq!(text_model.extra["reasoning_summary_format"], "experimental");
+        assert_eq!(
+            text_model.minimal_client_version,
+            Some(serde_json::json!("0.155.0"))
+        );
         assert_eq!(text_model.extra["use_responses_lite"], true);
         assert_eq!(text_model.extra["include_skills_usage_instructions"], false);
-        let image = all
-            .models
-            .iter()
-            .find(|model| model.slug == "gpt-image-2")
-            .expect("image model");
-        assert_eq!(image.input_modalities, ["text", "image"]);
-        assert_eq!(
-            image.extra["output_modalities"],
-            serde_json::json!(["image"])
-        );
-        assert_eq!(
-            image.extra["supported_endpoints"],
-            serde_json::json!(["/v1/images/generations", "/v1/images/edits"])
-        );
-        assert_eq!(image.extra["supports_text_generation"], false);
+        for slug in [
+            "gpt-image-2",
+            "gpt-image-2.5-sunburst",
+            "gpt-image-2.5-flare",
+        ] {
+            let image = all
+                .models
+                .iter()
+                .find(|model| model.slug == slug)
+                .unwrap_or_else(|| panic!("image model {slug}"));
+            assert_eq!(image.input_modalities, ["text", "image"]);
+            assert_eq!(
+                image.extra["output_modalities"],
+                serde_json::json!(["image"])
+            );
+            assert_eq!(
+                image.extra["supported_endpoints"],
+                serde_json::json!(["/v1/images/generations", "/v1/images/edits"])
+            );
+            assert_eq!(image.extra["supports_text_generation"], false);
+            assert_eq!(image.extra["supports_image_generation"], true);
+            assert_eq!(image.extra["supports_image_editing"], true);
+            assert!(image.extra["snapshot"].as_str().is_some());
+        }
+        for slug in ["gpt-image-2.5-sunburst", "gpt-image-2.5-flare"] {
+            let image = all
+                .models
+                .iter()
+                .find(|model| model.slug == slug)
+                .unwrap_or_else(|| panic!("image model {slug}"));
+            assert_eq!(
+                image.extra["quality_settings"],
+                serde_json::json!(["low", "medium", "high", "xhigh", "max", "auto"])
+            );
+            assert_eq!(image.extra["supports_transparent_background"], true);
+        }
 
         let text = text_generation_models_response_with_storage(&storage)
             .expect("text generation models response");
-        assert!(!text.models.iter().any(|model| model.slug == "gpt-image-2"));
-        assert_eq!(text.models.len() + 1, all.models.len());
+        for slug in [
+            "gpt-image-2",
+            "gpt-image-2.5-sunburst",
+            "gpt-image-2.5-flare",
+        ] {
+            assert!(!text.models.iter().any(|model| model.slug == slug));
+        }
+        assert_eq!(text.models.len() + 3, all.models.len());
     }
 
     #[test]
     fn model_info_exposes_fast_service_tier_for_codex_clients() {
         let model = ManagedModelV2 {
-            slug: "gpt-5.6-sol".to_string(),
+            slug: "gpt-6-sol".to_string(),
             display_name: "Fast Model".to_string(),
             capabilities: serde_json::json!({
                 "service_tiers": ["priority", "ultrafast", "flex"],

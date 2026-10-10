@@ -18,7 +18,12 @@ export const EN_MODEL_CATALOG_MESSAGES: MessageCatalog = {
   模型分类: "Model category",
   "例如：编程, 推理": "For example: coding, reasoning",
   排序: "Sort order",
+  支持的推理强度: "Supported reasoning efforts",
   默认推理强度: "Default reasoning effort",
+  不指定: "Not specified",
+  未在支持档位中: "not supported",
+  默认推理强度必须属于支持的档位:
+    "Default reasoning effort must be one of the supported efforts",
   启用模型: "Enable model",
   "可用于 API": "Available through API",
   可见性: "Visibility",

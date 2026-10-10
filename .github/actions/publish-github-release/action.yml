@@ -64,6 +64,9 @@ runs:
         esac
 
         TITLE="CodexManager $TAG"
+        NOTES_FILE="$(mktemp)"
+        trap 'rm -f "$NOTES_FILE"' EXIT
+        bash scripts/release/generate-release-notes.sh "$TAG" "$GH_REPO" docs/zh-CN/CHANGELOG.md > "$NOTES_FILE"
         mapfile -t FILES < <(find "$ASSETS_DIR" -type f \( \
           -name '*.exe' -o -name '*.zip' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' \
         \) | sort)
@@ -83,7 +86,8 @@ runs:
             --arg name "$TITLE" \
             --arg target_commitish "$TARGET_SHA" \
             --argjson prerelease "$PRERELEASE" \
-            '{name: $name, target_commitish: $target_commitish, prerelease: $prerelease}')"
+            --rawfile body "$NOTES_FILE" \
+            '{name: $name, target_commitish: $target_commitish, prerelease: $prerelease, body: $body}')"
           printf '%s' "$payload" | gh api "repos/$GH_REPO/releases/$release_id" --method PATCH --input -
         }
 
@@ -91,7 +95,7 @@ runs:
           sync_release_meta
           gh release upload "$TAG" "${FILES[@]}" --repo "$GH_REPO" --clobber
         else
-          CREATE_ARGS=(--repo "$GH_REPO" --title "$TITLE" --target "$TARGET_SHA" --generate-notes)
+          CREATE_ARGS=(--repo "$GH_REPO" --title "$TITLE" --target "$TARGET_SHA" --notes-file "$NOTES_FILE")
           if [ "$PRERELEASE" = "true" ]; then
             CREATE_ARGS+=(--prerelease)
           fi

@@ -48,7 +48,7 @@ pub(in super::super) struct CandidateAttemptParams<'a> {
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(in super::super) fn run_candidate_attempt(
+pub(in super::super) async fn run_candidate_attempt(
     params: CandidateAttemptParams<'_>,
 ) -> CandidateUpstreamDecision {
     let CandidateAttemptParams {
@@ -74,7 +74,7 @@ pub(in super::super) fn run_candidate_attempt(
 
     let executor_kind = resolve_gateway_upstream_executor_kind(context.protocol_type());
 
-    execute_candidate_upstream_flow(
+    let attempt = execute_candidate_upstream_flow(
         executor_kind,
         storage,
         method,
@@ -101,5 +101,11 @@ pub(in super::super) fn run_candidate_attempt(
             super::super::super::record_route_quality(&account.id, status_code);
             context.log_attempt_result(&account.id, upstream_url, status_code, error);
         },
-    )
+    );
+    crate::http::gateway_request::with_response_cancellation(attempt)
+        .await
+        .unwrap_or_else(|()| CandidateUpstreamDecision::Terminal {
+            status_code: 499,
+            message: "downstream request cancelled".to_owned(),
+        })
 }

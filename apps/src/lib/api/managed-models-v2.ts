@@ -3,6 +3,7 @@ import type {
   ManagedModelImportPreviewV2Result,
   ManagedModelImportV2Params,
   ManagedModelListV2Result,
+  ManagedModelPriceSyncV2Result,
   ManagedModelStateV2Update,
   ManagedModelV2,
   ManagedModelV2Upsert,
@@ -113,6 +114,21 @@ export const managedModelsV2Client = {
       }),
     );
   },
+
+  syncPrices(
+    modelSlugs: string[] = [],
+    addr?: string | null,
+  ): Promise<ManagedModelPriceSyncV2Result> {
+    return invoke<ManagedModelPriceSyncV2Result>(
+      "service_managed_model_price_sync_v2",
+      withAddr({
+        payload: {
+          modelSlugs,
+        },
+        ...(addr === undefined ? {} : { addr: addr || null }),
+      }),
+    );
+  },
 };
 
 function capability(model: ManagedModelV2, ...keys: string[]): unknown {
@@ -151,6 +167,8 @@ function serviceTierDescription(modelSlug: string, id: string): string {
     }
     if (
       new Set([
+        "gpt-6-sol",
+        "gpt-6-luna",
         "gpt-5.4",
         "gpt-5.5",
         "gpt-5.6-sol",

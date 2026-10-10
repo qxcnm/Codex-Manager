@@ -1,13 +1,18 @@
+use sqlx::pool::PoolConnection;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow};
-use sqlx::{Column, Row as SqlxRow, SqlitePool, TypeInfo};
+use sqlx::{Column, Row as SqlxRow, Sqlite, SqliteConnection, SqlitePool, TypeInfo};
 use std::cell::Cell;
 use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::str::FromStr;
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::thread::{self, ThreadId};
 use std::time::Duration;
 use tokio::runtime::{Builder, Runtime};
+use tokio::sync::Mutex as AsyncMutex;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -57,6 +62,18 @@ pub struct Connection {
     rt: Arc<Runtime>,
     pool: SqlitePool,
     path: Option<PathBuf>,
+    active_transaction: Arc<StdMutex<Option<ActiveTransaction>>>,
+    /// Last rowid observed on this connection's single physical SQLite
+    /// handle, fed by statement results and successful lookups. It is only a
+    /// fallback for when the on-demand `SELECT last_insert_rowid()` fails;
+    /// the authoritative value is always read from the handle itself.
+    last_known_rowid: Arc<AtomicI64>,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveTransaction {
+    owner: ThreadId,
+    connection: Arc<AsyncMutex<PoolConnection<Sqlite>>>,
 }
 
 impl Connection {
@@ -65,23 +82,21 @@ impl Connection {
         let rt = sqlite_runtime()?;
         let options = sqlite_options_for_path(&path)?;
         let pool = block_on_runtime(&rt, async {
-            SqlitePoolOptions::new()
-                .max_connections(1)
-                .connect_with(options)
-                .await
+            single_handle_pool_options().connect_with(options).await
         })?;
         Ok(Self {
             rt,
             pool,
             path: Some(path),
+            active_transaction: Arc::new(StdMutex::new(None)),
+            last_known_rowid: Arc::new(AtomicI64::new(0)),
         })
     }
 
     pub fn open_in_memory() -> Result<Self> {
         let rt = sqlite_runtime()?;
         let pool = block_on_runtime(&rt, async {
-            SqlitePoolOptions::new()
-                .max_connections(1)
+            single_handle_pool_options()
                 .connect_with(
                     SqliteConnectOptions::from_str("sqlite::memory:")?
                         .create_if_missing(true)
@@ -93,6 +108,8 @@ impl Connection {
             rt,
             pool,
             path: None,
+            active_transaction: Arc::new(StdMutex::new(None)),
+            last_known_rowid: Arc::new(AtomicI64::new(0)),
         })
     }
 
@@ -108,22 +125,25 @@ impl Connection {
     }
 
     pub fn execute<P: Params>(&self, sql: &str, params: P) -> Result<usize> {
-        self.block_on(execute_on_pool(
-            &self.pool,
-            sql,
-            Params::into_params(params),
-        ))
+        self.execute_params(sql, Params::into_params(params))
     }
 
     pub fn execute_batch(&self, sql: &str) -> Result<()> {
-        self.block_on(async {
-            for statement in split_sql_batch(sql) {
-                if !statement.trim().is_empty() {
-                    sqlx::query(statement).execute(&self.pool).await?;
+        if let Some(connection) = self.active_connection_for_current_thread() {
+            self.block_on(async {
+                let mut connection = connection.lock().await;
+                execute_batch_on_connection(&mut connection, sql).await
+            })
+        } else {
+            self.block_on(async {
+                for statement in split_sql_batch(sql) {
+                    if !statement.trim().is_empty() {
+                        sqlx::query(statement).execute(&self.pool).await?;
+                    }
                 }
-            }
-            Ok(())
-        })
+                Ok(())
+            })
+        }
     }
 
     pub fn query_row<P, F, T>(&self, sql: &str, params: P, f: F) -> Result<T>
@@ -139,21 +159,98 @@ impl Connection {
     }
 
     pub fn unchecked_transaction(&self) -> Result<Transaction<'_>> {
-        self.execute_batch("BEGIN IMMEDIATE")?;
+        if self.active_connection_for_current_thread().is_some() {
+            return Err(Error::SqliteFailure(
+                (),
+                Some("transaction already active on this thread".into()),
+            ));
+        }
+        let mut connection = self.block_on(self.pool.acquire())?;
+        let begin = self.block_on(async {
+            sqlx::query("BEGIN IMMEDIATE")
+                .execute(connection.as_mut())
+                .await
+        });
+        if let Err(error) = begin {
+            let _ = self.block_on(async move {
+                drop(connection);
+            });
+            return Err(error.into());
+        }
+        let connection = Arc::new(AsyncMutex::new(connection));
+        let owner = thread::current().id();
+        {
+            let mut active = self
+                .active_transaction
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if active.is_some() {
+                let _ = self.block_on(async move {
+                    let connection = connection.lock().await;
+                    drop(connection);
+                });
+                return Err(Error::SqliteFailure(
+                    (),
+                    Some("transaction already active".into()),
+                ));
+            }
+            *active = Some(ActiveTransaction {
+                owner,
+                connection: connection.clone(),
+            });
+        }
         Ok(Transaction {
             conn: self,
+            connection: Some(connection),
+            owner,
+            active_transaction: self.active_transaction.clone(),
             active: Cell::new(true),
-            last_insert_rowid: Cell::new(0),
         })
     }
 
+    /// Rowid of the most recent successful INSERT on this connection's
+    /// physical SQLite handle, read on demand (`sqlite3_last_insert_rowid`
+    /// semantics: UPDATE, DELETE, failed or ignored INSERTs leave it as is).
+    ///
+    /// On the thread that owns an active transaction the value is read from
+    /// the transaction's held handle; otherwise the pool's single handle is
+    /// acquired, so callers must not share one `Connection` across threads
+    /// between the INSERT and this call. If the lookup itself fails, the last
+    /// rowid this connection observed is returned and the error is reported
+    /// on stderr instead of panicking.
     pub fn last_insert_rowid(&self) -> i64 {
-        self.block_on(async {
-            sqlx::query_scalar::<_, i64>("SELECT last_insert_rowid()")
-                .fetch_one(&self.pool)
-                .await
-                .unwrap_or(0)
-        })
+        let result = if let Some(connection) = self.active_connection_for_current_thread() {
+            self.block_on(async {
+                let mut connection = connection.lock().await;
+                query_last_insert_rowid(connection.as_mut()).await
+            })
+        } else {
+            self.block_on(async {
+                let mut connection = self.pool.acquire().await?;
+                query_last_insert_rowid(connection.as_mut()).await
+            })
+        };
+        self.resolve_last_insert_rowid(result)
+    }
+
+    fn resolve_last_insert_rowid(&self, result: Result<i64>) -> i64 {
+        match result {
+            Ok(rowid) => {
+                self.record_rowid(rowid);
+                rowid
+            }
+            Err(error) => {
+                let fallback = self.last_known_rowid.load(Ordering::Relaxed);
+                eprintln!(
+                    "rusqlite shim: last_insert_rowid lookup failed, using last known rowid {fallback}: {error}"
+                );
+                fallback
+            }
+        }
+    }
+
+    fn record_rowid(&self, rowid: i64) {
+        self.last_known_rowid.store(rowid, Ordering::Relaxed);
     }
 
     pub fn path(&self) -> Option<&Path> {
@@ -166,6 +263,42 @@ impl Connection {
         F::Output: Send,
     {
         block_on_runtime(&self.rt, future)
+    }
+
+    fn active_connection_for_current_thread(
+        &self,
+    ) -> Option<Arc<AsyncMutex<PoolConnection<Sqlite>>>> {
+        let active = self
+            .active_transaction
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        active.as_ref().and_then(|transaction| {
+            (transaction.owner == thread::current().id()).then(|| transaction.connection.clone())
+        })
+    }
+
+    fn execute_params(&self, sql: &str, params: Vec<types::Value>) -> Result<usize> {
+        let outcome = if let Some(connection) = self.active_connection_for_current_thread() {
+            self.block_on(async {
+                let mut connection = connection.lock().await;
+                execute_on_connection(&mut connection, sql, params).await
+            })
+        } else {
+            self.block_on(execute_on_pool(&self.pool, sql, params))
+        }?;
+        self.record_rowid(outcome.rowid);
+        Ok(outcome.affected)
+    }
+
+    fn fetch_rows(&self, sql: &str, params: Vec<types::Value>) -> Result<Vec<Row<'static>>> {
+        if let Some(connection) = self.active_connection_for_current_thread() {
+            self.block_on(async {
+                let mut connection = connection.lock().await;
+                fetch_rows_on_connection(&mut connection, sql, params).await
+            })
+        } else {
+            self.block_on(fetch_rows_on_pool(&self.pool, sql, params))
+        }
     }
 }
 
@@ -190,7 +323,13 @@ where
     F: Future + Send,
     F::Output: Send,
 {
-    if tokio::runtime::Handle::try_current().is_ok() {
+    if tokio::runtime::Handle::try_current()
+        .is_ok_and(|handle| handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+    {
+        // Release the async executor while the legacy synchronous database
+        // facade waits on its shared SQLx runtime. No per-query thread.
+        tokio::task::block_in_place(|| rt.block_on(future))
+    } else if tokio::runtime::Handle::try_current().is_ok() {
         std::thread::scope(|scope| {
             scope
                 .spawn(|| rt.block_on(future))
@@ -200,6 +339,18 @@ where
     } else {
         rt.block_on(future)
     }
+}
+
+/// One `Connection` maps to exactly one physical SQLite handle for its whole
+/// life, like a real `sqlite3*`. SQLx's default 30 min max lifetime and
+/// 10 min idle timeout would silently swap the handle, dropping
+/// connection-scoped state (`last_insert_rowid`, `busy_timeout`,
+/// `temp_store`, `journal_size_limit`, ...) and wiping in-memory databases.
+fn single_handle_pool_options() -> SqlitePoolOptions {
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .max_lifetime(None)
+        .idle_timeout(None)
 }
 
 fn sqlite_options_for_path(path: &Path) -> Result<SqliteConnectOptions> {
@@ -217,11 +368,9 @@ pub struct Statement<'c> {
 
 impl<'c> Statement<'c> {
     pub fn query<P: Params>(&mut self, params: P) -> Result<Rows<'_>> {
-        let rows = self.conn.block_on(fetch_rows_on_pool(
-            &self.conn.pool,
-            &self.sql,
-            Params::into_params(params),
-        ))?;
+        let rows = self
+            .conn
+            .fetch_rows(&self.sql, Params::into_params(params))?;
         Ok(Rows {
             rows,
             index: 0,
@@ -257,11 +406,8 @@ impl<'c> Statement<'c> {
     }
 
     pub fn execute<P: Params>(&mut self, params: P) -> Result<usize> {
-        self.conn.block_on(execute_on_pool(
-            &self.conn.pool,
-            &self.sql,
-            Params::into_params(params),
-        ))
+        self.conn
+            .execute_params(&self.sql, Params::into_params(params))
     }
 }
 
@@ -688,20 +834,28 @@ impl<T> OptionalExtension<T> for Result<T> {
 #[derive(Debug)]
 pub struct Transaction<'c> {
     conn: &'c Connection,
+    connection: Option<Arc<AsyncMutex<PoolConnection<Sqlite>>>>,
+    owner: ThreadId,
+    active_transaction: Arc<StdMutex<Option<ActiveTransaction>>>,
     active: Cell<bool>,
-    last_insert_rowid: Cell<i64>,
 }
 
 impl<'c> Transaction<'c> {
     pub fn execute<P: Params>(&self, sql: &str, params: P) -> Result<usize> {
-        let affected = self.conn.execute(sql, params)?;
-        let rowid = self.conn.last_insert_rowid();
-        self.last_insert_rowid.set(rowid);
-        Ok(affected)
+        let sql = sql.to_string();
+        let params = Params::into_params(params);
+        let outcome = self.with_connection(|connection| {
+            Box::pin(async move { execute_on_connection(connection, &sql, params).await })
+        })?;
+        self.conn.record_rowid(outcome.rowid);
+        Ok(outcome.affected)
     }
 
     pub fn execute_batch(&self, sql: &str) -> Result<()> {
-        self.conn.execute_batch(sql)
+        let sql = sql.to_string();
+        self.with_connection(|connection| {
+            Box::pin(async move { execute_batch_on_connection(connection, &sql).await })
+        })
     }
 
     pub fn query_row<P, F, T>(&self, sql: &str, params: P, f: F) -> Result<T>
@@ -709,7 +863,15 @@ impl<'c> Transaction<'c> {
         P: Params,
         F: FnOnce(&Row<'_>) -> Result<T>,
     {
-        self.conn.query_row(sql, params, f)
+        let sql = sql.to_string();
+        let params = Params::into_params(params);
+        let rows = self.with_connection(|connection| {
+            Box::pin(async move { fetch_rows_on_connection(connection, &sql, params).await })
+        })?;
+        match rows.into_iter().next() {
+            Some(row) => f(&row),
+            None => Err(Error::QueryReturnedNoRows),
+        }
     }
 
     pub fn prepare<'t>(&'t self, sql: &str) -> Result<TransactionStatement<'t, 'c>> {
@@ -719,23 +881,113 @@ impl<'c> Transaction<'c> {
         })
     }
 
+    /// Reads `last_insert_rowid()` on demand from the handle this transaction
+    /// holds, never from the pool, so it reflects every INSERT issued through
+    /// this transaction, its statements, `execute_batch`, or the owning
+    /// `Connection` on the owner thread. Lookup failures fall back to the last
+    /// known rowid (see [`Connection::last_insert_rowid`]).
     pub fn last_insert_rowid(&self) -> i64 {
-        self.last_insert_rowid.get()
+        let result = self.with_connection(|connection| {
+            Box::pin(async move { query_last_insert_rowid(connection.as_mut()).await })
+        });
+        self.conn.resolve_last_insert_rowid(result)
     }
 
-    pub fn commit(self) -> Result<()> {
-        if self.active.replace(false) {
-            self.conn.execute_batch("COMMIT")?;
+    pub fn commit(mut self) -> Result<()> {
+        if self.active.get() {
+            let result = self.with_connection(|connection| {
+                Box::pin(async move {
+                    sqlx::query("COMMIT")
+                        .execute(&mut **connection)
+                        .await
+                        .map(|_| ())
+                        .map_err(Error::from)
+                })
+            });
+            if result.is_err() {
+                let _ = self.with_connection(|connection| {
+                    Box::pin(async move {
+                        sqlx::query("ROLLBACK")
+                            .execute(&mut **connection)
+                            .await
+                            .map(|_| ())
+                            .map_err(Error::from)
+                    })
+                });
+            }
+            self.active.set(false);
+            self.clear_active_transaction();
+            self.release_connection();
+            result
+        } else {
+            self.release_connection();
+            Ok(())
         }
-        Ok(())
+    }
+
+    fn clear_active_transaction(&self) {
+        let mut active = self
+            .active_transaction
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if active.as_ref().is_some_and(|transaction| {
+            transaction.owner == self.owner
+                && self
+                    .connection
+                    .as_ref()
+                    .is_some_and(|connection| Arc::ptr_eq(&transaction.connection, connection))
+        }) {
+            *active = None;
+        }
+    }
+
+    fn release_connection(&mut self) {
+        let Some(connection) = self.connection.take() else {
+            return;
+        };
+        let _ = self.conn.block_on(async move {
+            let connection = connection.lock().await;
+            drop(connection);
+        });
+    }
+
+    fn with_connection<T, F>(&self, operation: F) -> Result<T>
+    where
+        T: Send,
+        F: Send
+            + for<'a> FnOnce(
+                &'a mut PoolConnection<Sqlite>,
+            ) -> Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>,
+    {
+        let connection = self
+            .connection
+            .as_ref()
+            .ok_or_else(|| {
+                Error::SqliteFailure((), Some("transaction connection unavailable".to_string()))
+            })?
+            .clone();
+        self.conn.block_on(async move {
+            let mut connection = connection.lock().await;
+            operation(&mut connection).await
+        })
     }
 }
 
 impl Drop for Transaction<'_> {
     fn drop(&mut self) {
         if self.active.replace(false) {
-            let _ = self.conn.execute_batch("ROLLBACK");
+            let _ = self.with_connection(|connection| {
+                Box::pin(async move {
+                    sqlx::query("ROLLBACK")
+                        .execute(connection.as_mut())
+                        .await
+                        .map(|_| ())
+                        .map_err(Error::from)
+                })
+            });
+            self.clear_active_transaction();
         }
+        self.release_connection();
     }
 }
 
@@ -890,12 +1142,440 @@ pub mod backup {
     }
 }
 
-async fn execute_on_pool(pool: &SqlitePool, sql: &str, params: Vec<types::Value>) -> Result<usize> {
+#[cfg(test)]
+mod transaction_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn transaction_keeps_shared_handle_out_until_commit() {
+        let connection = Connection::open_in_memory().expect("open database");
+        connection
+            .execute_batch("CREATE TABLE entries(value TEXT NOT NULL);")
+            .expect("create table");
+        let shared = connection.clone();
+        let transaction = connection
+            .unchecked_transaction()
+            .expect("begin transaction");
+        transaction
+            .execute("INSERT INTO entries(value) VALUES (?)", ["transaction"])
+            .expect("write transaction row");
+
+        let (sender, receiver) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = shared.execute("INSERT INTO entries(value) VALUES (?)", ["shared"]);
+            sender.send(result).expect("send worker result");
+        });
+
+        assert!(receiver.recv_timeout(Duration::from_millis(100)).is_err());
+        transaction.commit().expect("commit transaction");
+        worker.join().expect("join worker");
+        receiver
+            .recv()
+            .expect("receive worker result")
+            .expect("write shared row");
+
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
+            .expect("count rows");
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn transaction_rolls_back_and_keeps_last_insert_rowid_on_owned_connection() {
+        let connection = Connection::open_in_memory().expect("open database");
+        connection
+            .execute_batch("CREATE TABLE entries(id INTEGER PRIMARY KEY, value TEXT NOT NULL);")
+            .expect("create table");
+        {
+            let transaction = connection
+                .unchecked_transaction()
+                .expect("begin transaction");
+            transaction
+                .execute("INSERT INTO entries(value) VALUES (?)", ["rolled-back"])
+                .expect("write transaction row");
+            assert_eq!(transaction.last_insert_rowid(), 1);
+        }
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
+            .expect("count rows");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn connection_methods_reuse_the_active_transaction_on_the_owner_thread() {
+        let connection = Connection::open_in_memory().expect("open database");
+        connection
+            .execute_batch("CREATE TABLE entries(value TEXT NOT NULL);")
+            .expect("create table");
+        let transaction = connection
+            .unchecked_transaction()
+            .expect("begin transaction");
+        connection
+            .execute("INSERT INTO entries(value) VALUES (?)", ["routed"])
+            .expect("write through connection route");
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
+            .expect("read through connection route");
+        assert_eq!(count, 1);
+        drop(transaction);
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
+            .expect("count rolled back rows");
+        assert_eq!(count, 0);
+    }
+}
+
+#[cfg(test)]
+mod single_handle_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn assert_never_recycled(connection: &Connection) {
+        let options = connection.pool.options();
+        assert_eq!(options.get_max_connections(), 1);
+        assert_eq!(options.get_max_lifetime(), None);
+        assert_eq!(options.get_idle_timeout(), None);
+    }
+
+    fn pragma(connection: &Connection, name: &str) -> i64 {
+        connection
+            .query_row(&format!("PRAGMA {name}"), [], |row| row.get(0))
+            .expect("read pragma")
+    }
+
+    /// Exercise acquire/release of the pooled handle through every route.
+    fn churn(connection: &Connection) {
+        for round in 0..20 {
+            connection
+                .execute("INSERT INTO entries(value) VALUES (?1)", [round])
+                .expect("pool insert");
+            let _: i64 = connection
+                .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
+                .expect("pool read");
+            connection
+                .execute_batch("UPDATE entries SET value = value; SELECT 1;")
+                .expect("pool batch");
+            let tx = connection.unchecked_transaction().expect("begin");
+            tx.execute("UPDATE entries SET value = value + 0", [])
+                .expect("tx update");
+            if round % 2 == 0 {
+                tx.commit().expect("commit");
+            }
+        }
+    }
+
+    #[test]
+    fn pools_never_recycle_their_single_handle() {
+        assert_never_recycled(&Connection::open_in_memory().expect("open memory"));
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "codexmanager-rusqlite-pool-{}-{nonce}.db",
+            std::process::id()
+        ));
+        assert_never_recycled(&Connection::open(&path).expect("open file"));
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
+
+    #[test]
+    fn in_memory_data_survives_repeated_acquire_and_release() {
+        let connection = Connection::open_in_memory().expect("open memory");
+        connection
+            .execute_batch("CREATE TABLE entries(id INTEGER PRIMARY KEY, value INTEGER NOT NULL);")
+            .expect("create table");
+        churn(&connection);
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
+            .expect("count rows");
+        assert_eq!(count, 20);
+    }
+
+    #[test]
+    fn connection_scoped_pragmas_persist_across_calls() {
+        let connection = Connection::open_in_memory().expect("open memory");
+        // Mirrors codexmanager-core `Storage::configure_connection`.
+        connection
+            .busy_timeout(Duration::from_millis(3000))
+            .expect("busy timeout");
+        connection
+            .execute_batch(
+                "PRAGMA temp_store=MEMORY; PRAGMA foreign_keys=ON; PRAGMA journal_size_limit=67108864;",
+            )
+            .expect("configure pragmas");
+        connection
+            .execute_batch("CREATE TABLE entries(id INTEGER PRIMARY KEY, value INTEGER NOT NULL);")
+            .expect("create table");
+        churn(&connection);
+        assert_eq!(pragma(&connection, "busy_timeout"), 3000);
+        assert_eq!(pragma(&connection, "temp_store"), 2);
+        assert_eq!(pragma(&connection, "foreign_keys"), 1);
+        assert_eq!(pragma(&connection, "journal_size_limit"), 67_108_864);
+    }
+}
+
+#[cfg(test)]
+mod last_insert_rowid_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    const SCHEMA: &str =
+        "CREATE TABLE entries(id INTEGER PRIMARY KEY, value TEXT NOT NULL UNIQUE);";
+
+    fn memory() -> Connection {
+        let connection = Connection::open_in_memory().expect("open database");
+        connection.execute_batch(SCHEMA).expect("create table");
+        connection
+    }
+
+    fn temp_path(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "codexmanager-rusqlite-rowid-{label}-{}-{nonce}.db",
+            std::process::id()
+        ))
+    }
+
+    fn remove_db(path: &Path) {
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
+
+    #[test]
+    fn fresh_connection_reports_zero() {
+        let connection = memory();
+        assert_eq!(connection.last_insert_rowid(), 0);
+    }
+
+    #[test]
+    fn only_successful_inserts_move_the_rowid_outside_transactions() {
+        let connection = memory();
+        connection
+            .execute("INSERT INTO entries(value) VALUES (?1)", ["a"])
+            .expect("insert a");
+        assert_eq!(connection.last_insert_rowid(), 1);
+        connection
+            .execute("INSERT INTO entries(id, value) VALUES (?1, ?2)", (40, "b"))
+            .expect("insert b");
+        assert_eq!(connection.last_insert_rowid(), 40);
+
+        connection
+            .execute("UPDATE entries SET value = 'a2' WHERE id = 1", [])
+            .expect("update");
+        assert_eq!(connection.last_insert_rowid(), 40);
+        connection
+            .execute("DELETE FROM entries WHERE id = 1", [])
+            .expect("delete");
+        assert_eq!(connection.last_insert_rowid(), 40);
+        let ignored = connection
+            .execute("INSERT OR IGNORE INTO entries(value) VALUES (?1)", ["b"])
+            .expect("ignored insert");
+        assert_eq!(ignored, 0);
+        assert_eq!(connection.last_insert_rowid(), 40);
+        assert!(connection
+            .execute("INSERT INTO entries(value) VALUES (?1)", ["b"])
+            .is_err());
+        assert_eq!(connection.last_insert_rowid(), 40);
+        let _: i64 = connection
+            .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
+            .expect("read");
+        assert_eq!(connection.last_insert_rowid(), 40);
+    }
+
+    #[test]
+    fn transaction_reads_rowid_on_demand_from_its_own_handle() {
+        let connection = memory();
+        connection
+            .execute("INSERT INTO entries(id, value) VALUES (7, 'before')", [])
+            .expect("insert before transaction");
+        let tx = connection.unchecked_transaction().expect("begin");
+        // Same handle as the connection, so the pre-transaction value shows.
+        assert_eq!(tx.last_insert_rowid(), 7);
+        for (expected, value) in [(8, "x"), (9, "y"), (10, "z")] {
+            tx.execute("INSERT INTO entries(value) VALUES (?1)", [value])
+                .expect("insert in transaction");
+            assert_eq!(tx.last_insert_rowid(), expected);
+        }
+        tx.execute("UPDATE entries SET value = 'x2' WHERE id = 8", [])
+            .expect("update");
+        tx.execute("DELETE FROM entries WHERE id = 9", [])
+            .expect("delete");
+        tx.execute("INSERT OR IGNORE INTO entries(value) VALUES ('z')", [])
+            .expect("ignored insert");
+        assert_eq!(tx.last_insert_rowid(), 10);
+
+        tx.prepare("INSERT INTO entries(value) VALUES (?1)")
+            .expect("prepare")
+            .execute(["stmt"])
+            .expect("statement insert");
+        assert_eq!(tx.last_insert_rowid(), 11);
+
+        // Connection methods on the owner thread route through the same
+        // handle without acquiring from the pool (which would deadlock).
+        connection
+            .execute("INSERT INTO entries(value) VALUES ('routed')", [])
+            .expect("routed insert");
+        assert_eq!(tx.last_insert_rowid(), 12);
+        assert_eq!(connection.last_insert_rowid(), 12);
+        tx.commit().expect("commit");
+
+        // The handle keeps its value after COMMIT, like sqlite3_last_insert_rowid.
+        assert_eq!(connection.last_insert_rowid(), 12);
+    }
+
+    #[test]
+    fn execute_batch_inserts_are_visible() {
+        let connection = memory();
+        connection
+            .execute_batch(
+                "INSERT INTO entries(value) VALUES ('a'); INSERT INTO entries(value) VALUES ('b');",
+            )
+            .expect("batch outside transaction");
+        assert_eq!(connection.last_insert_rowid(), 2);
+
+        let tx = connection.unchecked_transaction().expect("begin");
+        tx.execute_batch(
+            "INSERT INTO entries(id, value) VALUES (20, 'c'); UPDATE entries SET value = 'c2' WHERE id = 20;",
+        )
+        .expect("batch in transaction");
+        assert_eq!(tx.last_insert_rowid(), 20);
+        tx.commit().expect("commit");
+        assert_eq!(connection.last_insert_rowid(), 20);
+    }
+
+    #[test]
+    fn rollback_keeps_the_handle_value() {
+        let connection = memory();
+        {
+            let tx = connection.unchecked_transaction().expect("begin");
+            tx.execute("INSERT INTO entries(id, value) VALUES (5, 'gone')", [])
+                .expect("insert");
+            assert_eq!(tx.last_insert_rowid(), 5);
+        }
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(count, 0);
+        // SQLite does not reset last_insert_rowid on ROLLBACK.
+        assert_eq!(connection.last_insert_rowid(), 5);
+    }
+
+    #[test]
+    fn independent_connections_do_not_share_rowids() {
+        let first = memory();
+        let second = memory();
+        first
+            .execute("INSERT INTO entries(id, value) VALUES (3, 'first')", [])
+            .expect("insert first");
+        assert_eq!(second.last_insert_rowid(), 0);
+        second
+            .execute("INSERT INTO entries(id, value) VALUES (9, 'second')", [])
+            .expect("insert second");
+        assert_eq!(first.last_insert_rowid(), 3);
+        assert_eq!(second.last_insert_rowid(), 9);
+    }
+
+    #[test]
+    fn file_connections_on_one_database_keep_their_own_rowids() {
+        let path = temp_path("shared-file");
+        {
+            let writer = Connection::open(&path).expect("open writer");
+            writer.execute_batch(SCHEMA).expect("create table");
+            let other = Connection::open(&path).expect("open other");
+
+            let tx = writer.unchecked_transaction().expect("begin writer");
+            tx.execute("INSERT INTO entries(id, value) VALUES (100, 'w')", [])
+                .expect("writer insert");
+            tx.commit().expect("commit writer");
+
+            other
+                .execute("INSERT INTO entries(id, value) VALUES (200, 'o')", [])
+                .expect("other insert");
+            assert_eq!(writer.last_insert_rowid(), 100);
+            assert_eq!(other.last_insert_rowid(), 200);
+        }
+        remove_db(&path);
+    }
+
+    #[test]
+    fn statement_execute_updates_the_connection_rowid() {
+        let connection = memory();
+        let mut statement = connection
+            .prepare("INSERT INTO entries(value) VALUES (?1)")
+            .expect("prepare");
+        statement.execute(["one"]).expect("first");
+        statement.execute(["two"]).expect("second");
+        assert_eq!(connection.last_insert_rowid(), 2);
+    }
+}
+
+/// Result of one executed statement. `rowid` is the handle's
+/// `sqlite3_last_insert_rowid()` right after the statement, which SQLx
+/// captures for free; it only seeds the lookup fallback.
+struct ExecuteOutcome {
+    affected: usize,
+    rowid: i64,
+}
+
+impl From<sqlx::sqlite::SqliteQueryResult> for ExecuteOutcome {
+    fn from(result: sqlx::sqlite::SqliteQueryResult) -> Self {
+        Self {
+            affected: result.rows_affected() as usize,
+            rowid: result.last_insert_rowid(),
+        }
+    }
+}
+
+async fn execute_on_pool(
+    pool: &SqlitePool,
+    sql: &str,
+    params: Vec<types::Value>,
+) -> Result<ExecuteOutcome> {
     let (sql, params) = normalize_sql_and_params(sql, params)?;
     let result = bind_values(sqlx::query(&sql), &params)
         .execute(pool)
         .await?;
-    Ok(result.rows_affected() as usize)
+    Ok(result.into())
+}
+
+async fn execute_on_connection(
+    connection: &mut PoolConnection<Sqlite>,
+    sql: &str,
+    params: Vec<types::Value>,
+) -> Result<ExecuteOutcome> {
+    let (sql, params) = normalize_sql_and_params(sql, params)?;
+    let result = bind_values(sqlx::query(&sql), &params)
+        .execute(connection.as_mut())
+        .await?;
+    Ok(result.into())
+}
+
+async fn query_last_insert_rowid(connection: &mut SqliteConnection) -> Result<i64> {
+    sqlx::query_scalar::<_, i64>("SELECT last_insert_rowid()")
+        .fetch_one(connection)
+        .await
+        .map_err(Error::from)
+}
+
+async fn execute_batch_on_connection(
+    connection: &mut PoolConnection<Sqlite>,
+    sql: &str,
+) -> Result<()> {
+    for statement in split_sql_batch(sql) {
+        if !statement.trim().is_empty() {
+            sqlx::query(statement).execute(connection.as_mut()).await?;
+        }
+    }
+    Ok(())
 }
 
 async fn fetch_rows_on_pool(
@@ -906,6 +1586,18 @@ async fn fetch_rows_on_pool(
     let (sql, params) = normalize_sql_and_params(sql, params)?;
     let rows = bind_values(sqlx::query(&sql), &params)
         .fetch_all(pool)
+        .await?;
+    rows.into_iter().map(row_from_sqlx).collect()
+}
+
+async fn fetch_rows_on_connection(
+    connection: &mut PoolConnection<Sqlite>,
+    sql: &str,
+    params: Vec<types::Value>,
+) -> Result<Vec<Row<'static>>> {
+    let (sql, params) = normalize_sql_and_params(sql, params)?;
+    let rows = bind_values(sqlx::query(&sql), &params)
+        .fetch_all(connection.as_mut())
         .await?;
     rows.into_iter().map(row_from_sqlx).collect()
 }

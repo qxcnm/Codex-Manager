@@ -33,7 +33,7 @@ ignore_invalid_headers off;
    извлекает `conversation_id`, `session_id`, `x-codex-turn-state` и связанные заголовки.
 2. `crates/service/src/gateway/request/session_affinity.rs`
    вычисляет эффективный thread anchor.
-3. `crates/service/src/gateway/request/request_rewrite_responses.rs`
+3. `crates/service/src/gateway/request/official_responses_http.rs`
    записывает стабильный `prompt_cache_key` в тело запроса.
 
 Если proxy срезает эти заголовки, backend вынужден деградировать до менее стабильной fallback-сессии, а повторное использование prompt cache становится хуже.
@@ -172,6 +172,6 @@ Cloudflare может усложнять цепочку запроса, но с�
 
 - [`crates/service/src/gateway/request/incoming_headers.rs`](../../../crates/service/src/gateway/request/incoming_headers.rs)
 - [`crates/service/src/gateway/request/session_affinity.rs`](../../../crates/service/src/gateway/request/session_affinity.rs)
-- [`crates/service/src/gateway/request/request_rewrite_responses.rs`](../../../crates/service/src/gateway/request/request_rewrite_responses.rs)
+- [`crates/service/src/gateway/request/official_responses_http.rs`](../../../crates/service/src/gateway/request/official_responses_http.rs)
 - [`crates/service/src/gateway/observability/http_bridge/aggregate/output_text.rs`](../../../crates/service/src/gateway/observability/http_bridge/aggregate/output_text.rs)
-- [`crates/service/src/gateway/protocol_adapter/response_conversion/sse_conversion/openai_sse_anthropic_bridge.rs`](../../../crates/service/src/gateway/protocol_adapter/response_conversion/sse_conversion/openai_sse_anthropic_bridge.rs)
+- [`crates/service/src/gateway/observability/http_bridge/stream_readers/responses_from_anthropic.rs`](../../../crates/service/src/gateway/observability/http_bridge/stream_readers/responses_from_anthropic.rs)

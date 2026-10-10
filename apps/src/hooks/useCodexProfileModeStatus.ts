@@ -13,6 +13,7 @@ export const CODEX_PROFILE_MODE_LABELS: Record<CodexProfileMode, string> = {
   missing: "未发现配置",
   unmanaged: "未托管",
   direct_account: "直接连接 OpenAI",
+  direct_aggregate: "直连聚合 API",
   gateway: "通过 CodexManager",
   managed_unknown: "托管状态未知",
 };
@@ -48,6 +49,7 @@ export function useCodexProfileModeStatus(
     modeLabel: mode ? CODEX_PROFILE_MODE_LABELS[mode] : "未知",
     isServiceReady,
     isDirectAccountMode: mode === "direct_account",
+    isDirectAggregateMode: mode === "direct_aggregate",
     isGatewayMode: mode === "gateway",
   };
 }

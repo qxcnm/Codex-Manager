@@ -1,11 +1,10 @@
 use std::future::Future;
 use std::pin::pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::stream::unfold;
-use tokio::runtime::{Builder, Runtime};
 
 use super::errors::{
     map_proxy_test_reqwest_error, proxy_test_result_error_code, proxy_test_result_status,
@@ -13,8 +12,6 @@ use super::errors::{
 };
 
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(100);
-
-static PROXY_UPLOAD_TEST_RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -33,11 +30,12 @@ pub(crate) struct ProxyUploadTestOutcome {
 }
 
 #[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn run_proxy_upload_test(proxy_url: &str, upload_bytes: u64) -> ProxyUploadTestOutcome {
     run_proxy_upload_test_with_cancel(proxy_url, upload_bytes, || false, |_| {})
 }
 
-pub(crate) fn run_proxy_upload_test_with_cancel<F, P>(
+pub(crate) async fn run_proxy_upload_test_with_cancel_async<F, P>(
     proxy_url: &str,
     upload_bytes: u64,
     should_cancel: F,
@@ -66,7 +64,7 @@ where
     }
     let upload_url = endpoint_status.url.unwrap();
 
-    run_proxy_test_future(async move {
+    async move {
         let started_at = Instant::now();
         if should_cancel() {
             return cancelled_outcome(&upload_url, upload_bytes as i64, 0, started_at);
@@ -159,25 +157,8 @@ where
                 cancelled_outcome(&upload_url, upload_bytes as i64, final_bytes, started_at)
             }
         }
-    })
-}
-
-fn proxy_test_runtime() -> &'static Runtime {
-    PROXY_UPLOAD_TEST_RUNTIME.get_or_init(|| {
-        Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .thread_name("proxy-upload-test")
-            .build()
-            .unwrap_or_else(|err| panic!("build proxy upload test runtime failed: {err}"))
-    })
-}
-
-fn run_proxy_test_future<F>(future: F) -> F::Output
-where
-    F: Future,
-{
-    proxy_test_runtime().block_on(future)
+    }
+    .await
 }
 
 enum PollWithCancel<T> {
@@ -410,4 +391,24 @@ mod tests {
             }
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn run_proxy_upload_test_with_cancel<
+    F: Fn() -> bool,
+    P: Fn(u64) + Send + Sync + Clone + 'static,
+>(
+    proxy_url: &str,
+    upload_bytes: u64,
+    should_cancel: F,
+    on_progress: P,
+) -> ProxyUploadTestOutcome {
+    crate::account::background::runtime().unwrap().block_on(
+        run_proxy_upload_test_with_cancel_async(
+            proxy_url,
+            upload_bytes,
+            should_cancel,
+            on_progress,
+        ),
+    )
 }

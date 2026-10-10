@@ -66,7 +66,9 @@ pub(in super::super) fn prepare_request_setup(
         && conversation_routing.as_ref().is_some_and(|routing| {
             routing.existing_binding.is_none() && routing.source.allows_initial_binding_create()
         }) {
-        match storage.active_conversation_binding_account_counts(platform_key_hash) {
+        match crate::account::remote_storage::AccountStorage::new(storage)
+            .active_conversation_binding_account_counts(platform_key_hash)
+        {
             Ok(counts) => Some(counts),
             Err(err) => {
                 log::warn!("load conversation binding account counts failed: {err}");

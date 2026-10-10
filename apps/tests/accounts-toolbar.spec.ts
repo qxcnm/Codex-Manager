@@ -1,5 +1,110 @@
 import { expect, test } from "@playwright/test";
 
+test("quota reset auto wake defaults on and supports independent single and bulk changes", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  const accounts: Array<{
+    id: string;
+    label: string;
+    status: string;
+    sort: number;
+    resetWarmupEnabled?: boolean;
+  }> = [
+    { id: "reset-default", label: "default@example.com", status: "active", sort: 0 },
+    { id: "reset-off", label: "off@example.com", status: "disabled", sort: 1, resetWarmupEnabled: false },
+  ];
+  const updates: Array<{ accountIds: string[]; enabled: boolean }> = [];
+  const accountStatusUpdates: unknown[] = [];
+  let rejectNextUpdate = false;
+
+  await page.route("**/api/runtime**", async (route) => {
+    await route.fulfill({ json: {
+      mode: "web-gateway", rpcBaseUrl: "/api/rpc", canManageService: false,
+      canSelfUpdate: false, canCloseToTray: false, canOpenLocalDir: false,
+      canUseBrowserFileImport: true, canUseBrowserDownloadExport: true,
+    } });
+  });
+  await page.route("**/api/rpc**", async (route) => {
+    const payload = route.request().postDataJSON();
+    const method = String(payload?.method || "");
+    const id = payload?.id ?? 1;
+    const params = payload?.params ?? {};
+    const ok = (result: unknown) => route.fulfill({ json: { jsonrpc: "2.0", id, result } });
+    if (method === "appSettings/get") return ok(SETTINGS_SNAPSHOT);
+    if (method === "initialize") {
+      return ok({ userAgent: "codex_cli_rs/0.1.19", codexHome: "C:/Test", platformFamily: "windows", platformOs: "windows" });
+    }
+    if (method === "accountManager/session/current") {
+      return ok({ mode: "none", currentUser: null, role: "system_admin", permissions: ["system:admin"], distributionEnabled: false });
+    }
+    if (method === "account/list") return ok({ items: accounts, total: accounts.length, page: 1, pageSize: 20 });
+    if (method === "account/usage/list") return ok([]);
+    if (method === "account/resetWarmup/update") {
+      if (rejectNextUpdate) {
+        rejectNextUpdate = false;
+        return route.fulfill({ json: {
+          jsonrpc: "2.0", id, error: { code: -32000, message: "reset warmup update rejected" },
+        } });
+      }
+      const update = { accountIds: params.accountIds as string[], enabled: params.enabled as boolean };
+      updates.push(update);
+      for (const account of accounts) {
+        if (update.accountIds.includes(account.id)) account.resetWarmupEnabled = update.enabled;
+      }
+      return ok({ updated: update.accountIds.length });
+    }
+    if (method === "account/update") {
+      accountStatusUpdates.push(params);
+      return ok({});
+    }
+    return route.fulfill({ status: 500, json: {
+      jsonrpc: "2.0", id, error: { code: -32000, message: `Unhandled RPC: ${method}` },
+    } });
+  });
+
+  await page.goto("/accounts/");
+  await expect(page.getByRole("heading", { name: "OpenAI 账号池" })).toBeVisible();
+  const rows = page.locator(".account-pool-main-table tbody [data-account-pool-main-row]");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0).getByText("自动唤醒：开", { exact: true })).toBeVisible();
+  await expect(rows.nth(1).getByText("自动唤醒：关", { exact: true })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("quota-reset-warmup-table.png"), animations: "disabled" });
+
+  // A legacy account with no setting is enabled; a single action only changes this setting.
+  await page.getByTitle("更多账号操作", { exact: true }).first().click();
+  await page.getByRole("menuitem", { name: "关闭额度重置自动唤醒", exact: true }).click();
+  await expect.poll(() => updates).toEqual([{ accountIds: ["reset-default"], enabled: false }]);
+  await expect(rows.nth(0).getByText("自动唤醒：关", { exact: true })).toBeVisible();
+
+  await rows.nth(0).getByRole("checkbox").check();
+  await rows.nth(1).getByRole("checkbox").check();
+  await page.getByText("账号操作", { exact: true }).click();
+  await expect(page.getByRole("menuitem", { name: /批量关闭自动唤醒/ })).toBeDisabled();
+  await page.screenshot({ path: test.info().outputPath("quota-reset-warmup-bulk-menu.png"), animations: "disabled" });
+  await page.getByRole("menuitem", { name: /批量开启自动唤醒/ }).click();
+  await expect.poll(() => updates.at(-1)).toEqual({ accountIds: ["reset-default", "reset-off"], enabled: true });
+  await expect(page.getByText("自动唤醒：开", { exact: true })).toHaveCount(2);
+
+  await page.getByText("账号操作", { exact: true }).click();
+  await expect(page.getByRole("menuitem", { name: /批量开启自动唤醒/ })).toBeDisabled();
+  await page.getByRole("menuitem", { name: /批量关闭自动唤醒/ }).click();
+  await expect.poll(() => updates.at(-1)).toEqual({ accountIds: ["reset-default", "reset-off"], enabled: false });
+  await expect(page.getByText("自动唤醒：关", { exact: true })).toHaveCount(2);
+
+  // Failed writes leave the saved state visible, including after switching to cards.
+  rejectNextUpdate = true;
+  await page.getByRole("button", { name: "宫格视图" }).click();
+  await expect(page.getByTestId("account-grid")).toBeVisible();
+  await page.getByTitle("更多账号操作", { exact: true }).first().click();
+  await page.screenshot({ path: test.info().outputPath("quota-reset-warmup-single-menu.png"), animations: "disabled" });
+  await page.getByRole("menuitem", { name: "开启额度重置自动唤醒", exact: true }).click();
+  await expect(page.getByText(/更新额度重置自动唤醒失败:/)).toBeVisible();
+  await expect(page.getByText("自动唤醒：关", { exact: true })).toHaveCount(2);
+  await expect(page.getByRole("menuitem", { name: "开启额度重置自动唤醒", exact: true })).toBeHidden();
+  expect(updates).toHaveLength(3);
+  expect(accountStatusUpdates).toEqual([]);
+  expect(accounts.map((account) => account.status)).toEqual(["active", "disabled"]);
+});
+
 const SETTINGS_SNAPSHOT = {
   updateAutoCheck: true,
   closeToTrayOnClose: false,

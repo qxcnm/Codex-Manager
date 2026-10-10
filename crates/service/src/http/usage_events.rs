@@ -1,4 +1,5 @@
 use std::convert::Infallible;
+#[cfg(test)]
 use std::io::{self, Read};
 use std::time::Duration;
 
@@ -7,13 +8,16 @@ use axum::http::{
     HeaderMap as AxumHeaderMap, HeaderValue as AxumHeaderValue, StatusCode as AxumStatusCode,
 };
 use axum::response::{IntoResponse, Response as AxumResponse};
+#[cfg(test)]
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 use futures_util::stream;
+#[cfg(test)]
 use tiny_http::{Header, Request, Response, StatusCode};
 
 const EVENT_NAME: &str = "usage-refresh-completed";
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
+#[cfg(test)]
 fn request_header_value<'a>(request: &'a Request, name: &str) -> Option<&'a str> {
     request
         .headers()
@@ -23,6 +27,7 @@ fn request_header_value<'a>(request: &'a Request, name: &str) -> Option<&'a str>
         .filter(|value| !value.is_empty())
 }
 
+#[cfg(test)]
 fn rpc_token_valid(request: &Request) -> bool {
     request_header_value(request, "X-CodexManager-Rpc-Token")
         .is_some_and(crate::rpc_auth_token_matches)
@@ -37,6 +42,7 @@ fn axum_rpc_token_valid(headers: &AxumHeaderMap) -> bool {
         .is_some_and(crate::rpc_auth_token_matches)
 }
 
+#[cfg(test)]
 fn response_header(name: &'static str, value: &'static str) -> Header {
     Header::from_bytes(name.as_bytes(), value.as_bytes()).expect("valid static header")
 }
@@ -59,17 +65,21 @@ fn usage_refresh_sse_frame(event: &crate::UsageRefreshCompletedEvent) -> Vec<u8>
     .into_bytes()
 }
 
-fn next_usage_refresh_event_chunk(
-    receiver: Receiver<crate::UsageRefreshCompletedEvent>,
-) -> Option<(Receiver<crate::UsageRefreshCompletedEvent>, Vec<u8>)> {
-    let chunk = match receiver.recv_timeout(KEEPALIVE_INTERVAL) {
-        Ok(event) => usage_refresh_sse_frame(&event),
-        Err(RecvTimeoutError::Timeout) => b": keep-alive\n\n".to_vec(),
-        Err(RecvTimeoutError::Disconnected) => return None,
-    };
-    Some((receiver, chunk))
+async fn next_usage_refresh_event_chunk(
+    receiver: &mut tokio::sync::broadcast::Receiver<crate::UsageRefreshCompletedEvent>,
+    keepalive_interval: Duration,
+) -> Option<Vec<u8>> {
+    loop {
+        match tokio::time::timeout(keepalive_interval, receiver.recv()).await {
+            Ok(Ok(event)) => return Some(usage_refresh_sse_frame(&event)),
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => return None,
+            Err(_) => return Some(b": keep-alive\n\n".to_vec()),
+        }
+    }
 }
 
+#[cfg(test)]
 struct UsageRefreshEventStream {
     receiver: Receiver<crate::UsageRefreshCompletedEvent>,
     pending: Vec<u8>,
@@ -77,6 +87,7 @@ struct UsageRefreshEventStream {
     opened: bool,
 }
 
+#[cfg(test)]
 impl UsageRefreshEventStream {
     fn new(receiver: Receiver<crate::UsageRefreshCompletedEvent>) -> Self {
         Self {
@@ -105,6 +116,7 @@ impl UsageRefreshEventStream {
     }
 }
 
+#[cfg(test)]
 impl Read for UsageRefreshEventStream {
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
         if out.is_empty() {
@@ -123,6 +135,7 @@ impl Read for UsageRefreshEventStream {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn handle_usage_refresh_events(request: Request) {
     if request.method().as_str() != "GET" {
         let _ = request.respond(Response::from_string("{}").with_status_code(405));
@@ -155,8 +168,8 @@ pub(crate) async fn handle_usage_refresh_events_http(headers: AxumHeaderMap) -> 
         return (AxumStatusCode::UNAUTHORIZED, "{}").into_response();
     }
 
-    let receiver = crate::usage_refresh::subscribe_usage_refresh_completed();
-    let event_stream = stream::unfold((receiver, false), |(receiver, opened)| async move {
+    let receiver = crate::usage_refresh::subscribe_usage_refresh_completed_async();
+    let event_stream = stream::unfold((receiver, false), |(mut receiver, opened)| async move {
         if !opened {
             return Some((
                 Ok::<Bytes, Infallible>(Bytes::from_static(b": connected\n\n")),
@@ -164,11 +177,10 @@ pub(crate) async fn handle_usage_refresh_events_http(headers: AxumHeaderMap) -> 
             ));
         }
 
-        let next = tokio::task::spawn_blocking(move || next_usage_refresh_event_chunk(receiver))
-            .await
-            .ok()
-            .flatten()?;
-        Some((Ok(Bytes::from(next.1)), (next.0, true)))
+        // Broadcast receive is cancellation-safe: dropping the response body
+        // drops this receiver without leaving a blocked worker behind.
+        let chunk = next_usage_refresh_event_chunk(&mut receiver, KEEPALIVE_INTERVAL).await?;
+        Some((Ok(Bytes::from(chunk)), (receiver, true)))
     });
 
     let mut response = AxumResponse::new(Body::from_stream(event_stream));

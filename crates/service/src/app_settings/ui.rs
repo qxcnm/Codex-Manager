@@ -11,7 +11,7 @@ use super::{
 
 const DEFAULT_UI_THEME: &str = "tech";
 const DEFAULT_UI_APPEARANCE_PRESET: &str = "classic";
-const DEFAULT_UI_LOCALE: &str = "zh-CN";
+const DEFAULT_UI_LOCALE: &str = "auto";
 pub const DEFAULT_UI_ZOOM_FACTOR: f64 = 1.0;
 pub const MIN_UI_ZOOM_FACTOR: f64 = 0.75;
 pub const MAX_UI_ZOOM_FACTOR: f64 = 1.25;
@@ -20,7 +20,7 @@ const VALID_UI_THEMES: &[&str] = &[
     "slate", "aurora",
 ];
 const VALID_UI_APPEARANCE_PRESETS: &[&str] = &["modern", "classic"];
-const VALID_UI_LOCALES: &[&str] = &["zh-CN", "en", "ru", "ko"];
+const VALID_UI_LOCALES: &[&str] = &["auto", "zh-CN", "en", "ru", "ko"];
 
 /// 函数 `normalize_ui_theme`
 ///
@@ -72,6 +72,7 @@ pub(super) fn normalize_ui_locale(raw: Option<&str>) -> String {
     let candidate = raw.unwrap_or(DEFAULT_UI_LOCALE).trim();
     let normalized = candidate.to_ascii_lowercase();
     let next_value = match normalized.as_str() {
+        "auto" => "auto",
         "zh" | "zh-cn" | "zh_hans" | "zh-hans" => "zh-CN",
         "en" | "en-us" | "en-gb" => "en",
         "ru" | "ru-ru" => "ru",

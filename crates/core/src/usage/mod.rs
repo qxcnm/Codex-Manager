@@ -417,7 +417,18 @@ pub fn merge_missing_extra_rate_limits(
 }
 
 pub const LUNA_RESERVE_MODEL_SLUG: &str = "gpt-reserve";
-pub const LUNA_MODEL_SLUG: &str = "gpt-5.6-luna";
+pub const LUNA_MODEL_SLUG: &str = "gpt-6-luna";
+pub const LEGACY_LUNA_MODEL_SLUG: &str = "gpt-5.6-luna";
+
+/// Returns whether a catalog slug is the canonical Luna model or its retained
+/// compatibility slug.
+pub fn is_luna_catalog_model(model: Option<&str>) -> bool {
+    let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) else {
+        return false;
+    };
+    model.eq_ignore_ascii_case(LUNA_MODEL_SLUG)
+        || model.eq_ignore_ascii_case(LEGACY_LUNA_MODEL_SLUG)
+}
 
 /// Returns whether a request model is the explicit Luna Reserve alias.
 pub fn is_luna_reserve_model(model: Option<&str>) -> bool {

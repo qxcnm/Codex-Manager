@@ -6,7 +6,7 @@ Note: In the current workspace, Codex outbound direct contract differences have 
 
 1. The inbound HTTP request first enters `crates/service/src/gateway/request/incoming_headers.rs`, where only a header snapshot is taken and the request is not directly rewritten.
 2. Session affinity is calculated uniformly by `crates/service/src/gateway/request/session_affinity.rs`, yielding `incoming_session_id`, `incoming_client_request_id`, and `fallback_session_id`.
-3. The request body enters the rewriting process in `crates/service/src/gateway/request/request_rewrite.rs`, and then the Responses compatibility field is processed in `request_rewrite_responses.rs`.
+3. The request body enters the rewriting process in `crates/service/src/gateway/request/request_rewrite.rs`, and then the Responses compatibility fields are processed in `official_responses_http.rs`.
 4. The final outbound header is assembled by `crates/service/src/gateway/upstream/headers/codex_headers.rs`.
 5. Before actually sending to the upstream, the headers + body are handed over to reqwest according to `crates/service/src/gateway/upstream/attempt_flow/transport.rs`.
 
@@ -57,7 +57,7 @@ Note: In the current workspace, Codex outbound direct contract differences have 
 - `crates/service/src/gateway/request/incoming_headers.rs`
 - `crates/service/src/gateway/request/session_affinity.rs`
 - `crates/service/src/gateway/request/request_rewrite.rs`
-- `crates/service/src/gateway/request/request_rewrite_responses.rs`
+- `crates/service/src/gateway/request/official_responses_http.rs`
 - `crates/service/src/gateway/upstream/headers/codex_headers.rs`
 - `crates/service/src/gateway/upstream/attempt_flow/transport.rs`
 - `crates/service/src/gateway/core/runtime_config.rs`

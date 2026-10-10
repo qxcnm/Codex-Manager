@@ -1,7 +1,45 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { getLocalDayRange, type LocalDayRange } from "@/lib/utils/time";
+
+let sharedDayRange = getLocalDayRange();
+const listeners = new Set<() => void>();
+let intervalId: ReturnType<typeof setInterval> | null = null;
+
+function refreshSharedDayRange() {
+  const next = getLocalDayRange();
+  if (
+    sharedDayRange.dayStartTs === next.dayStartTs &&
+    sharedDayRange.dayEndTs === next.dayEndTs &&
+    sharedDayRange.timeZone === next.timeZone
+  ) {
+    return;
+  }
+
+  sharedDayRange = next;
+  listeners.forEach((listener) => listener());
+}
+
+function subscribe(onStoreChange: () => void): () => void {
+  listeners.add(onStoreChange);
+  if (listeners.size === 1) {
+    refreshSharedDayRange();
+    intervalId = setInterval(refreshSharedDayRange, 60_000);
+  }
+
+  return () => {
+    listeners.delete(onStoreChange);
+    if (listeners.size === 0 && intervalId !== null) {
+      clearInterval(intervalId);
+      intervalId = null;
+    }
+  };
+}
+
+function getSnapshot(): LocalDayRange {
+  return sharedDayRange;
+}
 
 /**
  * 函数 `useLocalDayRange`
@@ -17,27 +55,5 @@ import { getLocalDayRange, type LocalDayRange } from "@/lib/utils/time";
  * 返回当前浏览器本地时区对应的当天时间范围
  */
 export function useLocalDayRange(): LocalDayRange {
-  const [dayRange, setDayRange] = useState<LocalDayRange>(() => getLocalDayRange());
-
-  useEffect(() => {
-    const refresh = () => {
-      setDayRange((current) => {
-        const next = getLocalDayRange();
-        if (
-          current.dayStartTs === next.dayStartTs &&
-          current.dayEndTs === next.dayEndTs &&
-          current.timeZone === next.timeZone
-        ) {
-          return current;
-        }
-        return next;
-      });
-    };
-
-    refresh();
-    const intervalId = window.setInterval(refresh, 60_000);
-    return () => window.clearInterval(intervalId);
-  }, []);
-
-  return dayRange;
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

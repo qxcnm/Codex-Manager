@@ -25,7 +25,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
     defaultOptions: {
       queries: {
         staleTime: 60_000,
-        gcTime: 1_800_000,
+        // Keep inactive route/query snapshots bounded during long desktop sessions.
+        gcTime: 600_000,
         refetchOnWindowFocus: false,
         refetchOnReconnect: false,
         refetchOnMount: false,

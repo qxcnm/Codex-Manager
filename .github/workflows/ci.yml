@@ -22,7 +22,7 @@ jobs:
   rust_workspace:
     name: Rust workspace and WebSocket pin validation
     runs-on: ubuntu-22.04
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -44,10 +44,34 @@ jobs:
       - name: Check workspace targets
         run: cargo check --workspace --all-targets
 
+      - name: Test SQLite storage maintenance
+        run: |
+          cargo test -p codexmanager-core --no-fail-fast
+          cargo test -p codexmanager-service --lib storage::maintenance -- --test-threads=1
+
       - name: Test Responses WebSocket regressions
         run: |
           cargo test -p codexmanager-service --lib official_responses_websocket_ --no-fail-fast
           cargo test -p codexmanager-service --lib send_websocket_upstream_request_ --no-fail-fast
+
+      - name: Test request payload storage, cleanup and detail
+        run: |
+          cargo test -p codexmanager-core --lib request_log_payload_store
+          cargo test -p codexmanager-core --lib request_log_payload_batch
+          cargo test -p codexmanager-core --lib request_log_spill
+          cargo test -p codexmanager-service --lib request_log_payload -- --test-threads=1
+          cargo test -p codexmanager-service --lib requestlog::detail -- --test-threads=1
+          cargo test -p codexmanager-service --lib response_id_only_comes_from_successful_completed_event
+          cargo test -p codexmanager-service --lib non_stream_json_only_links_real_completed_responses_id
+          cargo test -p codexmanager-service --lib captured_upstream_websocket_body_matches_sent_response_create_frame
+
+      - name: Test request payloads against mock upstreams
+        run: |
+          cargo test -p codexmanager-service --test gateway_logs hybrid_routing:: -- --test-threads=1
+          cargo test -p codexmanager-service --test gateway_logs gateway_stateless_retry_strips_encrypted_content_on_invalid_encrypted_content -- --test-threads=1
+
+      - name: Test SQLite shim
+        run: cargo test -p rusqlite
 
   frontend_and_web:
     name: Frontend build and Web service tests
@@ -83,6 +107,10 @@ jobs:
       - name: Build frontend static output
         working-directory: apps
         run: pnpm run build:desktop
+
+      - name: Test frontend runtime
+        working-directory: apps
+        run: node --test --test-concurrency=1
 
       - name: Test Web service
         run: cargo test -p codexmanager-web --no-fail-fast

@@ -122,7 +122,8 @@ impl Storage {
     /// # 返回
     /// 返回函数执行结果
     pub fn insert_usage_snapshot(&self, snap: &UsageSnapshotRecord) -> Result<()> {
-        self.conn.execute(
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
             "INSERT INTO usage_snapshots (account_id, used_percent, window_minutes, resets_at, secondary_used_percent, secondary_window_minutes, secondary_resets_at, credits_json, captured_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             (
                 &snap.account_id,
@@ -136,6 +137,8 @@ impl Storage {
                 snap.captured_at,
             ),
         )?;
+        super::account_reset_warmups::observe_usage_snapshot(&tx, snap)?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -194,6 +197,7 @@ impl Storage {
                 resolved.captured_at,
             ),
         )?;
+        super::account_reset_warmups::observe_usage_snapshot(&tx, &resolved)?;
         let pruned = if retain > 0 {
             tx.execute(
                 prune_usage_snapshots_for_account_sql(),

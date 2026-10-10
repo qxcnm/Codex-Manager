@@ -152,7 +152,7 @@ fn reload_from_env_updates_timeout_and_proxy() {
     let _strict_allowlist_guard = EnvGuard::set(ENV_STRICT_REQUEST_PARAM_ALLOWLIST, "0");
     let _request_compression_guard = EnvGuard::set(ENV_ENABLE_REQUEST_COMPRESSION, "0");
     let _image_enabled_guard = EnvGuard::set(ENV_CODEX_IMAGE_GENERATION_ENABLED, "0");
-    let _image_main_model_guard = EnvGuard::set(ENV_CODEX_IMAGE_MAIN_MODEL, "gpt-5.4");
+    let _image_main_model_guard = EnvGuard::set(ENV_CODEX_IMAGE_MAIN_MODEL, "gpt-6-sol");
     let _image_tool_model_guard = EnvGuard::set(ENV_CODEX_IMAGE_TOOL_MODEL, "gpt-image-2");
     let _client_id_guard = EnvGuard::set(ENV_TOKEN_EXCHANGE_CLIENT_ID, "client-id-123");
     let _issuer_guard = EnvGuard::set(ENV_TOKEN_EXCHANGE_ISSUER, "https://issuer.example");
@@ -166,7 +166,7 @@ fn reload_from_env_updates_timeout_and_proxy() {
     assert!(!strict_request_param_allowlist_enabled());
     assert!(!request_compression_enabled());
     assert!(!codex_image_generation_enabled());
-    assert_eq!(current_codex_image_main_model(), "gpt-5.4");
+    assert_eq!(current_codex_image_main_model(), "gpt-6-sol");
     assert_eq!(current_codex_image_tool_model(), "gpt-image-2");
     assert_eq!(token_exchange_client_id(), "client-id-123");
     assert_eq!(
@@ -215,7 +215,7 @@ fn reload_from_env_defaults_keep_request_gate_legacy_unbounded() {
     );
     assert!(request_compression_enabled());
     assert!(codex_image_generation_enabled());
-    assert_eq!(current_codex_image_main_model(), "gpt-5.4-mini");
+    assert_eq!(current_codex_image_main_model(), "gpt-6-luna");
     assert_eq!(current_codex_image_tool_model(), "gpt-image-2");
 }
 
@@ -291,7 +291,7 @@ fn stable_proxy_index_is_deterministic() {
 }
 
 #[test]
-fn upstream_client_pool_builds_matching_blocking_and_async_clients() {
+fn upstream_client_pool_reuses_async_clients() {
     let _guard = crate::test_env_guard();
     let _global_proxy_guard = EnvGuard::clear(ENV_UPSTREAM_PROXY_URL);
     let _proxy_list_guard = EnvGuard::set(
@@ -303,11 +303,9 @@ fn upstream_client_pool_builds_matching_blocking_and_async_clients() {
 
     let pool = crate::lock_utils::read_recover(upstream_client_pool_lock(), "test_pool");
     assert_eq!(pool.proxies.len(), 2);
-    assert_eq!(pool.retry_clients.len(), pool.proxies.len());
     assert_eq!(pool.async_retry_clients.len(), pool.proxies.len());
 
     let account_id = "account-42";
-    assert!(pool.retry_client_for_account(account_id).is_some());
     assert!(pool.async_retry_client_for_account(account_id).is_some());
     assert_eq!(
         pool.proxy_for_account(account_id),
@@ -322,19 +320,22 @@ fn upstream_client_reuses_cached_default_client() {
     let _proxy_list_guard = EnvGuard::clear(ENV_PROXY_LIST);
 
     reload_from_env();
-    reset_upstream_client_build_count_for_test();
 
-    let first = upstream_client();
-    let after_first = upstream_client_build_count_for_test();
-    let second = upstream_client();
+    let first = async_upstream_client();
+    let after_first = async_upstream_client_build_count_for_test();
+    let second = async_upstream_client();
 
-    assert_eq!(upstream_client_build_count_for_test(), after_first);
+    assert_eq!(async_upstream_client_build_count_for_test(), after_first);
     drop(first);
     drop(second);
 
-    let fresh = fresh_upstream_client_for_account("account-42");
-    let another_fresh = fresh_upstream_client_for_account("account-42");
-    assert_eq!(upstream_client_build_count_for_test(), after_first);
+    let fresh = fresh_async_upstream_client_for_account("account-42");
+    let after_first_retry = async_upstream_client_build_count_for_test();
+    let another_fresh = fresh_async_upstream_client_for_account("account-42");
+    assert_eq!(
+        async_upstream_client_build_count_for_test(),
+        after_first_retry
+    );
     drop(fresh);
     drop(another_fresh);
 }
@@ -357,8 +358,12 @@ fn async_upstream_client_for_account_reuses_cached_default_client() {
     drop(second);
 
     let fresh = fresh_async_upstream_client_for_account("account-42");
+    let after_first_retry = async_upstream_client_build_count_for_test();
     let another_fresh = fresh_async_upstream_client_for_account("account-42");
-    assert_eq!(async_upstream_client_build_count_for_test(), after_first);
+    assert_eq!(
+        async_upstream_client_build_count_for_test(),
+        after_first_retry
+    );
     drop(fresh);
     drop(another_fresh);
 }
@@ -373,19 +378,22 @@ fn upstream_client_for_account_reuses_cached_proxy_pool_retry_client() {
     );
 
     reload_from_env();
-    reset_upstream_client_build_count_for_test();
 
-    let first = upstream_client_for_account("account-42");
-    let after_first = upstream_client_build_count_for_test();
-    let second = upstream_client_for_account("account-42");
+    let first = async_upstream_client_for_account("account-42");
+    let after_first = async_upstream_client_build_count_for_test();
+    let second = async_upstream_client_for_account("account-42");
 
-    assert_eq!(upstream_client_build_count_for_test(), after_first);
+    assert_eq!(async_upstream_client_build_count_for_test(), after_first);
     drop(first);
     drop(second);
 
-    let fresh = fresh_upstream_client_for_account("account-42");
-    let another_fresh = fresh_upstream_client_for_account("account-42");
-    assert_eq!(upstream_client_build_count_for_test(), after_first);
+    let fresh = fresh_async_upstream_client_for_account("account-42");
+    let after_first_retry = async_upstream_client_build_count_for_test();
+    let another_fresh = fresh_async_upstream_client_for_account("account-42");
+    assert_eq!(
+        async_upstream_client_build_count_for_test(),
+        after_first_retry
+    );
     drop(fresh);
     drop(another_fresh);
 }
@@ -398,23 +406,21 @@ fn account_candidate_client_prepare_reuses_cached_account_clients() {
 
     reload_from_env();
     let _ = upstream_total_timeout();
-    reset_upstream_client_build_count_for_test();
+
     reset_async_upstream_client_build_count_for_test();
 
     prepare_upstream_client_for_account("account-42").expect("prepare account client");
-    assert_eq!(upstream_client_build_count_for_test(), 1);
+
     assert_eq!(async_upstream_client_build_count_for_test(), 1);
 
     prepare_upstream_client_for_account("account-42").expect("prepare account client again");
-    let blocking = upstream_client_for_account("account-42");
     let async_client = async_upstream_client_for_account("account-42");
-    assert_eq!(upstream_client_build_count_for_test(), 1);
+
     assert_eq!(async_upstream_client_build_count_for_test(), 1);
-    drop(blocking);
     drop(async_client);
 
     prepare_upstream_client_for_account("account-43").expect("prepare second account client");
-    assert_eq!(upstream_client_build_count_for_test(), 2);
+
     assert_eq!(async_upstream_client_build_count_for_test(), 2);
 }
 
@@ -426,25 +432,108 @@ fn aggregate_candidate_client_cache_keys_include_id_and_url() {
 
     reload_from_env();
     let _ = upstream_total_timeout();
-    reset_upstream_client_build_count_for_test();
+
+    reset_async_upstream_client_build_count_for_test();
 
     prepare_upstream_client_for_aggregate_api_candidate("agg-a", "https://agg.example/v1")
         .expect("prepare aggregate client");
-    assert_eq!(upstream_client_build_count_for_test(), 1);
+
+    assert_eq!(async_upstream_client_build_count_for_test(), 1);
 
     prepare_upstream_client_for_aggregate_api_candidate("agg-a", "https://agg.example/v1")
         .expect("prepare same aggregate client");
-    let client = upstream_client_for_aggregate_api_candidate("agg-a", "https://agg.example/v1");
-    assert_eq!(upstream_client_build_count_for_test(), 1);
+    let client =
+        async_upstream_client_for_aggregate_api_candidate("agg-a", "https://agg.example/v1");
+
+    assert_eq!(async_upstream_client_build_count_for_test(), 1);
     drop(client);
 
     prepare_upstream_client_for_aggregate_api_candidate("agg-a", "https://other.example/v1")
         .expect("prepare aggregate client with changed url");
-    assert_eq!(upstream_client_build_count_for_test(), 2);
+
+    assert_eq!(async_upstream_client_build_count_for_test(), 2);
 
     prepare_upstream_client_for_aggregate_api_candidate("agg-b", "https://agg.example/v1")
         .expect("prepare aggregate client with changed id");
-    assert_eq!(upstream_client_build_count_for_test(), 3);
+
+    assert_eq!(async_upstream_client_build_count_for_test(), 3);
+}
+
+#[test]
+fn client_cache_lifecycle_is_safe_in_current_thread_runtime() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("current-thread runtime");
+    assert_async_client_cache_lifecycle(&runtime);
+}
+
+#[test]
+fn client_cache_lifecycle_is_safe_in_multi_thread_runtime() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("multi-thread runtime");
+    assert_async_client_cache_lifecycle(&runtime);
+}
+
+fn assert_async_client_cache_lifecycle(runtime: &tokio::runtime::Runtime) {
+    let _guard = crate::test_env_guard();
+    let _reload_guard = RuntimeConfigReloadGuard;
+    let db = TestDbGuard::new("runtime-async-client-lifecycle");
+    for account in ["acc-explicit", "acc-pool", "acc-invalid"] {
+        seed_account(db.path(), account);
+    }
+    seed_account_proxy(
+        db.path(),
+        "acc-explicit",
+        true,
+        Some("http://127.0.0.1:7001"),
+    );
+    seed_account_proxy(db.path(), "acc-invalid", true, Some("://invalid"));
+    let _global_proxy_guard = EnvGuard::clear(ENV_UPSTREAM_PROXY_URL);
+    let _proxy_list_guard = EnvGuard::set(ENV_PROXY_LIST, "http://127.0.0.1:7002");
+
+    runtime.block_on(async {
+        reload_from_env();
+
+        drop(async_upstream_client_for_account("").expect("default async client"));
+        drop(async_upstream_client_for_account("acc-explicit").expect("explicit async client"));
+        drop(
+            fresh_async_upstream_client_for_account("acc-explicit").expect("fresh explicit client"),
+        );
+        drop(async_upstream_client_for_account("acc-pool").expect("account async client"));
+        drop(fresh_async_upstream_client_for_account("acc-pool").expect("pool async client"));
+        prepare_upstream_client_for_account("acc-pool").expect("prewarm async account");
+        prepare_upstream_client_for_account("acc-explicit").expect("prewarm async explicit proxy");
+        prepare_upstream_client_for_aggregate_api_candidate(
+            "agg-runtime",
+            "https://agg.example/v1",
+        )
+        .expect("prewarm async aggregate");
+        drop(async_upstream_client_for_aggregate_api_candidate(
+            "agg-runtime",
+            "https://agg.example/v1",
+        ));
+
+        assert!(async_upstream_client_for_account("acc-invalid")
+            .expect_err("invalid explicit proxy stays fail-closed")
+            .contains("fail-closed"));
+
+        assert!(matches!(
+            account_proxy_client_cache_entry("acc-explicit"),
+            AccountProxyClientCacheEntry::Ready { .. }
+        ));
+        // Cloned async clients may outlive cache invalidation on either runtime.
+        let last_owner = async_upstream_client_for_account("acc-pool").unwrap();
+        reload_from_env();
+        drop(last_owner);
+
+        let bounded = build_account_test_client_with_timeouts(None, Duration::from_secs(1))
+            .expect("bounded async client construction");
+        drop(bounded);
+    });
 }
 
 #[test]
@@ -575,14 +664,14 @@ fn aggregate_api_client_uses_global_proxy_when_no_bypass_host_is_configured() {
     reload_from_env();
     reset_direct_upstream_client_use_count_for_test();
 
-    let first = upstream_client_for_aggregate_url("https://api.minimax.io");
-    let second = upstream_client_for_aggregate_url("https://api.minimax.io/v1/models");
+    let first = async_upstream_client_for_aggregate_url("https://api.minimax.io");
+    let second = async_upstream_client_for_aggregate_url("https://api.minimax.io/v1/models");
 
     assert_eq!(direct_upstream_client_use_count_for_test(), 0);
     drop(first);
     drop(second);
 
-    let non_minimax = upstream_client_for_aggregate_url("https://api.openai.com/v1/models");
+    let non_minimax = async_upstream_client_for_aggregate_url("https://api.openai.com/v1/models");
     assert_eq!(direct_upstream_client_use_count_for_test(), 0);
     drop(non_minimax);
 }
@@ -597,9 +686,9 @@ fn aggregate_api_client_uses_direct_client_for_configured_bypass_host() {
     reload_from_env();
     reset_direct_upstream_client_use_count_for_test();
 
-    let direct = upstream_client_for_aggregate_url("https://api.example.test/v1/models");
+    let direct = async_upstream_client_for_aggregate_url("https://api.example.test/v1/models");
     let after_direct = direct_upstream_client_use_count_for_test();
-    let proxied = upstream_client_for_aggregate_url("https://api.openai.com/v1/models");
+    let proxied = async_upstream_client_for_aggregate_url("https://api.openai.com/v1/models");
 
     assert_eq!(after_direct, 1);
     assert_eq!(direct_upstream_client_use_count_for_test(), after_direct);
@@ -925,11 +1014,12 @@ fn upstream_client_for_account_uses_explicit_proxy_before_global_and_pool() {
     reload_from_env();
 
     let client =
-        upstream_client_for_account("acc-explicit").expect("resolve explicit proxy client");
-    let response = client
-        .get("http://example.invalid/probe")
-        .send()
-        .expect("send request through explicit proxy");
+        async_upstream_client_for_account("acc-explicit").expect("resolve explicit proxy client");
+    let response = crate::runtime::service_runtime::run_sync(
+        client.get("http://example.invalid/probe").send(),
+    )
+    .expect("async proxy runtime")
+    .expect("send request through explicit proxy");
     assert_eq!(response.status().as_u16(), 204);
     assert_eq!(
         request_rx
@@ -952,11 +1042,12 @@ fn fresh_upstream_client_for_account_uses_global_proxy_without_explicit_proxy() 
     reload_from_env();
 
     let client =
-        fresh_upstream_client_for_account("acc-global").expect("resolve global proxy client");
-    let response = client
-        .get("http://example.invalid/global")
-        .send()
-        .expect("send request through global proxy");
+        fresh_async_upstream_client_for_account("acc-global").expect("resolve global proxy client");
+    let response = crate::runtime::service_runtime::run_sync(
+        client.get("http://example.invalid/global").send(),
+    )
+    .expect("async proxy runtime")
+    .expect("send request through global proxy");
     assert_eq!(response.status().as_u16(), 204);
     assert_eq!(
         request_rx
@@ -978,11 +1069,12 @@ fn fresh_upstream_client_for_account_uses_proxy_pool_without_explicit_or_global_
 
     reload_from_env();
 
-    let client = fresh_upstream_client_for_account("acc-pool").expect("resolve pool proxy client");
-    let response = client
-        .get("http://example.invalid/pool")
-        .send()
-        .expect("send request through pool proxy");
+    let client =
+        fresh_async_upstream_client_for_account("acc-pool").expect("resolve pool proxy client");
+    let response =
+        crate::runtime::service_runtime::run_sync(client.get("http://example.invalid/pool").send())
+            .expect("async proxy runtime")
+            .expect("send request through pool proxy");
     assert_eq!(response.status().as_u16(), 204);
     assert_eq!(
         request_rx
@@ -1004,8 +1096,8 @@ fn upstream_client_for_account_fails_closed_for_invalid_explicit_proxy() {
 
     reload_from_env();
 
-    let err =
-        upstream_client_for_account("acc-invalid").expect_err("fail closed for invalid proxy");
+    let err = async_upstream_client_for_account("acc-invalid")
+        .expect_err("fail closed for invalid proxy");
     assert!(err.contains("fail-closed"));
     assert!(err.contains("acc-invalid"));
 }
@@ -1021,8 +1113,8 @@ fn upstream_client_for_account_fails_closed_for_enabled_proxy_without_url() {
 
     reload_from_env();
 
-    let err =
-        upstream_client_for_account("acc-empty").expect_err("fail closed for missing proxy URL");
+    let err = async_upstream_client_for_account("acc-empty")
+        .expect_err("fail closed for missing proxy URL");
     assert!(err.contains("fail-closed"));
     assert!(err.contains("acc-empty"));
     assert!(err.contains("missing proxy URL"));
@@ -1077,17 +1169,17 @@ fn upstream_client_for_account_fails_closed_for_invalid_profile_binding() {
 
     reload_from_env();
 
-    let missing = upstream_client_for_account("acc-missing-profile")
+    let missing = async_upstream_client_for_account("acc-missing-profile")
         .expect_err("fail closed for missing bound profile");
     assert!(missing.contains("fail-closed"));
     assert!(missing.contains("missing"));
 
-    let disabled = upstream_client_for_account("acc-disabled-profile")
+    let disabled = async_upstream_client_for_account("acc-disabled-profile")
         .expect_err("fail closed for disabled bound profile");
     assert!(disabled.contains("fail-closed"));
     assert!(disabled.contains("disabled"));
 
-    let invalid = upstream_client_for_account("acc-invalid-profile")
+    let invalid = async_upstream_client_for_account("acc-invalid-profile")
         .expect_err("fail closed for invalid bound profile");
     assert!(invalid.contains("fail-closed"));
     assert!(invalid.contains("invalid"));
@@ -1204,7 +1296,7 @@ fn set_upstream_total_timeout_ms_updates_env_and_cache() {
     );
 }
 
-/// 函数 `normalize_model_slug_maps_legacy_gpt_5_4_pro_to_gpt_5_4`
+/// 函数 `normalize_model_slug_maps_obsolete_models_to_auto`
 ///
 /// 作者: gaohongshun
 ///
@@ -1216,12 +1308,30 @@ fn set_upstream_total_timeout_ms_updates_env_and_cache() {
 /// # 返回
 /// 无
 #[test]
-fn normalize_model_slug_maps_legacy_gpt_5_4_pro_to_gpt_5_4() {
+fn normalize_model_slug_maps_obsolete_models_to_auto() {
     let _guard = crate::test_env_guard();
 
-    let actual = normalize_model_slug("gpt-5.4-pro").expect("normalize model");
-
-    assert_eq!(actual, "gpt-5.4");
+    for model in [
+        "gpt-5",
+        "gpt-5-codex",
+        "gpt-5-codex-mini",
+        "gpt-5.1",
+        "gpt-5.1-codex",
+        "gpt-5.1-codex-max",
+        "gpt-5.1-codex-mini",
+        "gpt-5.2",
+        "gpt-5.2-codex",
+        "gpt-5.3-codex",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-pro",
+    ] {
+        assert_eq!(
+            normalize_model_slug(model).expect("normalize obsolete model"),
+            "auto",
+            "{model} should no longer constrain free accounts"
+        );
+    }
 }
 
 /// 函数 `normalize_model_slug_accepts_auto`
@@ -1587,6 +1697,7 @@ fn set_originator_updates_env_and_dynamic_user_agent() {
 #[test]
 fn set_codex_user_agent_version_updates_env_and_user_agent() {
     let _guard = crate::test_env_guard();
+    set_originator("codex_cli_rs").expect("reset originator for user agent assertion");
 
     let applied = set_codex_user_agent_version("0.102.1").expect("set codex user agent version");
 

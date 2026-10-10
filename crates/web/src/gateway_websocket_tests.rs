@@ -230,3 +230,65 @@ async fn preserves_handshake_rejection_status() {
     gateway_handle.abort();
     service_handle.abort();
 }
+
+async fn close_handshake_through_gateway(upstream_initiates: bool) {
+    use tokio_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
+
+    let frame = CloseFrame {
+        code: CloseCode::Normal,
+        reason: "fixture finished".into(),
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let service_addr = listener.local_addr().unwrap();
+    let upstream_frame = frame.clone();
+    let service_handle = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut upstream = tokio_tungstenite::accept_async(stream).await.unwrap();
+        if upstream_initiates {
+            upstream.close(Some(upstream_frame.clone())).await.unwrap();
+        }
+        let message = tokio::time::timeout(Duration::from_secs(5), upstream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(message, WsMessage::Close(Some(upstream_frame)));
+        if !upstream_initiates {
+            // Complete the forwarded close handshake as a real service would.
+            let _ = upstream.flush().await;
+        }
+    });
+    let (gateway_addr, gateway_handle) = start_test_gateway(service_addr.to_string()).await;
+    let mut request = format!("ws://{gateway_addr}/v1/responses")
+        .into_client_request()
+        .unwrap();
+    request.headers_mut().insert(
+        header::AUTHORIZATION,
+        HeaderValue::from_static("Bearer close_fixture_key"),
+    );
+    let (mut client, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    if !upstream_initiates {
+        client.close(Some(frame.clone())).await.unwrap();
+    }
+    let message = tokio::time::timeout(Duration::from_secs(5), client.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(message, WsMessage::Close(Some(frame)));
+    if upstream_initiates {
+        let _ = client.flush().await;
+    }
+    service_handle.await.unwrap();
+    gateway_handle.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acknowledges_client_close_and_forwards_code_and_reason() {
+    close_handshake_through_gateway(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acknowledges_upstream_close_and_forwards_code_and_reason() {
+    close_handshake_through_gateway(true).await;
+}

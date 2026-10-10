@@ -119,22 +119,11 @@ function routeStrategyLabel(
   );
 }
 
-function catalogSourceLabel(
-  candidate: CodexProfileApiKeyCandidate | undefined,
-  t: (message: string) => string,
-): string {
-  if (candidate?.catalogSource === "official") return t("OpenAI 官方目录");
-  if (candidate?.catalogSource === "managed") {
-    return t("CodexManager 本地目录");
-  }
-  return t("无法确认");
-}
-
 function CatalogStatusFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-border/60 bg-background/40 p-3">
+    <div className="min-w-0 border-l border-border/60 pl-3">
       <p className="text-[11px] text-muted-foreground">{label}</p>
-      <p className="mt-1 break-words text-sm font-semibold text-foreground">
+      <p className="mt-0.5 break-words text-sm font-semibold text-foreground">
         {value}
       </p>
     </div>
@@ -164,14 +153,15 @@ function modelMatchesFilter(model: ManagedModelV2, filter: ModelFilter): boolean
 }
 
 const BUILTIN_MODEL_DESCRIPTION_KEYS: Record<string, string> = {
+  "gpt-6-sol": "最新的前沿智能体编程模型。",
+  "gpt-6-luna": "快速且经济的智能体编程模型。",
   "gpt-5.6-sol": "最新的前沿智能体编程模型。",
   "gpt-5.6-terra": "适合日常工作的均衡型智能体编程模型。",
   "gpt-5.6-luna": "快速且经济的智能体编程模型。",
   "gpt-5.5": "适合复杂编程、研究和真实工作场景的前沿模型。",
-  "gpt-5.4": "适合日常编程的强大模型。",
-  "gpt-5.4-mini": "适合简单编程任务的小型、快速且高性价比模型。",
-  "gpt-5.2": "针对专业工作和长时间运行智能体优化的模型。",
   "gpt-image-2": "先进的图像生成和编辑模型。",
+  "gpt-image-2.5-sunburst": "用于高保真、强指令遵循图像生成和编辑的最先进模型。",
+  "gpt-image-2.5-flare": "适合日常使用的快速、高质量图像生成和编辑模型。",
   "codex-auto-review": "用于 Codex 自动审批审查的模型。",
 };
 
@@ -241,13 +231,16 @@ export default function ModelsPage() {
   const role = resolveSessionRole(session, isSessionLoading, isDesktopRuntime);
   const isAdminMode = isAdminRole(role);
   const isPageActive = useDesktopPageActive("/models/");
-  const codexModeStatus = useCodexProfileModeStatus({ enabled: isAdminMode });
+  const codexModeStatus = useCodexProfileModeStatus({
+    enabled: isAdminMode && isPageActive,
+  });
   const {
     models,
     stats,
     isLoading,
     isServiceReady,
-    refreshLocal,
+    applyModels,
+    syncPrices,
     saveModel,
     updateModelState,
     updateModelStates,
@@ -257,6 +250,8 @@ export default function ModelsPage() {
     previewImport,
     commitImport,
     isRefreshing,
+    isApplyingModels,
+    isSyncingPrices,
     isSaving,
     isUpdatingModelState,
     isBatchUpdatingModelState,
@@ -266,14 +261,16 @@ export default function ModelsPage() {
     isImporting,
   } = useManagedModels();
   usePageTransitionReady("/models/", !isServiceReady || !isLoading);
-  const isModelOperationPending =
-    isLoading ||
-    isRefreshing ||
+  const isModelMutationPending =
+    isApplyingModels ||
+    isSyncingPrices ||
     isSaving ||
     isDeleting ||
     isAssigningRoutes ||
     isImporting ||
     isUpdatingModelState;
+  const isModelOperationPending =
+    isLoading || isRefreshing || isModelMutationPending;
 
   const { data: aggregateApis = [] } = useQuery({
     queryKey: ["aggregate-apis"],
@@ -308,18 +305,19 @@ export default function ModelsPage() {
         ? routeStrategyLabel(activeApiKey, t)
         : t("无法确认");
   const currentCatalog =
-    codexMode === "direct_account"
-      ? t("OpenAI 官方目录")
-      : codexMode === "gateway"
-        ? catalogSourceLabel(activeApiKey, t)
+    codexModeStatus.status?.managedCatalogActive === true
+      ? t("CodexManager 本地目录")
+      : codexMode === "direct_account" || activeApiKey?.catalogSource === "official"
+        ? t("OpenAI 官方目录")
         : t("无法确认");
-  const isLocalCatalogActive =
-    codexMode === "gateway" && activeApiKey?.catalogSource === "managed"
-      ? true
-      : codexMode === "direct_account" ||
-          (codexMode === "gateway" && activeApiKey?.catalogSource === "official")
-        ? false
-        : null;
+  const isLocalCatalogActive = codexModeStatus.status
+    ? codexModeStatus.status.managedCatalogActive
+    : null;
+  const canApplyModels =
+    isAdminMode &&
+    isServiceReady &&
+    models.length > 0 &&
+    codexModeStatus.status?.profileWritable === true;
   const localCatalogEffect =
     isLocalCatalogActive === true
       ? t("当前生效")
@@ -328,9 +326,9 @@ export default function ModelsPage() {
         : t("无法确认");
   const catalogImpactDescription =
     isLocalCatalogActive === true
-      ? t("当前平台密钥使用本地网关目录；下方模型、路由和可见性设置会影响当前 Codex。")
+      ? t("当前 Codex 已应用本地模型目录；下方模型、路由和可见性设置会影响当前 Codex。")
       : isLocalCatalogActive === false
-        ? t("当前 Codex 跟随 OpenAI 官方目录；下方设置仅供使用本地目录的平台密钥，不会改变当前模型列表。")
+        ? t("当前 Codex 尚未应用本地模型目录；点击应用模型后，模型列表将使用下方目录。")
         : t("尚未确认当前 Codex 的目录来源；请先在 Codex 接入方式页面检查配置。");
 
   const [search, setSearch] = useState("");
@@ -400,6 +398,20 @@ export default function ModelsPage() {
     setEditorOpen(true);
   };
 
+  const applyCurrentModels = () => {
+    const status = codexModeStatus.status;
+    if (!status || !canApplyModels) return;
+    const modelSlugs =
+      selectedSlugs.length > 0
+        ? [...selectedSlugs]
+        : models.map((model) => model.slug);
+    if (modelSlugs.length === 0) return;
+    void applyModels({
+      codexHome: status.codexHome,
+      modelSlugs,
+    });
+  };
+
   const openEditor = (slug: string) => {
     setEditingSlug(slug);
     setEditorOpen(true);
@@ -420,22 +432,17 @@ export default function ModelsPage() {
 
   const confirmDeleteDescription = useMemo(() => {
     if (deleteSlugs.length === 0) return "";
-    const builtinCount = deleteSlugs.filter(
-      (slug) => models.find((model) => model.slug === slug)?.origin === "builtin",
-    ).length;
     if (deleteSlugs.length === 1) {
-      const model = models.find((item) => item.slug === deleteSlugs[0]);
-      return model?.origin === "builtin"
-        ? t("内置模型 {slug} 将从本地网关目录隐藏并禁用，数据不会删除。此操作不影响直接连接 OpenAI 或使用官方目录的账号池。", {
-            slug: model.slug,
-          })
-        : t("确定要从本地网关目录永久删除自定义模型 {slug} 吗？此操作不影响直接连接 OpenAI 或使用官方目录的账号池。", { slug: deleteSlugs[0] });
+      return t(
+        "确定要从本地网关目录永久删除模型 {slug} 吗？此操作不影响直接连接 OpenAI 或使用官方目录的账号池。",
+        { slug: deleteSlugs[0] },
+      );
     }
     return t(
-      "将处理本地网关目录中的 {count} 个模型：{builtin} 个内置模型会被隐藏并禁用，其余自定义模型会被删除。此操作不影响直接连接 OpenAI 或使用官方目录的账号池。",
-      { count: deleteSlugs.length, builtin: builtinCount },
+      "确定要从本地网关目录永久删除这 {count} 个模型吗？此操作不影响直接连接 OpenAI 或使用官方目录的账号池。",
+      { count: deleteSlugs.length },
     );
-  }, [deleteSlugs, models, t]);
+  }, [deleteSlugs, t]);
 
   return (
     <>
@@ -445,15 +452,45 @@ export default function ModelsPage() {
           description={t("配置 CodexManager 本地网关目录中的模型、价格、路由和指令策略。")}
           actions={
             <>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!isServiceReady || isModelOperationPending}
-                onClick={() => void refreshLocal()}
-              >
-                <RefreshCw className={`mr-1.5 h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
-                {t("刷新本地目录")}
-              </Button>
+              {isAdminMode ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!isServiceReady || isModelOperationPending}
+                  onClick={() => void syncPrices(selectedSlugs)}
+                >
+                  {isSyncingPrices ? (
+                    <RefreshCw className="mr-1.5 h-4 w-4 animate-spin" />
+                  ) : (
+                    <CircleDollarSign className="mr-1.5 h-4 w-4" />
+                  )}
+                  {isSyncingPrices
+                    ? t("正在同步价格...")
+                    : selectedSlugs.length > 0
+                      ? `${t("同步价格")} (${selectedSlugs.length})`
+                      : t("同步价格")}
+                </Button>
+              ) : null}
+              {isAdminMode ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={
+                    !canApplyModels ||
+                    isModelMutationPending
+                  }
+                  onClick={applyCurrentModels}
+                >
+                  <RefreshCw
+                    className={`mr-1.5 h-4 w-4 ${isApplyingModels ? "animate-spin" : ""}`}
+                  />
+                  {isApplyingModels
+                    ? t("正在应用...")
+                    : selectedSlugs.length > 0
+                      ? `${t("应用模型")} (${selectedSlugs.length})`
+                      : t("应用模型")}
+                </Button>
+              ) : null}
               {isAdminMode ? (
                 <Button
                   size="sm"
@@ -480,14 +517,14 @@ export default function ModelsPage() {
         />
 
         {isAdminMode ? (
-          <Card className="border-primary/20 bg-primary/5">
-            <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <Card className="glass-card">
+            <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <CardTitle className="flex items-center gap-2">
                   <Cable className="h-4 w-4 text-primary" />
                   {t("当前 Codex 模型来源")}
                 </CardTitle>
-                <CardDescription className="mt-1.5">
+                <CardDescription className="mt-1">
                   {catalogImpactDescription}
                 </CardDescription>
               </div>
@@ -509,7 +546,7 @@ export default function ModelsPage() {
           </Card>
         ) : null}
 
-        <section className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+        <section className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-6">
           <MetricCard title={t("总数")} value={stats.total} icon={Database} tone="blue" />
           <MetricCard title={t("已启用")} value={stats.enabled} icon={Boxes} tone="emerald" />
           <MetricCard title={t("内置模型")} value={stats.builtin} icon={Database} tone="violet" />
@@ -526,9 +563,14 @@ export default function ModelsPage() {
                 <p className="mt-1 text-xs text-muted-foreground">
                   {t("显示来源、启用状态、价格状态、指令模式和路由状态。")}
                   {isAdminMode ? (
-                    <span className="mt-0.5 block text-primary/80">
-                      {t("请先勾选一个或多个模型，再使用批量分配路由。")}
-                    </span>
+                    <>
+                      <span className="mt-0.5 block text-primary/80">
+                        {t("未勾选模型时会应用全部模型；勾选后仅应用所选模型。批量操作仍需先勾选模型。")}
+                      </span>
+                      <span className="mt-0.5 block text-primary/80">
+                        {t("未勾选时同步全部模型并保留自定义价格；勾选的模型会用外部价格覆盖自定义价格。")}
+                      </span>
+                    </>
                   ) : null}
                 </p>
               </div>
@@ -721,7 +763,7 @@ export default function ModelsPage() {
                                 <Button type="button" variant="ghost" size="icon" disabled={isModelOperationPending} aria-label={t("编辑模型 {slug}", { slug: model.slug })} onClick={() => openEditor(model.slug)}>
                                   <PencilLine className="h-4 w-4" />
                                 </Button>
-                                <Button type="button" variant="ghost" size="icon" disabled={isModelOperationPending} aria-label={model.origin === "builtin" ? t("从本地网关目录隐藏模型 {slug}", { slug: model.slug }) : t("从本地网关目录删除模型 {slug}", { slug: model.slug })} onClick={() => setDeleteSlugs([model.slug])}>
+                                <Button type="button" variant="ghost" size="icon" disabled={isModelOperationPending} aria-label={t("从本地网关目录删除模型 {slug}", { slug: model.slug })} onClick={() => setDeleteSlugs([model.slug])}>
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
                               </div>
@@ -781,9 +823,9 @@ export default function ModelsPage() {
           onOpenChange={(open) => {
             if (!open) setDeleteSlugs([]);
           }}
-          title={deleteSlugs.length > 1 ? t("从本地网关目录批量移除模型") : t("从本地网关目录移除模型")}
+          title={deleteSlugs.length > 1 ? t("从本地网关目录批量删除模型") : t("从本地网关目录删除模型")}
           description={confirmDeleteDescription}
-          confirmText={isDeleting ? t("处理中...") : t("移除")}
+          confirmText={isDeleting ? t("处理中...") : t("删除")}
           confirmVariant="destructive"
           onConfirm={async () => {
             const targets = [...deleteSlugs];
@@ -795,7 +837,7 @@ export default function ModelsPage() {
               return succeeded;
             }
             const result = await deleteModels(targets);
-            const processed = new Set([...result.hidden, ...result.deleted]);
+            const processed = new Set(result.deleted);
             setSelectedSlugs((current) =>
               current.filter((slug) => !processed.has(slug)),
             );

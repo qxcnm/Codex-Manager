@@ -397,10 +397,10 @@ fn app_settings_roundtrip_gateway_user_agent_and_validates_header_value() {
 }
 
 #[test]
-fn app_settings_remove_requires_openai_auth_defaults_off_and_persists_updates() {
+fn app_settings_remove_requires_openai_auth_defaults_on_and_persists_updates() {
     with_temp_db(|db_path| {
         let defaults = codexmanager_service::app_settings_get().expect("read default settings");
-        assert_eq!(defaults["removeRequiresOpenaiAuth"], false);
+        assert_eq!(defaults["removeRequiresOpenaiAuth"], true);
         let storage = Storage::open(db_path).expect("open storage");
         assert_eq!(
             storage
@@ -435,6 +435,20 @@ fn app_settings_remove_requires_openai_auth_defaults_off_and_persists_updates() 
         })))
         .expect("disable requires_openai_auth removal");
         assert_eq!(disabled["removeRequiresOpenaiAuth"], false);
+        assert_eq!(
+            Storage::open(db_path)
+                .unwrap()
+                .get_app_setting(
+                    codexmanager_service::APP_SETTING_CODEX_PROFILE_REMOVE_REQUIRES_OPENAI_AUTH_KEY
+                )
+                .unwrap()
+                .as_deref(),
+            Some("0")
+        );
+        assert_eq!(
+            codexmanager_service::app_settings_get().unwrap()["removeRequiresOpenaiAuth"],
+            false
+        );
     });
 }
 
@@ -1101,7 +1115,7 @@ fn app_settings_set_persists_snapshot_and_password_hash() {
             snapshot
                 .get("freeAccountMaxModel")
                 .and_then(|value| value.as_str()),
-            Some("gpt-5.3-codex")
+            Some("auto")
         );
         assert_eq!(
             snapshot
@@ -1186,7 +1200,7 @@ fn app_settings_set_persists_snapshot_and_password_hash() {
                     codexmanager_service::APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY
                 )
                 .expect("read free account max model"),
-            Some("gpt-5.3-codex".to_string())
+            Some("auto".to_string())
         );
         assert_eq!(
             storage
@@ -1551,7 +1565,7 @@ fn sync_runtime_settings_from_storage_applies_saved_runtime_values() {
             snapshot
                 .get("freeAccountMaxModel")
                 .and_then(|value| value.as_str()),
-            Some("gpt-5.1-codex")
+            Some("auto")
         );
         assert_eq!(
             snapshot
@@ -1767,7 +1781,7 @@ fn app_settings_get_loads_env_backed_dedicated_settings_when_storage_missing() {
             snapshot
                 .get("freeAccountMaxModel")
                 .and_then(|value| value.as_str()),
-            Some("gpt-5.2-codex")
+            Some("auto")
         );
         assert_eq!(
             snapshot
@@ -1891,7 +1905,7 @@ fn app_settings_get_loads_env_backed_dedicated_settings_when_storage_missing() {
                     codexmanager_service::APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY
                 )
                 .expect("read free account max model"),
-            Some("gpt-5.2-codex".to_string())
+            Some("auto".to_string())
         );
         assert_eq!(
             storage

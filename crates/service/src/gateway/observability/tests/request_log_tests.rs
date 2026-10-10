@@ -4,7 +4,7 @@ fn test_api_key(id: &str) -> ApiKey {
     ApiKey {
         id: id.to_string(),
         name: Some("last used test key".to_string()),
-        model_slug: Some("gpt-5.4".to_string()),
+        model_slug: Some("gpt-6-sol".to_string()),
         reasoning_effort: None,
         service_tier: None,
         rotation_strategy: "account_rotation".to_string(),
@@ -43,7 +43,7 @@ fn successful_request_log_touches_key_and_records_v2_snapshot() {
         None,
         "/v1/responses",
         "POST",
-        Some("gpt-5.4"),
+        Some("gpt-6-sol"),
         None,
         Some("https://example.test/v1/responses"),
         Some(200),
@@ -69,11 +69,11 @@ fn successful_request_log_touches_key_and_records_v2_snapshot() {
     assert_eq!(snapshot.usage_source, "actual");
     assert_eq!(snapshot.input_tokens, 1);
     assert_eq!(snapshot.output_tokens, 1);
-    assert_eq!(snapshot.base_cost_microusd, 18);
+    assert_eq!(snapshot.base_cost_microusd, 12);
     let logs = storage
         .list_request_logs(None, 10)
         .expect("read request logs");
-    assert_eq!(logs[0].estimated_cost_usd, Some(0.000_018));
+    assert_eq!(logs[0].estimated_cost_usd, Some(0.000_012));
 }
 
 #[test]

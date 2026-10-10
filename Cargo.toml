@@ -3,6 +3,7 @@ members = [
   "crates/core",
   "crates/rusqlite",
   "crates/service",
+  "crates/storage-seaorm",
   "crates/start",
   "crates/web"
 ]
@@ -19,7 +20,7 @@ tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev 
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "4fffad30fe373adbdcffab9545e9e9bf4f2fc19f" }
 
 [workspace.package]
-version = "0.6.0"
+version = "0.6.3"
 
 # Keep local development artifacts compact while retaining file/line backtraces.
 [profile.dev]

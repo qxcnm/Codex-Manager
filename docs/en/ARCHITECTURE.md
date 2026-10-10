@@ -20,10 +20,10 @@ Unified goal:
 ```text
 .
 ├─ apps/                  # 前端与 Tauri 桌面端
-│  ├─ src/                # Vite + 原生 JavaScript 前端
+│  ├─ src/                # Next.js App Router + TypeScript 前端
 │  ├─ src-tauri/          # Tauri 桌面壳与原生命令桥接
 │  ├─ tests/              # 前端 UI/结构测试
-│  └─ dist/               # 前端构建产物
+│  └─ out/                # Next.js 静态导出产物
 ├─ crates/
 │  ├─ core/               # 数据库迁移、存储基础、认证/用量底层能力
 │  ├─ service/            # 本地 HTTP/RPC 服务、网关、协议适配、设置持久化
@@ -39,17 +39,17 @@ Unified goal:
 
 ### 3.1 Front-end master control entrance
 
-- `apps/src/main.js`: Front-end startup assembly entrance
-- `apps/src/runtime/app-bootstrap.js`: Interface initialization arrangement
-- `apps/src/runtime/app-runtime.js`: Coordination of refresh process and runtime
-- `apps/src/settings/controller.js`: Set up domain facade and continue distribution to submodules
+- `apps/src/app/layout.tsx`: App Router root layout and global providers
+- `apps/src/components/providers.tsx`: React Query, theme, i18n, and toast providers
+- `apps/src/components/layout/app-bootstrap.tsx`: Desktop/Web runtime initialization and service connection setup
+- `apps/src/lib/api/transport.ts`: Unified Tauri invoke and Web RPC transport facade
 
 ### 3.2 Desktop shell entrance
 
 - `apps/src-tauri/src/lib.rs`: Tauri Application assembly entry
-- `apps/src-tauri/src/settings_commands.rs`: Desktop setting bridge command
+- `apps/src-tauri/src/commands/settings/mod.rs`: Desktop settings command module
 - `apps/src-tauri/src/service_runtime.rs`: Desktop embedded service life cycle
-- `apps/src-tauri/src/rpc_client.rs`: Desktop RPC Call infrastructure
+- `apps/src-tauri/src/rpc_client/mod.rs`: Desktop RPC call infrastructure
 
 ### 3.3 service gateway and protocol entry
 
@@ -57,17 +57,16 @@ Unified goal:
 - `crates/service/src/http/`: HTTP routing entry
 - `crates/service/src/rpc_dispatch/`: RPC Distribution entrance
 - `crates/service/src/gateway/mod.rs`: Gateway aggregation entry
-- `crates/service/src/gateway/observability/http_bridge.rs`: Request tracking, protocol bridging, log writing
-- `crates/service/src/gateway/protocol_adapter/request_mapping.rs`: OpenAI/Codex input mapping
-- `crates/service/src/gateway/protocol_adapter/response_conversion.rs`: Non-streaming result total conversion entry
-- `crates/service/src/gateway/protocol_adapter/response_conversion/sse_conversion.rs`: Streaming SSE Conversion Entry
-- `crates/service/src/gateway/protocol_adapter/response_conversion/openai_chat.rs`: OpenAI Chat result adaptation
-- `crates/service/src/gateway/protocol_adapter/response_conversion/tool_mapping.rs`: Tool name shortening and restoration
+- `crates/service/src/gateway/observability/http_bridge/mod.rs`: Request tracking, protocol bridging, and log writing
+- `crates/service/src/gateway/protocol_adapter/request_router.rs`: OpenAI/Codex request routing and upstream protocol selection
+- `crates/service/src/gateway/protocol_adapter/types.rs`: Shared protocol adapter request/response types
+- `crates/service/src/gateway/observability/http_bridge/stream_readers/`: Streaming response readers for supported upstream protocols
+- `crates/service/src/gateway/request/request_rewrite.rs`: Request overrides and compatibility rewrites
 
 ### 3.4 Setup and run configuration entry
 
 - `crates/service/src/app_settings/`: Set up persistence, environment variable coverage, runtime synchronization
-- `crates/service/src/web_access.rs`: Web Access password and session token
+- `crates/service/src/auth/web_access.rs`: Web Access password and session token
 
 ## 4. Running relationship
 
@@ -155,7 +154,7 @@ Mainly responsible for:
 
 - Provide Web UI static resources
 - Mount or proxy to service
-- Optionally embed `apps/dist` into the binary to form a single-file distribution
+- Optionally embed `apps/out` into the binary to form a single-file distribution
 
 ### 5.6 `crates/start/`
 
@@ -168,10 +167,12 @@ Mainly responsible for:
 
 ### 6.1 Database
 
-The current project uses SQLite.
-Database migration is located at:
+Desktop mode uses SQLite. Service mode can use the SeaORM storage adapter for SQLite,
+MySQL, or PostgreSQL when an explicit `CODEXMANAGER_DATABASE_URL` is configured.
+Database migrations are located at:
 
-- `crates/core/migrations/`
+- `crates/core/migrations/`: desktop SQLite migrations
+- `crates/storage-seaorm/src/migration.rs`: service-mode cross-database migrations
 
 The database not only stores accounts, but also assumes:
 
@@ -244,9 +245,9 @@ Additional synchronization on desktop:
 - `apps/src-tauri/Cargo.toml`
 - `apps/src-tauri/tauri.conf.json`
 
-Unified modification entry:
-
-- `scripts/bump-version.ps1`
+Version changes are made directly in the workspace and Tauri manifests
+(`Cargo.toml`, `apps/src-tauri/Cargo.toml`, and `apps/src-tauri/tauri.conf.json`);
+no `scripts/bump-version.ps1` helper is currently checked in.
 
 ### 8.3 GitHub Release
 
@@ -267,14 +268,14 @@ The current repository needs to focus on the following issues:
 
 1. `apps/src-tauri/src/lib.rs` It is still thick, and the desktop shell assembly and command implementation still need to be disassembled.
 2. `crates/service/src/lib.rs` Configuration, runtime synchronization, and side effect boundaries are not clear enough.
-3. `crates/service/src/gateway/protocol_adapter/response_conversion.rs` There are many compatible branches and the risk of regression is high.
+3. `crates/service/src/gateway/protocol_adapter/` has many compatibility branches and a high regression risk.
 4. `.github/workflows/release-all.yml` Still long, multi-platform logic requires persistence constraints.
 
 ## 10. Suggested changes
 
 In order to reduce structural pollution, new demands should be targeted according to the following principles:
 
-- New pages or front-end interactions: Priority falls in `apps/src/views/`, `apps/src/services/`, `apps/src/ui/`
+- New pages or front-end interactions: Priority falls in `apps/src/app/`, `apps/src/components/`, `apps/src/lib/`
 - New Desktop Capabilities: Prioritize standalone modules that fall into `apps/src-tauri/src/`, rather than continuing to cram them all into `lib.rs`
 - New setting item: first determine whether it belongs to environment variables, persistent configuration or runtime state
 - Compatible with new protocols: priority should be placed in the gateway / protocol adapter submodule, and do not continue to stack conditional branches out of order.

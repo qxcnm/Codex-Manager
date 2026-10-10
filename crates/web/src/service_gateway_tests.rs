@@ -1,8 +1,10 @@
 use super::{
-    account_test_events_role_allowed, account_test_events_target_url,
+    account_test_events_role_allowed, account_test_events_target_url, ensure_service_running,
     format_upstream_error_message, gateway_proxy_max_body_bytes, gateway_proxy_target_url,
-    service_probe_client, should_skip_gateway_request_header, should_skip_gateway_response_header,
-    tcp_probe, ENV_GATEWAY_PROXY_MAX_BODY_BYTES,
+    service_bin_path, service_probe_client, should_restart_service_after_probe_failure,
+    should_skip_gateway_request_header, should_skip_gateway_response_header, tcp_probe,
+    validate_service_initialize_response, ENV_GATEWAY_PROXY_MAX_BODY_BYTES,
+    ENV_WEB_NO_SPAWN_SERVICE, SERVICE_VERSION_MISMATCH,
 };
 use axum::http::{header, HeaderValue, Uri};
 use axum::{body::Bytes, extract::State, http::HeaderMap};
@@ -41,6 +43,179 @@ impl Drop for EnvGuard {
             std::env::remove_var(self.key);
         }
     }
+}
+
+fn initialize_response(version: &str) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "version": version,
+            "userAgent": "codex_cli_rs/1.0.0",
+            "codexHome": "C:/tmp/codexmanager"
+        }
+    })
+}
+
+struct TestDir(std::path::PathBuf);
+
+impl TestDir {
+    fn new(label: &str) -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "codexmanager-web-{label}-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&path).expect("create test directory");
+        Self(path)
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+struct ShutdownFlagReset;
+
+impl ShutdownFlagReset {
+    fn new() -> Self {
+        codexmanager_service::clear_shutdown_flag();
+        Self
+    }
+}
+
+impl Drop for ShutdownFlagReset {
+    fn drop(&mut self) {
+        codexmanager_service::clear_shutdown_flag();
+    }
+}
+
+async fn spawn_stale_service() -> (
+    String,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind stale service");
+    let addr = listener.local_addr().expect("read stale service address");
+    let app = axum::Router::new().route(
+        "/rpc",
+        axum::routing::post(|| async { axum::Json(initialize_response("0.0.0-old")) }),
+    );
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .expect("serve stale service");
+    });
+    (addr.to_string(), shutdown_tx, task)
+}
+
+async fn assert_stale_service_survives_binary_preflight_failure(
+    dir: &std::path::Path,
+    expected_error: &str,
+) {
+    let (addr, shutdown_tx, task) = spawn_stale_service().await;
+    let spawned_service = std::sync::Arc::new(tokio::sync::Mutex::new(false));
+
+    let error = ensure_service_running(&addr, "test-token", dir, &spawned_service)
+        .await
+        .expect("replacement should fail preflight");
+
+    assert!(error.contains("service_version_mismatch"), "{error}");
+    assert!(error.contains("old instance was left running"), "{error}");
+    assert!(error.contains(expected_error), "{error}");
+    assert!(!codexmanager_service::shutdown_requested());
+    assert!(tcp_probe(&addr).await);
+    assert!(!*spawned_service.lock().await);
+
+    let _ = shutdown_tx.send(());
+    task.await.expect("join stale service");
+}
+
+#[test]
+fn service_initialize_response_accepts_current_version() {
+    let payload = initialize_response(env!("CARGO_PKG_VERSION"));
+
+    validate_service_initialize_response(&payload).expect("accept current service version");
+}
+
+#[test]
+fn service_version_mismatch_requests_service_restart() {
+    let _lock = env_test_lock();
+    let _guard = EnvGuard::clear(ENV_WEB_NO_SPAWN_SERVICE);
+    let error = validate_service_initialize_response(&initialize_response("0.0.0-old"))
+        .expect_err("reject stale service version");
+
+    assert!(error.starts_with(SERVICE_VERSION_MISMATCH));
+    assert!(error.contains(env!("CARGO_PKG_VERSION")));
+    assert!(error.contains("0.0.0-old"));
+    assert!(should_restart_service_after_probe_failure(&error));
+}
+
+#[test]
+fn service_version_mismatch_is_reported_when_spawn_is_disabled() {
+    let _lock = env_test_lock();
+    let _guard = EnvGuard::set(ENV_WEB_NO_SPAWN_SERVICE, "1");
+    let error = validate_service_initialize_response(&initialize_response("0.0.0-old"))
+        .expect_err("reject stale service version");
+
+    assert!(error.starts_with(SERVICE_VERSION_MISMATCH));
+    assert!(!should_restart_service_after_probe_failure(&error));
+    let startup_error =
+        format!("service reachable at 127.0.0.1:48760 but startup handshake failed: {error}");
+    assert!(startup_error.contains("service_version_mismatch"));
+    assert!(startup_error.contains("expected"));
+    assert!(startup_error.contains("got 0.0.0-old"));
+}
+
+#[tokio::test]
+async fn stale_service_is_not_shutdown_when_replacement_binary_is_missing() {
+    let _lock = env_test_lock();
+    let _guard = EnvGuard::clear(ENV_WEB_NO_SPAWN_SERVICE);
+    let _shutdown_reset = ShutdownFlagReset::new();
+    let dir = TestDir::new("missing-service-binary");
+
+    assert_stale_service_survives_binary_preflight_failure(dir.path(), "missing").await;
+}
+
+#[tokio::test]
+async fn stale_service_is_not_shutdown_when_replacement_binary_is_unavailable() {
+    let _lock = env_test_lock();
+    let _guard = EnvGuard::clear(ENV_WEB_NO_SPAWN_SERVICE);
+    let _shutdown_reset = ShutdownFlagReset::new();
+    let dir = TestDir::new("unavailable-service-binary");
+    let bin = service_bin_path(dir.path());
+
+    #[cfg(unix)]
+    let expected_error = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(&bin, b"not executable").expect("create service file");
+        let mut permissions = std::fs::metadata(&bin)
+            .expect("read service file metadata")
+            .permissions();
+        permissions.set_mode(0o644);
+        std::fs::set_permissions(&bin, permissions).expect("remove service execute permission");
+        "not executable"
+    };
+
+    #[cfg(not(unix))]
+    let expected_error = {
+        std::fs::create_dir(&bin).expect("create non-file service path");
+        "not a regular file"
+    };
+
+    assert_stale_service_survives_binary_preflight_failure(dir.path(), expected_error).await;
 }
 
 #[test]

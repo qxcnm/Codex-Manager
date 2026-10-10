@@ -8,6 +8,34 @@ pub(super) fn delete_token_for_account_sql() -> &'static str {
 }
 
 impl Storage {
+    /// Replace credentials only if another refresh has not already rotated
+    /// either credential. Deleted token rows are never recreated here.
+    pub fn compare_and_swap_token(&self, expected: &Token, next: &Token) -> Result<bool> {
+        if expected.account_id != next.account_id {
+            return Ok(false);
+        }
+        let changed = self.conn.execute(
+            "UPDATE tokens SET id_token = ?1, access_token = ?2, refresh_token = ?3,
+                 api_key_access_token = ?4, last_refresh = ?5
+             WHERE account_id = ?6 AND access_token = ?7 AND refresh_token = ?8
+               AND id_token = ?9 AND api_key_access_token IS ?10 AND last_refresh = ?11",
+            (
+                &next.id_token,
+                &next.access_token,
+                &next.refresh_token,
+                &next.api_key_access_token,
+                next.last_refresh,
+                &expected.account_id,
+                &expected.access_token,
+                &expected.refresh_token,
+                &expected.id_token,
+                &expected.api_key_access_token,
+                expected.last_refresh,
+            ),
+        )?;
+        Ok(changed > 0)
+    }
+
     /// 函数 `insert_token`
     ///
     /// 作者: gaohongshun

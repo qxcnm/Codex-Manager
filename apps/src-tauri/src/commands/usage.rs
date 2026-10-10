@@ -91,11 +91,15 @@ pub async fn service_usage_reset_credits(
 pub async fn service_usage_reset_credit_consume(
     addr: Option<String>,
     account_id: String,
+    operation_id: String,
 ) -> Result<serde_json::Value, String> {
     rpc_call_in_background(
         "account/usage/resetCredit/consume",
         addr,
-        Some(serde_json::json!({ "accountId": account_id })),
+        Some(serde_json::json!({
+            "accountId": account_id,
+            "operationId": operation_id,
+        })),
     )
     .await
 }

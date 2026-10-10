@@ -170,6 +170,11 @@ async fn relay(
                     }
                 };
                 let client_closed = matches!(client_message, Message::Close(_));
+                if client_closed {
+                    // Receiving Close queues its reply; flush it before dropping
+                    // this leg or waiting on the other peer to avoid client 1006.
+                    let _ = tokio::time::timeout(Duration::from_secs(3), client.flush()).await;
+                }
                 if let Some(message) = client_message_to_upstream(client_message) {
                     if let Err(err) = upstream.send(message).await {
                         log::warn!("event=web_gateway_websocket_upstream_send_failed err={err}");
@@ -195,6 +200,9 @@ async fn relay(
                     }
                 };
                 let upstream_closed = matches!(upstream_message, UpstreamMessage::Close(_));
+                if upstream_closed {
+                    let _ = tokio::time::timeout(Duration::from_secs(3), upstream.flush()).await;
+                }
                 if let Some(message) = upstream_message_to_client(upstream_message) {
                     if let Err(err) = client.send(message).await {
                         log::warn!("event=web_gateway_websocket_client_send_failed err={err}");

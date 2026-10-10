@@ -12,6 +12,8 @@ const STREAM_INCOMPLETE_FALLBACK_MESSAGE: &str = "连接中断（可能是网络
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct UpstreamResponseUsage {
+    /// ID observed in a successful upstream Responses completion.
+    pub response_id: Option<String>,
     pub input_tokens: Option<i64>,
     pub cached_input_tokens: Option<i64>,
     pub cache_write_tokens: Option<i64>,
@@ -26,6 +28,7 @@ pub(crate) struct UpstreamResponseUsage {
 pub(crate) struct UpstreamResponseBridgeResult {
     pub usage: UpstreamResponseUsage,
     pub stream_terminal_seen: bool,
+    pub stream_terminal_delivered: bool,
     pub stream_terminal_error: Option<String>,
     pub delivery_error: Option<String>,
     pub upstream_error_hint: Option<String>,
@@ -111,6 +114,9 @@ pub(in super::super) fn merge_usage(
     target: &mut UpstreamResponseUsage,
     source: UpstreamResponseUsage,
 ) {
+    if source.response_id.is_some() {
+        target.response_id = source.response_id;
+    }
     if source.input_tokens.is_some() {
         target.input_tokens = source.input_tokens;
     }
@@ -234,6 +240,7 @@ fn parse_usage_from_object(usage: Option<&Map<String, Value>>) -> UpstreamRespon
                 .and_then(Value::as_i64)
         });
     UpstreamResponseUsage {
+        response_id: None,
         input_tokens,
         cached_input_tokens,
         cache_write_tokens,

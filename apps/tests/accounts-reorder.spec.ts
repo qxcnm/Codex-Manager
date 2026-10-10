@@ -162,8 +162,8 @@ test("account row menu moves an account to the top of the pool", async ({
     page.getByRole("menuitem", { name }).filter({ visible: true });
 
   const actionCells = page
-    .getByRole("table", { name: "账号操作" })
-    .getByRole("cell");
+    .getByRole("group", { name: "账号操作" })
+    .locator(".account-pool-action-rail-row");
   await expect(actionCells).toHaveCount(ACCOUNT_ITEMS.length);
   await actionCells.last().getByLabel("更多账号操作").click();
 

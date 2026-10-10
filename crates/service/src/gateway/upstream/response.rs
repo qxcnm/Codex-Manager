@@ -1,15 +1,19 @@
+use super::attempt_flow::transport::runtime::upstream_runtime;
 use bytes::Bytes;
 use std::collections::VecDeque;
+#[cfg(test)]
 use std::io::Read;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::sync::Arc;
+#[cfg(test)]
+use std::sync::mpsc;
+use std::sync::mpsc::RecvTimeoutError;
+#[cfg(test)]
 use std::thread;
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc::{channel, Receiver};
 
+#[cfg(test)]
 const GATEWAY_STREAM_READ_CHUNK_BYTES: usize = 8 * 1024;
 const GATEWAY_STREAM_CHANNEL_CAPACITY: usize = 128;
-const GATEWAY_STREAM_TEE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone)]
 pub(crate) enum GatewayByteStreamItem {
@@ -23,7 +27,6 @@ pub(crate) struct GatewayByteStream {
     rx: Receiver<GatewayByteStreamItem>,
     replay: VecDeque<GatewayByteStreamItem>,
     cancel: Option<tokio::sync::oneshot::Sender<()>>,
-    tee_consumers: Option<Arc<AtomicUsize>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,34 +42,35 @@ pub(crate) enum GatewayStreamPrefetchTerminal {
 
 impl GatewayByteStream {
     pub(crate) fn from_bytes(body: Bytes) -> Self {
-        let (tx, rx) = mpsc::sync_channel::<GatewayByteStreamItem>(2);
+        let (tx, rx) = channel(2);
         if !body.is_empty() {
-            let _ = tx.send(GatewayByteStreamItem::Chunk(body));
+            let _ = tx.try_send(GatewayByteStreamItem::Chunk(body));
         }
-        let _ = tx.send(GatewayByteStreamItem::Eof);
+        let _ = tx.try_send(GatewayByteStreamItem::Eof);
         Self::from_receiver(rx)
     }
 
+    #[cfg(test)]
     pub(crate) fn from_blocking_response(mut response: reqwest::blocking::Response) -> Self {
-        let (tx, rx) = mpsc::sync_channel::<GatewayByteStreamItem>(GATEWAY_STREAM_CHANNEL_CAPACITY);
+        let (tx, rx) = channel::<GatewayByteStreamItem>(GATEWAY_STREAM_CHANNEL_CAPACITY);
         thread::spawn(move || loop {
             let mut buffer = vec![0_u8; GATEWAY_STREAM_READ_CHUNK_BYTES];
             match response.read(&mut buffer) {
                 Ok(0) => {
-                    let _ = tx.send(GatewayByteStreamItem::Eof);
+                    let _ = tx.blocking_send(GatewayByteStreamItem::Eof);
                     return;
                 }
                 Ok(read) => {
                     buffer.truncate(read);
                     if tx
-                        .send(GatewayByteStreamItem::Chunk(Bytes::from(buffer)))
+                        .blocking_send(GatewayByteStreamItem::Chunk(Bytes::from(buffer)))
                         .is_err()
                     {
                         return;
                     }
                 }
                 Err(err) => {
-                    let _ = tx.send(GatewayByteStreamItem::Error(err.to_string()));
+                    let _ = tx.blocking_send(GatewayByteStreamItem::Error(err.to_string()));
                     return;
                 }
             }
@@ -82,29 +86,58 @@ impl GatewayByteStream {
         rx: Receiver<GatewayByteStreamItem>,
         cancel: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Self {
-        Self::from_receiver_with_parts(rx, cancel, None)
-    }
-
-    fn from_receiver_with_parts(
-        rx: Receiver<GatewayByteStreamItem>,
-        cancel: Option<tokio::sync::oneshot::Sender<()>>,
-        tee_consumers: Option<Arc<AtomicUsize>>,
-    ) -> Self {
         Self {
             rx,
             replay: VecDeque::new(),
             cancel,
-            tee_consumers,
         }
     }
 
+    pub(crate) async fn recv_async(&mut self) -> Option<GatewayByteStreamItem> {
+        if let Some(item) = self.replay.pop_front() {
+            return Some(item);
+        }
+        self.rx.recv().await
+    }
+
+    pub(crate) async fn recv_timeout_async(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<GatewayByteStreamItem, RecvTimeoutError> {
+        match tokio::time::timeout(timeout, self.recv_async()).await {
+            Ok(Some(item)) => Ok(item),
+            Ok(None) => Err(RecvTimeoutError::Disconnected),
+            Err(_) => Err(RecvTimeoutError::Timeout),
+        }
+    }
+
+    pub(crate) async fn read_all_bytes_async(mut self) -> Result<Bytes, String> {
+        let mut buffer = Vec::new();
+        loop {
+            match self.recv_async().await {
+                Some(GatewayByteStreamItem::Chunk(bytes)) => buffer.extend_from_slice(&bytes),
+                Some(GatewayByteStreamItem::Eof) | None => return Ok(Bytes::from(buffer)),
+                Some(GatewayByteStreamItem::Error(error)) => return Err(error),
+            }
+        }
+    }
+
+    // Synchronous access exists only for legacy test fixtures.
+    #[cfg(test)]
     pub(crate) fn recv(&mut self) -> Result<GatewayByteStreamItem, mpsc::RecvError> {
         if let Some(item) = self.replay.pop_front() {
             return Ok(item);
         }
-        self.rx.recv()
+        upstream_runtime()
+            .map_err(|_| mpsc::RecvError)?
+            .block_on(crate::http::gateway_request::with_response_cancellation(
+                self.rx.recv(),
+            ))
+            .map_err(|_| mpsc::RecvError)?
+            .ok_or(mpsc::RecvError)
     }
 
+    #[cfg(test)]
     pub(crate) fn recv_timeout(
         &mut self,
         timeout: Duration,
@@ -112,10 +145,43 @@ impl GatewayByteStream {
         if let Some(item) = self.replay.pop_front() {
             return Ok(item);
         }
-        self.rx.recv_timeout(timeout)
+        upstream_runtime()
+            .map_err(|_| RecvTimeoutError::Disconnected)?
+            .block_on(async {
+                match crate::http::gateway_request::with_response_cancellation(
+                    tokio::time::timeout(timeout, self.rx.recv()),
+                )
+                .await
+                {
+                    Ok(Ok(Some(item))) => Ok(item),
+                    Ok(Ok(None)) | Err(()) => Err(RecvTimeoutError::Disconnected),
+                    Ok(Err(_)) => Err(RecvTimeoutError::Timeout),
+                }
+            })
     }
 
+    #[cfg(test)]
     fn prefetch_until<F>(
+        self,
+        max_bytes: usize,
+        idle_timeout: Option<Duration>,
+        wall_clock_timeout: Option<Duration>,
+        should_stop: F,
+    ) -> (Bytes, Self, GatewayStreamPrefetchTerminal)
+    where
+        F: Fn(&[u8]) -> bool,
+    {
+        upstream_runtime()
+            .expect("gateway test runtime")
+            .block_on(self.prefetch_until_async(
+                max_bytes,
+                idle_timeout,
+                wall_clock_timeout,
+                should_stop,
+            ))
+    }
+
+    async fn prefetch_until_async<F>(
         mut self,
         max_bytes: usize,
         idle_timeout: Option<Duration>,
@@ -151,8 +217,11 @@ impl GatewayByteStream {
                 (None, None) => None,
             };
             let next_item = match recv_timeout {
-                Some(timeout) => self.recv_timeout(timeout),
-                None => self.recv().map_err(|_| RecvTimeoutError::Disconnected),
+                Some(timeout) => self.recv_timeout_async(timeout).await,
+                None => self
+                    .recv_async()
+                    .await
+                    .ok_or(RecvTimeoutError::Disconnected),
             };
             match next_item {
                 Ok(item @ GatewayByteStreamItem::Chunk(_)) => {
@@ -197,53 +266,71 @@ impl GatewayByteStream {
         (Bytes::from(prefix), self, terminal)
     }
 
+    pub(crate) fn close(&mut self) {
+        self.close_input();
+        self.replay.clear();
+    }
+
+    fn close_input(&mut self) {
+        self.rx.close();
+        if let Some(cancel) = self.cancel.take() {
+            let _ = cancel.send(());
+        }
+    }
+
+    /// The left consumer owns provider cancellation. Closing it stops new
+    /// provider bytes, while the observer receives every already queued item.
     pub(crate) fn tee(mut self) -> (Self, Self) {
-        let (left_tx, left_rx) =
-            mpsc::sync_channel::<GatewayByteStreamItem>(GATEWAY_STREAM_CHANNEL_CAPACITY);
-        let (right_tx, right_rx) =
-            mpsc::sync_channel::<GatewayByteStreamItem>(GATEWAY_STREAM_CHANNEL_CAPACITY);
-        let consumers = Arc::new(AtomicUsize::new(2));
-        let relay_consumers = Arc::clone(&consumers);
-        thread::spawn(move || loop {
-            if relay_consumers.load(Ordering::Acquire) == 0 {
-                return;
-            }
-            match self.recv_timeout(GATEWAY_STREAM_TEE_POLL_INTERVAL) {
-                Ok(item) => {
-                    let is_terminal = matches!(
+        let (left_tx, left_rx) = channel(GATEWAY_STREAM_CHANNEL_CAPACITY);
+        let (right_tx, right_rx) = channel(GATEWAY_STREAM_CHANNEL_CAPACITY);
+        let primary_cancel = self.cancel.take();
+        if let Ok(runtime) = upstream_runtime() {
+            runtime.spawn(async move {
+                loop {
+                    let item = tokio::select! {
+                        _ = left_tx.closed() => break,
+                        item = self.recv_async() => item.unwrap_or(GatewayByteStreamItem::Eof),
+                    };
+                    let terminal = matches!(
                         item,
                         GatewayByteStreamItem::Eof | GatewayByteStreamItem::Error(_)
                     );
-                    let left_open = left_tx.send(item.clone()).is_ok();
-                    let right_open = right_tx.send(item).is_ok();
-                    if is_terminal || (!left_open && !right_open) {
+                    let left = left_tx.send(item.clone()).await;
+                    // Finish the observer send even if the primary consumer
+                    // closed during it; dropping right_tx then provides EOF.
+                    let _ = right_tx.send(item).await;
+                    if terminal {
                         return;
                     }
+                    if left.is_err() {
+                        break;
+                    }
                 }
-                Err(RecvTimeoutError::Timeout) => continue,
-                Err(RecvTimeoutError::Disconnected) => {
-                    let _ = left_tx.send(GatewayByteStreamItem::Eof);
-                    let _ = right_tx.send(GatewayByteStreamItem::Eof);
-                    return;
+                // Freeze input and flush bytes the HTTP producer had already
+                // queued before cancellation. No further network wait occurs.
+                self.close_input();
+                while let Some(item) = self.recv_async().await {
+                    let terminal = matches!(
+                        item,
+                        GatewayByteStreamItem::Eof | GatewayByteStreamItem::Error(_)
+                    );
+                    if right_tx.send(item).await.is_err() || terminal {
+                        break;
+                    }
                 }
-            }
-        });
+            });
+        }
         (
-            Self::from_receiver_with_parts(left_rx, None, Some(Arc::clone(&consumers))),
-            Self::from_receiver_with_parts(right_rx, None, Some(consumers)),
+            Self::from_receiver_with_cancel(left_rx, primary_cancel),
+            Self::from_receiver(right_rx),
         )
     }
 
-    pub(crate) fn read_all_bytes(mut self) -> Result<Bytes, String> {
-        let mut buffer = Vec::new();
-        loop {
-            match self.recv() {
-                Ok(GatewayByteStreamItem::Chunk(bytes)) => buffer.extend_from_slice(bytes.as_ref()),
-                Ok(GatewayByteStreamItem::Eof) => return Ok(Bytes::from(buffer)),
-                Ok(GatewayByteStreamItem::Error(err)) => return Err(err),
-                Err(_) => return Ok(Bytes::from(buffer)),
-            }
-        }
+    #[cfg(test)]
+    pub(crate) fn read_all_bytes(self) -> Result<Bytes, String> {
+        upstream_runtime()
+            .map_err(|error| error.to_string())?
+            .block_on(self.read_all_bytes_async())
     }
 }
 
@@ -267,6 +354,7 @@ impl GatewayStreamResponse {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn from_blocking_response(response: reqwest::blocking::Response) -> Self {
         let status = response.status();
         let headers = response.headers().clone();
@@ -282,15 +370,33 @@ impl GatewayStreamResponse {
         &self.headers
     }
 
+    #[cfg(test)]
     pub(crate) fn read_all_bytes(self) -> Result<Bytes, String> {
-        self.body.read_all_bytes()
+        upstream_runtime()
+            .map_err(|error| error.to_string())?
+            .block_on(self.read_all_bytes_async())
+    }
+
+    pub(crate) async fn read_all_bytes_async(self) -> Result<Bytes, String> {
+        self.body.read_all_bytes_async().await
+    }
+
+    pub(crate) async fn read_all_bytes_cancellable(
+        self,
+        mut cancellation: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<Bytes, String> {
+        tokio::select! {
+            biased;
+            _ = cancellation.wait_for(|cancelled| *cancelled) => Err("broken pipe: downstream HTTP body closed".to_owned()),
+            body = self.read_all_bytes_async() => body,
+        }
     }
 
     pub(crate) fn into_body(self) -> GatewayByteStream {
         self.body
     }
 
-    fn prefetch_until<F>(
+    async fn prefetch_until_async<F>(
         self,
         max_bytes: usize,
         idle_timeout: Option<Duration>,
@@ -305,18 +411,15 @@ impl GatewayStreamResponse {
             headers,
             body,
         } = self;
-        let (prefix, body, terminal) =
-            body.prefetch_until(max_bytes, idle_timeout, wall_clock_timeout, should_stop);
+        let (prefix, body, terminal) = body
+            .prefetch_until_async(max_bytes, idle_timeout, wall_clock_timeout, should_stop)
+            .await;
         (prefix, Self::new(status, headers, body), terminal)
     }
 }
 
 impl Drop for GatewayByteStream {
     fn drop(&mut self) {
-        if let Some(consumers) = self.tee_consumers.take() {
-            let previous = consumers.fetch_sub(1, Ordering::AcqRel);
-            debug_assert!(previous > 0, "gateway stream tee consumer count underflow");
-        }
         if let Some(cancel) = self.cancel.take() {
             let _ = cancel.send(());
         }
@@ -325,6 +428,7 @@ impl Drop for GatewayByteStream {
 
 #[derive(Debug)]
 pub(crate) enum GatewayUpstreamResponse {
+    #[cfg(test)]
     Blocking(reqwest::blocking::Response),
     Stream(GatewayStreamResponse),
 }
@@ -332,6 +436,7 @@ pub(crate) enum GatewayUpstreamResponse {
 impl GatewayUpstreamResponse {
     pub(crate) fn status(&self) -> reqwest::StatusCode {
         match self {
+            #[cfg(test)]
             Self::Blocking(response) => response.status(),
             Self::Stream(response) => response.status(),
         }
@@ -339,19 +444,30 @@ impl GatewayUpstreamResponse {
 
     pub(crate) fn headers(&self) -> &reqwest::header::HeaderMap {
         match self {
+            #[cfg(test)]
             Self::Blocking(response) => response.headers(),
             Self::Stream(response) => response.headers(),
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn into_buffered(self) -> Result<(Bytes, Self), String> {
+        upstream_runtime()
+            .map_err(|error| error.to_string())?
+            .block_on(self.into_buffered_async())
+    }
+
+    pub(crate) async fn into_buffered_async(self) -> Result<(Bytes, Self), String> {
         let status = self.status();
         let headers = self.headers().clone();
         let body = match self {
-            Self::Blocking(response) => response
-                .bytes()
-                .map_err(|err| format!("read upstream response body failed: {err}"))?,
-            Self::Stream(response) => response.read_all_bytes()?,
+            #[cfg(test)]
+            Self::Blocking(response) => {
+                GatewayByteStream::from_blocking_response(response)
+                    .read_all_bytes_async()
+                    .await?
+            }
+            Self::Stream(response) => response.read_all_bytes_async().await?,
         };
         let rebuilt = Self::Stream(GatewayStreamResponse::new(
             status,
@@ -361,6 +477,7 @@ impl GatewayUpstreamResponse {
         Ok((body, rebuilt))
     }
 
+    #[cfg(test)]
     pub(crate) fn prefetch_stream_prefix<F>(
         self,
         max_bytes: usize,
@@ -371,16 +488,39 @@ impl GatewayUpstreamResponse {
     where
         F: Fn(&[u8]) -> bool,
     {
+        upstream_runtime().expect("gateway test runtime").block_on(
+            self.prefetch_stream_prefix_async(
+                max_bytes,
+                idle_timeout,
+                wall_clock_timeout,
+                should_stop,
+            ),
+        )
+    }
+
+    pub(crate) async fn prefetch_stream_prefix_async<F>(
+        self,
+        max_bytes: usize,
+        idle_timeout: Option<Duration>,
+        wall_clock_timeout: Option<Duration>,
+        should_stop: F,
+    ) -> (Bytes, Self, GatewayStreamPrefetchTerminal)
+    where
+        F: Fn(&[u8]) -> bool,
+    {
         let response = match self {
+            #[cfg(test)]
             Self::Blocking(response) => GatewayStreamResponse::from_blocking_response(response),
             Self::Stream(response) => response,
         };
-        let (prefix, response, terminal) =
-            response.prefetch_until(max_bytes, idle_timeout, wall_clock_timeout, should_stop);
+        let (prefix, response, terminal) = response
+            .prefetch_until_async(max_bytes, idle_timeout, wall_clock_timeout, should_stop)
+            .await;
         (prefix, Self::Stream(response), terminal)
     }
 }
 
+#[cfg(test)]
 impl From<reqwest::blocking::Response> for GatewayUpstreamResponse {
     fn from(response: reqwest::blocking::Response) -> Self {
         Self::Blocking(response)

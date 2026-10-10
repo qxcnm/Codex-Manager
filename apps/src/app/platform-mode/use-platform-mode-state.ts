@@ -23,7 +23,7 @@ import type {
   CodexRuntimeReloadResult,
 } from "@/types";
 
-const EMPTY_CANDIDATES = { accounts: [], apiKeys: [] };
+const EMPTY_CANDIDATES = { accounts: [], apiKeys: [], aggregateApis: [] };
 const RELOAD_AFTER_SWITCH_STORAGE_KEY =
   "codexmanager.platform-mode.reload-after-switch";
 const RELOAD_AFTER_SWITCH_EVENT =
@@ -102,6 +102,9 @@ export function modeImpact(
   if (mode === "direct_account") {
     return t("Codex 直接连接 OpenAI，并跟随 OpenAI 官方模型目录；CodexManager 不参与请求转发或模型目录管理。");
   }
+  if (mode === "direct_aggregate") {
+    return t("Codex 直接连接所选聚合 API；CodexManager 只负责写入和备份配置，不参与请求转发或日志统计。");
+  }
   if (mode === "gateway") {
     return t("Codex 请求由 CodexManager 转发；实际路由和模型目录取决于当前平台密钥的配置。");
   }
@@ -119,6 +122,9 @@ export function usePlatformModePageState(
   const [codexHomeDraft, setCodexHomeDraft] = useState<string | null>(null);
   const [selectedAccountIdDraft, setSelectedAccountIdDraft] = useState<string | null>(null);
   const [selectedApiKeyIdDraft, setSelectedApiKeyIdDraft] = useState<string | null>(null);
+  const [selectedAggregateApiIdDraft, setSelectedAggregateApiIdDraft] = useState<
+    string | null
+  >(null);
   const [gatewayBaseUrlDraft, setGatewayBaseUrlDraft] = useState<string | null>(null);
   const [supportsWebsocketsDraft, setSupportsWebsocketsDraft] = useState<boolean | null>(
     null,
@@ -146,7 +152,7 @@ export function usePlatformModePageState(
     return buildOpenAiGatewayEndpoint(origin);
   }, [browserOrigin, mode, serviceStatus.addr]);
 
-  const statusQuery = useCodexProfileModeStatus();
+  const statusQuery = useCodexProfileModeStatus({ enabled: isPageActive });
 
   const setReloadAfterSwitch = (enabled: boolean) => {
     reloadAfterSwitchMemoryValue = enabled;
@@ -163,7 +169,7 @@ export function usePlatformModePageState(
   const candidatesQuery = useQuery({
     queryKey: CODEX_PROFILE_CANDIDATES_QUERY_KEY,
     queryFn: () => codexProfileClient.listCandidates(),
-    enabled: isServiceReady,
+    enabled: isServiceReady && isPageActive,
     retry: 1,
     staleTime: 0,
     refetchInterval: isServiceReady && isPageActive ? 5_000 : false,
@@ -184,11 +190,17 @@ export function usePlatformModePageState(
     status?.selectedApiKeyId,
     candidates.apiKeys,
   );
+  const selectedAggregateApiId = pickAvailableCandidateId(
+    selectedAggregateApiIdDraft,
+    status?.selectedAggregateApiId,
+    candidates.aggregateApis,
+  );
   const gatewayBaseUrl =
     gatewayBaseUrlDraft ?? status?.gatewayBaseUrl ?? defaultGatewayBaseUrl;
   const supportsWebsockets =
     supportsWebsocketsDraft ?? status?.supportsWebsockets ?? false;
   const isDirectActive = status?.mode === "direct_account";
+  const isDirectAggregateActive = status?.mode === "direct_aggregate";
   const isGatewayActive = status?.mode === "gateway";
   const activeAccountValue = status?.selectedAccountId
     ? candidates.accounts.find((item) => item.id === status.selectedAccountId)?.label ||
@@ -197,6 +209,11 @@ export function usePlatformModePageState(
   const activeKeyValue = status?.selectedApiKeyId
     ? candidates.apiKeys.find((item) => item.id === status.selectedApiKeyId)?.name ||
       status.selectedApiKeyId
+    : "-";
+  const activeAggregateApiValue = status?.selectedAggregateApiId
+    ? candidates.aggregateApis.find(
+        (item) => item.id === status.selectedAggregateApiId,
+      )?.label || status.selectedAggregateApiId
     : "-";
 
   const refreshAll = async () => {
@@ -262,6 +279,24 @@ export function usePlatformModePageState(
     onSuccess: async (nextStatus) => {
       await refreshAll();
       toast.success(t("已切换为直接连接 OpenAI"));
+      showHistoryRepairToast(nextStatus.historyRepair);
+      showRuntimeReloadToast(nextStatus.runtimeReload);
+    },
+    onError: (error: unknown) => {
+      toast.error(`${t("切换失败")}: ${getAppErrorMessage(error)}`);
+    },
+  });
+
+  const applyDirectAggregateMutation = useMutation({
+    mutationFn: () =>
+      codexProfileClient.applyDirectAggregate({
+        aggregateApiId: selectedAggregateApiId,
+        codexHome: codexHomeInput,
+        reloadAfterSwitch,
+      }),
+    onSuccess: async (nextStatus) => {
+      await refreshAll();
+      toast.success(t("已切换为直连聚合 API"));
       showHistoryRepairToast(nextStatus.historyRepair);
       showRuntimeReloadToast(nextStatus.runtimeReload);
     },
@@ -338,6 +373,7 @@ export function usePlatformModePageState(
   const isMutating =
     saveConfigMutation.isPending ||
     applyDirectMutation.isPending ||
+    applyDirectAggregateMutation.isPending ||
     applyGatewayMutation.isPending ||
     restoreMutation.isPending ||
     repairHistoryMutation.isPending ||
@@ -346,6 +382,7 @@ export function usePlatformModePageState(
   const latestHistoryRepair =
     repairHistoryMutation.data ||
     applyDirectMutation.data?.historyRepair ||
+    applyDirectAggregateMutation.data?.historyRepair ||
     applyGatewayMutation.data?.historyRepair ||
     status?.historyRepair ||
     null;
@@ -361,23 +398,28 @@ export function usePlatformModePageState(
     codexHomeInput,
     selectedAccountId,
     selectedApiKeyId,
+    selectedAggregateApiId,
     gatewayBaseUrl,
     supportsWebsockets,
     reloadAfterSwitch,
     defaultGatewayBaseUrl,
     isDirectActive,
+    isDirectAggregateActive,
     isGatewayActive,
     activeAccountValue,
     activeKeyValue,
+    activeAggregateApiValue,
     setCodexHomeDraft,
     setSelectedAccountIdDraft,
     setSelectedApiKeyIdDraft,
+    setSelectedAggregateApiIdDraft,
     setGatewayBaseUrlDraft,
     setSupportsWebsocketsDraft,
     setReloadAfterSwitch,
     refreshAll,
     saveConfigMutation,
     applyDirectMutation,
+    applyDirectAggregateMutation,
     applyGatewayMutation,
     restoreMutation,
     repairHistoryMutation,

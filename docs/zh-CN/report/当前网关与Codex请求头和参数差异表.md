@@ -6,7 +6,7 @@
 
 1. 入站 HTTP 请求先进入 `crates/service/src/gateway/request/incoming_headers.rs`，这里只做头快照，不直接改写请求。
 2. 会话亲和由 `crates/service/src/gateway/request/session_affinity.rs` 统一计算，产出 `incoming_session_id`、`incoming_client_request_id` 和 `fallback_session_id`。
-3. 请求体在 `crates/service/src/gateway/request/request_rewrite.rs` 里进入重写流程，再由 `request_rewrite_responses.rs` 处理 Responses 兼容字段。
+3. 请求体在 `crates/service/src/gateway/request/request_rewrite.rs` 里进入重写流程，再由 `official_responses_http.rs` 处理 Responses 兼容字段。
 4. 最终出站头由 `crates/service/src/gateway/upstream/headers/codex_headers.rs` 组装。
 5. 真正发往上游前，由 `crates/service/src/gateway/upstream/attempt_flow/transport.rs` 把 headers + body 交给 reqwest。
 
@@ -57,7 +57,7 @@
 - `crates/service/src/gateway/request/incoming_headers.rs`
 - `crates/service/src/gateway/request/session_affinity.rs`
 - `crates/service/src/gateway/request/request_rewrite.rs`
-- `crates/service/src/gateway/request/request_rewrite_responses.rs`
+- `crates/service/src/gateway/request/official_responses_http.rs`
 - `crates/service/src/gateway/upstream/headers/codex_headers.rs`
 - `crates/service/src/gateway/upstream/attempt_flow/transport.rs`
 - `crates/service/src/gateway/core/runtime_config.rs`

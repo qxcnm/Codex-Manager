@@ -83,20 +83,20 @@ fn websocket_frame_applies_model_fast_policy() {
         (ModelFastPolicyV2::Block, None, None, Some("unset")),
     ] {
         let mut model = storage
-            .get_managed_model_v2("gpt-5.4")
+            .get_managed_model_v2("gpt-5.6-terra")
             .expect("read managed model")
             .expect("managed model");
         model.fast_policy = policy;
         storage
             .upsert_managed_model_v2(&ManagedModelV2Upsert {
-                previous_slug: Some("gpt-5.4".to_string()),
+                previous_slug: Some("gpt-5.6-terra".to_string()),
                 model,
             })
             .expect("update model fast policy");
 
         let mut frame = json!({
             "type": "response.create",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6-terra",
             "input": "hello"
         });
         if let Some(client_tier) = client_tier {
@@ -121,20 +121,20 @@ fn websocket_frame_applies_model_fast_policy() {
     }
 
     let mut model = storage
-        .get_managed_model_v2("gpt-5.4")
+        .get_managed_model_v2("gpt-5.6-terra")
         .expect("read managed model")
         .expect("managed model");
     model.fast_policy = ModelFastPolicyV2::Block;
     storage
         .upsert_managed_model_v2(&ManagedModelV2Upsert {
-            previous_slug: Some("gpt-5.4".to_string()),
+            previous_slug: Some("gpt-5.6-terra".to_string()),
             model,
         })
         .expect("update block policy");
     for tier in ["fast", "priority", "ultrafast"] {
         let frame = json!({
             "type": "response.create",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6-terra",
             "input": "hello",
             "service_tier": tier
         });
@@ -161,7 +161,7 @@ fn websocket_frame_applies_model_fast_policy() {
     {
         let frame = json!({
             "type": "response.create",
-            "model": "gpt-5.4",
+            "model": "gpt-5.6-terra",
             "input": "hello",
             "service_tier": tier
         });
@@ -187,7 +187,7 @@ fn websocket_frame_applies_model_fast_policy() {
 
     let frame = json!({
         "type": "response.create",
-        "model": "gpt-5.4",
+        "model": "gpt-5.6-terra",
         "input": "hello",
         "service_tier": "flex"
     });
@@ -226,7 +226,7 @@ fn websocket_frame_applies_model_fast_policy() {
     let mut api_key_fast_context = context.clone();
     api_key_fast_context.api_key.service_tier = Some("fast".to_string());
     let prepared = rewrite_client_frame(
-        r#"{"type":"response.create","model":"gpt-5.4","input":"hello"}"#,
+        r#"{"type":"response.create","model":"gpt-5.6-terra","input":"hello"}"#,
         &api_key_fast_context,
     )
     .expect("rewrite API key fast frame");
@@ -241,7 +241,7 @@ fn websocket_frame_applies_model_fast_policy() {
     let mut api_key_ultrafast_context = context.clone();
     api_key_ultrafast_context.api_key.service_tier = Some("ultrafast".to_string());
     let prepared = rewrite_client_frame(
-        r#"{"type":"response.create","model":"gpt-5.4","input":"hello"}"#,
+        r#"{"type":"response.create","model":"gpt-5.6-terra","input":"hello"}"#,
         &api_key_ultrafast_context,
     )
     .expect("rewrite API key ultrafast frame");
@@ -272,27 +272,27 @@ fn websocket_frame_applies_model_fast_policy() {
     );
 
     let mut overridden_model = storage
-        .get_managed_model_v2("gpt-5.4-mini")
+        .get_managed_model_v2("gpt-6-luna")
         .expect("read overridden managed model")
         .expect("overridden managed model");
     overridden_model.fast_policy = ModelFastPolicyV2::Filter;
     storage
         .upsert_managed_model_v2(&ManagedModelV2Upsert {
-            previous_slug: Some("gpt-5.4-mini".to_string()),
+            previous_slug: Some("gpt-6-luna".to_string()),
             model: overridden_model,
         })
         .expect("update overridden model fast policy");
     let mut model_override_context = context;
-    model_override_context.api_key.model_slug = Some("gpt-5.4-mini".to_string());
+    model_override_context.api_key.model_slug = Some("gpt-6-luna".to_string());
     let prepared = rewrite_client_frame(
-        r#"{"type":"response.create","model":"gpt-5.4","input":"hello","service_tier":"fast"}"#,
+        r#"{"type":"response.create","model":"gpt-5.6-terra","input":"hello","service_tier":"fast"}"#,
         &model_override_context,
     )
     .expect("rewrite overridden model frame");
     let prepared = apply_model_fast_policy_with_storage(prepared, &storage)
         .expect("apply final model fast policy");
     let value: Value = serde_json::from_str(&prepared.text).expect("parse overridden model frame");
-    assert_eq!(prepared.model.as_deref(), Some("gpt-5.4-mini"));
+    assert_eq!(prepared.model.as_deref(), Some("gpt-6-luna"));
     assert!(value.get("service_tier").is_none());
 }
 
@@ -1953,6 +1953,16 @@ fn websocket_detects_exact_missing_custom_and_function_tool_call_terminals() {
             "No tool call found for function tool call output with call_id call_function_2",
             WsToolCallKind::Function,
             "call_function_2",
+        ),
+        (
+            "No tool call found for custom tool call output with call_id: `call_custom_3` (request req_123)",
+            WsToolCallKind::Custom,
+            "call_custom_3",
+        ),
+        (
+            "NO TOOL CALL FOUND for function call output related to call_id=\"call_function_3\".",
+            WsToolCallKind::Function,
+            "call_function_3",
         ),
     ] {
         let terminal = inspect_ws_terminal_event(

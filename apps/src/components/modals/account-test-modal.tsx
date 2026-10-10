@@ -53,12 +53,22 @@ interface Accumulated {
 }
 
 type Phase = "idle" | "running" | "done";
+const DEFAULT_ACCOUNT_TEST_MODEL = "gpt-6-luna";
+const MAX_TEST_OUTPUT_CHARS = 200_000;
+const MAX_TEST_IMAGES = 4;
 
 function isImageModel(model: ManagedModelV2): boolean {
   const caps = (model.capabilities ?? {}) as Record<string, unknown>;
+  const outputModalities = [caps.output_modalities, caps.outputModalities].flatMap(
+    (value) => (Array.isArray(value) ? value : []),
+  );
   return (
     caps.supports_image_generation === true ||
-    caps.supportsImageGeneration === true
+    caps.supportsImageGeneration === true ||
+    outputModalities.some(
+      (modality) =>
+        typeof modality === "string" && modality.trim().toLowerCase() === "image",
+    )
   );
 }
 
@@ -122,12 +132,18 @@ export function AccountTestModal({
   };
 
   const testIdRef = useRef<string | null>(null);
+  const runTokenRef = useRef(0);
   const finishedRef = useRef(false);
   const unlistenRef = useRef<(() => void) | null>(null);
+  const listenerAbortRef = useRef<AbortController | null>(null);
   const phaseRef = useRef<Phase>("idle");
   const accountIdRef = useRef<string | null>(account?.id ?? null);
   const onFinishedRef = useRef(onFinished);
   const terminalRef = useRef<HTMLDivElement>(null);
+  const pendingTextChunksRef = useRef<string[]>([]);
+  const pendingTextChunkOffsetRef = useRef(0);
+  const pendingTextLengthRef = useRef(0);
+  const textFlushFrameRef = useRef<number | null>(null);
 
   const accountId = account?.id ?? null;
   accountIdRef.current = accountId;
@@ -144,6 +160,71 @@ export function AccountTestModal({
     }
   }, [state.text, state.status, phase, state.images.length]);
 
+  const appendPendingText = useCallback((chunk: string) => {
+    const chunks = pendingTextChunksRef.current;
+    chunks.push(chunk);
+    pendingTextLengthRef.current += chunk.length;
+
+    let offset = pendingTextChunkOffsetRef.current;
+    while (pendingTextLengthRef.current > MAX_TEST_OUTPUT_CHARS && offset < chunks.length) {
+      const overflow = pendingTextLengthRef.current - MAX_TEST_OUTPUT_CHARS;
+      const currentChunk = chunks[offset];
+      if (currentChunk.length <= overflow) {
+        pendingTextLengthRef.current -= currentChunk.length;
+        offset += 1;
+      } else {
+        chunks[offset] = currentChunk.slice(overflow);
+        pendingTextLengthRef.current -= overflow;
+        break;
+      }
+    }
+
+    if (offset >= chunks.length) {
+      chunks.length = 0;
+      offset = 0;
+    } else if (offset > 64 && offset * 2 >= chunks.length) {
+      chunks.splice(0, offset);
+      offset = 0;
+    }
+    pendingTextChunkOffsetRef.current = offset;
+  }, []);
+
+  const flushPendingText = useCallback(() => {
+    const nextText = pendingTextChunksRef.current
+      .slice(pendingTextChunkOffsetRef.current)
+      .join("");
+    setState((prev) =>
+      prev.text === nextText ? prev : { ...prev, text: nextText },
+    );
+  }, []);
+
+  const scheduleTextFlush = useCallback(() => {
+    if (textFlushFrameRef.current !== null) return;
+    textFlushFrameRef.current = window.requestAnimationFrame(() => {
+      textFlushFrameRef.current = null;
+      flushPendingText();
+    });
+  }, [flushPendingText]);
+
+  const resetOutputBuffer = useCallback(() => {
+    pendingTextChunksRef.current.length = 0;
+    pendingTextChunkOffsetRef.current = 0;
+    pendingTextLengthRef.current = 0;
+    if (textFlushFrameRef.current !== null) {
+      window.cancelAnimationFrame(textFlushFrameRef.current);
+      textFlushFrameRef.current = null;
+    }
+  }, []);
+
+  const stopEventListener = useCallback(() => {
+    const unlisten = unlistenRef.current;
+    unlistenRef.current = null;
+    unlisten?.();
+    const controller = listenerAbortRef.current;
+    listenerAbortRef.current = null;
+    controller?.abort();
+  }, []);
+
   const handleEvent = useCallback((payload: AccountTestEventPayload) => {
     const currentId = testIdRef.current;
     if (currentId && payload.testId && payload.testId !== currentId) {
@@ -157,18 +238,24 @@ export function AccountTestModal({
         setState((prev) => ({ ...prev, model: payload.model ?? prev.model }));
         break;
       case "content":
-        setState((prev) => ({ ...prev, text: prev.text + (payload.text ?? "") }));
+        if (typeof payload.text === "string" && payload.text) {
+          appendPendingText(payload.text);
+          scheduleTextFlush();
+        }
         break;
       case "image": {
         const imageUrl = payload.imageUrl;
         if (imageUrl) {
-          setState((prev) => ({
-            ...prev,
-            images: [
-              ...prev.images,
-              { url: imageUrl, mimeType: payload.mimeType ?? "image/png" },
-            ],
-          }));
+          setState((prev) => {
+            if (prev.images.length >= MAX_TEST_IMAGES) return prev;
+            return {
+              ...prev,
+              images: [
+                ...prev.images,
+                { url: imageUrl, mimeType: payload.mimeType ?? "image/png" },
+              ],
+            };
+          });
         }
         break;
       }
@@ -176,34 +263,44 @@ export function AccountTestModal({
         setState((prev) => ({ ...prev, status: payload.status ?? prev.status }));
         break;
       case "test_complete":
+        flushPendingText();
+        finishedRef.current = true;
+        phaseRef.current = "done";
+        stopEventListener();
+        testIdRef.current = null;
         setState((prev) => ({ ...prev, success: payload.success ?? true }));
         setPhase("done");
-        finishedRef.current = true;
         if (accountIdRef.current) {
           onFinishedRef.current?.(accountIdRef.current);
         }
         break;
       case "error":
+        flushPendingText();
+        finishedRef.current = true;
+        phaseRef.current = "done";
+        stopEventListener();
+        testIdRef.current = null;
         setState((prev) => ({
           ...prev,
           error: payload.error ?? t("测试失败"),
         }));
         setPhase("done");
-        finishedRef.current = true;
         if (accountIdRef.current) {
           onFinishedRef.current?.(accountIdRef.current);
         }
         break;
     }
-  }, [t]);
+  }, [appendPendingText, flushPendingText, scheduleTextFlush, stopEventListener, t]);
 
   const startTest = useCallback(async () => {
     const id = accountIdRef.current;
     if (!id || phaseRef.current === "running") {
       return;
     }
-    unlistenRef.current?.();
-    unlistenRef.current = null;
+    const runToken = ++runTokenRef.current;
+    stopEventListener();
+    const listenerAbortController = new AbortController();
+    listenerAbortRef.current = listenerAbortController;
     // 订阅前先持有本次测试的 testId，事件到达时即可按 testId 隔离，避免并发测试串流。
     let testId: string;
     try {
@@ -212,17 +309,49 @@ export function AccountTestModal({
       setState({ text: "", images: [], error: t("启动测试失败") });
       setCanceled(false);
       finishedRef.current = true;
+      phaseRef.current = "done";
       setPhase("done");
+      stopEventListener();
       return;
     }
+
+    if (
+      runToken !== runTokenRef.current ||
+      !open ||
+      accountIdRef.current !== id ||
+      listenerAbortController.signal.aborted
+    ) {
+      void accountClient.cancelAccountTest(id, testId).catch(() => {});
+      listenerAbortController.abort();
+      if (listenerAbortRef.current === listenerAbortController) {
+        listenerAbortRef.current = null;
+      }
+      return;
+    }
+
     testIdRef.current = testId;
     finishedRef.current = false;
+    resetOutputBuffer();
     setState({ text: "", images: [] });
     setCanceled(false);
+    phaseRef.current = "running";
     setPhase("running");
 
     try {
-      const unlisten = await listenAccountTestEvent(testId, handleEvent);
+      const unlisten = await listenAccountTestEvent(testId, handleEvent, {
+        signal: listenerAbortController.signal,
+      });
+      if (
+        runToken !== runTokenRef.current ||
+        !open ||
+        accountIdRef.current !== id
+      ) {
+        unlisten();
+        if (listenerAbortRef.current === listenerAbortController) {
+          listenerAbortRef.current = null;
+        }
+        return;
+      }
       unlistenRef.current = unlisten;
       const result = await accountClient.testAccount({
         accountId: id,
@@ -230,10 +359,17 @@ export function AccountTestModal({
         kind: testKind,
         testId,
       });
+      if (runToken !== runTokenRef.current) {
+        void accountClient.cancelAccountTest(id, testId).catch(() => {});
+        return;
+      }
       setState((prev) => ({ ...prev, model: result.model ?? prev.model }));
     } catch (err) {
-      unlistenRef.current?.();
-      unlistenRef.current = null;
+      if (runToken !== runTokenRef.current) {
+        void accountClient.cancelAccountTest(id, testId).catch(() => {});
+        return;
+      }
+      stopEventListener();
       setState((prev) => ({
         ...prev,
         error:
@@ -242,40 +378,39 @@ export function AccountTestModal({
             : t("启动测试失败"),
       }));
       finishedRef.current = true;
+      phaseRef.current = "done";
       setPhase("done");
       if (accountIdRef.current) {
         onFinishedRef.current?.(accountIdRef.current);
       }
     }
-  }, [handleEvent, selectedModel, t, testKind]);
+  }, [handleEvent, open, resetOutputBuffer, selectedModel, stopEventListener, t, testKind]);
 
   const cancelTest = useCallback(() => {
+    runTokenRef.current += 1;
     const id = accountIdRef.current;
     const testId = testIdRef.current;
     if (id && testId) {
       void accountClient.cancelAccountTest(id, testId).catch(() => {});
     }
-    unlistenRef.current?.();
-    unlistenRef.current = null;
+    stopEventListener();
     testIdRef.current = null;
     finishedRef.current = true;
+    resetOutputBuffer();
     setState({ text: "", images: [] });
     setCanceled(true);
+    phaseRef.current = "idle";
     setPhase("idle");
-  }, []);
+  }, [resetOutputBuffer, stopEventListener]);
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
       if (!nextOpen && phaseRef.current === "running") {
-        const id = accountIdRef.current;
-        const testId = testIdRef.current;
-        if (id && testId) {
-          void accountClient.cancelAccountTest(id, testId).catch(() => {});
-        }
+        cancelTest();
       }
       onOpenChange(nextOpen);
     },
-    [onOpenChange],
+    [cancelTest, onOpenChange],
   );
 
   useEffect(() => {
@@ -283,13 +418,15 @@ export function AccountTestModal({
       return;
     }
 
+    runTokenRef.current += 1;
+    phaseRef.current = "idle";
     setPhase("idle");
+    resetOutputBuffer();
     setState({ text: "", images: [] });
     setCanceled(false);
     testIdRef.current = null;
     finishedRef.current = false;
-    unlistenRef.current?.();
-    unlistenRef.current = null;
+    stopEventListener();
     setModels([]);
     setSelectedModel(null);
     setTestKind("text");
@@ -304,7 +441,14 @@ export function AccountTestModal({
         const enabled = result.items.filter((model) => model.enabled);
         setModels(enabled);
         const textModel = enabled.find((model) => !isImageModel(model));
-        setSelectedModel((textModel ?? enabled[0])?.slug ?? null);
+        const preferredTextModel = enabled.find(
+          (model) =>
+            model.slug.toLowerCase() === DEFAULT_ACCOUNT_TEST_MODEL &&
+            !isImageModel(model),
+        );
+        setSelectedModel(
+          (preferredTextModel ?? textModel ?? enabled[0])?.slug ?? null,
+        );
       } catch {
         // 模型列表加载失败不阻塞测试，后端会用默认文字模型兜底。
       }
@@ -312,10 +456,19 @@ export function AccountTestModal({
 
     return () => {
       disposed = true;
-      unlistenRef.current?.();
-      unlistenRef.current = null;
+      runTokenRef.current += 1;
+      const activeTestId = testIdRef.current;
+      if (accountId && activeTestId && phaseRef.current === "running") {
+        void accountClient.cancelAccountTest(accountId, activeTestId).catch(() => {});
+      }
+      stopEventListener();
+      if (textFlushFrameRef.current !== null) {
+        window.cancelAnimationFrame(textFlushFrameRef.current);
+        textFlushFrameRef.current = null;
+      }
+      resetOutputBuffer();
     };
-  }, [open, accountId]);
+  }, [accountId, open, resetOutputBuffer, stopEventListener]);
 
   const { text, images, status, success, error } = state;
 
@@ -379,8 +532,7 @@ export function AccountTestModal({
               onValueChange={(value) => {
                 const slug = value ? String(value) : null;
                 setSelectedModel(slug);
-                // 让测试类型跟随所选模型能力，避免「文字直连 + 图片专用模型」把
-                // gpt-image-2 当主模型直连、被上游判为不支持。
+                // 让测试类型跟随所选模型能力，避免将图片专用模型作为文字主模型直连。
                 const model = models.find((item) => item.slug === slug);
                 if (model) {
                   setTestKind(isImageModel(model) ? "image" : "text");

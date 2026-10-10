@@ -47,8 +47,8 @@ export const EN_DYNAMIC_UI_MESSAGES: MessageCatalog = {
   简体中文: "Simplified Chinese",
   "控制 compact 请求实际转发到哪个上游路径；默认 /v1/responses/compact，可改成 /v1/chat/completions。":
     "Controls which upstream path compact requests are forwarded to. Default is /v1/responses/compact; it can be changed to /v1/chat/completions.",
-  "控制 Images API 兼容入口内部使用的 Codex 主模型；默认 gpt-5.4-mini。":
-    "Controls the Codex main model used internally by the Images API compatibility endpoint. Default is gpt-5.4-mini.",
+  "控制 Images API 兼容入口内部使用的 Codex 主模型；默认 gpt-6-luna。":
+    "Controls the Codex main model used internally by the Images API compatibility endpoint. Default is gpt-6-luna.",
   "控制 Images API 兼容入口注入的图片工具模型；默认 gpt-image-2。":
     "Controls the image tool model injected by the Images API compatibility endpoint. Default is gpt-image-2.",
   "控制 OpenAI Images 兼容入口是否启用；默认 1，填 0 会关闭 /v1/images/generations 和 /v1/images/edits。":

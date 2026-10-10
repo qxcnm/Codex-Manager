@@ -326,8 +326,8 @@ export function AdminUsageTrendChart({
   );
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+    <div className="space-y-2">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex flex-wrap items-center gap-2">
           <div
             className="inline-flex rounded-md border border-border/70 bg-background/40 p-0.5"
@@ -396,9 +396,9 @@ export function AdminUsageTrendChart({
       </div>
 
       {availableModelNames.length > 0 ? (
-        <div className="mission-panel space-y-2.5 rounded-lg border border-primary/15 bg-background/25 p-2.5 shadow-[inset_0_1px_0_rgb(255_255_255/0.05)]">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <div className="rounded-md bg-primary/8 px-2 py-1 text-[11px] font-medium text-foreground">
+        <div className="mission-panel flex flex-wrap items-center gap-2 rounded-lg border border-primary/15 bg-background/25 px-2 py-1.5 shadow-[inset_0_1px_0_rgb(255_255_255/0.05)]">
+          <div className="flex shrink-0 items-center gap-2">
+            <div className="text-[11px] font-medium text-foreground">
               {t("模型曲线")} · {t("已选 {selected}/{max}", {
                 selected: activeModels.length,
                 max: MAX_SELECTED_MODELS,
@@ -416,14 +416,9 @@ export function AdminUsageTrendChart({
                 {t("恢复默认")}
               </Button>
             ) : null}
-            <span className="text-[11px] text-muted-foreground">
-              {hourlyAvailable
-                ? t("拖动底部时间滑块调整范围，滚轮可快速缩放")
-                : t("小时曲线最多支持 31 天区间")}
-            </span>
           </div>
           <div
-            className="flex max-w-full flex-nowrap items-center gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible"
+            className="flex min-w-0 w-full flex-nowrap items-center gap-1.5 overflow-x-auto sm:w-auto sm:flex-1"
             aria-label={t("模型曲线")}
           >
             <Button
@@ -432,8 +427,8 @@ export function AdminUsageTrendChart({
               variant="outline"
               className={
                 showTotal
-                  ? "h-9 shrink-0 gap-1.5 border-primary/50 bg-primary/10 px-2.5 text-xs text-foreground shadow-sm"
-                  : "h-9 shrink-0 gap-1.5 border-border/60 bg-background/30 px-2.5 text-xs text-muted-foreground"
+                  ? "h-8 shrink-0 gap-1.5 border-primary/50 bg-primary/10 px-2 text-xs text-foreground shadow-sm"
+                  : "h-8 shrink-0 gap-1.5 border-border/60 bg-background/30 px-2 text-xs text-muted-foreground"
               }
               aria-pressed={showTotal}
               onClick={() => setShowTotal((value) => !value)}
@@ -466,8 +461,8 @@ export function AdminUsageTrendChart({
                   variant="outline"
                   className={
                     isSelected
-                      ? "h-9 max-w-[19rem] shrink-0 gap-1.5 bg-background/70 px-2.5 text-xs text-foreground shadow-sm"
-                      : "h-9 max-w-[19rem] shrink-0 gap-1.5 border-border/60 bg-background/25 px-2.5 text-xs text-muted-foreground opacity-75 hover:opacity-100"
+                      ? "h-8 max-w-[19rem] shrink-0 gap-1.5 bg-background/70 px-2 text-xs text-foreground shadow-sm"
+                      : "h-8 max-w-[19rem] shrink-0 gap-1.5 border-border/60 bg-background/25 px-2 text-xs text-muted-foreground opacity-75 hover:opacity-100"
                   }
                   style={
                     isSelected

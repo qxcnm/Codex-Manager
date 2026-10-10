@@ -16,6 +16,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  existingAggregateApiModelIds,
+  sortAggregateApiAssociationItems,
+} from "@/lib/aggregate-api-model-association";
 import { useI18n } from "@/lib/i18n/provider";
 import type { AggregateApi } from "@/types/api-key";
 
@@ -73,11 +77,16 @@ export function AggregateApiModelAssociationModal({
 
   const filteredItems = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return items;
-    return items.filter((item) =>
+    const sortedItems = sortAggregateApiAssociationItems(items);
+    if (!query) return sortedItems;
+    return sortedItems.filter((item) =>
       `${item.upstreamModel} ${item.displayName || ""}`.toLowerCase().includes(query),
     );
   }, [items, search]);
+  const existingModelIds = useMemo(
+    () => existingAggregateApiModelIds(items),
+    [items],
+  );
 
   const allSelected = items.length > 0 && items.every((item) => selected.has(item.upstreamModel));
   const selectedCount = selected.size;
@@ -130,12 +139,23 @@ export function AggregateApiModelAssociationModal({
                 className="h-9 border-border/60 bg-background/55 pl-9"
               />
             </div>
-            <div className="flex items-center justify-between gap-3 sm:justify-end">
+            <div className="flex flex-wrap items-center justify-between gap-2 sm:justify-end">
               <span className="text-xs text-muted-foreground">
                 {t("显示 {shown} / {total} 个", { shown: filteredItems.length, total: items.length })}
                 <span className="mx-1 text-border">·</span>
                 <span className="font-medium text-foreground/75">{t("已选择 {count} 个", { count: selectedCount })}</span>
               </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-9 shrink-0 bg-background/45"
+                disabled={existingModelIds.length === 0}
+                onClick={() => setSelected(new Set(existingModelIds))}
+              >
+                <ListChecks className="mr-1.5 h-4 w-4" />
+                {t("选择已有模型")}
+              </Button>
               <Button
                 type="button"
                 size="sm"

@@ -1,6 +1,7 @@
 import { invoke, withAddr } from "./transport";
 import type {
   CodexProfileAccountCandidate,
+  CodexProfileAggregateApiCandidate,
   CodexProfileApiKeyCandidate,
   CodexProfileCandidates,
   CodexProfileHistoryRepairSummary,
@@ -60,6 +61,7 @@ function normalizeMode(value: unknown): CodexProfileMode {
     mode === "missing" ||
     mode === "unmanaged" ||
     mode === "direct_account" ||
+    mode === "direct_aggregate" ||
     mode === "gateway" ||
     mode === "managed_unknown"
   ) {
@@ -101,7 +103,13 @@ export function normalizeCodexProfileStatus(payload: unknown): CodexProfileStatu
       source.selectedAccountId ?? source.selected_account_id,
     ),
     selectedApiKeyId: toNullableString(source.selectedApiKeyId ?? source.selected_api_key_id),
+    selectedAggregateApiId: toNullableString(
+      source.selectedAggregateApiId ?? source.selected_aggregate_api_id,
+    ),
     gatewayBaseUrl: toNullableString(source.gatewayBaseUrl ?? source.gateway_base_url),
+    aggregateApiBaseUrl: toNullableString(
+      source.aggregateApiBaseUrl ?? source.aggregate_api_base_url,
+    ),
     supportsWebsockets: asBoolean(
       source.supportsWebsockets ?? source.supports_websockets,
     ),
@@ -109,6 +117,9 @@ export function normalizeCodexProfileStatus(payload: unknown): CodexProfileStatu
     hasBackup: asBoolean(source.hasBackup ?? source.has_backup),
     lastAppliedAt: toNullableNumber(source.lastAppliedAt ?? source.last_applied_at),
     profileWritable: asBoolean(source.profileWritable ?? source.profile_writable),
+    managedCatalogActive: asBoolean(
+      source.managedCatalogActive ?? source.managed_catalog_active,
+    ),
     error: toNullableString(source.error),
     warnings: asStringArray(source.warnings),
     historyRepair: normalizeCodexProfileHistoryRepair(
@@ -228,6 +239,24 @@ function normalizeApiKeyCandidate(
   };
 }
 
+function normalizeAggregateApiCandidate(
+  payload: unknown,
+): CodexProfileAggregateApiCandidate | null {
+  const source = asObject(payload);
+  const id = asString(source.id);
+  if (!id) return null;
+  return {
+    id,
+    label: asString(source.label) || id,
+    supplierName: toNullableString(source.supplierName ?? source.supplier_name),
+    providerType: asString(source.providerType ?? source.provider_type) || "codex",
+    baseUrl: asString(source.baseUrl ?? source.base_url),
+    sort: asNumber(source.sort),
+    modelOverride: toNullableString(source.modelOverride ?? source.model_override),
+    userAgent: toNullableString(source.userAgent ?? source.user_agent),
+  };
+}
+
 export function normalizeCodexProfileCandidates(
   payload: unknown,
 ): CodexProfileCandidates {
@@ -239,6 +268,9 @@ export function normalizeCodexProfileCandidates(
     apiKeys: asArray(source.apiKeys ?? source.api_keys)
       .map(normalizeApiKeyCandidate)
       .filter((item): item is CodexProfileApiKeyCandidate => Boolean(item)),
+    aggregateApis: asArray(source.aggregateApis ?? source.aggregate_apis)
+      .map(normalizeAggregateApiCandidate)
+      .filter((item): item is CodexProfileAggregateApiCandidate => Boolean(item)),
   };
 }
 
@@ -299,6 +331,21 @@ export const codexProfileClient = {
     );
     return normalizeCodexProfileStatus(result);
   },
+  async applyDirectAggregate(params: {
+    aggregateApiId: string;
+    codexHome?: string | null;
+    reloadAfterSwitch: boolean;
+  }): Promise<CodexProfileStatus> {
+    const result = await invoke<unknown>(
+      "service_codex_profile_apply_direct_aggregate",
+      withAddr({
+        aggregateApiId: params.aggregateApiId,
+        codexHome: params.codexHome || null,
+        reloadAfterSwitch: params.reloadAfterSwitch,
+      }),
+    );
+    return normalizeCodexProfileStatus(result);
+  },
   async applyGateway(params: {
     apiKeyId: string;
     codexHome?: string | null;
@@ -314,6 +361,20 @@ export const codexProfileClient = {
         baseUrl: params.baseUrl || null,
         supportsWebsockets: params.supportsWebsockets,
         reloadAfterSwitch: params.reloadAfterSwitch,
+      }),
+    );
+    return normalizeCodexProfileStatus(result);
+  },
+  async applyModels(params: {
+    codexHome?: string | null;
+    modelSlugs: string[];
+  }): Promise<CodexProfileStatus> {
+    const result = await invoke<unknown>(
+      "service_codex_profile_apply_models",
+      withAddr({
+        codexHome: params.codexHome || null,
+        modelSlugs: params.modelSlugs,
+        reloadAfterSwitch: false,
       }),
     );
     return normalizeCodexProfileStatus(result);

@@ -1,5 +1,5 @@
 #[derive(Debug, Clone)]
-pub(super) enum RequestLogQuery {
+pub enum RequestLogQuery {
     All,
     GlobalLike(String),
     AccountLike(String),
@@ -27,7 +27,7 @@ pub(super) enum RequestLogQuery {
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(super) fn parse_request_log_query(query: Option<&str>) -> RequestLogQuery {
+pub fn parse_request_log_query(query: Option<&str>) -> RequestLogQuery {
     let Some(raw) = query.map(str::trim).filter(|v| !v.is_empty()) else {
         return RequestLogQuery::All;
     };

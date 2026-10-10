@@ -6,6 +6,8 @@ import {
   ChevronDown,
   Clock3,
   Database,
+  Eye,
+  Info,
   RefreshCw,
   Search,
   SlidersHorizontal,
@@ -33,7 +35,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { buildStaticRouteUrl } from "@/lib/utils/static-routes";
 import { formatTsFromSeconds } from "@/lib/utils/usage";
 import { cn } from "@/lib/utils";
 import {
@@ -83,6 +84,7 @@ export function RequestLogsTabContent({
   onFilterChange,
   onRefresh,
   onOpenClearConfirm,
+  onOpenDetail,
   onApplyTimePreset,
   onStartTimeChange,
   onEndTimeChange,
@@ -119,6 +121,7 @@ export function RequestLogsTabContent({
   onFilterChange: (value: StatusFilter) => void;
   onRefresh: () => void;
   onOpenClearConfirm: () => void;
+  onOpenDetail: (log: RequestLog) => void;
   onApplyTimePreset: (preset: TimeRangePreset) => void;
   onStartTimeChange: (value: string) => void;
   onEndTimeChange: (value: string) => void;
@@ -146,26 +149,20 @@ export function RequestLogsTabContent({
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {isDirectAccountMode ? (
-        <div className="flex flex-col gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex gap-3 rounded-xl border border-primary/25 bg-primary/8 px-4 py-3 text-sm">
           <div className="flex min-w-0 items-start gap-3">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-300" />
+            <Info className="mt-0.5 size-4 shrink-0 text-primary" />
             <div>
-              <div className="font-semibold text-amber-700 dark:text-amber-200">
-                {t("账号直连模式不会产生新的 CodexManager 请求日志")}
+              <div className="font-semibold text-foreground">
+                {t("本机 Codex 的账号直连请求不会写入此日志")}
               </div>
               <div className="mt-1 text-xs text-muted-foreground">
-                {t("这里仅展示历史网关请求；如需记录请求，请切换到本地网关模式。")}
+                {t("下方仍展示 CodexManager 已记录的网关请求，包括其他客户端通过平台密钥产生的流量。")}
               </div>
             </div>
           </div>
-          <a
-            href={buildStaticRouteUrl("/platform-mode")}
-            className="inline-flex h-8 w-fit items-center justify-center rounded-lg border border-amber-500/40 bg-background/70 px-3 text-xs font-medium text-foreground transition-colors hover:bg-background"
-          >
-            {t("去切换为本地网关")}
-          </a>
         </div>
       ) : null}
 
@@ -174,7 +171,7 @@ export function RequestLogsTabContent({
           <div className={cn("grid", filtersExpanded ? "xl:grid-cols-[minmax(0,1fr)_390px]" : "")}>
             <div
               className={cn(
-                "space-y-4 p-4",
+                "space-y-3 p-3",
                 filtersExpanded ? "xl:border-r xl:border-border/50" : "",
               )}
             >
@@ -215,7 +212,7 @@ export function RequestLogsTabContent({
                 </div>
               </div>
 
-              <div className="grid gap-3 2xl:grid-cols-[minmax(320px,1fr)_auto] 2xl:items-center">
+              <div className="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_auto] lg:items-center">
                 <div className="relative min-w-0">
                   <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
@@ -226,7 +223,7 @@ export function RequestLogsTabContent({
                   />
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2 2xl:justify-end">
+                <div className="flex flex-wrap items-center gap-2 lg:justify-end">
                   <span className="inline-flex h-9 items-center rounded-xl border border-border/60 bg-background/70 px-3 text-xs font-medium text-muted-foreground">
                     {currentFilterLabel}
                   </span>
@@ -455,6 +452,9 @@ export function RequestLogsTabContent({
                   <TableHead className="w-[240px] px-4 text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
                     {t("错误")}
                   </TableHead>
+                  <TableHead className="w-[72px] px-2 text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
+                    {t("操作")}
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -469,18 +469,19 @@ export function RequestLogsTabContent({
                       <TableCell><Skeleton className="h-4 w-12" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-20" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-full" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-7" /></TableCell>
                     </TableRow>
                   ))
                 ) : logs.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={8}
+                      colSpan={9}
                       className="h-52 px-4 text-center text-sm text-muted-foreground"
                     >
                       {!serviceConnected
                         ? t("服务未连接，无法获取日志")
                         : isDirectAccountMode
-                          ? t("账号直连模式下不会产生请求日志，如需记录请求请切换到本地网关模式。")
+                          ? t("当前筛选下暂无已记录的网关请求；本机 Codex 的账号直连请求不会写入此日志。")
                           : t("暂无请求日志")}
                     </TableCell>
                   </TableRow>
@@ -527,6 +528,18 @@ export function RequestLogsTabContent({
                       </TableCell>
                       <TableCell className="px-4 py-3 text-left align-top">
                         <ErrorInfoCell error={log.error} />
+                      </TableCell>
+                      <TableCell className="px-2 py-3 align-top">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-7 opacity-40 transition-opacity group-hover:opacity-100"
+                          title={t("查看请求内容")}
+                          onClick={() => onOpenDetail(log)}
+                        >
+                          <Eye className="size-3.5" />
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))

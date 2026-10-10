@@ -54,9 +54,23 @@ pub(crate) fn read_requestlog_today_summary_with_storage(
     day_end_ts: Option<i64>,
 ) -> Result<RequestLogTodaySummaryResult, String> {
     let (start_ts, end_ts) = resolve_day_bounds_ts(day_start_ts, day_end_ts)?;
-    let summary = storage
-        .summarize_request_logs_between(start_ts, end_ts)
-        .map_err(|err| format!("summarize request logs failed: {err}"))?;
+    let summary = if crate::storage_helpers::seaorm_enabled() {
+        let keys = None::<Vec<String>>;
+        crate::storage_helpers::seaorm_block_on(move |storage| async move {
+            codexmanager_storage_seaorm::ApiKeyDetailsRepository::today_summary(
+                storage.connection(),
+                keys.as_deref(),
+                start_ts,
+                end_ts,
+            )
+            .await
+            .map_err(|err| format!("summarize SeaORM request usage failed: {err}"))
+        })?
+    } else {
+        storage
+            .summarize_request_logs_between(start_ts, end_ts)
+            .map_err(|err| format!("summarize request logs failed: {err}"))?
+    };
     Ok(map_today_summary(summary))
 }
 
@@ -76,9 +90,23 @@ pub(crate) fn read_requestlog_today_summary_for_key_ids_with_storage(
             estimated_cost_usd: 0.0,
         }));
     }
-    let summary = storage
-        .summarize_request_logs_between_for_keys(start_ts, end_ts, key_ids)
-        .map_err(|err| format!("summarize request logs failed: {err}"))?;
+    let summary = if crate::storage_helpers::seaorm_enabled() {
+        let keys = Some(key_ids.to_vec());
+        crate::storage_helpers::seaorm_block_on(move |storage| async move {
+            codexmanager_storage_seaorm::ApiKeyDetailsRepository::today_summary(
+                storage.connection(),
+                keys.as_deref(),
+                start_ts,
+                end_ts,
+            )
+            .await
+            .map_err(|err| format!("summarize SeaORM request usage failed: {err}"))
+        })?
+    } else {
+        storage
+            .summarize_request_logs_between_for_keys(start_ts, end_ts, key_ids)
+            .map_err(|err| format!("summarize request logs failed: {err}"))?
+    };
     Ok(map_today_summary(summary))
 }
 

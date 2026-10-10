@@ -1,5 +1,5 @@
+use crate::http::gateway_request::GatewayRequest as Request;
 use codexmanager_core::storage::{Account, Storage, Token};
-use tiny_http::Request;
 
 pub(in super::super) enum CandidatePrecheckResult {
     Ready {
@@ -77,7 +77,7 @@ pub(in super::super) fn prepare_candidates_for_proxy(
             let response = super::super::super::error_response::terminal_text_response(
                 500,
                 super::super::super::error_message_for_client(
-                    super::super::super::prefers_raw_errors_for_tiny_http_request(&request),
+                    super::super::super::prefers_raw_errors_for_gateway_request(&request),
                     err_text.clone(),
                 ),
                 Some(trace_id),
@@ -124,7 +124,7 @@ pub(in super::super) fn prepare_candidates_for_proxy(
         let response = super::super::super::error_response::terminal_text_response(
             503,
             super::super::super::error_message_for_client(
-                super::super::super::prefers_raw_errors_for_tiny_http_request(&request),
+                super::super::super::prefers_raw_errors_for_gateway_request(&request),
                 "无可用账号(no available account)",
             ),
             Some(trace_id),

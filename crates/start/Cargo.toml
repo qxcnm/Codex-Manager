@@ -3,10 +3,16 @@ name = "codexmanager-start"
 version.workspace = true
 edition = "2021"
 
+[features]
+default = ["storage-sqlite"]
+storage-sqlite = ["codexmanager-service/storage-sqlite"]
+storage-mysql = ["codexmanager-service/storage-mysql"]
+storage-postgres = ["codexmanager-service/storage-postgres"]
+
 [dependencies]
 ctrlc = "3"
 webbrowser = "0.8"
-codexmanager-service = { path = "../service" }
+codexmanager-service = { path = "../service", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects"] }

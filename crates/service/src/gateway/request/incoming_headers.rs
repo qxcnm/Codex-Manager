@@ -1,4 +1,4 @@
-use tiny_http::Request;
+use crate::http::gateway_request::GatewayRequest as Request;
 
 const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER_NAME: &str =
     "x-openai-internal-codex-responses-lite";

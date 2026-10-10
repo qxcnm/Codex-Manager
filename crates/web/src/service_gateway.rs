@@ -1,5 +1,9 @@
 use super::*;
 
+const ENV_WEB_NO_SPAWN_SERVICE: &str = "CODEXMANAGER_WEB_NO_SPAWN_SERVICE";
+const RPC_TOKEN_MISMATCH: &str = "rpc_token_mismatch";
+const SERVICE_VERSION_MISMATCH: &str = "service_version_mismatch";
+
 /// 函数 `should_spawn_service`
 ///
 /// 作者: gaohongshun
@@ -12,7 +16,7 @@ use super::*;
 /// # 返回
 /// 返回函数执行结果
 pub(super) fn should_spawn_service() -> bool {
-    read_env_trim("CODEXMANAGER_WEB_NO_SPAWN_SERVICE").is_none()
+    read_env_trim(ENV_WEB_NO_SPAWN_SERVICE).is_none()
 }
 
 static SERVICE_PROBE_CLIENT: std::sync::OnceLock<Result<reqwest::Client, String>> =
@@ -30,6 +34,41 @@ fn service_probe_client() -> Result<reqwest::Client, String> {
     SERVICE_PROBE_CLIENT
         .get_or_init(build_service_probe_client)
         .clone()
+}
+
+fn validate_service_initialize_response(payload: &serde_json::Value) -> Result<(), String> {
+    let result = payload.get("result").and_then(|value| value.as_object());
+    let user_agent = result
+        .and_then(|value| value.get("userAgent").or_else(|| value.get("user_agent")))
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let codex_home = result
+        .and_then(|value| value.get("codexHome").or_else(|| value.get("codex_home")))
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let version = result
+        .and_then(|value| value.get("version"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    if !user_agent.contains("codex_cli_rs/") || codex_home.is_empty() || version.is_empty() {
+        return Err("unexpected service on target port".to_string());
+    }
+
+    let expected_version = env!("CARGO_PKG_VERSION");
+    if version != expected_version {
+        return Err(format!(
+            "{SERVICE_VERSION_MISMATCH}: expected {expected_version}, got {version}"
+        ));
+    }
+    Ok(())
+}
+
+fn probe_failure_requires_restart(error: &str) -> bool {
+    error == RPC_TOKEN_MISMATCH || error.starts_with(SERVICE_VERSION_MISMATCH)
+}
+
+fn should_restart_service_after_probe_failure(error: &str) -> bool {
+    should_spawn_service() && probe_failure_requires_restart(error)
 }
 
 /// 函数 `service_rpc_probe`
@@ -72,7 +111,7 @@ async fn service_rpc_probe(
         .map_err(|err| format!("probe request failed: {err}"))?;
 
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-        return Err("rpc_token_mismatch".to_string());
+        return Err(RPC_TOKEN_MISMATCH.to_string());
     }
     if !response.status().is_success() {
         return Err(format!("probe http {}", response.status()));
@@ -82,19 +121,7 @@ async fn service_rpc_probe(
         .json::<serde_json::Value>()
         .await
         .map_err(|err| format!("probe response parse failed: {err}"))?;
-    let result = payload.get("result").and_then(|value| value.as_object());
-    let user_agent = result
-        .and_then(|value| value.get("userAgent").or_else(|| value.get("user_agent")))
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
-    let codex_home = result
-        .and_then(|value| value.get("codexHome").or_else(|| value.get("codex_home")))
-        .and_then(|value| value.as_str())
-        .unwrap_or("");
-    if !user_agent.contains("codex_cli_rs/") || codex_home.is_empty() {
-        return Err("unexpected service on target port".to_string());
-    }
-    Ok(())
+    validate_service_initialize_response(&payload)
 }
 
 /// 函数 `shutdown_existing_service`
@@ -175,6 +202,30 @@ fn service_bin_path(dir: &Path) -> PathBuf {
     }
 }
 
+fn preflight_service_binary(dir: &Path) -> Result<PathBuf, String> {
+    let bin = service_bin_path(dir);
+    let metadata = std::fs::metadata(&bin).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            format!("missing {}", bin.display())
+        } else {
+            format!("cannot inspect {}: {err}", bin.display())
+        }
+    })?;
+    if !metadata.is_file() {
+        return Err(format!("{} is not a regular file", bin.display()));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Err(format!("{} is not executable", bin.display()));
+        }
+    }
+
+    Ok(bin)
+}
+
 /// 函数 `spawn_service_detached`
 ///
 /// 作者: gaohongshun
@@ -187,8 +238,7 @@ fn service_bin_path(dir: &Path) -> PathBuf {
 ///
 /// # 返回
 /// 返回函数执行结果
-fn spawn_service_detached(dir: &Path, service_addr: &str) -> std::io::Result<()> {
-    let bin = service_bin_path(dir);
+fn spawn_service_detached(bin: &Path, service_addr: &str) -> std::io::Result<()> {
     let mut cmd = Command::new(bin);
     let bind_addr = codexmanager_service::listener_bind_addr(service_addr);
     cmd.env("CODEXMANAGER_SERVICE_ADDR", bind_addr);
@@ -225,16 +275,26 @@ pub(super) async fn ensure_service_running(
         Ok(client) => client,
         Err(err) => return Some(err),
     };
+    let mut replacement_bin = None;
 
     if tcp_probe(service_addr).await {
         match service_rpc_probe(&probe_client, service_addr, rpc_token).await {
             Ok(()) => return None,
-            Err(err) if err == "rpc_token_mismatch" && should_spawn_service() => {
+            Err(err) if should_restart_service_after_probe_failure(&err) => {
+                let bin = match preflight_service_binary(dir) {
+                    Ok(bin) => bin,
+                    Err(preflight_err) => {
+                        return Some(format!(
+                            "service reachable at {service_addr} but replacement binary preflight failed after startup handshake failure ({err}); old instance was left running: {preflight_err}"
+                        ));
+                    }
+                };
                 if !shutdown_existing_service(service_addr).await {
                     return Some(format!(
-                        "service reachable at {service_addr} but rejected rpc token; old instance is still occupying the port"
+                        "service reachable at {service_addr} but cannot be replaced after startup handshake failure ({err}); old instance is still occupying the port"
                     ));
                 }
+                replacement_bin = Some(bin);
             }
             Err(err) => {
                 return Some(format!(
@@ -249,15 +309,19 @@ pub(super) async fn ensure_service_running(
         ));
     }
 
-    let bin = service_bin_path(dir);
-    if !bin.is_file() {
-        return Some(format!(
-            "service not reachable at {service_addr} (missing {})",
-            bin.display()
-        ));
-    }
+    let bin = match replacement_bin {
+        Some(bin) => bin,
+        None => match preflight_service_binary(dir) {
+            Ok(bin) => bin,
+            Err(err) => {
+                return Some(format!(
+                    "service not reachable at {service_addr} (replacement binary unavailable: {err})"
+                ));
+            }
+        },
+    };
 
-    if let Err(err) = spawn_service_detached(dir, service_addr) {
+    if let Err(err) = spawn_service_detached(&bin, service_addr) {
         return Some(format!("failed to spawn service: {err}"));
     }
     *spawned_service.lock().await = true;

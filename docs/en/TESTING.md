@@ -77,24 +77,15 @@ Minimal verification:
 pnpm -C apps run build
 pnpm -C apps run test:runtime
 cargo test -p codexmanager-web
-pwsh -NoLogo -NoProfile -File scripts/tests/web_runtime_probe.test.ps1
 ```
 
-Suggested additions:
-
-```powershell
-pwsh -NoLogo -NoProfile -File scripts/tests/web_runtime_probe.ps1 `
-  -Base http://localhost:48761
-pwsh -NoLogo -NoProfile -File scripts/tests/web_ui_smoke.ps1 -SkipBuild
-```
+After starting the Web service, verify `/api/runtime`, `/api/rpc`, and key pages with a browser or HTTP client. The old `scripts/tests/web_runtime_probe*.ps1` and `web_ui_smoke.ps1` probes are no longer in the repository.
 
 illustrate:
 
 - `pnpm -C apps run build`: Confirm that front-end static export can still be generated
 - `pnpm -C apps run test:runtime`: Confirm that the front-end runtime contract and capability determination are consistent
 - `cargo test -p codexmanager-web`: Confirm Web Shell Routing and Runtime Probe Contract
-- `web_runtime_probe.test.ps1`: Confirm Web script behavior of running shell minimal smoke link
-- `web_ui_smoke.ps1`: Confirm key UI behavior of Web page under supported / unsupported running shell
 
 ## 5. Rust server-side changes
 
@@ -140,21 +131,19 @@ Minimal verification:
 
 ```bash
 cargo test --workspace
-pwsh -NoLogo -NoProfile -File scripts/tests/gateway_regression_suite.ps1
-pwsh -NoLogo -NoProfile -File scripts/tests/codex_stream_probe.ps1
-pwsh -NoLogo -NoProfile -File scripts/tests/chat_tools_hit_probe.ps1
+cargo test -p codexmanager-service gateway --offline -- --test-threads=1
 ```
 
 illustrate:
 
-- If the local environment does not have a real upstream account, at least run Rust tests and keep probe execution instructions.
+- If the local environment does not have a real upstream account, at least run the Rust tests and record real-upstream acceptance as not executed.
 - Compatibility fixes cannot validate only one type of client.
 
 ## 7. Settings/Environment Variables/Persistence Changes
 
 Scope of application:
 
-- `apps/src/settings/`
+- `apps/src/app/settings/`
 - `crates/service/src/app_settings/`
 - `crates/core/src/storage/settings.rs`
 - Added `CODEXMANAGER_*` configuration items
@@ -187,8 +176,7 @@ Minimal verification:
 ```bash
 pnpm -C apps run build
 cargo test --workspace
-pwsh -NoLogo -NoProfile -File scripts/tests/assert-release-version.test.ps1
-pwsh -NoLogo -NoProfile -File scripts/tests/rebuild.test.ps1
+pnpm -C apps run build:desktop
 ```
 
 Must be manually confirmed:
@@ -236,14 +224,13 @@ pnpm -C apps run test:runtime
 pnpm -C apps run build
 pnpm -C apps run test:runtime
 cargo test -p codexmanager-web
-pwsh -NoLogo -NoProfile -File scripts/tests/web_runtime_probe.test.ps1
 ```
 
 ### Protocol adaptation changes
 
 ```bash
 cargo test --workspace
-pwsh -NoLogo -NoProfile -File scripts/tests/gateway_regression_suite.ps1
+cargo test -p codexmanager-service gateway --offline -- --test-threads=1
 ```
 
 ## 11. Result recording convention

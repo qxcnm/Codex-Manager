@@ -44,7 +44,7 @@ ignore_invalid_headers off;
    这里负责从入站请求中提取 `conversation_id`、`session_id`、`x-codex-turn-state` 等头。
 2. `crates/service/src/gateway/request/session_affinity.rs`
    这里会基于这些头计算稳定的会话锚点。
-3. `crates/service/src/gateway/request/request_rewrite_responses.rs`
+3. `crates/service/src/gateway/request/official_responses_http.rs`
    这里会把线程锚点写回 `prompt_cache_key`。
 
 一旦代理层把头吞掉，后端就只能退化为“不稳定的 fallback 会话”，自然很难拿到和桌面端相同的缓存命中。
@@ -218,6 +218,6 @@ Cloudflare 会增加代理链路复杂度，但这类问题最常见的直接原
 
 - [`crates/service/src/gateway/request/incoming_headers.rs`](../../../crates/service/src/gateway/request/incoming_headers.rs)
 - [`crates/service/src/gateway/request/session_affinity.rs`](../../../crates/service/src/gateway/request/session_affinity.rs)
-- [`crates/service/src/gateway/request/request_rewrite_responses.rs`](../../../crates/service/src/gateway/request/request_rewrite_responses.rs)
+- [`crates/service/src/gateway/request/official_responses_http.rs`](../../../crates/service/src/gateway/request/official_responses_http.rs)
 - [`crates/service/src/gateway/observability/http_bridge/aggregate/output_text.rs`](../../../crates/service/src/gateway/observability/http_bridge/aggregate/output_text.rs)
-- [`crates/service/src/gateway/protocol_adapter/response_conversion/sse_conversion/openai_sse_anthropic_bridge.rs`](../../../crates/service/src/gateway/protocol_adapter/response_conversion/sse_conversion/openai_sse_anthropic_bridge.rs)
+- [`crates/service/src/gateway/observability/http_bridge/stream_readers/responses_from_anthropic.rs`](../../../crates/service/src/gateway/observability/http_bridge/stream_readers/responses_from_anthropic.rs)

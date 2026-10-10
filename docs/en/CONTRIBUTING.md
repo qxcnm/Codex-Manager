@@ -23,7 +23,7 @@ Governance document entry:
 - `ARCHITECTURE.md`: Structural boundaries and operational relationships
 - `TESTING.md`: Warehouse-level verification baseline
 - `SECURITY.md`: Security issues and rules for handling sensitive information
-- `docs/README.md`: Governance document directory and submission rules
+- `docs/zh-CN/README.md`: Governance document directory and submission rules
 
 ## 2. Development environment
 
@@ -85,10 +85,10 @@ Prioritize the following boundaries:
 
 The following files are obviously too large, so you must refrain from adding general control logic when modifying them:
 
-- `apps/src/main.js`
+- `apps/src/components/layout/app-bootstrap.tsx`
 - `apps/src-tauri/src/lib.rs`
 - `crates/service/src/lib.rs`
-- `crates/service/src/gateway/protocol_adapter/response_conversion.rs`
+- `crates/service/src/gateway/observability/http_bridge/`
 - `.github/workflows/release-all.yml`
 
 ### 3.3 Large file warning threshold

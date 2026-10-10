@@ -78,8 +78,8 @@ export const KO_PLATFORM_MODE_MESSAGES: MessageCatalog = {
   账号直连: "계정 직결",
   "OpenAI 账号": "OpenAI 계정",
   选择账号: "계정 선택",
-  "直连 OpenAI 官方后端，不经过 CodexManager 网关；不会产生 CodexManager 请求日志，仪表盘用量统计不可用。":
-    "CodexManager 게이트웨이를 거치지 않고 OpenAI 공식 백엔드에 직접 연결합니다. CodexManager 요청 로그와 대시보드 사용량 통계는 사용할 수 없습니다.",
+  "直连 OpenAI 官方后端，不经过 CodexManager 网关；本机 Codex 的直连请求不会写入网关日志，但仪表盘仍会展示已记录的其他网关流量。":
+    "CodexManager 게이트웨이를 거치지 않고 OpenAI 공식 백엔드에 직접 연결합니다. 이 컴퓨터의 Codex 직결 요청은 게이트웨이 로그에 기록되지 않지만, 대시보드에는 기록된 다른 게이트웨이 트래픽이 계속 표시됩니다.",
   "没有可用于账号直连的 active OpenAI 账号。":
     "계정 직결에 사용할 수 있는 활성 OpenAI 계정이 없습니다.",
   "去添加 OpenAI 账号": "OpenAI 계정 추가",
@@ -167,4 +167,25 @@ export const KO_PLATFORM_MODE_MESSAGES: MessageCatalog = {
     "Codex 백그라운드 프로세스 {count}개에 다시 로드를 요청했습니다",
   "未发现需要重载的 Codex 后台进程":
     "다시 로드할 Codex 백그라운드 프로세스를 찾지 못했습니다",
+  "选择 Codex 直接连接 OpenAI、直连聚合 API，或通过 CodexManager 进行转发与管理。":
+    "Codex를 OpenAI에 직접 연결하거나 집계 API에 직접 연결하거나 CodexManager를 통해 라우팅하고 관리합니다.",
+  "直连聚合 API": "집계 API에 직접 연결",
+  "当前聚合 API": "현재 집계 API",
+  "已切换为直连聚合 API": "집계 API 직접 연결로 전환했습니다",
+  "Codex 直接连接所选聚合 API；CodexManager 只负责写入和备份配置，不参与请求转发或日志统计。":
+    "Codex가 선택한 집계 API에 직접 연결됩니다. CodexManager는 설정 작성과 백업만 수행하며 요청 전달이나 로그 기록에는 참여하지 않습니다.",
+  "Codex 直接请求所选聚合 API，不经过 CodexManager 网关；切换时会自动写入对应的 Responses base_url 与认证配置。":
+    "Codex가 CodexManager 게이트웨이를 거치지 않고 선택한 집계 API에 직접 요청합니다. 전환 시 Responses base_url과 인증 설정을 자동으로 작성합니다.",
+  "没有可直连的聚合 API；仅支持 active 的 Codex / Compatible Responses API-key 条目。":
+    "직접 연결할 수 있는 집계 API가 없습니다. 활성 Codex 또는 Compatible Responses API-key 항목만 지원합니다.",
+  "去配置聚合 API": "집계 API 설정",
+  "选择聚合 API": "집계 API 선택",
+  "请选择聚合 API": "집계 API를 선택하세요",
+  "所选聚合 API": "선택한 집계 API",
+  "由聚合 API 提供": "집계 API에서 제공",
+  "该条目的模型覆盖会作为直连默认模型；网关模式中用于上游重写。":
+    "이 항목의 모델 재정의는 직접 연결 모드의 기본 모델이 되며 게이트웨이 모드에서는 업스트림 모델을 재작성합니다.",
+  "直连 base_url：{baseUrl}": "직접 연결 base_url: {baseUrl}",
+  "重新应用直连聚合 API": "집계 API 직접 연결 다시 적용",
+  "切换为直连聚合 API": "집계 API 직접 연결로 전환",
 };

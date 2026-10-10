@@ -62,7 +62,8 @@ const CLEANUP_STATUS_ALLOWLIST: &[&str] = &[
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn delete_unavailable_free_accounts() -> Result<DeleteUnavailableFreeResult, String> {
-    let mut storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let scanned = storage.account_count().map_err(|err| err.to_string())? as usize;
     let accounts = storage
         .list_account_cleanup_candidates_by_statuses(&cleanup_status_allowlist_vec())
@@ -181,7 +182,8 @@ pub(crate) fn delete_unavailable_free_accounts() -> Result<DeleteUnavailableFree
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn delete_banned_accounts() -> Result<DeleteBannedResult, String> {
-    let mut storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let scanned = storage.account_count().map_err(|err| err.to_string())? as usize;
     let accounts = storage
         .list_account_cleanup_candidates_by_statuses(&[
@@ -252,7 +254,8 @@ pub(crate) fn delete_accounts_by_statuses(
     statuses: Vec<String>,
 ) -> Result<DeleteAccountsByStatusesResult, String> {
     let target_statuses = normalize_cleanup_statuses(statuses)?;
-    let mut storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let scanned = storage.account_count().map_err(|err| err.to_string())? as usize;
     let accounts = storage
         .list_account_cleanup_candidates_by_statuses(&target_statuses)

@@ -12,7 +12,7 @@ use super::super::support::deadline;
 use super::CandidateUpstreamDecision;
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn execute<F>(
+pub(super) async fn execute<F>(
     storage: &Storage,
     method: &reqwest::Method,
     request_ctx: UpstreamRequestContext<'_>,
@@ -37,7 +37,7 @@ pub(super) fn execute<F>(
 where
     F: FnMut(Option<&str>, u16, Option<&str>),
 {
-    let client = match super::super::super::upstream_client_for_account(account.id.as_str()) {
+    let client = match super::super::super::async_upstream_client_for_account(account.id.as_str()) {
         Ok(client) => client,
         Err(err) => {
             return CandidateUpstreamDecision::Terminal {
@@ -68,8 +68,11 @@ where
             strip_session_affinity,
             debug,
             has_more_candidates,
+            request_ctx.capture,
             &mut log_gateway_result,
-        ) {
+        )
+        .await
+        {
             OpenAiAttemptResult::Upstream(resp) => {
                 return CandidateUpstreamDecision::RespondUpstream(resp);
             }
@@ -89,7 +92,9 @@ where
     }
 
     let allow_openai_fallback = if allow_openai_fallback {
-        match storage.find_account_agent_identity(&account.id) {
+        match crate::account::remote_storage::AccountStorage::new(&storage)
+            .find_account_agent_identity(&account.id)
+        {
             Ok(Some(_)) => false,
             Ok(None) => true,
             Err(err) => {
@@ -123,7 +128,9 @@ where
         allow_openai_fallback,
         has_more_candidates,
         &mut log_gateway_result,
-    ) {
+    )
+    .await
+    {
         PrimaryFlowDecision::Continue {
             upstream,
             authorization,
@@ -169,7 +176,9 @@ where
         has_more_candidates,
         upstream,
         &mut log_gateway_result,
-    ) {
+    )
+    .await
+    {
         PostRetryFlowDecision::Failover => CandidateUpstreamDecision::Failover,
         PostRetryFlowDecision::Terminal {
             status_code,

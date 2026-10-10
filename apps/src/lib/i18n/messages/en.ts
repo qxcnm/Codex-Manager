@@ -185,8 +185,8 @@ export const EN_MESSAGES: MessageCatalog = {
   控制应用启动和窗口行为: "Control startup and window behavior.",
   自动检查更新: "Check updates automatically",
   "移除 requires_openai_auth": "Remove requires_openai_auth",
-  "开启后，在切换到 CodexManager 网关或同步配置时移除 requires_openai_auth；关闭时保留现有配置，默认关闭":
-    "When enabled, remove requires_openai_auth while switching to the CodexManager gateway or syncing the profile; when disabled, keep the existing configuration. Disabled by default.",
+  "默认开启，在切换到网关或同步配置时清理旧认证标记；关闭仅保留已有值，不恢复已删除的配置。保留 true 可能禁用图片扩展。":
+    "Enabled by default: clear the old auth flag when switching to the gateway or syncing the profile. Disabling only preserves existing values; it does not restore removed settings. Keeping true may disable image extensions.",
   "启动完成后在后台检查更新，并每 7 小时检查一次":
     "Check for updates in the background after startup, then every 7 hours.",
   "检测到新版本，是否现在更新？":
@@ -221,6 +221,9 @@ export const EN_MESSAGES: MessageCatalog = {
   默认网关: "Default gateway",
   实际监听地址: "Actual bind address",
   界面语言: "Interface language",
+  自动检测: "Auto-detect",
+  "自动检测会跟随系统语言，不支持的语言使用英文。":
+    "Auto-detect follows your system language and uses English for unsupported languages.",
   "切换应用界面语言，设置后会立即生效并持久化保存。":
     "Switch the UI language. Changes apply immediately and persist.",
   选择语言: "Select language",
@@ -642,6 +645,89 @@ export const EN_MESSAGES: MessageCatalog = {
   "4xx / 5xx 或显式错误": "4xx / 5xx or explicit errors",
   请求明细: "Request details",
   "请求明细 按": "Request details by",
+  请求内容: "Request payload",
+  查看请求内容: "View request payload",
+  原始大小: "Original size",
+  "敏感凭据在写入时已脱敏；请求内容为发往上游的实际请求体。":
+    "Sensitive credentials are redacted at ingest time; the payload shows the request body actually sent upstream.",
+  "请求内容超出存储上限，仅保留前 16 KB 预览。":
+    "The request payload exceeds the storage cap; only the first 16 KB preview is kept.",
+  "未找到该请求的内容记录；日志可能产生于旧版本，或已被清理。":
+    "No payload record found for this request; the log may predate this feature or have been cleared.",
+  "有 {count} 条请求内容因磁盘空间不足等原因未记录": "{count} request bodies were not recorded (low disk space or similar)",
+  "此请求内容因{reason}未记录": "This request body was not recorded: {reason}",
+  "磁盘空间不足": "low disk space",
+  "磁盘写入跟不上": "disk writes could not keep up",
+  "写入失败": "write failed",
+  "写入线程不可用": "writer unavailable",
+  "溢出目录被其他进程占用": "spill directory is used by another process",
+  "清空日志或超出保留期": "cleared logs or retention limit",
+  请求体: "Request body",
+  沿用: "Shared from previous request",
+  全部展开: "Expand all",
+  全部收起: "Collapse all",
+  存储方式: "Storage",
+  完整存储: "Full payload",
+  "16 KB 预览": "16 KB preview",
+  复制完整请求: "Copy full request",
+  数据库空间: "Database space",
+  "清空或过期清理日志后，数据库文件不会自动变小；释放出的空间会被新数据复用，也可以在这里回收给系统。":
+    "Clearing or expiring logs does not shrink the database file. The freed space is reused for new data, and you can return it to the system here.",
+  读取数据库空间失败: "Failed to read database space",
+  远程数据库模式下不支持此操作: "Not available with remote database storage",
+  已用空间: "Used",
+  可回收空间: "Reclaimable",
+  数据库文件: "Database file",
+  "WAL 文件": "WAL file",
+  自动回收模式: "Auto-vacuum mode",
+  增量回收: "Incremental",
+  完整回收: "Full",
+  正在后台分批清理已清空的请求内容: "Removing cleared request payloads in the background",
+  "数据库整理中，请勿关闭应用": "Rebuilding the database, keep the app open",
+  "上次回收失败：{error}": "Last reclaim failed: {error}",
+  "回收中...": "Reclaiming...",
+  立即回收: "Reclaim now",
+  启用增量回收并整理数据库: "Enable incremental reclaim and rebuild",
+  已开始在后台回收空间: "Reclaiming space in the background",
+  数据库整理已开始: "Database rebuild started",
+  回收失败: "Reclaim failed",
+  整理数据库: "Rebuild database",
+  "当前数据库创建于旧版本，未启用增量回收。整理会重写整个数据库文件：数据目录和系统临时目录各需要约等于已用空间的空闲磁盘，耗时取决于数据库大小，期间网关写入日志可能短暂等待，建议在低峰时执行。完成后，之后释放的空间都可以在后台逐步回收。":
+    "This database was created by an older version without incremental reclaim. Rebuilding rewrites the whole file: the data directory and the system temp directory each need free space about the size of the used data, the duration depends on the database size, and gateway log writes may wait briefly. Run it during low traffic. Afterwards, freed space can be reclaimed gradually in the background.",
+  开始整理: "Start rebuild",
+  "磁盘空间不会立即变小，可在“设置 → 网关 → 数据库空间”中查看并回收。":
+    "Disk usage does not drop immediately. You can check and reclaim it in Settings → Gateway → Database space.",
+  已复制完整请求内容: "Full request copied",
+  "上游尝试 {number}": "Upstream attempt {number}",
+  "传输字节 SHA-256": "Wire bytes SHA-256",
+  传输编码: "Content encoding",
+  "请求体展示为解码后内容；上方摘要对应实际发送的压缩字节。":
+    "The payload shown is decoded; the checksum above is for the compressed bytes actually sent.",
+  请求内容脱敏: "Redact request payloads",
+  "开启后，请求日志里保存的请求内容会把密钥、Token、密码等凭据字段替换为 [REDACTED]；关闭后按原样保存，不做任何脱敏。仅影响之后的新请求。":
+    "When enabled, credential-like fields (keys, tokens, passwords) in stored request payloads are replaced with [REDACTED]; when disabled the payload is stored exactly as sent. Applies to new requests only.",
+  "请求内容仅保留 16 KB 预览": "Keep only a 16 KB payload preview",
+  "开启后每个请求只保存前 16 KB，超出部分截断；关闭后完整保存请求内容，同一会话的历史消息只存一份，按需拼回完整请求。仅影响之后的新请求。":
+    "When enabled only the first 16 KB of each request body is stored; when disabled the full body is stored, repeated conversation history is kept once and rebuilt on demand. Applies to new requests only.",
+  "上文请求 {trace}（{count} 条）": "Earlier request {trace} ({count} items)",
+  "上一轮模型输出（{id}）不在请求日志中，以下为本次请求新增内容":
+    "The previous model output ({id}) is not part of the request log; the entries below are what this request added.",
+  "本请求通过 previous_response_id（{id}）续接上文，但未找到同会话的上一请求记录":
+    "This request continues a conversation via previous_response_id ({id}), but no earlier request of the same conversation was found.",
+  "顶层字段（{count}）": "Top-level fields ({count})",
+  "{field}（{count} 条，前 {shared} 条与上一请求相同）":
+    "{field} ({count} items, the first {shared} are shared with the previous request)",
+  "{field}（{count} 条）": "{field} ({count} items)",
+  请求体来源: "Body source",
+  客户端原始: "Client",
+  发往上游: "Upstream",
+  "凭据字段已脱敏；": "Credential fields are redacted; ",
+  "未脱敏，可能包含凭据；": "Not redacted, may contain credentials; ",
+  "内容为发往上游的实际请求体。": "the content is the request body actually sent upstream.",
+  "内容为客户端原始请求体。":
+    "the content is the request body exactly as it was received from the client.",
+  "该请求依赖的上一请求记录已被清理，部分消息无法还原。":
+    "The previous request this one depends on has been cleared, so part of the conversation cannot be rebuilt.",
   展示: "display",
   "类型 / 方法 / 路径": "Type / Method / Path",
   "账号 / 密钥": "Account / Key",
@@ -1064,8 +1150,7 @@ export const EN_MESSAGES: MessageCatalog = {
   目标模型: "Target model",
   新增规则: "Add rule",
   "例如：spark*": "e.g. spark*",
-  "例如：gpt-5.4": "e.g. gpt-5.4",
-  "例如：gpt-5.4-openai-compact": "e.g. gpt-5.4-openai-compact",
+  "例如：gpt-6-sol": "e.g. gpt-6-sol",
   "左边匹配请求模型，右边填写转发目标；支持":
     "Match the request model on the left and enter the forwarding target on the right. Supports",
   "通配。平台 Key 没有强绑模型时，会先按这里把请求模型改写，再进入账号路由。":
@@ -1481,8 +1566,8 @@ export const EN_MESSAGES: MessageCatalog = {
   "重新打开 Codex CLI 引导": "Reopen the Codex CLI guide",
   后续将不再显示这份引导: "This guide will no longer be shown",
   "保存引导状态失败: {message}": "Failed to save guide state: {message}",
-  "主对话模型，推荐直接使用 gpt-5.4 作为默认工作模型":
-    "Primary chat model. It is recommended to use gpt-5.4 as the default working model.",
+  "主对话模型，推荐直接使用 gpt-6-sol 作为默认工作模型":
+    "Primary chat model. It is recommended to use gpt-6-sol as the default working model.",
   "默认模型提供方，填写 cm 代表走下面定义的本地 provider":
     "Default model provider. Setting it to cm means using the local provider defined below.",
   "代码审查或 review 场景使用的模型，这里也保持与主模型一致":
@@ -1756,14 +1841,14 @@ export const EN_MESSAGES: MessageCatalog = {
   转发路径: "Forwarded path",
   上游模型: "Upstream model",
   实际来源: "Actual source",
-  "账号直连模式不会产生新的 CodexManager 请求日志":
-    "Direct account mode does not create new CodexManager request logs",
-  "这里仅展示历史网关请求；如需记录请求，请切换到本地网关模式。":
-    "Only historical gateway requests are shown here; switch to local gateway mode if you need request logging.",
+  "本机 Codex 的账号直连请求不会写入此日志":
+    "Direct-account requests from Codex on this machine are not written to this log",
+  "下方仍展示 CodexManager 已记录的网关请求，包括其他客户端通过平台密钥产生的流量。":
+    "The list below still shows gateway requests recorded by CodexManager, including traffic from other clients using platform keys.",
   去切换为本地网关: "Switch to local gateway",
   仅网关流量: "Gateway traffic only",
-  "账号直连模式下不会产生请求日志，如需记录请求请切换到本地网关模式。":
-    "Direct account mode does not generate request logs. Switch to local gateway mode if you need logging.",
+  "当前筛选下暂无已记录的网关请求；本机 Codex 的账号直连请求不会写入此日志。":
+    "No recorded gateway requests match the current filters. Direct-account requests from Codex on this machine are not written to this log.",
   未分配: "Unassigned",
   按我的平台密钥累计: "Accumulated by my platform keys",
   归属成员: "Owner member",

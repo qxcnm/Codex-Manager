@@ -1,10 +1,11 @@
 use super::{normalize_ui_locale, normalize_ui_zoom_factor, DEFAULT_UI_LOCALE};
 
 #[test]
-fn ui_locale_normalization_defaults_to_chinese() {
+fn ui_locale_normalization_defaults_to_auto() {
     assert_eq!(normalize_ui_locale(None), DEFAULT_UI_LOCALE);
     assert_eq!(normalize_ui_locale(Some("")), DEFAULT_UI_LOCALE);
     assert_eq!(normalize_ui_locale(Some("unknown")), DEFAULT_UI_LOCALE);
+    assert_eq!(normalize_ui_locale(Some("AUTO")), "auto");
 }
 
 #[test]

@@ -37,6 +37,7 @@ struct AnthropicSseState {
 }
 
 impl AnthropicSseReader {
+    #[cfg(test)]
     pub(crate) fn from_reader<R>(
         upstream: R,
         usage_collector: Arc<Mutex<UpstreamResponseUsage>>,
@@ -47,13 +48,45 @@ impl AnthropicSseReader {
     where
         R: Read + Send + 'static,
     {
+        Self::from_pump(
+            UpstreamSseFramePump::from_reader(upstream),
+            usage_collector,
+            fallback_model,
+            tool_name_restore_map,
+            request_started_at,
+        )
+    }
+
+    pub(crate) fn from_stream_response(
+        upstream: crate::gateway::upstream::GatewayStreamResponse,
+        usage_collector: Arc<Mutex<UpstreamResponseUsage>>,
+        fallback_model: Option<&str>,
+        tool_name_restore_map: Option<crate::gateway::ToolNameRestoreMap>,
+        request_started_at: Instant,
+    ) -> Self {
+        Self::from_pump(
+            UpstreamSseFramePump::from_stream(upstream.into_body()),
+            usage_collector,
+            fallback_model,
+            tool_name_restore_map,
+            request_started_at,
+        )
+    }
+
+    pub(crate) fn from_pump(
+        upstream: UpstreamSseFramePump,
+        usage_collector: Arc<Mutex<UpstreamResponseUsage>>,
+        fallback_model: Option<&str>,
+        tool_name_restore_map: Option<crate::gateway::ToolNameRestoreMap>,
+        request_started_at: Instant,
+    ) -> Self {
         let mut state = AnthropicSseState::default();
         state.model = fallback_model
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string);
         Self {
-            upstream: UpstreamSseFramePump::from_reader(upstream),
+            upstream,
             out_cursor: Cursor::new(Vec::new()),
             state,
             tool_name_restore_map,
@@ -75,6 +108,7 @@ impl AnthropicSseReader {
     ///
     /// # 返回
     /// 返回函数执行结果
+    #[cfg(test)]
     pub(crate) fn new(
         upstream: reqwest::blocking::Response,
         usage_collector: Arc<Mutex<UpstreamResponseUsage>>,
@@ -102,11 +136,12 @@ impl AnthropicSseReader {
     ///
     /// # 返回
     /// 返回函数执行结果
-    fn next_chunk(&mut self) -> std::io::Result<Vec<u8>> {
+    async fn next_chunk(&mut self) -> std::io::Result<Vec<u8>> {
         loop {
             match self
                 .upstream
-                .recv_timeout(stream_wait_timeout(self.last_upstream_activity))
+                .recv_timeout_async(stream_wait_timeout(self.last_upstream_activity))
+                .await
             {
                 Ok(UpstreamSseFramePumpItem::Frame(frame)) => {
                     self.last_upstream_activity = Instant::now();
@@ -493,7 +528,7 @@ impl AnthropicSseReader {
                     "id": self.state.response_id.clone().unwrap_or_else(|| "msg_proxy".to_string()),
                     "type": "message",
                     "role": "assistant",
-                    "model": self.state.model.clone().unwrap_or_else(|| "gpt-5.3-codex".to_string()),
+                    "model": self.state.model.clone().unwrap_or_else(|| super::super::DEFAULT_BRIDGE_MODEL.to_string()),
                     "content": [],
                     "stop_reason": Value::Null,
                     "stop_sequence": Value::Null,
@@ -623,31 +658,33 @@ impl AnthropicSseReader {
     }
 }
 
+impl crate::http::gateway_response_body::GatewayResponseBody for AnthropicSseReader {
+    fn read_async<'a>(
+        &'a mut self,
+        buf: &'a mut [u8],
+    ) -> crate::http::gateway_response_body::BodyReadFuture<'a> {
+        Box::pin(async move {
+            loop {
+                let read = self.out_cursor.read(buf)?;
+                if read > 0 {
+                    return Ok(read);
+                }
+                if self.state.finished {
+                    return Ok(0);
+                }
+                let next = self.next_chunk().await?;
+                self.out_cursor = Cursor::new(next);
+            }
+        })
+    }
+}
+
+#[cfg(test)]
 impl Read for AnthropicSseReader {
-    /// 函数 `read`
-    ///
-    /// 作者: gaohongshun
-    ///
-    /// 时间: 2026-04-02
-    ///
-    /// # 参数
-    /// - self: 参数 self
-    /// - buf: 参数 buf
-    ///
-    /// # 返回
-    /// 返回函数执行结果
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        loop {
-            let read = self.out_cursor.read(buf)?;
-            if read > 0 {
-                return Ok(read);
-            }
-            if self.state.finished {
-                return Ok(0);
-            }
-            let next = self.next_chunk()?;
-            self.out_cursor = Cursor::new(next);
-        }
+        crate::gateway::response_test_runtime()?.block_on(
+            crate::http::gateway_response_body::GatewayResponseBody::read_async(self, buf),
+        )
     }
 }
 

@@ -35,7 +35,7 @@
   - 结果：运行时前端调用已基本收口到原生 `/v1/responses`，这轮再次全仓复核后，剩余 `/v1/chat/completions` / `/v1/completions` 主要只存在于协议兼容入口、验证逻辑、观测统计和测试覆盖中
   - 保留原因：这些剩余路径属于我们对外兼容能力的一部分，不是主功能内部调用
   - 关键代码：
-    - `crates/service/src/gateway/protocol_adapter/request_mapping/openai.rs`
+    - `crates/service/src/gateway/protocol_adapter/request_router.rs`
     - `crates/service/src/gateway/protocol_adapter/codex_adapter.rs`
 
 - [x] 统一 `response.incomplete` / `idle timeout` / body error 的归因和终态文案
@@ -66,8 +66,8 @@
     - 没有 reasoning 时不再补 `include`
     - 官方 `/v1/responses` allowlist 不再把 `stream_passthrough` 当成官方字段
   - 关键代码：
-    - `crates/service/src/gateway/protocol_adapter/request_mapping/openai.rs`
-    - `crates/service/src/gateway/request/request_rewrite_responses.rs`
+    - `crates/service/src/gateway/protocol_adapter/request_router.rs`
+    - `crates/service/src/gateway/request/official_responses_http.rs`
 
 ### P2
 

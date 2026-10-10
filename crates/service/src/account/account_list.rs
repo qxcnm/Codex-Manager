@@ -91,6 +91,7 @@ impl From<&Account> for AccountSummaryParts {
 /// 返回函数执行结果
 pub(crate) fn read_accounts() -> Result<AccountListResult, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let db_path = std::env::var("CODEXMANAGER_DB_PATH").unwrap_or_else(|_| "<unset>".to_string());
     let mut accounts = storage
         .list_account_summary_rows()
@@ -124,6 +125,7 @@ fn resolve_generated_import_labels(
     storage: &codexmanager_core::storage::Storage,
     accounts: &mut [AccountListSummaryRow],
 ) {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     for account in accounts {
         if !super::import::is_generated_import_label(&account.label) {
             continue;
@@ -186,6 +188,7 @@ fn to_account_summary_with_reason(
         label: parts.label,
         group_name: parts.group_name,
         preferred,
+        reset_warmup_enabled: true,
         sort: parts.sort,
         status: parts.status,
         status_reason,
@@ -240,6 +243,7 @@ pub(crate) fn build_account_summary_context_from_rows(
     storage: &codexmanager_core::storage::Storage,
     accounts: Vec<AccountListSummaryRow>,
 ) -> Result<AccountSummaryContext, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     build_account_summary_context_from_rows_with_options(
         storage,
         accounts,
@@ -252,6 +256,7 @@ pub(crate) fn build_account_summary_context_from_rows_with_options(
     accounts: Vec<AccountListSummaryRow>,
     options: AccountSummaryStorageSnapshotOptions,
 ) -> Result<AccountSummaryContext, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     build_account_summary_context_for_items(storage, accounts, options)
 }
 
@@ -263,6 +268,7 @@ fn build_account_summary_context_for_items<A>(
 where
     A: Into<AccountSummaryParts> + AsAccountId,
 {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     if accounts.is_empty() {
         return Ok(AccountSummaryContext {
             items: Vec::new(),
@@ -274,7 +280,15 @@ where
         .map(|account| account.account_id().to_string())
         .collect::<Vec<_>>();
     let setup = load_account_summary_setup(storage, &account_ids, options)?;
-    let items = build_account_summary_items(accounts, &setup);
+    let mut items = build_account_summary_items(accounts, &setup);
+    let reset_warmup_settings = storage
+        .list_account_reset_warmup_settings_for_accounts(&account_ids)
+        .map_err(|err| format!("load account reset warmup settings failed: {err}"))?
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+    for item in &mut items {
+        item.reset_warmup_enabled = reset_warmup_settings.get(&item.id).copied().unwrap_or(true);
+    }
     Ok(AccountSummaryContext {
         items,
         usage_snapshots: setup.usage_snapshots,
@@ -302,6 +316,7 @@ fn load_account_summary_setup(
     account_ids: &[String],
     options: AccountSummaryStorageSnapshotOptions,
 ) -> Result<AccountSummarySetup, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let snapshot = storage
         .load_account_summary_storage_snapshot_with_options(account_ids, options)
         .map_err(|err| format!("load account summary snapshot failed: {err}"))?;

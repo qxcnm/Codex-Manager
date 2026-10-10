@@ -3,14 +3,32 @@ use codexmanager_core::storage::{Account, Storage};
 use reqwest::header::{ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, ETAG, USER_AGENT};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::Mutex;
 
 const OFFICIAL_CATALOG_CACHE_DIR: &str = "official-model-catalogs";
 const OFFICIAL_CATALOG_CACHE_TTL_SECS: i64 = 300;
 static OFFICIAL_CATALOG_SYNC_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static CATALOG_PHASE_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(8);
+
+async fn catalog_phase<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let permit = CATALOG_PHASE_WORKERS
+        .acquire()
+        .await
+        .map_err(|_| "Codex catalog workers unavailable".to_owned())?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work()
+    })
+    .await
+    .map_err(|error| format!("Codex catalog worker failed: {error}"))?
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GatewayCatalogPolicy {
@@ -22,8 +40,7 @@ pub(crate) fn gateway_catalog_policy_for_api_key(
     storage: &Storage,
     api_key_id: &str,
 ) -> Result<GatewayCatalogPolicy, String> {
-    let api_key = storage
-        .find_api_key_by_id(api_key_id)
+    let api_key = crate::apikey::remote::find_by_id(storage, api_key_id)
         .map_err(|err| format!("read api key routing config failed: {err}"))?
         .ok_or_else(|| "api key not found".to_string())?;
     Ok(gateway_catalog_policy_for_rotation_strategy(
@@ -41,17 +58,33 @@ pub(crate) fn gateway_catalog_policy_for_rotation_strategy(
     }
 }
 
+// Legacy synchronous entry points are retained for desktop/Rhai callers; native routes await the async variants.
+#[allow(dead_code)]
 pub(crate) fn models_response_for_gateway_key(
     storage: &Storage,
     api_key_id: &str,
 ) -> Result<(ModelsResponse, GatewayCatalogPolicy), String> {
-    let policy = gateway_catalog_policy_for_api_key(storage, api_key_id)?;
+    crate::gateway::run_upstream_io(models_response_for_gateway_key_async(storage, api_key_id))?
+}
+
+pub(crate) async fn models_response_for_gateway_key_async(
+    storage: &Storage,
+    api_key_id: &str,
+) -> Result<(ModelsResponse, GatewayCatalogPolicy), String> {
+    let owned_storage = storage.shared_handle();
+    let owned_key = api_key_id.to_owned();
+    let policy =
+        catalog_phase(move || gateway_catalog_policy_for_api_key(&owned_storage, &owned_key))
+            .await?;
     let response = match policy {
         GatewayCatalogPolicy::OfficialAccountPool => {
-            let value = load_or_sync_official_model_catalog(storage, api_key_id)?;
-            official_models_response_from_value(value)?
+            let value = load_or_sync_official_model_catalog(storage, api_key_id).await?;
+            catalog_phase(move || official_models_response_from_value(value)).await?
         }
-        GatewayCatalogPolicy::Managed => crate::models_v2::models_response_with_storage(storage)?,
+        GatewayCatalogPolicy::Managed => {
+            let storage = storage.shared_handle();
+            catalog_phase(move || crate::models_v2::models_response_with_storage(&storage)).await?
+        }
     };
     Ok((response, policy))
 }
@@ -62,40 +95,195 @@ fn official_models_response_from_value(value: Value) -> Result<ModelsResponse, S
         .map_err(|err| format!("decode official Codex model cache failed: {err}"))
 }
 
+#[allow(dead_code)]
 pub(crate) fn write_gateway_model_catalog(
     storage: &Storage,
     api_key_id: &str,
     catalog_path: &Path,
     policy: GatewayCatalogPolicy,
 ) -> Result<usize, String> {
-    let (content, models_count) = match policy {
-        GatewayCatalogPolicy::OfficialAccountPool => {
-            let official_cache = load_or_sync_official_model_catalog(storage, api_key_id)?;
-            let official_models = official_model_catalog_from_value(&official_cache)?;
-            let models_count = official_models.len();
-            (
-                serialize_account_pool_model_catalog(&official_models)?,
-                models_count,
-            )
-        }
-        GatewayCatalogPolicy::Managed => {
-            let catalog = crate::models_v2::text_generation_models_response_with_storage(storage)?;
-            let models_count = catalog.models.len();
-            (serialize_gateway_model_catalog(&catalog)?, models_count)
-        }
-    };
-    write_atomic(catalog_path, &content)?;
+    crate::gateway::run_upstream_io(write_gateway_model_catalog_async(
+        storage,
+        api_key_id,
+        catalog_path,
+        policy,
+    ))?
+}
+
+#[allow(dead_code)]
+pub(crate) async fn write_gateway_model_catalog_async(
+    storage: &Storage,
+    api_key_id: &str,
+    catalog_path: &Path,
+    policy: GatewayCatalogPolicy,
+) -> Result<usize, String> {
+    let (content, models_count) =
+        gateway_model_catalog_content_async(storage, api_key_id, policy).await?;
+    let catalog_path = catalog_path.to_owned();
+    catalog_phase(move || write_atomic(&catalog_path, &content)).await?;
     Ok(models_count)
 }
 
-fn load_or_sync_official_model_catalog(
+pub(crate) async fn gateway_model_catalog_content_async(
+    storage: &Storage,
+    api_key_id: &str,
+    policy: GatewayCatalogPolicy,
+) -> Result<(String, usize), String> {
+    match policy {
+        GatewayCatalogPolicy::OfficialAccountPool => {
+            let official_cache = load_or_sync_official_model_catalog(storage, api_key_id).await?;
+            catalog_phase(move || {
+                let official_models = official_model_catalog_from_value(&official_cache)?;
+                let models_count = official_models.len();
+                Ok((
+                    serialize_account_pool_model_catalog(&official_models)?,
+                    models_count,
+                ))
+            })
+            .await
+        }
+        GatewayCatalogPolicy::Managed => managed_model_catalog_content_async(storage).await,
+    }
+}
+
+pub(crate) async fn managed_model_catalog_content_async(
+    storage: &Storage,
+) -> Result<(String, usize), String> {
+    let storage = storage.shared_handle();
+    catalog_phase(move || {
+        let catalog = crate::models_v2::text_generation_models_response_with_storage(&storage)?;
+        let models_count = catalog.models.len();
+        Ok((serialize_gateway_model_catalog(&catalog)?, models_count))
+    })
+    .await
+}
+
+pub(crate) async fn selected_managed_model_catalog_content_async(
+    storage: &Storage,
+    model_slugs: Vec<String>,
+) -> Result<(String, Vec<String>), String> {
+    let storage = storage.shared_handle();
+    catalog_phase(move || {
+        let mut requested = Vec::new();
+        let mut seen = HashSet::new();
+        for slug in model_slugs {
+            let slug = slug.trim();
+            if slug.is_empty() {
+                continue;
+            }
+            let normalized = slug.to_ascii_lowercase();
+            if seen.insert(normalized.clone()) {
+                requested.push((slug.to_string(), normalized));
+            }
+        }
+        if requested.is_empty() {
+            return Err("no models selected".to_string());
+        }
+
+        let requested_keys = requested
+            .iter()
+            .map(|(_, normalized)| normalized.clone())
+            .collect::<HashSet<_>>();
+        let selected = crate::models_v2::list_with_storage(&storage, true)?
+            .items
+            .into_iter()
+            .filter(|model| requested_keys.contains(&model.slug.to_ascii_lowercase()))
+            .collect::<Vec<_>>();
+        let selected_keys = selected
+            .iter()
+            .map(|model| model.slug.to_ascii_lowercase())
+            .collect::<HashSet<_>>();
+        let unknown = requested
+            .into_iter()
+            .filter_map(|(requested_slug, normalized)| {
+                (!selected_keys.contains(&normalized)).then_some(requested_slug)
+            })
+            .collect::<Vec<_>>();
+        if !unknown.is_empty() {
+            return Err(format!(
+                "unknown managed model slug(s): {}",
+                unknown.join(", ")
+            ));
+        }
+
+        let canonical_slugs = selected.iter().map(|model| model.slug.clone()).collect();
+        let catalog = ModelsResponse {
+            models: selected.iter().map(selected_codex_model_info).collect(),
+            ..ModelsResponse::default()
+        };
+        Ok((serialize_gateway_model_catalog(&catalog)?, canonical_slugs))
+    })
+    .await
+}
+
+pub(crate) async fn reconciled_managed_model_catalog_content_async(
+    storage: &Storage,
+    model_slugs: Vec<String>,
+) -> Result<(Option<String>, Vec<String>), String> {
+    let storage = storage.shared_handle();
+    catalog_phase(move || {
+        let requested_keys = model_slugs
+            .into_iter()
+            .map(|slug| slug.trim().to_ascii_lowercase())
+            .filter(|slug| !slug.is_empty())
+            .collect::<HashSet<_>>();
+        let selected = crate::models_v2::list_with_storage(&storage, true)?
+            .items
+            .into_iter()
+            .filter(|model| requested_keys.contains(&model.slug.to_ascii_lowercase()))
+            .collect::<Vec<_>>();
+        if selected.is_empty() {
+            return Ok((None, Vec::new()));
+        }
+
+        let canonical_slugs = selected.iter().map(|model| model.slug.clone()).collect();
+        let catalog = ModelsResponse {
+            models: selected.iter().map(selected_codex_model_info).collect(),
+            ..ModelsResponse::default()
+        };
+        Ok((
+            Some(serialize_gateway_model_catalog(&catalog)?),
+            canonical_slugs,
+        ))
+    })
+    .await
+}
+
+fn selected_codex_model_info(
+    model: &codexmanager_core::storage::ManagedModelV2,
+) -> codexmanager_core::rpc::types::ModelInfo {
+    let mut info = crate::models_v2::model_info(model);
+    // Applying an explicit selection is the user's allowlist for Codex's picker.
+    // Keep the stored flags unchanged for gateway/API behavior, but do not let
+    // Codex hide an explicitly selected entry when it reads this dedicated file.
+    info.visibility = Some("list".to_string());
+    info.supported_in_api = true;
+    info
+}
+
+async fn load_official_snapshot_async(
+    cache_path: &Path,
+    client_version: &str,
+) -> Result<Option<Value>, String> {
+    let cache_path = cache_path.to_owned();
+    let client_version = client_version.to_owned();
+    catalog_phase(move || {
+        Ok(load_compatible_official_snapshot(
+            &cache_path,
+            &client_version,
+        ))
+    })
+    .await
+}
+
+async fn load_or_sync_official_model_catalog(
     storage: &Storage,
     api_key_id: &str,
 ) -> Result<Value, String> {
     let client_version = crate::gateway::current_codex_user_agent_version();
     let cache_path = official_catalog_cache_path(api_key_id);
     let now = chrono::Utc::now().timestamp();
-    let cached = load_compatible_official_snapshot(&cache_path, &client_version);
+    let cached = load_official_snapshot_async(&cache_path, &client_version).await?;
     if cached
         .as_ref()
         .is_some_and(|value| official_snapshot_is_fresh(value, now))
@@ -104,10 +292,10 @@ fn load_or_sync_official_model_catalog(
     }
 
     let sync_lock = OFFICIAL_CATALOG_SYNC_LOCK.get_or_init(|| Mutex::new(()));
-    let _guard = crate::lock_utils::lock_recover(sync_lock, "official_catalog_sync");
+    let lease = Arc::new(sync_lock.lock().await);
 
     // Another caller may have completed the refresh while this caller waited for the lock.
-    let cached = load_compatible_official_snapshot(&cache_path, &client_version);
+    let cached = load_official_snapshot_async(&cache_path, &client_version).await?;
     if cached
         .as_ref()
         .is_some_and(|value| official_snapshot_is_fresh(value, chrono::Utc::now().timestamp()))
@@ -115,11 +303,16 @@ fn load_or_sync_official_model_catalog(
         return Ok(cached.expect("checked above"));
     }
 
-    match fetch_official_model_catalog(storage, api_key_id, &client_version) {
+    match fetch_official_model_catalog(storage, api_key_id, &client_version).await {
         Ok((response, etag)) => {
+            // A cancelled request must not release the sync lock before its
+            // already-started snapshot write commits on the disk worker.
+            catalog_phase(move || {
+            let _lease = lease;
             let snapshot = build_official_snapshot(response, &client_version, etag.as_deref())?;
             write_official_snapshot(&cache_path, &snapshot)?;
             Ok(snapshot)
+            }).await
         }
         Err(err) => match cached {
             Some(snapshot) => {
@@ -135,13 +328,15 @@ fn load_or_sync_official_model_catalog(
     }
 }
 
-fn fetch_official_model_catalog(
+async fn fetch_official_model_catalog(
     storage: &Storage,
     api_key_id: &str,
     client_version: &str,
 ) -> Result<(Value, Option<String>), String> {
-    let api_key = storage
-        .find_api_key_by_id(api_key_id)
+    let owned_storage = storage.shared_handle();
+    let api_key_id = api_key_id.to_owned();
+    let (upstream_base, routed) = catalog_phase(move || {
+    let api_key = crate::apikey::remote::find_by_id(&owned_storage, &api_key_id)
         .map_err(|err| format!("read api key routing config failed: {err}"))?
         .ok_or_else(|| "api key not found".to_string())?;
     let upstream_base = crate::gateway::gateway_resolve_effective_upstream_base(&api_key);
@@ -150,6 +345,11 @@ fn fetch_official_model_catalog(
             "account-pool model sync requires the official ChatGPT Codex backend, got {upstream_base}"
         ));
     }
+    let routed = crate::gateway::gateway_collect_routed_candidates_with_log_source(
+        &owned_storage, &api_key_id, None,
+    )?;
+    Ok((upstream_base, routed))
+    }).await?;
 
     let (models_url, _) =
         crate::gateway::gateway_compute_upstream_url(&upstream_base, "/v1/models");
@@ -159,19 +359,18 @@ fn fetch_official_model_catalog(
         .query_pairs_mut()
         .append_pair("client_version", client_version);
 
-    let routed = crate::gateway::gateway_collect_routed_candidates_with_log_source(
-        storage, api_key_id, None,
-    )?;
     if routed.candidates.is_empty() {
         return Err("no available OpenAI account for official model sync".to_string());
     }
 
     let mut errors = Vec::new();
     for (account, mut token) in routed.candidates {
-        let result = (|| {
-            let bearer =
-                crate::gateway::gateway_resolve_openai_bearer_token(storage, &account, &mut token)?;
-            let client = crate::gateway::upstream_client_for_account(account.id.as_str())?;
+        let result = async {
+            let bearer = crate::gateway::gateway_resolve_openai_bearer_token_async(
+                storage, &account, &mut token,
+            )
+            .await?;
+            let client = crate::gateway::async_upstream_client_for_account(account.id.as_str())?;
             let mut request = client
                 .get(models_url.clone())
                 .header(
@@ -187,10 +386,11 @@ fn fetch_official_model_catalog(
             }
             let response = request
                 .send()
+                .await
                 .map_err(|err| format!("request official Codex model endpoint failed: {err}"))?;
             if !response.status().is_success() {
                 let status = response.status();
-                let body = response.text().unwrap_or_default();
+                let body = response.text().await.unwrap_or_default();
                 return Err(format!(
                     "official Codex model endpoint returned {status}: {}",
                     truncate_error_body(&body)
@@ -201,12 +401,19 @@ fn fetch_official_model_catalog(
                 .get(ETAG)
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_string);
-            let value = response
-                .json::<Value>()
-                .map_err(|err| format!("decode official Codex model response failed: {err}"))?;
-            official_model_catalog_from_value(&value)?;
-            Ok((value, response_etag))
-        })();
+            let body = response
+                .bytes()
+                .await
+                .map_err(|err| format!("read official Codex model response failed: {err}"))?;
+            catalog_phase(move || {
+                let value = serde_json::from_slice::<Value>(&body)
+                    .map_err(|err| format!("decode official Codex model response failed: {err}"))?;
+                official_model_catalog_from_value(&value)?;
+                Ok((value, response_etag))
+            })
+            .await
+        }
+        .await;
         match result {
             Ok(value) => return Ok(value),
             Err(err) => errors.push(format!("account {}: {err}", account.id)),
@@ -222,7 +429,15 @@ fn official_chatgpt_account_id<'a>(account: &'a Account, upstream_base: &str) ->
     account
         .chatgpt_account_id
         .as_deref()
-        .or(account.workspace_id.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            account
+                .workspace_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
 }
 
 fn official_catalog_cache_path(api_key_id: &str) -> PathBuf {
@@ -403,12 +618,31 @@ fn prepare_managed_model(model: &mut codexmanager_core::rpc::types::ModelInfo) {
     {
         model.shell_type = Some("shell_command".to_string());
     }
-    model.visibility.get_or_insert_with(|| "list".to_string());
+    model.visibility = Some("list".to_string());
     model.base_instructions.get_or_insert_with(String::new);
     model
         .availability_nux
         .get_or_insert(serde_json::Value::Null);
     model.upgrade.get_or_insert(serde_json::Value::Null);
+    if let Some(serde_json::Value::Object(upgrade)) = model.upgrade.as_mut() {
+        let migration_markdown = upgrade
+            .get("migration_markdown")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                upgrade
+                    .get("upgrade_copy")
+                    .and_then(serde_json::Value::as_str)
+            })
+            .unwrap_or_default()
+            .to_string();
+        upgrade.insert(
+            "migration_markdown".to_string(),
+            serde_json::Value::String(migration_markdown),
+        );
+        upgrade
+            .entry("retirement_at".to_string())
+            .or_insert(serde_json::Value::Null);
+    }
     model.model_messages.get_or_insert_with(|| {
         serde_json::json!({
             "instructions_template": "",
@@ -523,6 +757,204 @@ fn temp_file_path(parent: &Path, target: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use codexmanager_core::rpc::types::ModelInfo;
+    use codexmanager_core::storage::{
+        ManagedModelV2, ManagedModelV2Upsert, ModelPriceV2, ModelRouteV2,
+    };
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn aggregate_model_reasoning_levels_survive_persistence_and_catalog_generation() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "codexmanager-aggregate-reasoning-catalog-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp_root).expect("create catalog temp dir");
+        let storage = Storage::open(&temp_root.join("codexmanager.db")).expect("open storage");
+        storage.init().expect("initialize storage");
+
+        let inputs = [
+            (
+                "deepseek-flash",
+                vec!["low", "medium", "high"],
+                Some("medium"),
+            ),
+            ("plain-upstream", Vec::new(), None),
+        ]
+        .into_iter()
+        .map(|(slug, efforts, default)| ManagedModelV2Upsert {
+            model: ManagedModelV2 {
+                slug: slug.to_string(),
+                display_name: slug.to_string(),
+                origin: "custom".to_string(),
+                enabled: true,
+                supported_in_api: true,
+                visibility: "list".to_string(),
+                default_reasoning_effort: default.map(str::to_string),
+                capabilities: serde_json::json!({
+                    "supports_text_generation": true,
+                    "reasoningEfforts": efforts,
+                }),
+                instructions_mode: "passthrough".to_string(),
+                price: ModelPriceV2 {
+                    price_status: "missing".to_string(),
+                    ..Default::default()
+                },
+                routes: vec![ModelRouteV2 {
+                    source_kind: "aggregate_api".to_string(),
+                    source_id: "agg-deepseek".to_string(),
+                    upstream_model: slug.to_string(),
+                    enabled: true,
+                    weight: 1,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+        storage
+            .upsert_managed_models_v2(&inputs)
+            .expect("save aggregate models");
+
+        let stored = storage
+            .get_managed_model_v2("deepseek-flash")
+            .expect("read configured model")
+            .expect("configured model exists");
+        assert_eq!(
+            stored.capabilities["reasoningEfforts"],
+            serde_json::json!(["low", "medium", "high"])
+        );
+        assert_eq!(stored.default_reasoning_effort.as_deref(), Some("medium"));
+
+        let (full_content, _) = managed_model_catalog_content_async(&storage)
+            .await
+            .expect("generate managed catalog");
+        let (selected_content, selected_slugs) = selected_managed_model_catalog_content_async(
+            &storage,
+            vec!["deepseek-flash".to_string(), "plain-upstream".to_string()],
+        )
+        .await
+        .expect("generate selected catalog");
+        assert_eq!(selected_slugs, ["deepseek-flash", "plain-upstream"]);
+
+        for content in [full_content, selected_content] {
+            let catalog: Value = serde_json::from_str(&content).expect("parse generated catalog");
+            let models = catalog["models"].as_array().expect("models array");
+            let reasoning = models
+                .iter()
+                .find(|model| model["slug"] == "deepseek-flash")
+                .expect("configured aggregate model");
+            assert_eq!(reasoning["default_reasoning_level"], "medium");
+            assert_eq!(
+                reasoning["supported_reasoning_levels"],
+                serde_json::json!([
+                    {"effort": "low", "description": ""},
+                    {"effort": "medium", "description": ""},
+                    {"effort": "high", "description": ""}
+                ])
+            );
+            let unsupported = models
+                .iter()
+                .find(|model| model["slug"] == "plain-upstream")
+                .expect("unconfigured aggregate model");
+            assert_eq!(
+                unsupported["supported_reasoning_levels"],
+                serde_json::json!([])
+            );
+            assert!(unsupported["default_reasoning_level"].is_null());
+        }
+
+        drop(storage);
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn selected_catalog_uses_catalog_order_and_canonical_slugs() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "codexmanager-selected-models-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp_root).expect("create catalog temp dir");
+        let db_path = temp_root.join("codexmanager.db");
+        let storage = Storage::open(&db_path).expect("open catalog storage");
+        storage.init().expect("initialize catalog storage");
+        let mut image_model = storage
+            .get_managed_model_v2("gpt-image-2")
+            .expect("read image model")
+            .expect("seeded image model");
+        image_model.enabled = false;
+        image_model.supported_in_api = false;
+        image_model.visibility = "hide".to_string();
+        storage
+            .upsert_managed_model_v2(&codexmanager_core::storage::ManagedModelV2Upsert {
+                previous_slug: Some(image_model.slug.clone()),
+                model: image_model,
+            })
+            .expect("make image model hidden and unavailable");
+        let requested_keys = HashSet::from(["gpt-6-sol", "gpt-image-2"]);
+        let expected = crate::models_v2::list_with_storage(&storage, true)
+            .expect("list full catalog")
+            .items
+            .into_iter()
+            .filter(|model| requested_keys.contains(model.slug.as_str()))
+            .map(|model| model.slug)
+            .collect::<Vec<_>>();
+        assert_eq!(expected.len(), 2);
+
+        let (content, canonical) = selected_managed_model_catalog_content_async(
+            &storage,
+            vec![
+                " GPT-IMAGE-2 ".to_string(),
+                "gpt-6-sol".to_string(),
+                "GPT-6-SOL".to_string(),
+            ],
+        )
+        .await
+        .expect("build selected catalog");
+        assert_eq!(canonical, expected);
+        let catalog: serde_json::Value = serde_json::from_str(&content).expect("parse catalog");
+        let models = catalog["models"].as_array().expect("models array");
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| model["slug"].as_str().expect("model slug").to_string())
+                .collect::<Vec<_>>(),
+            canonical
+        );
+        assert!(models
+            .iter()
+            .all(|model| model["visibility"].as_str() == Some("list")));
+        assert!(!models.iter().any(|model| model["slug"] == "gpt-5.6-sol"));
+        let image = models
+            .iter()
+            .find(|model| model["slug"] == "gpt-image-2")
+            .expect("selected image model");
+        assert_eq!(image["visibility"], "list");
+        assert_eq!(image["supported_in_api"], true);
+        assert_eq!(image["supports_text_generation"], false);
+        assert_eq!(image["output_modalities"], serde_json::json!(["image"]));
+        assert_eq!(
+            image["supported_endpoints"],
+            serde_json::json!(["/v1/images/generations", "/v1/images/edits"])
+        );
+        let stored_image = storage
+            .get_managed_model_v2("gpt-image-2")
+            .expect("read persisted image model")
+            .expect("persisted image model");
+        assert!(!stored_image.enabled);
+        assert!(!stored_image.supported_in_api);
+        assert_eq!(stored_image.visibility, "hide");
+
+        drop(storage);
+        let _ = fs::remove_dir_all(temp_root);
+    }
 
     #[test]
     fn gateway_catalog_serializes_models_response_shape() {
@@ -616,6 +1048,31 @@ mod tests {
             value["models"][0]["shell_type"].as_str(),
             Some("custom_shell")
         );
+    }
+
+    #[test]
+    fn gateway_catalog_normalizes_legacy_upgrade_metadata_for_current_codex() {
+        let catalog = ModelsResponse {
+            models: vec![ModelInfo {
+                slug: "gpt-old".to_string(),
+                display_name: "GPT Old".to_string(),
+                upgrade: Some(serde_json::json!({
+                    "model": "gpt-new",
+                    "upgrade_copy": "Use GPT New"
+                })),
+                ..ModelInfo::default()
+            }],
+            ..ModelsResponse::default()
+        };
+
+        let content = serialize_gateway_model_catalog(&catalog).expect("serialize catalog");
+        let value: Value = serde_json::from_str(&content).expect("parse catalog");
+        let upgrade = &value["models"][0]["upgrade"];
+
+        assert_eq!(upgrade["model"].as_str(), Some("gpt-new"));
+        assert_eq!(upgrade["upgrade_copy"].as_str(), Some("Use GPT New"));
+        assert_eq!(upgrade["migration_markdown"].as_str(), Some("Use GPT New"));
+        assert!(upgrade["retirement_at"].is_null());
     }
 
     #[test]
@@ -762,5 +1219,59 @@ mod tests {
         let err = serialize_gateway_model_catalog(&ModelsResponse::default())
             .expect_err("empty catalog must fail");
         assert!(err.contains("empty"));
+    }
+
+    #[test]
+    fn official_model_sync_omits_empty_account_identity_header_value() {
+        let account = Account {
+            id: "account-1".to_string(),
+            label: "Account 1".to_string(),
+            issuer: "https://auth.openai.com".to_string(),
+            chatgpt_account_id: Some("  ".to_string()),
+            workspace_id: Some("\t".to_string()),
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        assert_eq!(
+            official_chatgpt_account_id(&account, "https://chatgpt.com/backend-api/codex"),
+            None
+        );
+
+        let account = Account {
+            id: "account-1b".to_string(),
+            label: "Account 1b".to_string(),
+            issuer: "https://auth.openai.com".to_string(),
+            chatgpt_account_id: Some("  ".to_string()),
+            workspace_id: Some(" workspace-456 ".to_string()),
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        assert_eq!(
+            official_chatgpt_account_id(&account, "https://chatgpt.com/backend-api/codex"),
+            Some("workspace-456")
+        );
+
+        let account = Account {
+            id: "account-2".to_string(),
+            label: "Account 2".to_string(),
+            issuer: "https://auth.openai.com".to_string(),
+            chatgpt_account_id: Some("  account-123  ".to_string()),
+            workspace_id: Some("workspace-456".to_string()),
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        assert_eq!(
+            official_chatgpt_account_id(&account, "https://chatgpt.com/backend-api/codex"),
+            Some("account-123")
+        );
     }
 }

@@ -1,8 +1,8 @@
+use crate::http::gateway_request::GatewayRequest as Request;
 use bytes::Bytes;
 use codexmanager_core::storage::{Account, Storage, Token, UsageSnapshotRecord};
 use std::collections::HashMap;
 use std::time::Instant;
-use tiny_http::Request;
 
 use super::super::attempt_flow::transport::UpstreamRequestContext;
 use super::super::executor::CandidateUpstreamDecision;
@@ -61,7 +61,9 @@ fn usage_snapshots_for_candidate_plans(
         return HashMap::new();
     }
 
-    match storage.latest_usage_snapshots_for_accounts(&account_ids) {
+    match crate::account::remote_storage::AccountStorage::new(&storage)
+        .latest_usage_snapshots_for_accounts(&account_ids)
+    {
         Ok(snapshots) => snapshots
             .into_iter()
             .map(|snapshot| (snapshot.account_id.clone(), snapshot))
@@ -169,8 +171,7 @@ fn account_model_override_for_request(
 ) -> Option<String> {
     model_for_log
         .and_then(|model| {
-            storage
-                .get_enabled_model_v2(crate::models_v2::policy_catalog_slug(model))
+            crate::models_v2::enabled_model(storage, crate::models_v2::policy_catalog_slug(model))
                 .ok()
                 .flatten()
         })
@@ -253,7 +254,30 @@ fn respond_terminal_attempt(
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(in super::super) fn execute_candidate_sequence(
+fn finalize_cancelled_candidate(
+    request: &Request,
+    context: &GatewayUpstreamExecutionContext<'_>,
+    account_id: Option<&str>,
+    upstream_url: Option<&str>,
+    started_at: Instant,
+    attempted_account_ids: &[String],
+) -> bool {
+    if !request.is_cancelled() {
+        return false;
+    }
+    context.log_final_result(
+        account_id,
+        upstream_url,
+        499,
+        super::super::super::request_log::RequestLogUsage::default(),
+        Some("downstream request cancelled"),
+        started_at.elapsed().as_millis(),
+        Some(attempted_account_ids),
+    );
+    true
+}
+
+pub(in super::super) async fn execute_candidate_sequence(
     request: Request,
     candidates: Vec<(Account, Token)>,
     params: CandidateExecutorParams<'_>,
@@ -295,6 +319,18 @@ pub(in super::super) fn execute_candidate_sequence(
         .map(|(account, _)| account.id.clone())
         .collect::<Vec<_>>();
     for (idx, (account, mut token)) in candidates.into_iter().enumerate() {
+        if finalize_cancelled_candidate(
+            request
+                .as_ref()
+                .ok_or_else(|| "request already consumed".to_owned())?,
+            context,
+            attempted_account_ids.last().map(String::as_str),
+            last_attempt_url.as_deref(),
+            started_at,
+            &attempted_account_ids,
+        ) {
+            return Ok(CandidateExecutionResult::Handled);
+        }
         if deadline::is_expired(request_deadline) {
             let request = request
                 .take()
@@ -368,7 +404,8 @@ pub(in super::super) fn execute_candidate_sequence(
             .as_ref()
             .ok_or_else(|| "request already consumed".to_string())?;
         let request_ctx =
-            UpstreamRequestContext::from_request(request_ref, context.protocol_type());
+            UpstreamRequestContext::from_request(request_ref, context.protocol_type())
+                .with_capture(context.payload_capture());
         let incoming_session_id = attempt_headers.session_id();
         let incoming_turn_state = attempt_headers.turn_state();
         let incoming_conversation_id = attempt_headers.conversation_id();
@@ -415,7 +452,20 @@ pub(in super::super) fn execute_candidate_sequence(
             context,
             setup,
             trace: &mut attempt_trace,
-        });
+        })
+        .await;
+        if finalize_cancelled_candidate(
+            request
+                .as_ref()
+                .ok_or_else(|| "request already consumed".to_owned())?,
+            context,
+            Some(&account.id),
+            attempt_trace.last_attempt_url.as_deref(),
+            started_at,
+            &attempted_account_ids,
+        ) {
+            return Ok(CandidateExecutionResult::Handled);
+        }
 
         // A transient upstream error gets one retry on the same account. If that
         // retry also fails, the normal candidate failover path selects the next
@@ -435,7 +485,8 @@ pub(in super::super) fn execute_candidate_sequence(
                 .as_ref()
                 .ok_or_else(|| "request already consumed before same-account retry".to_string())?;
             let retry_request_ctx =
-                UpstreamRequestContext::from_request(request_ref, context.protocol_type());
+                UpstreamRequestContext::from_request(request_ref, context.protocol_type())
+                    .with_capture(context.payload_capture());
             decision = run_candidate_attempt(CandidateAttemptParams {
                 storage,
                 method,
@@ -455,7 +506,20 @@ pub(in super::super) fn execute_candidate_sequence(
                 context,
                 setup,
                 trace: &mut attempt_trace,
-            });
+            })
+            .await;
+            if finalize_cancelled_candidate(
+                request
+                    .as_ref()
+                    .ok_or_else(|| "request already consumed".to_owned())?,
+                context,
+                Some(&account.id),
+                attempt_trace.last_attempt_url.as_deref(),
+                started_at,
+                &attempted_account_ids,
+            ) {
+                return Ok(CandidateExecutionResult::Handled);
+            }
         }
 
         match decision {
@@ -547,7 +611,20 @@ pub(in super::super) fn execute_candidate_sequence(
                         context,
                         setup,
                         trace: &mut attempt_trace,
-                    });
+                    })
+                    .await;
+                    if finalize_cancelled_candidate(
+                        request
+                            .as_ref()
+                            .ok_or_else(|| "request already consumed".to_owned())?,
+                        context,
+                        Some(&account.id),
+                        attempt_trace.last_attempt_url.as_deref(),
+                        started_at,
+                        &attempted_account_ids,
+                    ) {
+                        return Ok(CandidateExecutionResult::Handled);
+                    }
 
                     match retry_decision {
                         CandidateUpstreamDecision::RespondUpstream(retry_resp) => {
@@ -584,12 +661,29 @@ pub(in super::super) fn execute_candidate_sequence(
                         }
                     }
                 }
-                match preflight_stream_response(
-                    resp,
-                    path,
-                    upstream_is_stream,
-                    context.has_more_candidates(idx),
+                let preflight = crate::http::gateway_request::with_response_cancellation(
+                    preflight_stream_response(
+                        resp,
+                        path,
+                        upstream_is_stream,
+                        context.has_more_candidates(idx),
+                    ),
+                )
+                .await;
+
+                if finalize_cancelled_candidate(
+                    request
+                        .as_ref()
+                        .ok_or_else(|| "request already consumed".to_owned())?,
+                    context,
+                    Some(&account.id),
+                    attempt_trace.last_attempt_url.as_deref(),
+                    started_at,
+                    &attempted_account_ids,
                 ) {
+                    return Ok(CandidateExecutionResult::Handled);
+                }
+                match preflight.map_err(|()| "downstream request cancelled".to_owned())? {
                     StreamPreflightOutcome::Ready(response) => {
                         resp = response;
                     }
@@ -698,7 +792,9 @@ pub(in super::super) fn execute_candidate_sequence(
                     attempt_model_for_log,
                     Some(attempted_account_ids.as_slice()),
                     context.has_more_candidates(idx),
-                )? {
+                )
+                .await?
+                {
                     FinalizeUpstreamResponseOutcome::Handled => {
                         if let Err(err) = super::super::super::conversation_binding::record_conversation_binding_terminal_response(
                             storage,

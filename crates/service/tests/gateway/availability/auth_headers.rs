@@ -47,8 +47,13 @@ fn resolve_openai_bearer_token_uses_cached_storage_value() {
         last_refresh: now_ts(),
     };
 
-    let bearer =
-        resolve_openai_bearer_token(&storage, &account, &mut runtime_token).expect("resolve");
+    let bearer = crate::gateway::run_upstream_io(resolve_openai_bearer_token(
+        &storage,
+        &account,
+        &mut runtime_token,
+    ))
+    .expect("gateway async test runtime")
+    .expect("resolve");
     assert_eq!(bearer, "cached-api-key-token");
     assert_eq!(
         runtime_token.api_key_access_token.as_deref(),

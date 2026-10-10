@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { LanguageSwitcher } from "@/components/layout/language-switcher";
 import type { UpdateCheckResult, UpdatePrepareResult } from "@/lib/api/app-updates";
 import type { AppSettings } from "@/types";
 
@@ -77,66 +78,79 @@ export function GeneralBasicsCard({
         </div>
         <CardDescription>{t("控制应用启动和窗口行为")}</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-6">
-        <Card size="sm">
-          <CardContent className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div className="space-y-1">
-              <Label>{updateActionLabel}</Label>
-              <p className="text-xs text-muted-foreground">{updateActionDescription}</p>
-              {lastUpdateCheck ? (
-                <p className="text-xs text-muted-foreground">
-                  {preparedUpdate
-                    ? `${t("已下载")} ${preparedUpdate.latestVersion || preparedUpdate.releaseTag || t("新版本")}${t("，等待替换更新")}`
-                    : lastUpdateCheck.hasUpdate
-                      ? `${t("发现新版本")} ${lastUpdateCheck.latestVersion || lastUpdateCheck.releaseTag || t("可用")}`
-                      : lastUpdateCheck.reason || `${t("当前版本")} ${lastUpdateCheck.currentVersion || t("未知")} ${t("已是最新")}`}
-                </p>
-              ) : null}
-              {shouldShowUpdateLogsEntry ? (
-                <div className="pt-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-auto px-0 text-xs text-muted-foreground hover:text-foreground"
-                    onClick={handleOpenUpdateLogsDir}
-                  >
-                    <FolderOpen className="h-3.5 w-3.5" />
-                    {t("打开日志目录")}
-                  </Button>
-                </div>
-              ) : null}
-            </div>
-            <Button
-              variant="outline"
-              className="gap-2 self-start md:self-auto"
-              disabled={!canSelfUpdate || updateActionBusy}
-              onClick={handleUpdateAction}
-            >
-              {manualUpdateCheckPending ? (
-                <RefreshCw className="h-4 w-4 animate-spin" />
-              ) : prepareUpdatePending ? (
-                <Download className="h-4 w-4 animate-pulse" />
-              ) : applyPreparedUpdatePending ? (
-                <RefreshCw className="h-4 w-4 animate-spin" />
-              ) : hasPreparedUpdate ? (
-                <Check className="h-4 w-4" />
-              ) : canDownloadUpdate ? (
-                <Download className="h-4 w-4" />
-              ) : (
-                <RefreshCw className="h-4 w-4" />
-              )}
-              {updateActionBusyLabel}
-            </Button>
-          </CardContent>
-        </Card>
-        <div className="flex items-center justify-between">
-          <div className="space-y-0.5">
+      <CardContent className="divide-y divide-border/60">
+        <div className="flex items-center justify-between gap-4 pb-3" data-testid="settings-language-row">
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <Label htmlFor="settings-language">{t("界面语言")}</Label>
+            <p id="settings-language-description" className="text-xs text-muted-foreground">
+              {t("自动检测会跟随系统语言，不支持的语言使用英文。")}
+            </p>
+          </div>
+          <LanguageSwitcher
+            compact
+            triggerId="settings-language"
+            descriptionId="settings-language-description"
+            className="shrink-0"
+          />
+        </div>
+        <div className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0 space-y-1">
+            <Label>{updateActionLabel}</Label>
+            <p className="text-xs text-muted-foreground">{updateActionDescription}</p>
+            {lastUpdateCheck ? (
+              <p className="text-xs text-muted-foreground">
+                {preparedUpdate
+                  ? `${t("已下载")} ${preparedUpdate.latestVersion || preparedUpdate.releaseTag || t("新版本")}${t("，等待替换更新")}`
+                  : lastUpdateCheck.hasUpdate
+                    ? `${t("发现新版本")} ${lastUpdateCheck.latestVersion || lastUpdateCheck.releaseTag || t("可用")}`
+                    : lastUpdateCheck.reason || `${t("当前版本")} ${lastUpdateCheck.currentVersion || t("未知")} ${t("已是最新")}`}
+              </p>
+            ) : null}
+            {shouldShowUpdateLogsEntry ? (
+              <div className="pt-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-auto px-0 text-xs text-muted-foreground hover:text-foreground"
+                  onClick={handleOpenUpdateLogsDir}
+                >
+                  <FolderOpen className="h-3.5 w-3.5" />
+                  {t("打开日志目录")}
+                </Button>
+              </div>
+            ) : null}
+          </div>
+          <Button
+            variant="outline"
+            className="gap-2 self-start md:self-auto"
+            disabled={!canSelfUpdate || updateActionBusy}
+            onClick={handleUpdateAction}
+          >
+            {manualUpdateCheckPending ? (
+              <RefreshCw className="h-4 w-4 animate-spin" />
+            ) : prepareUpdatePending ? (
+              <Download className="h-4 w-4 animate-pulse" />
+            ) : applyPreparedUpdatePending ? (
+              <RefreshCw className="h-4 w-4 animate-spin" />
+            ) : hasPreparedUpdate ? (
+              <Check className="h-4 w-4" />
+            ) : canDownloadUpdate ? (
+              <Download className="h-4 w-4" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            {updateActionBusyLabel}
+          </Button>
+        </div>
+        <div className="flex items-center justify-between gap-4 py-3">
+          <div className="min-w-0 space-y-0.5">
             <Label>{t("自动检查更新")}</Label>
             <p className="text-xs text-muted-foreground">
               {t("启动完成后在后台检查更新，并每 7 小时检查一次")}
             </p>
           </div>
           <Switch
+            aria-label={t("自动检查更新")}
             checked={snapshot.updateAutoCheck}
             disabled={!canSelfUpdate}
             onCheckedChange={(value) =>
@@ -144,41 +158,41 @@ export function GeneralBasicsCard({
             }
           />
         </div>
-        <div className="flex items-center justify-between gap-4">
-          <div className="space-y-0.5">
-            <Label>{t("移除 requires_openai_auth")}</Label>
-            <p className="text-xs text-muted-foreground">
-              {t(
-                "开启后，在切换到 CodexManager 网关或同步配置时移除 requires_openai_auth；关闭时保留现有配置，默认关闭",
-              )}
+        <div className="flex items-center justify-between gap-4 py-3">
+          <div className="min-w-0 flex flex-col gap-0.5">
+            <Label htmlFor="settings-remove-openai-auth">{t("移除 requires_openai_auth")}</Label>
+            <p id="settings-remove-openai-auth-description" className="text-xs text-muted-foreground">
+              {t("默认开启，在切换到网关或同步配置时清理旧认证标记；关闭仅保留已有值，不恢复已删除的配置。保留 true 可能禁用图片扩展。")}
             </p>
           </div>
           <Switch
+            id="settings-remove-openai-auth"
+            aria-describedby="settings-remove-openai-auth-description"
             checked={snapshot.removeRequiresOpenaiAuth}
-            onCheckedChange={(value) =>
-              updateSettings.mutate({ removeRequiresOpenaiAuth: value })
-            }
+            onCheckedChange={(value) => updateSettings.mutate({ removeRequiresOpenaiAuth: value })}
           />
         </div>
-        <div className="flex items-center justify-between">
-          <div className="space-y-0.5">
+        <div className="flex items-center justify-between gap-4 py-3">
+          <div className="min-w-0 space-y-0.5">
             <Label>{t("开机自动启动")}</Label>
             <p className="text-xs text-muted-foreground">{t("系统登录后自动启动桌面端并保持网关可用")}</p>
           </div>
           <Switch
+            aria-label={t("开机自动启动")}
             checked={snapshot.autoStartEnabled}
             disabled={!canAutoStart || !snapshot.autoStartSupported}
             onCheckedChange={(value) => updateSettings.mutate({ autoStartEnabled: value })}
           />
         </div>
-        <div className="flex items-center justify-between">
-          <div className="space-y-0.5">
+        <div className="flex items-center justify-between gap-4 py-3">
+          <div className="min-w-0 space-y-0.5">
             <Label>{t("启动时显示主界面")}</Label>
             <p className="text-xs text-muted-foreground">
               {t("开启时直接显示主界面；关闭此项时保持隐藏，可从托盘菜单打开")}
             </p>
           </div>
           <Switch
+            aria-label={t("启动时显示主界面")}
             checked={snapshot.showMainWindowOnStartup}
             disabled={!snapshot.closeToTraySupported}
             onCheckedChange={(value) =>
@@ -186,19 +200,20 @@ export function GeneralBasicsCard({
             }
           />
         </div>
-        <div className="flex items-center justify-between">
-          <div className="space-y-0.5">
+        <div className="flex items-center justify-between gap-4 py-3">
+          <div className="min-w-0 space-y-0.5">
             <Label>{t("关闭时最小化到托盘")}</Label>
             <p className="text-xs text-muted-foreground">{t("点击关闭按钮不会直接退出程序")}</p>
           </div>
           <Switch
+            aria-label={t("关闭时最小化到托盘")}
             checked={snapshot.closeToTrayOnClose}
             disabled={!canCloseToTray || !snapshot.closeToTraySupported}
             onCheckedChange={(value) => updateSettings.mutate({ closeToTrayOnClose: value })}
           />
         </div>
-        <div className="flex items-center justify-between">
-          <div className="space-y-0.5">
+        <div className="flex items-center justify-between gap-4 py-3">
+          <div className="min-w-0 space-y-0.5">
             <Label>{t("窗口界面资源常驻")}</Label>
             <p className="text-xs text-muted-foreground">
               {!snapshot.closeToTrayOnClose
@@ -209,6 +224,7 @@ export function GeneralBasicsCard({
             </p>
           </div>
           <Switch
+            aria-label={t("窗口界面资源常驻")}
             checked={snapshot.keepWindowUiMounted}
             disabled={
               !canCloseToTray ||
@@ -218,12 +234,13 @@ export function GeneralBasicsCard({
             onCheckedChange={(value) => updateSettings.mutate({ keepWindowUiMounted: value })}
           />
         </div>
-        <div className="flex items-center justify-between">
-          <div className="space-y-0.5">
+        <div className="flex items-center justify-between gap-4 pt-3">
+          <div className="min-w-0 space-y-0.5">
             <Label>{t("视觉性能模式")}</Label>
             <p className="text-xs text-muted-foreground">{t("关闭毛玻璃等特效以提升低配电脑性能")}</p>
           </div>
           <Switch
+            aria-label={t("视觉性能模式")}
             checked={snapshot.lowTransparency}
             onCheckedChange={(value) => updateSettings.mutate({ lowTransparency: value })}
           />

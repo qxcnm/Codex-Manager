@@ -77,24 +77,15 @@ pwsh -NoLogo -NoProfile -File scripts/rebuild.ps1 -Bundle nsis -CleanDist
 pnpm -C apps run build
 pnpm -C apps run test:runtime
 cargo test -p codexmanager-web
-pwsh -NoLogo -NoProfile -File scripts/tests/web_runtime_probe.test.ps1
 ```
 
-建议补充：
-
-```powershell
-pwsh -NoLogo -NoProfile -File scripts/tests/web_runtime_probe.ps1 `
-  -Base http://localhost:48761
-pwsh -NoLogo -NoProfile -File scripts/tests/web_ui_smoke.ps1 -SkipBuild
-```
+建议在启动 Web 服务后，通过浏览器或 HTTP 客户端验证 `/api/runtime`、`/api/rpc` 和关键页面；仓库已移除旧的 `scripts/tests/web_runtime_probe*.ps1` 与 `web_ui_smoke.ps1`。
 
 说明：
 
 - `pnpm -C apps run build`：确认前端静态导出仍可生成
 - `pnpm -C apps run test:runtime`：确认前端运行时契约和能力判定保持一致
 - `cargo test -p codexmanager-web`：确认 Web 壳路由与运行时探针契约
-- `web_runtime_probe.test.ps1`：确认 Web 运行壳最小 smoke 链路的脚本行为
-- `web_ui_smoke.ps1`：确认 Web 页面在 supported / unsupported 运行壳下的关键 UI 行为
 
 ## 5. Rust 服务端改动
 
@@ -140,21 +131,19 @@ cargo build -p codexmanager-start --release
 
 ```bash
 cargo test --workspace
-pwsh -NoLogo -NoProfile -File scripts/tests/gateway_regression_suite.ps1
-pwsh -NoLogo -NoProfile -File scripts/tests/codex_stream_probe.ps1
-pwsh -NoLogo -NoProfile -File scripts/tests/chat_tools_hit_probe.ps1
+cargo test -p codexmanager-service gateway --offline -- --test-threads=1
 ```
 
 说明：
 
-- 如果本地环境不具备真实上游账号，至少要跑 Rust 测试并保留探针执行说明。
+- 如果本地环境不具备真实上游账号，至少要跑 Rust 测试，并将真实上游验收明确记录为未执行。
 - 兼容性修复不能只验证一种客户端。
 
 ## 7. 设置项 / 环境变量 / 持久化改动
 
 适用范围：
 
-- `apps/src/settings/`
+- `apps/src/app/settings/`
 - `crates/service/src/app_settings/`
 - `crates/core/src/storage/settings.rs`
 - 新增 `CODEXMANAGER_*` 配置项
@@ -187,8 +176,7 @@ cargo test --workspace
 ```bash
 pnpm -C apps run build
 cargo test --workspace
-pwsh -NoLogo -NoProfile -File scripts/tests/assert-release-version.test.ps1
-pwsh -NoLogo -NoProfile -File scripts/tests/rebuild.test.ps1
+pnpm -C apps run build:desktop
 ```
 
 必须人工确认：
@@ -236,14 +224,13 @@ pnpm -C apps run test:runtime
 pnpm -C apps run build
 pnpm -C apps run test:runtime
 cargo test -p codexmanager-web
-pwsh -NoLogo -NoProfile -File scripts/tests/web_runtime_probe.test.ps1
 ```
 
 ### 协议适配改动
 
 ```bash
 cargo test --workspace
-pwsh -NoLogo -NoProfile -File scripts/tests/gateway_regression_suite.ps1
+cargo test -p codexmanager-service gateway --offline -- --test-threads=1
 ```
 
 ## 11. 结果记录约定

@@ -8,9 +8,15 @@ import { useDesktopPageActive } from "@/hooks/useDesktopPageActive";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
 import {
   buildManagedModelListQueryKey,
+  buildManagedModelSelectorQueryKey,
   buildModelGroupListQueryKey,
   normalizeQueryServiceAddress,
 } from "@/lib/api/account-query-keys";
+import {
+  CODEX_PROFILE_CANDIDATES_QUERY_KEY,
+  CODEX_PROFILE_STATUS_QUERY_KEY,
+  codexProfileClient,
+} from "@/lib/api/codex-profile-client";
 import { managedModelsV2Client } from "@/lib/api/managed-models-v2";
 import { getAppErrorMessage } from "@/lib/api/transport";
 import { useI18n } from "@/lib/i18n/provider";
@@ -41,7 +47,6 @@ const EMPTY_STATS: ModelCatalogV2Stats = {
 };
 
 type BatchDeleteManagedModelsResult = {
-  hidden: string[];
   deleted: string[];
   failed: Array<{ slug: string; reason: string }>;
 };
@@ -50,6 +55,11 @@ type UpdateManagedModelStateInput = {
   model: ManagedModelV2;
   enabled: boolean;
   visibility: ModelVisibilityV2;
+};
+
+type ApplyManagedModelsInput = {
+  codexHome?: string | null;
+  modelSlugs: string[];
 };
 
 function routeAssignmentKey(sourceKind: string, sourceId: string): string {
@@ -77,6 +87,8 @@ export function useManagedModels() {
   const serviceStatus = useAppStore((state) => state.serviceStatus);
   const serviceAddr = normalizeQueryServiceAddress(serviceStatus.addr);
   const managedModelsQueryKey = buildManagedModelListQueryKey(serviceAddr, true);
+  const managedModelSelectorQueryKey =
+    buildManagedModelSelectorQueryKey(serviceAddr);
   const modelGroupListQueryKey = buildModelGroupListQueryKey(serviceAddr);
   const startupSnapshotQueryKey = ["startup-snapshot", serviceAddr] as const;
   const { canAccessManagementRpc } = useRuntimeCapabilities();
@@ -101,6 +113,7 @@ export function useManagedModels() {
 
   const invalidateConsumers = async () => {
     await Promise.all([
+      queryClient.invalidateQueries({ queryKey: managedModelSelectorQueryKey }),
       queryClient.invalidateQueries({ queryKey: modelGroupListQueryKey }),
       queryClient.invalidateQueries({ queryKey: startupSnapshotQueryKey }),
     ]);
@@ -123,27 +136,16 @@ export function useManagedModels() {
   };
 
   const applyCommittedDeletesToCache = (
-    hiddenSlugs: string[],
     deletedSlugs: string[],
   ): void => {
-    const hidden = new Set(hiddenSlugs);
     const deleted = new Set(deletedSlugs);
     queryClient.setQueryData<ManagedModelListV2Result>(
       managedModelsQueryKey,
       (current) => {
         if (!current) return current;
-        const items = current.items
-          .filter((model) => !deleted.has(model.slug))
-          .map((model) =>
-            hidden.has(model.slug)
-              ? {
-                  ...model,
-                  enabled: false,
-                  visibility: "hide" as const,
-                  userEdited: true,
-                }
-              : model,
-          );
+        const items = current.items.filter(
+          (model) => !deleted.has(model.slug),
+        );
         return { items, stats: buildCatalogStats(items) };
       },
     );
@@ -268,26 +270,12 @@ export function useManagedModels() {
 
   const deleteMutation = useMutation({
     mutationFn: async (slug: string) => {
-      const catalog =
-        queryClient.getQueryData<ManagedModelListV2Result>(
-          managedModelsQueryKey,
-        ) ?? query.data;
-      const isBuiltin =
-        catalog?.items.find((model) => model.slug === slug)?.origin ===
-        "builtin";
       await managedModelsV2Client.delete(slug, serviceAddr);
-      return { isBuiltin, slug };
+      return slug;
     },
-    onSuccess: ({ isBuiltin, slug }) => {
-      applyCommittedDeletesToCache(
-        isBuiltin ? [slug] : [],
-        isBuiltin ? [] : [slug],
-      );
-      toast.success(
-        isBuiltin
-          ? t("已隐藏内置模型 {slug}", { slug })
-          : t("已删除自定义模型 {slug}", { slug }),
-      );
+    onSuccess: (slug) => {
+      applyCommittedDeletesToCache([slug]);
+      toast.success(t("已删除模型 {slug}", { slug }));
       void refreshCatalogAfterCommittedMutation();
     },
     onError: (error: unknown) => {
@@ -300,61 +288,33 @@ export function useManagedModels() {
       const normalizedSlugs = Array.from(
         new Set(slugs.map((slug) => slug.trim()).filter(Boolean)),
       );
-      const catalog =
-        queryClient.getQueryData<ManagedModelListV2Result>(
-          managedModelsQueryKey,
-        ) ?? query.data;
-      const hidden: string[] = [];
       const deleted: string[] = [];
       const failed: Array<{ slug: string; reason: string }> = [];
       for (const slug of normalizedSlugs) {
         try {
           await managedModelsV2Client.delete(slug, serviceAddr);
-          if (
-            catalog?.items.find((model) => model.slug === slug)?.origin ===
-            "builtin"
-          ) {
-            hidden.push(slug);
-          } else {
-            deleted.push(slug);
-          }
+          deleted.push(slug);
         } catch (error) {
           failed.push({ slug, reason: getAppErrorMessage(error) });
         }
       }
-      return { hidden, deleted, failed };
+      return { deleted, failed };
     },
     onSuccess: (result) => {
-      const processedCount = result.hidden.length + result.deleted.length;
+      const processedCount = result.deleted.length;
       if (processedCount > 0) {
-        applyCommittedDeletesToCache(result.hidden, result.deleted);
+        applyCommittedDeletesToCache(result.deleted);
       }
       if (processedCount > 0 && result.failed.length === 0) {
-        if (result.hidden.length > 0 && result.deleted.length > 0) {
-          toast.success(
-            t("已隐藏 {hidden} 个内置模型，并删除 {deleted} 个自定义模型", {
-              hidden: result.hidden.length,
-              deleted: result.deleted.length,
-            }),
-          );
-        } else if (result.hidden.length > 0) {
-          toast.success(
-            t("已隐藏 {count} 个内置模型", {
-              count: result.hidden.length,
-            }),
-          );
-        } else {
-          toast.success(
-            t("已删除 {count} 个自定义模型", {
-              count: result.deleted.length,
-            }),
-          );
-        }
+        toast.success(
+          t("已删除 {count} 个模型", {
+            count: result.deleted.length,
+          }),
+        );
       } else if (processedCount > 0) {
         toast.warning(
-          t("批量处理完成：隐藏{hidden}个，删除{deleted}个，失败{failed}个", {
-            hidden: result.hidden.length,
-            deleted: result.deleted.length,
+          t("批量删除完成：成功{success}个，失败{failed}个", {
+            success: result.deleted.length,
             failed: result.failed.length,
           }),
         );
@@ -499,20 +459,107 @@ export function useManagedModels() {
     },
   });
 
+  const priceSyncMutation = useMutation({
+    mutationFn: (modelSlugs: string[]) =>
+      managedModelsV2Client.syncPrices(modelSlugs, serviceAddr),
+    onSuccess: async (result) => {
+      let refreshError: unknown = null;
+      try {
+        await Promise.all([reloadCatalog(), invalidateConsumers()]);
+      } catch (error) {
+        refreshError = error;
+      }
+      const failedSources = result.sources
+        .filter((source) => source.status === "error")
+        .map((source) => source.name)
+        .join(", ");
+      const values = {
+        updated: result.updated,
+        unchanged: result.unchanged,
+        preservedCustom: result.preservedCustom,
+        unmatched: result.unmatched,
+        ambiguous: result.ambiguous,
+      };
+      if (failedSources) {
+        toast.warning(
+          t(
+            "价格同步部分完成（失败来源：{sources}）：更新 {updated}，未变化 {unchanged}，保留自定义 {preservedCustom}，未匹配 {unmatched}，歧义 {ambiguous}",
+            { ...values, sources: failedSources },
+          ),
+        );
+      } else {
+        toast.success(
+          t(
+            "价格同步完成：更新 {updated}，未变化 {unchanged}，保留自定义 {preservedCustom}，未匹配 {unmatched}，歧义 {ambiguous}",
+            values,
+          ),
+        );
+      }
+      if (refreshError) {
+        toast.warning(
+          `${t("价格已同步，但重新读取模型失败")}: ${getAppErrorMessage(refreshError)}`,
+        );
+      }
+    },
+    onError: (error: unknown) => {
+      toast.error(`${t("同步价格失败")}: ${getAppErrorMessage(error)}`);
+    },
+  });
+
+  const applyModelsMutation = useMutation({
+    mutationFn: (input: ApplyManagedModelsInput) =>
+      codexProfileClient.applyModels({
+        ...input,
+      }),
+    onSuccess: async (nextStatus, input) => {
+      queryClient.setQueryData(CODEX_PROFILE_STATUS_QUERY_KEY, nextStatus);
+      toast.success(
+        t(
+          "已将 {count} 个所选模型写入 Codex 配置；关闭并重新打开 Codex 后会显示最新模型",
+          { count: input.modelSlugs.length },
+        ),
+      );
+
+      try {
+        await Promise.all([
+          reloadCatalog(),
+          queryClient.invalidateQueries({ queryKey: CODEX_PROFILE_STATUS_QUERY_KEY }),
+          queryClient.invalidateQueries({ queryKey: CODEX_PROFILE_CANDIDATES_QUERY_KEY }),
+          invalidateConsumers(),
+        ]);
+      } catch (error) {
+        toast.warning(
+          `${t("模型已应用，但重新读取状态失败")}: ${getAppErrorMessage(error)}`,
+        );
+      }
+    },
+    onError: (error: unknown) => {
+      toast.error(`${t("应用模型失败")}: ${getAppErrorMessage(error)}`);
+    },
+  });
+
   return {
     models: query.data?.items || [],
     catalog: query.data || { items: [], stats: EMPTY_STATS },
     stats: query.data?.stats || EMPTY_STATS,
     isLoading: isServiceReady && (!isQueryEnabled || query.isLoading),
     isServiceReady,
-    refreshLocal: async () => {
-      if (!ensureServiceReady("读取模型")) return null;
+    applyModels: async (input: ApplyManagedModelsInput) => {
+      if (!ensureServiceReady("应用模型")) return null;
       try {
-        const result = await reloadCatalog();
-        toast.success(t("本地网关模型目录已刷新"));
-        return result;
-      } catch (error) {
-        toast.error(`${t("读取模型失败")}: ${getAppErrorMessage(error)}`);
+        return await applyModelsMutation.mutateAsync(input);
+      } catch {
+        return null;
+      }
+    },
+    syncPrices: async (modelSlugs: string[] = []) => {
+      if (!ensureServiceReady("同步价格")) return null;
+      try {
+        const normalizedSlugs = Array.from(
+          new Set(modelSlugs.map((slug) => slug.trim()).filter(Boolean)),
+        );
+        return await priceSyncMutation.mutateAsync(normalizedSlugs);
+      } catch {
         return null;
       }
     },
@@ -542,7 +589,7 @@ export function useManagedModels() {
     },
     deleteModels: async (slugs: string[]) => {
       if (!ensureServiceReady("批量删除模型")) {
-        return { hidden: [], deleted: [], failed: [] };
+        return { deleted: [], failed: [] };
       }
       return batchDeleteMutation.mutateAsync(slugs);
     },
@@ -565,6 +612,8 @@ export function useManagedModels() {
       return commitImportMutation.mutateAsync(input);
     },
     isRefreshing: query.isRefetching,
+    isApplyingModels: applyModelsMutation.isPending,
+    isSyncingPrices: priceSyncMutation.isPending,
     isSaving: saveMutation.isPending,
     isUpdatingModelState:
       modelStateMutation.isPending || batchModelStateMutation.isPending,

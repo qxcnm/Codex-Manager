@@ -14,6 +14,7 @@ pub fn read_tray_usage_reset_summary() -> TrayUsageResetSummary {
     let Some(storage) = open_storage() else {
         return TrayUsageResetSummary::default();
     };
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let Ok(items) = storage.latest_usage_snapshots_by_account() else {
         return TrayUsageResetSummary::default();
     };

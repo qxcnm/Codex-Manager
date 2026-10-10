@@ -7,7 +7,6 @@ use reqwest::header::{ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, USER_AGENT};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
-use std::io::Read;
 use std::time::Duration;
 
 use crate::storage_helpers::open_storage;
@@ -132,7 +131,7 @@ fn account_fetched_model(
     }
 }
 
-fn read_models_response(mut response: reqwest::blocking::Response) -> Result<Value, String> {
+async fn read_models_response(mut response: reqwest::Response) -> Result<Value, String> {
     let status = response.status();
     if response
         .content_length()
@@ -142,11 +141,16 @@ fn read_models_response(mut response: reqwest::blocking::Response) -> Result<Val
     }
 
     let mut bytes = Vec::new();
-    response
-        .by_ref()
-        .take((MAX_MODELS_RESPONSE_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "account models response could not be read".to_string())?;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "account models response could not be read".to_string())?
+    {
+        if bytes.len().saturating_add(chunk.len()) > MAX_MODELS_RESPONSE_BYTES {
+            return Err("account models response is too large".to_string());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
     if bytes.len() > MAX_MODELS_RESPONSE_BYTES {
         return Err("account models response is too large".to_string());
     }
@@ -184,13 +188,17 @@ fn validate_official_codex_backend(raw: &str) -> Result<reqwest::Url, String> {
     Ok(url)
 }
 
-fn with_account_models_timeout(
-    request: reqwest::blocking::RequestBuilder,
-) -> reqwest::blocking::RequestBuilder {
+fn with_account_models_timeout(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
     request.timeout(ACCOUNT_MODELS_REQUEST_TIMEOUT)
 }
 
 pub(crate) fn fetch_account_models(account_id: &str) -> Result<AccountFetchModelsResult, String> {
+    crate::gateway::run_upstream_io(fetch_account_models_async(account_id))?
+}
+
+pub(crate) async fn fetch_account_models_async(
+    account_id: &str,
+) -> Result<AccountFetchModelsResult, String> {
     let account_id = account_id.trim();
     if account_id.is_empty() {
         return Err("account id required".to_string());
@@ -201,7 +209,10 @@ pub(crate) fn fetch_account_models(account_id: &str) -> Result<AccountFetchModel
     let upstream_base = crate::gateway::gateway_resolve_default_upstream_base_url();
     let upstream_base = validate_official_codex_backend(&upstream_base)?;
 
-    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = open_storage()
+        .map(|pooled| pooled.shared_handle())
+        .ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let Some((account, mut token)) = storage
         .find_account_with_token_by_id(account_id)
         .map_err(|err| format!("read account failed: {err}"))?
@@ -227,9 +238,10 @@ pub(crate) fn fetch_account_models(account_id: &str) -> Result<AccountFetchModel
     );
 
     let bearer =
-        crate::gateway::gateway_resolve_openai_bearer_token(&storage, &account, &mut token)
+        crate::gateway::gateway_resolve_openai_bearer_token_async(&storage, &account, &mut token)
+            .await
             .map_err(|_| "resolve account authorization failed".to_string())?;
-    let client = crate::gateway::upstream_client_for_account(account.id.as_str())
+    let client = crate::gateway::async_upstream_client_for_account(account.id.as_str())
         .map_err(|_| "build account models request client failed".to_string())?;
     let mut request = with_account_models_timeout(client.get(models_url))
         .header(
@@ -240,20 +252,27 @@ pub(crate) fn fetch_account_models(account_id: &str) -> Result<AccountFetchModel
         .header(ACCEPT_ENCODING, "identity")
         .header(USER_AGENT, crate::gateway::current_gateway_user_agent())
         .header("originator", crate::gateway::current_wire_originator());
-    if let Some(chatgpt_account_id) = account
+    let chatgpt_account_id = account
         .chatgpt_account_id
         .as_deref()
-        .or(account.workspace_id.as_deref())
         .map(str::trim)
         .filter(|value| !value.is_empty())
-    {
+        .or_else(|| {
+            account
+                .workspace_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        });
+    if let Some(chatgpt_account_id) = chatgpt_account_id {
         request = request.header("ChatGPT-Account-ID", chatgpt_account_id);
     }
 
     let response = request
         .send()
+        .await
         .map_err(|_| "account models request failed".to_string())?;
-    let body = read_models_response(response)?;
+    let body = read_models_response(response).await?;
     let parsed = parse_account_models(&body);
     let existing = storage
         .list_managed_models_v2(true)
@@ -282,6 +301,7 @@ pub(crate) fn associate_account_models(
         return Err("account id required".to_string());
     }
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     if storage
         .find_account_by_id(account_id)
         .map_err(|err| format!("read account failed: {err}"))?
@@ -297,6 +317,7 @@ fn associate_account_models_with_storage(
     upstream_models: Vec<String>,
     display_names: BTreeMap<String, String>,
 ) -> Result<AggregateApiAssociateModelsResult, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let mut requested = Vec::new();
     let mut seen = HashSet::new();
     for raw in upstream_models {
@@ -535,7 +556,7 @@ mod tests {
             crate::gateway::gateway_compute_upstream_url(base.as_str(), "/v1/models");
         assert_eq!(models_url, "https://chatgpt.com/backend-api/codex/models");
 
-        let request = with_account_models_timeout(reqwest::blocking::Client::new().get(models_url))
+        let request = with_account_models_timeout(reqwest::Client::new().get(models_url))
             .build()
             .expect("build request");
         assert_eq!(request.timeout(), Some(&ACCOUNT_MODELS_REQUEST_TIMEOUT));
@@ -646,3 +667,7 @@ mod tests {
         }));
     }
 }
+
+#[cfg(test)]
+#[path = "account_models_async_tests.rs"]
+mod async_network_tests;

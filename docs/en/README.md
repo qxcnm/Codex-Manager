@@ -194,9 +194,13 @@ If this project has helped you, donations are welcome!
 - Account pool management: groups, tags, ordering, notes, ban recognition, and ban filtering.
 - Batch import/export: multi-file import, recursive JSON folder import on desktop, and per-account single-file export.
 - Usage display: standard 5-hour + 7-day windows, 7-day-only accounts, and official additional buckets such as Code Review / Spark; refresh shows remaining percentages and reset times consistently.
+- Quota reset warmup: enabled by default, sends a short warmup message after an exhausted 5-hour window resets. Enable or disable it per account or in bulk from the account pool. A separate 5-second scheduler checks recorded deadlines while the service is running; exhausted weekly quotas and disabled accounts are skipped. Each cycle is attempted once, with the attempt persisted across restarts.
 - Account authorization: `chatgpt.com` browser OAuth and Device Code login; browser OAuth also supports manually pasting the callback URL.
 - Platform keys: random or custom fixed keys, disabling, deletion, model binding, reasoning tier, and service tier (follow request / Standard / Fast / Ultrafast / Flex). Keys can be bound to custom account groups and intersected with plan filters so rotation stays inside the authorized pool.
 - Model management: Model Catalog V2 is the sole runtime source of truth. It supports builtin/custom models, integer three-tier and long-context pricing, account-pool and aggregate-API routes, instructions policy, local JSON preview/commit, and proactive Codex cache export from desktop and Web.
+- The current catalog contains 12 built-in rows. `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, the three GPT-5.6 models, `gpt-5.5`, `gpt-image-2`, and the two Image 2.5 variants make up the 11 models visible by default; only `codex-auto-review` is hidden.
+- Image 2.5 official pricing separates text and image input rates, while the current V2 billing snapshot has one input/cached-input bucket. Both Image 2.5 variants therefore keep their official pricing source but ship with `price_status=missing` and no tiers: they remain routable outside wallet billing, and wallet charging fails with `model_price_missing` instead of applying an inaccurate unified rate.
+- `gpt-5.4` and `gpt-5.4-mini` retired from Codex with ChatGPT sign-in on August 31, 2026, and `gpt-5.2` is also deprecated for that sign-in path; the general API model is not removed by this cleanup. Revision 9 removes their untouched built-ins, while user edits, price tiers, non-default routes, and permission/API-key associations are preserved as custom models. API-key users can also add the same slugs explicitly as custom models.
 - Aggregate API: manage minimal third-party upstreams, including create, edit, balance, and connectivity tests against configured V2 routes. It does not auto-discover provider models; administrators fetch and selectively link models to Catalog V2.
 - Plugin center: `/plugins/` supports built-in curated, enterprise private, and custom source marketplace modes, plus manifests, tasks, logs, and Rhai interfaces.
 - Skills and plugins: `/skills/` separates Skills Installation from Codex Plugin Installation. It supports GitHub repositories, skills.sh search, ZIP/directory import, installed-item management, and the native Marketplace plugin flow; `.system` Skills remain read-only.
@@ -205,17 +209,27 @@ If this project has helped you, donations are welcome!
 - System internal interface inventory: all desktop/service commands, RPC methods, and built-in plugin functions.
 - Local service: automatic startup with configurable port and listen address.
 - Local gateway: one OpenAI-compatible endpoint for Codex CLI, Gemini CLI, Claude Code, and third-party tools; supports Gemini to `/v1/responses`, SSE, tools, MCP, skills, and request/stream timeouts.
-- Image generation: injects the official Codex `image_generation` tool for `/v1/responses` by default and provides `/v1/images/generations` and `/v1/images/edits`; the default model is `gpt-image-2`.
+- Image generation: injects the official Codex `image_generation` tool for `/v1/responses` by default and provides `/v1/images/generations` and `/v1/images/edits`; the Images API compatibility main model defaults to `gpt-6-luna`, while the injected image tool remains `gpt-image-2` and the two Image 2.5 variants are available for explicit selection.
 
 ## Screenshots
 
-![Dashboard](../../assets/images/dashboard.png)
-![Account Management](../../assets/images/accounts.png)
-![Platform Key](../../assets/images/platform-key.png)
-![Aggregate API](../../assets/images/aggregate-api.png)
+![Dashboard](../../assets/images/dashboard%20.png)
+
+![OpenAI Account Pool (List View)](../../assets/images/accounts.png)
+
+![OpenAI Account Pool (Card View)](../../assets/images/accounts2.png)
+
+![Aggregate API](../../assets/images/aggregate-api%20.png)
+
+![Platform Keys](../../assets/images/platform-key%20.png)
+
+![Models and Routing](../../assets/images/models.png)
+
+![Request Logs](../../assets/images/log.png)
+
+![System Settings](../../assets/images/setting.png)
+
 ![Plugin Center](../../assets/images/plug.png)
-![Log View](../../assets/images/log.png)
-![Settings](../../assets/images/themes.png)
 
 ## Quick Start
 
@@ -247,6 +261,7 @@ If this project has helped you, donations are welcome!
 - Skills and Plugins: `/skills/` separates Skills and Codex plugins, with repository/skills.sh install, ZIP/directory import, safe uninstall, native Marketplace flow, and read-only system Skills.
 - Project Launcher: desktop bookmarks local folders; Windows/macOS open them in the ChatGPT Codex App, Sessions uses the local CLI, and Web/Docker do not access device directories.
 - Settings: manage port, listen address, proxy, timeouts, SSE keepalive, theme, updates, and background behavior.
+- “Remove requires_openai_auth” in Basic settings is enabled by default, preserving the managed gateway's image/actor extension auth behavior. Disable it to preserve an existing value in the `cm` provider during gateway switching, reapplication, or startup sync; it does not restore a previously removed field. Keeping `true` may disable Codex image extensions. Direct aggregate profiles and other providers are unaffected.
 
 ### Service Edition
 

@@ -23,12 +23,14 @@ const ROUNDING_BIAS: i64 = 3;
 /// 返回函数执行结果
 pub(crate) fn read_usage_aggregate_summary() -> Result<UsageAggregateSummaryResult, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     read_usage_aggregate_summary_with_storage(&storage)
 }
 
 pub(crate) fn read_usage_aggregate_summary_with_storage(
     storage: &codexmanager_core::storage::Storage,
 ) -> Result<UsageAggregateSummaryResult, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let usage_items = storage
         .latest_usage_snapshot_summary_rows()
         .map_err(|err| format!("list usage snapshot summary rows failed: {err}"))?;

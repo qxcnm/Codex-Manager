@@ -26,6 +26,94 @@ pub(in super::super) struct GatewayUpstreamExecutionContext<'a> {
     candidate_count: usize,
     account_max_inflight: usize,
 }
+/// Owned metadata allows stream delivery to outlive the short routing worker.
+/// A fresh storage handle is acquired only for final accounting.
+pub(in super::super) struct OwnedGatewayUpstreamExecutionContext {
+    trace_id: String,
+    key_id: String,
+    original_path: String,
+    path: String,
+    request_method: String,
+    response_adapter: super::super::super::ResponseAdapter,
+    protocol_type: String,
+    client_model_for_log: Option<String>,
+    model_for_log: Option<String>,
+    model_source_for_log: Option<String>,
+    client_reasoning_for_log: Option<String>,
+    reasoning_for_log: Option<String>,
+    reasoning_source_for_log: Option<String>,
+    service_tier_for_log: Option<String>,
+    effective_service_tier_for_log: Option<String>,
+    service_tier_source_for_log: Option<String>,
+    gateway_mode_for_log: Option<String>,
+    route_strategy_for_log: Option<String>,
+    route_source_for_log: Option<String>,
+    estimated_input_tokens: i64,
+    candidate_count: usize,
+    account_max_inflight: usize,
+}
+
+impl GatewayUpstreamExecutionContext<'_> {
+    pub(in super::super) fn to_owned(&self) -> OwnedGatewayUpstreamExecutionContext {
+        OwnedGatewayUpstreamExecutionContext {
+            trace_id: self.trace_id.to_owned(),
+            key_id: self.key_id.to_owned(),
+            original_path: self.original_path.to_owned(),
+            path: self.path.to_owned(),
+            request_method: self.request_method.to_owned(),
+            response_adapter: self.response_adapter,
+            protocol_type: self.protocol_type.to_owned(),
+            client_model_for_log: self.client_model_for_log.map(str::to_owned),
+            model_for_log: self.model_for_log.map(str::to_owned),
+            model_source_for_log: self.model_source_for_log.map(str::to_owned),
+            client_reasoning_for_log: self.client_reasoning_for_log.map(str::to_owned),
+            reasoning_for_log: self.reasoning_for_log.map(str::to_owned),
+            reasoning_source_for_log: self.reasoning_source_for_log.map(str::to_owned),
+            service_tier_for_log: self.service_tier_for_log.map(str::to_owned),
+            effective_service_tier_for_log: self.effective_service_tier_for_log.map(str::to_owned),
+            service_tier_source_for_log: self.service_tier_source_for_log.map(str::to_owned),
+            gateway_mode_for_log: self.gateway_mode_for_log.map(str::to_owned),
+            route_strategy_for_log: self.route_strategy_for_log.map(str::to_owned),
+            route_source_for_log: self.route_source_for_log.map(str::to_owned),
+            estimated_input_tokens: self.estimated_input_tokens,
+            candidate_count: self.candidate_count,
+            account_max_inflight: self.account_max_inflight,
+        }
+    }
+}
+
+impl OwnedGatewayUpstreamExecutionContext {
+    pub(in super::super) fn as_borrowed<'a>(
+        &'a self,
+        storage: &'a Storage,
+    ) -> GatewayUpstreamExecutionContext<'a> {
+        GatewayUpstreamExecutionContext {
+            storage,
+            trace_id: self.trace_id.as_str(),
+            key_id: self.key_id.as_str(),
+            original_path: self.original_path.as_str(),
+            path: self.path.as_str(),
+            request_method: self.request_method.as_str(),
+            response_adapter: self.response_adapter,
+            protocol_type: self.protocol_type.as_str(),
+            client_model_for_log: self.client_model_for_log.as_deref(),
+            model_for_log: self.model_for_log.as_deref(),
+            model_source_for_log: self.model_source_for_log.as_deref(),
+            client_reasoning_for_log: self.client_reasoning_for_log.as_deref(),
+            reasoning_for_log: self.reasoning_for_log.as_deref(),
+            reasoning_source_for_log: self.reasoning_source_for_log.as_deref(),
+            service_tier_for_log: self.service_tier_for_log.as_deref(),
+            effective_service_tier_for_log: self.effective_service_tier_for_log.as_deref(),
+            service_tier_source_for_log: self.service_tier_source_for_log.as_deref(),
+            gateway_mode_for_log: self.gateway_mode_for_log.as_deref(),
+            route_strategy_for_log: self.route_strategy_for_log.as_deref(),
+            route_source_for_log: self.route_source_for_log.as_deref(),
+            estimated_input_tokens: self.estimated_input_tokens,
+            candidate_count: self.candidate_count,
+            account_max_inflight: self.account_max_inflight,
+        }
+    }
+}
 
 impl<'a> GatewayUpstreamExecutionContext<'a> {
     /// 函数 `new`
@@ -109,6 +197,27 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
 
     pub(in super::super) fn protocol_type(&self) -> &str {
         self.protocol_type
+    }
+
+    pub(in super::super) fn payload_capture(
+        &self,
+    ) -> super::super::super::OutboundPayloadContext<'_> {
+        super::super::super::OutboundPayloadContext {
+            trace_id: self.trace_id,
+            key_id: self.key_id,
+        }
+    }
+
+    pub(in super::super) fn record_completed_response_id(&self, response_id: &str) {
+        if let Err(err) =
+            self.storage
+                .record_request_log_response_id(self.key_id, response_id, self.trace_id)
+        {
+            log::warn!(
+                "event=request_log_response_id_insert_failed trace_id={} err={err}",
+                self.trace_id
+            );
+        }
     }
 
     /// 函数 `should_skip_candidate`

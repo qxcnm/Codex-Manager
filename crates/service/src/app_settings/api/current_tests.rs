@@ -1,7 +1,4 @@
-use super::{
-    collect_free_account_max_model_options, normalize_market_mode,
-    DEFAULT_FREE_ACCOUNT_MAX_MODEL_OPTIONS,
-};
+use super::{collect_free_account_max_model_options, normalize_market_mode};
 
 /// 函数 `free_account_max_model_options_fallback_to_curated_defaults`
 ///
@@ -17,11 +14,22 @@ use super::{
 #[test]
 fn free_account_max_model_options_fallback_to_curated_defaults() {
     let actual = collect_free_account_max_model_options("auto", &[]);
-    let expected = DEFAULT_FREE_ACCOUNT_MAX_MODEL_OPTIONS
-        .iter()
-        .map(|item| (*item).to_string())
-        .collect::<Vec<_>>();
-    assert_eq!(actual, expected);
+    assert_eq!(
+        actual,
+        [
+            "auto",
+            "gpt-6-astra",
+            "gpt-6-sol",
+            "gpt-6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.5",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>()
+    );
 }
 
 /// 函数 `free_account_max_model_options_reuse_cached_model_picker_options`
@@ -38,13 +46,15 @@ fn free_account_max_model_options_fallback_to_curated_defaults() {
 #[test]
 fn free_account_max_model_options_reuse_cached_model_picker_options() {
     let actual = collect_free_account_max_model_options(
-        "gpt-5.2",
+        "gpt-6-luna",
         &[
             "gpt-5".to_string(),
             "gpt-5.1-codex".to_string(),
             "gpt-5.4-pro".to_string(),
+            "gpt-5.4".to_string(),
+            "gpt-6-sol".to_string(),
             "o3".to_string(),
-            "gpt-5.1-codex".to_string(),
+            "gpt-6-sol".to_string(),
         ],
     );
 
@@ -52,9 +62,8 @@ fn free_account_max_model_options_reuse_cached_model_picker_options() {
         actual,
         vec![
             "auto".to_string(),
-            "gpt-5".to_string(),
-            "gpt-5.1-codex".to_string(),
-            "gpt-5.2".to_string()
+            "gpt-6-sol".to_string(),
+            "gpt-6-luna".to_string()
         ]
     );
 }

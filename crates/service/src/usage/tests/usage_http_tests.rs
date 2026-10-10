@@ -30,12 +30,31 @@ struct EnvVarRestore {
 }
 
 impl EnvVarRestore {
+    fn reload_clients_if_proxy_env(key: &str) {
+        if matches!(
+            key,
+            "CODEXMANAGER_UPSTREAM_PROXY_URL"
+                | "HTTP_PROXY"
+                | "HTTPS_PROXY"
+                | "ALL_PROXY"
+                | "NO_PROXY"
+                | "http_proxy"
+                | "https_proxy"
+                | "all_proxy"
+                | "no_proxy"
+        ) {
+            crate::gateway::reload_runtime_config_from_env();
+            super::reload_usage_http_client_from_env();
+        }
+    }
+
     fn set(key: &'static str, value: &str) -> Self {
         let restore = Self {
             key,
             value: std::env::var(key).ok(),
         };
         std::env::set_var(key, value);
+        Self::reload_clients_if_proxy_env(key);
         restore
     }
 
@@ -45,6 +64,7 @@ impl EnvVarRestore {
             value: std::env::var(key).ok(),
         };
         std::env::remove_var(key);
+        Self::reload_clients_if_proxy_env(key);
         restore
     }
 }
@@ -55,6 +75,7 @@ impl Drop for EnvVarRestore {
             Some(value) => std::env::set_var(self.key, value),
             None => std::env::remove_var(self.key),
         }
+        Self::reload_clients_if_proxy_env(self.key);
     }
 }
 
@@ -1362,6 +1383,8 @@ fn consume_reset_credit_with_explicit_proxy_uses_account_route() {
 fn consume_reset_credit_waits_for_success_response_body() {
     let _guard = crate::test_env_guard();
     let _global_proxy = EnvVarRestore::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "");
+    let _no_proxy = EnvVarRestore::set("NO_PROXY", "127.0.0.1,localhost");
+    let _no_proxy_lowercase = EnvVarRestore::set("no_proxy", "127.0.0.1,localhost");
     super::reload_usage_http_client_from_env();
     let (base_url, headers_sent_rx, release_body_tx, server_handle) =
         spawn_delayed_success_server();
@@ -1394,6 +1417,8 @@ fn consume_reset_credit_waits_for_success_response_body() {
 fn success_body_read_failure_does_not_reclassify_redeem_as_failed() {
     let _guard = crate::test_env_guard();
     let _global_proxy = EnvVarRestore::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "");
+    let _no_proxy = EnvVarRestore::set("NO_PROXY", "127.0.0.1,localhost");
+    let _no_proxy_lowercase = EnvVarRestore::set("no_proxy", "127.0.0.1,localhost");
     super::reload_usage_http_client_from_env();
     let (base_url, server_handle) = spawn_truncated_success_server();
 
@@ -1407,6 +1432,30 @@ fn success_body_read_failure_does_not_reclassify_redeem_as_failed() {
     server_handle
         .join()
         .expect("join truncated response server");
+}
+
+#[test]
+fn reset_credit_transport_errors_keep_ambiguous_statuses_pending() {
+    for status in [None, Some(408), Some(429), Some(500), Some(503)] {
+        let error = super::UsageActionHttpError {
+            status,
+            message: "fixture".to_string(),
+        };
+        assert!(
+            error.is_ambiguous_non_idempotent(),
+            "status {status:?} must remain unknown"
+        );
+    }
+    for status in [Some(400), Some(401), Some(403), Some(404), Some(422)] {
+        let error = super::UsageActionHttpError {
+            status,
+            message: "fixture".to_string(),
+        };
+        assert!(
+            !error.is_ambiguous_non_idempotent(),
+            "status {status:?} is a definitive rejection"
+        );
+    }
 }
 
 #[test]

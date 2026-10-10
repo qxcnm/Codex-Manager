@@ -188,6 +188,7 @@ pub(crate) fn load_conversation_binding(
     platform_key_hash: &str,
     conversation_id: Option<&str>,
 ) -> Result<Option<ConversationBinding>, String> {
+    let storage = crate::account::remote_storage::AccountStorage::new(storage);
     let Some(conversation_id) = normalize_conversation_id(conversation_id) else {
         return Ok(None);
     };
@@ -499,6 +500,7 @@ pub(crate) fn claim_initial_conversation_binding(
     candidates: &mut Vec<(Account, Token)>,
     model: Option<&str>,
 ) -> Result<InitialBindingClaim, String> {
+    let storage = crate::account::remote_storage::AccountStorage::new(storage);
     let Some(routing) = routing else {
         return Ok(InitialBindingClaim::Skipped);
     };
@@ -600,6 +602,7 @@ pub(crate) fn record_conversation_binding_terminal_response(
     model: Option<&str>,
     status_code: u16,
 ) -> Result<(), String> {
+    let storage = crate::account::remote_storage::AccountStorage::new(storage);
     let Some(routing) = routing else {
         return Ok(());
     };

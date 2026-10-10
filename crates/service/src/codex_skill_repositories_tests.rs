@@ -1,6 +1,108 @@
 use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[tokio::test(flavor = "current_thread")]
+async fn cancelled_mutation_retains_lock_until_disk_phase_finishes() {
+    let (started, entered) = tokio::sync::oneshot::channel();
+    let (release, resume) = std::sync::mpsc::channel();
+    let (finished, done) = tokio::sync::oneshot::channel();
+    let mutation = tokio::spawn(async move {
+        let lease = Arc::new(mutation_lock().lock().await);
+        run_locked_phase(&lease, move || {
+            started.send(()).unwrap();
+            resume.recv_timeout(Duration::from_secs(5)).unwrap();
+            let _ = finished.send(());
+            Ok(())
+        })
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), entered)
+        .await
+        .expect("disk phase started")
+        .unwrap();
+    mutation.abort();
+    assert!(mutation.await.unwrap_err().is_cancelled());
+    // The HTTP task is gone, but the outstanding disk commit still owns its
+    // mutation lease. A concurrent delete/install cannot pass it.
+    assert!(mutation_lock().try_lock().is_err());
+    release.send(()).unwrap();
+    done.await.unwrap();
+    let _next = tokio::time::timeout(Duration::from_secs(2), mutation_lock().lock())
+        .await
+        .expect("the lock releases after the disk phase finishes");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn repository_downloads_yield_and_enforce_both_body_size_limits() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let (entered, mut started) = tokio::sync::mpsc::channel(16);
+    let app = axum::Router::new()
+        .route(
+            "/slow",
+            axum::routing::get({
+                let gate = gate.clone();
+                move || {
+                    let gate = gate.clone();
+                    let entered = entered.clone();
+                    async move {
+                        entered.send(()).await.unwrap();
+                        gate.acquire().await.unwrap().forget();
+                        "archive"
+                    }
+                }
+            }),
+        )
+        .route("/fast", axum::routing::get(|| async { "metadata" }))
+        .route("/known-large", axum::routing::get(|| async { "oversized" }))
+        .route(
+            "/chunked-large",
+            axum::routing::get(|| async {
+                axum::body::Body::from_stream(futures_util::stream::iter([
+                    Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"1234")),
+                    Ok(bytes::Bytes::from_static(b"5678")),
+                ]))
+            }),
+        );
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let mut requests = Vec::new();
+    for _ in 0..16 {
+        let url = format!("{base}/slow");
+        requests.push(tokio::spawn(async move {
+            get_bounded(&url, 32, "download").await
+        }));
+    }
+    for _ in 0..16 {
+        tokio::time::timeout(Duration::from_secs(2), started.recv())
+            .await
+            .expect("concurrent download starts")
+            .unwrap();
+    }
+    let metadata = tokio::time::timeout(
+        Duration::from_secs(2),
+        get_bounded(&format!("{base}/fast"), 32, "metadata"),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(metadata, b"metadata");
+    assert_eq!(run_phase(|| Ok(17)).await.unwrap(), 17);
+    gate.add_permits(16);
+    for request in requests {
+        assert_eq!(request.await.unwrap().unwrap(), b"archive");
+    }
+    for path in ["known-large", "chunked-large"] {
+        assert!(get_bounded(&format!("{base}/{path}"), 5, "download")
+            .await
+            .unwrap_err()
+            .contains("size limit"));
+    }
+    server.abort();
+}
+
 struct TempTree {
     path: PathBuf,
 }
@@ -189,9 +291,9 @@ fn selected_skill_archive_rejects_symlinks() {
     assert!(error.contains("symlink"));
 }
 
-#[test]
+#[tokio::test(flavor = "current_thread")]
 #[ignore = "live GitHub repository probe"]
-fn live_builtin_repositories_scan_and_package() {
+async fn live_builtin_repositories_scan_and_package() {
     for (owner, repository, ref_name, minimum) in [
         ("anthropics", "skills", "main", 10usize),
         ("ComposioHQ", "awesome-claude-skills", "master", 100usize),
@@ -202,7 +304,9 @@ fn live_builtin_repositories_scan_and_package() {
             owner: owner.to_string(),
             repository: repository.to_string(),
         };
-        let archive = download_repository_archive(&source, ref_name).expect("download repository");
+        let archive = download_repository_archive(&source, ref_name)
+            .await
+            .expect("download repository");
         let skills = scan_repository_archive(&archive, "repo_live", &source, ref_name)
             .expect("scan repository");
         assert!(

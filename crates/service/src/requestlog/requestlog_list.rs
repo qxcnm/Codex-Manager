@@ -131,9 +131,20 @@ pub(crate) fn read_request_logs_with_storage(
     if limit <= 0 {
         return Ok(Vec::new());
     }
-    let logs = storage
-        .list_request_logs(query.as_deref(), limit)
-        .map_err(|err| format!("list request logs failed: {err}"))?;
+    let logs = if crate::storage_helpers::seaorm_enabled() {
+        super::seaorm::list(
+            codexmanager_storage_seaorm::RequestLogFilter {
+                query,
+                ..Default::default()
+            },
+            0,
+            limit,
+        )?
+    } else {
+        storage
+            .list_request_logs(query.as_deref(), limit)
+            .map_err(|err| format!("list request logs failed: {err}"))?
+    };
     Ok(logs
         .into_iter()
         .map(|item| to_request_log_summary(item, true))
@@ -153,9 +164,21 @@ pub(crate) fn read_request_logs_for_key_ids_with_storage(
     if limit <= 0 {
         return Ok(Vec::new());
     }
-    let logs = storage
-        .list_request_logs_for_keys(query.as_deref(), limit, key_ids)
-        .map_err(|err| format!("list request logs failed: {err}"))?;
+    let logs = if crate::storage_helpers::seaorm_enabled() {
+        super::seaorm::list(
+            codexmanager_storage_seaorm::RequestLogFilter {
+                query,
+                key_ids: Some(key_ids.to_vec()),
+                ..Default::default()
+            },
+            0,
+            limit,
+        )?
+    } else {
+        storage
+            .list_request_logs_for_keys(query.as_deref(), limit, key_ids)
+            .map_err(|err| format!("list request logs failed: {err}"))?
+    };
     Ok(logs
         .into_iter()
         .map(|item| to_request_log_summary(item, false))
@@ -185,14 +208,18 @@ pub(crate) fn read_request_log_page_with_storage(
     params: RequestLogListParams,
 ) -> Result<RequestLogListResult, String> {
     let params = NormalizedRequestLogParams::from_params(params);
-    let total = storage
-        .count_request_logs(
-            params.query.as_deref(),
-            params.status_filter.as_deref(),
-            params.start_ts,
-            params.end_ts,
-        )
-        .map_err(|err| format!("count request logs failed: {err}"))?;
+    let total = if crate::storage_helpers::seaorm_enabled() {
+        super::seaorm::count(super::seaorm::filter(&params, None))?
+    } else {
+        storage
+            .count_request_logs(
+                params.query.as_deref(),
+                params.status_filter.as_deref(),
+                params.start_ts,
+                params.end_ts,
+            )
+            .map_err(|err| format!("count request logs failed: {err}"))?
+    };
     read_request_log_page_with_normalized_total(storage, params, total)
 }
 
@@ -221,16 +248,24 @@ fn read_request_log_page_with_normalized_total(
         });
     }
     let offset = (page - 1) * params.page_size;
-    let logs = storage
-        .list_request_logs_paginated(
-            params.query.as_deref(),
-            params.status_filter.as_deref(),
-            params.start_ts,
-            params.end_ts,
+    let logs = if crate::storage_helpers::seaorm_enabled() {
+        super::seaorm::list(
+            super::seaorm::filter(&params, None),
             offset,
             params.page_size,
-        )
-        .map_err(|err| format!("list request logs failed: {err}"))?;
+        )?
+    } else {
+        storage
+            .list_request_logs_paginated(
+                params.query.as_deref(),
+                params.status_filter.as_deref(),
+                params.start_ts,
+                params.end_ts,
+                offset,
+                params.page_size,
+            )
+            .map_err(|err| format!("list request logs failed: {err}"))?
+    };
 
     Ok(RequestLogListResult {
         items: logs
@@ -275,15 +310,19 @@ pub(crate) fn read_request_log_page_for_key_ids_with_storage(
             page_size: params.page_size,
         });
     }
-    let total = storage
-        .count_request_logs_for_keys(
-            params.query.as_deref(),
-            params.status_filter.as_deref(),
-            params.start_ts,
-            params.end_ts,
-            key_ids,
-        )
-        .map_err(|err| format!("count request logs failed: {err}"))?;
+    let total = if crate::storage_helpers::seaorm_enabled() {
+        super::seaorm::count(super::seaorm::filter(&params, Some(key_ids)))?
+    } else {
+        storage
+            .count_request_logs_for_keys(
+                params.query.as_deref(),
+                params.status_filter.as_deref(),
+                params.start_ts,
+                params.end_ts,
+                key_ids,
+            )
+            .map_err(|err| format!("count request logs failed: {err}"))?
+    };
     read_request_log_page_for_key_ids_with_normalized_total(storage, params, key_ids, total)
 }
 
@@ -322,17 +361,25 @@ fn read_request_log_page_for_key_ids_with_normalized_total(
         });
     }
     let offset = (page - 1) * params.page_size;
-    let logs = storage
-        .list_request_logs_paginated_for_keys(
-            params.query.as_deref(),
-            params.status_filter.as_deref(),
-            params.start_ts,
-            params.end_ts,
+    let logs = if crate::storage_helpers::seaorm_enabled() {
+        super::seaorm::list(
+            super::seaorm::filter(&params, Some(key_ids)),
             offset,
             params.page_size,
-            key_ids,
-        )
-        .map_err(|err| format!("list request logs failed: {err}"))?;
+        )?
+    } else {
+        storage
+            .list_request_logs_paginated_for_keys(
+                params.query.as_deref(),
+                params.status_filter.as_deref(),
+                params.start_ts,
+                params.end_ts,
+                offset,
+                params.page_size,
+                key_ids,
+            )
+            .map_err(|err| format!("list request logs failed: {err}"))?
+    };
 
     Ok(RequestLogListResult {
         items: logs

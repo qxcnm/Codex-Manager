@@ -230,15 +230,13 @@ fn parse_models(
 }
 
 fn prepare_import(
-    storage: &codexmanager_core::storage::Storage,
+    existing_models: Vec<ManagedModelV2>,
     json_content: &str,
     conflict_strategy: &str,
 ) -> Result<(ManagedModelImportPreviewV2Result, Vec<ManagedModelV2Upsert>), String> {
     validate_conflict_strategy(conflict_strategy)?;
     let (models, ignored_fields, errors) = parse_models(json_content)?;
-    let existing = storage
-        .list_managed_models_v2(true)
-        .map_err(|err| format!("list models for import failed: {err}"))?
+    let existing = existing_models
         .into_iter()
         .map(|model| (model.slug.to_ascii_lowercase(), model))
         .collect::<HashMap<_, _>>();
@@ -285,29 +283,35 @@ fn prepare_import(
 pub(crate) fn preview_import(
     params: ManagedModelImportPreviewV2Params,
 ) -> Result<ManagedModelImportPreviewV2Result, String> {
-    let storage =
-        crate::storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    prepare_import(&storage, &params.json_content, &params.conflict_strategy)
+    let models = super::list(true)?.items;
+    prepare_import(models, &params.json_content, &params.conflict_strategy)
         .map(|(preview, _)| preview)
 }
 
 pub(crate) fn commit_import(
     params: ManagedModelImportCommitV2Params,
 ) -> Result<ManagedModelImportPreviewV2Result, String> {
-    let storage =
-        crate::storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let models = super::list(true)?.items;
     let (mut preview, writes) =
-        prepare_import(&storage, &params.json_content, &params.conflict_strategy)?;
+        prepare_import(models, &params.json_content, &params.conflict_strategy)?;
     if !preview.errors.is_empty() {
         return Err(format!(
             "model import contains {} validation errors",
             preview.errors.len()
         ));
     }
+    let changes = super::selection_changes_for_upserts(&writes);
+    if crate::storage_helpers::seaorm_enabled() {
+        preview.committed = super::seaorm::upsert_many(writes)?.len();
+        super::sync_active_gateway_catalog_for_current_backend_best_effort(changes);
+        return Ok(preview);
+    }
+    let storage =
+        crate::storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     storage
         .upsert_managed_models_v2(&writes)
         .map_err(|err| format!("commit model import failed: {err}"))?;
-    super::sync_active_gateway_catalog_best_effort(&storage);
+    super::sync_active_gateway_catalog_after_model_changes_best_effort(&storage, changes);
     preview.committed = writes.len();
     Ok(preview)
 }

@@ -1,10 +1,10 @@
+use crate::http::gateway_request::GatewayRequest as Request;
 use bytes::Bytes;
 use codexmanager_core::storage::{AggregateApi, Storage};
 use reqwest::header::{HeaderName, HeaderValue};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
-use tiny_http::Request;
 
 use super::super::GatewayUpstreamResponse;
 use crate::aggregate_api::{
@@ -66,6 +66,21 @@ enum AggregateApiAuthConfig {
 
 fn normalize_header_key(name: &str) -> String {
     name.trim().to_ascii_lowercase()
+}
+
+fn is_client_delivery_error(message: &str) -> bool {
+    let normalized = message.trim().to_ascii_lowercase();
+    normalized.contains("broken pipe")
+        || normalized.contains("downstream http body closed")
+        || normalized.contains("connection reset")
+        || normalized.contains("connection aborted")
+        || normalized.contains("connection was forcibly closed")
+        || normalized.contains("os error 32")
+        || normalized.contains("os error 54")
+        || normalized.contains("os error 104")
+        || normalized.contains("os error 10053")
+        || normalized.contains("os error 10054")
+        || normalized.contains("os error 10058")
 }
 
 fn normalize_action_path(action: &str) -> String {
@@ -524,7 +539,11 @@ fn should_skip_forward_header_for_aggregate_request(
     if should_skip_forward_header_with_overrides(name, injected) {
         return true;
     }
-    is_stream && normalize_header_key(name) == "accept"
+    is_stream
+        && matches!(
+            normalize_header_key(name).as_str(),
+            "accept" | "accept-encoding"
+        )
 }
 
 /// 函数 `respond_error`
@@ -541,9 +560,9 @@ fn should_skip_forward_header_for_aggregate_request(
 ///
 /// # 返回
 /// 无
-fn respond_error(request: Request, status: u16, message: &str, trace_id: Option<&str>) {
+async fn respond_error(request: Request, status: u16, message: &str, trace_id: Option<&str>) {
     let response_message = super::super::super::error_message_for_client(
-        super::super::super::prefers_raw_errors_for_tiny_http_request(&request),
+        super::super::super::prefers_raw_errors_for_gateway_request(&request),
         message,
     );
     let response = super::super::super::error_response::terminal_text_response(
@@ -551,7 +570,7 @@ fn respond_error(request: Request, status: u16, message: &str, trace_id: Option<
         response_message,
         trace_id,
     );
-    let _ = request.respond(response);
+    let _ = request.respond_async(response).await;
 }
 
 /// 函数 `normalize_candidate_order`
@@ -830,7 +849,7 @@ fn aggregate_api_failure_message(
 /// # 返回
 /// 返回函数执行结果
 fn build_aggregate_api_request(
-    client: &reqwest::blocking::Client,
+    client: &reqwest::Client,
     request: &Request,
     method: &reqwest::Method,
     url: reqwest::Url,
@@ -841,7 +860,7 @@ fn build_aggregate_api_request(
     user_agent: &str,
     request_deadline: Option<Instant>,
     is_stream: bool,
-) -> Result<reqwest::blocking::Request, String> {
+) -> Result<reqwest::Request, String> {
     let mut builder = client.request(method.clone(), url);
     if let Some(timeout) =
         super::super::support::deadline::send_timeout(request_deadline, is_stream)
@@ -868,6 +887,14 @@ fn build_aggregate_api_request(
         builder = builder.header(
             HeaderName::from_static("accept"),
             HeaderValue::from_static("text/event-stream"),
+        );
+        // The gateway inspects SSE frames for terminal state and usage while it
+        // streams the same bytes to the client. Compressed upstream bytes would
+        // be valid for the client but unreadable to that observer, causing a
+        // successful request to be logged as a UTF-8/502 failure.
+        builder = builder.header(
+            HeaderName::from_static("accept-encoding"),
+            HeaderValue::from_static("identity"),
         );
     }
 
@@ -943,7 +970,7 @@ fn build_aggregate_api_request(
 }
 
 fn build_anthropic_bridge_aggregate_api_request(
-    client: &reqwest::blocking::Client,
+    client: &reqwest::Client,
     request: &Request,
     method: &reqwest::Method,
     url: reqwest::Url,
@@ -954,7 +981,7 @@ fn build_anthropic_bridge_aggregate_api_request(
     user_agent: &str,
     request_deadline: Option<Instant>,
     is_stream: bool,
-) -> Result<reqwest::blocking::Request, String> {
+) -> Result<reqwest::Request, String> {
     let mut request = build_aggregate_api_request(
         client,
         request,
@@ -1004,7 +1031,7 @@ pub(crate) fn resolve_aggregate_api_rotation_candidates(
         _ => AGGREGATE_API_PROVIDER_CODEX,
     };
 
-    let mut candidates = storage
+    let mut candidates = crate::account::remote_storage::AccountStorage::new(&storage)
         .list_active_aggregate_apis_by_provider_type(provider_type)
         .map_err(|err| err.to_string())?
         .into_iter()
@@ -1086,7 +1113,203 @@ pub(in super::super) struct AggregateProxyRequest<'a> {
     pub failure_policy: AggregateFailurePolicy,
 }
 
-pub(in super::super) fn proxy_aggregate_request(
+struct AggregateDeliveryContext {
+    trace_id: String,
+    key_id: String,
+    original_path: String,
+    path: String,
+    request_method: String,
+    gateway_mode_for_log: Option<String>,
+    route_strategy_for_log: Option<String>,
+    route_source_for_log: Option<String>,
+    client_model_for_log: Option<String>,
+    model_for_log: Option<String>,
+    model_source_for_log: Option<String>,
+    client_reasoning_for_log: Option<String>,
+    reasoning_for_log: Option<String>,
+    reasoning_source_for_log: Option<String>,
+    service_tier_for_log: Option<String>,
+    effective_service_tier_for_log: Option<String>,
+    service_tier_source_for_log: Option<String>,
+    candidate_supplier_name: Option<String>,
+    candidate_url: String,
+    url: String,
+    candidate_upstream_model: Option<String>,
+    candidate_id: String,
+    attempted_aggregate_api_ids: Vec<String>,
+    response_adapter_for_candidate: super::super::super::ResponseAdapter,
+    is_stream: bool,
+    started_at: Instant,
+    estimated_input_tokens: i64,
+}
+
+impl AggregateDeliveryContext {
+    fn finalize(
+        &self,
+        storage: &Storage,
+        bridge: crate::gateway::http_bridge::UpstreamResponseBridgeResult,
+    ) {
+        let trace_id = self.trace_id.as_str();
+        let key_id = self.key_id.as_str();
+        let original_path = self.original_path.as_str();
+        let path = self.path.as_str();
+        let request_method = self.request_method.as_str();
+        let gateway_mode_for_log = self.gateway_mode_for_log.as_deref();
+        let route_strategy_for_log = self.route_strategy_for_log.as_deref();
+        let route_source_for_log = self.route_source_for_log.as_deref();
+        let client_model_for_log = self.client_model_for_log.as_deref();
+        let model_for_log = self.model_for_log.as_deref();
+        let model_source_for_log = self.model_source_for_log.as_deref();
+        let client_reasoning_for_log = self.client_reasoning_for_log.as_deref();
+        let reasoning_for_log = self.reasoning_for_log.as_deref();
+        let reasoning_source_for_log = self.reasoning_source_for_log.as_deref();
+        let service_tier_for_log = self.service_tier_for_log.as_deref();
+        let effective_service_tier_for_log = self.effective_service_tier_for_log.as_deref();
+        let service_tier_source_for_log = self.service_tier_source_for_log.as_deref();
+        let candidate_supplier_name = &self.candidate_supplier_name;
+        let candidate_url = &self.candidate_url;
+        let url = &self.url;
+        let candidate_upstream_model = &self.candidate_upstream_model;
+        let candidate_id = &self.candidate_id;
+        let attempted_aggregate_api_ids = &self.attempted_aggregate_api_ids;
+        let response_adapter_for_candidate = self.response_adapter_for_candidate;
+        let is_stream = self.is_stream;
+        let started_at = self.started_at;
+        let estimated_input_tokens = self.estimated_input_tokens;
+        let bridge_output_text_len = bridge
+            .usage
+            .output_text
+            .as_deref()
+            .map(str::trim)
+            .map(str::len)
+            .unwrap_or(0);
+        super::super::super::trace_log::log_bridge_result(
+            super::super::super::trace_log::BridgeResultLog {
+                trace_id,
+                adapter: format!("{response_adapter_for_candidate:?}").as_str(),
+                path,
+                is_stream,
+                stream_terminal_seen: bridge.stream_terminal_seen,
+                stream_terminal_delivered: bridge.stream_terminal_delivered,
+                stream_terminal_error: bridge.stream_terminal_error.as_deref(),
+                delivery_error: bridge.delivery_error.as_deref(),
+                output_text_len: bridge_output_text_len,
+                output_tokens: bridge.usage.output_tokens,
+                first_response_ms: bridge.usage.first_response_ms,
+                delivered_status_code: bridge.delivered_status_code,
+                upstream_error_hint: bridge.upstream_error_hint.as_deref(),
+                upstream_request_id: bridge.upstream_request_id.as_deref(),
+                upstream_cf_ray: bridge.upstream_cf_ray.as_deref(),
+                upstream_auth_error: bridge.upstream_auth_error.as_deref(),
+                upstream_identity_error_code: bridge.upstream_identity_error_code.as_deref(),
+                upstream_content_type: bridge.upstream_content_type.as_deref(),
+                last_sse_event_type: bridge.last_sse_event_type.as_deref(),
+            },
+        );
+        let bridge_ok = bridge.is_ok(is_stream);
+        let mut final_error = bridge.upstream_error_hint.clone();
+        if final_error.is_none() && !bridge_ok {
+            final_error = Some(
+                bridge
+                    .error_message(is_stream)
+                    .unwrap_or_else(|| "aggregate api upstream response incomplete".to_string()),
+            );
+        }
+        let status_code = bridge
+            .delivered_status_code
+            .unwrap_or(if bridge_ok { 200 } else { 502 });
+        let status_code = if final_error.is_some() && status_code < 400 {
+            502
+        } else {
+            status_code
+        };
+        let status_code = if bridge
+            .delivery_error
+            .as_deref()
+            .is_some_and(is_client_delivery_error)
+        {
+            499
+        } else {
+            status_code
+        };
+        let usage = bridge.usage;
+        let response_id = if bridge_ok && status_code < 400 {
+            usage.response_id.as_deref()
+        } else {
+            None
+        };
+
+        super::super::super::record_gateway_request_outcome(
+            path,
+            status_code,
+            Some("aggregate_api"),
+        );
+        super::super::super::trace_log::log_request_final(
+            trace_id,
+            status_code,
+            Some(key_id),
+            Some(url.as_str()),
+            final_error.as_deref(),
+            started_at.elapsed().as_millis(),
+        );
+        super::super::super::write_request_log(
+            storage,
+            super::super::super::request_log::RequestLogTraceContext {
+                trace_id: Some(trace_id),
+                original_path: Some(original_path),
+                adapted_path: Some(path),
+                gateway_mode: gateway_mode_for_log,
+                route_strategy: route_strategy_for_log,
+                route_source: route_source_for_log,
+                client_model: client_model_for_log,
+                model_source: model_source_for_log,
+                client_reasoning_effort: client_reasoning_for_log,
+                reasoning_source: reasoning_source_for_log,
+                response_adapter: Some(response_adapter_for_candidate),
+                service_tier: service_tier_for_log,
+                effective_service_tier: effective_service_tier_for_log,
+                service_tier_source: service_tier_source_for_log,
+                aggregate_api_supplier_name: candidate_supplier_name.as_deref(),
+                aggregate_api_url: Some(candidate_url.as_str()),
+                attempted_aggregate_api_ids: Some(attempted_aggregate_api_ids.as_slice()),
+                upstream_model: candidate_upstream_model.as_deref(),
+                actual_source_kind: Some("aggregate_api"),
+                actual_source_id: Some(candidate_id.as_str()),
+                ..Default::default()
+            },
+            Some(key_id),
+            None,
+            path,
+            request_method,
+            model_for_log,
+            reasoning_for_log,
+            Some(url.as_str()),
+            Some(status_code),
+            RequestLogUsage {
+                input_tokens: usage.input_tokens,
+                cached_input_tokens: usage.cached_input_tokens,
+                cache_write_tokens: usage.cache_write_tokens,
+                output_tokens: usage.output_tokens,
+                total_tokens: usage.total_tokens,
+                reasoning_output_tokens: usage.reasoning_output_tokens,
+                first_response_ms: usage.first_response_ms,
+                estimated_input_tokens: Some(estimated_input_tokens),
+            },
+            final_error.as_deref(),
+            Some(started_at.elapsed().as_millis()),
+        );
+        if let Some(response_id) = response_id {
+            if let Err(err) = storage.record_request_log_response_id(key_id, response_id, trace_id)
+            {
+                log::warn!(
+                    "event=request_log_response_id_insert_failed trace_id={trace_id} err={err}"
+                );
+            }
+        }
+    }
+}
+
+pub(in super::super) async fn proxy_aggregate_request(
     params: AggregateProxyRequest<'_>,
 ) -> Result<AggregateAttemptOutcome, String> {
     let AggregateProxyRequest {
@@ -1139,7 +1362,7 @@ pub(in super::super) fn proxy_aggregate_request(
             started_at.elapsed().as_millis(),
         );
         let request = request;
-        respond_error(request, 404, message.as_str(), Some(trace_id));
+        respond_error(request, 404, message.as_str(), Some(trace_id)).await;
         return Ok(AggregateAttemptOutcome::Responded);
     }
 
@@ -1159,7 +1382,8 @@ pub(in super::super) fn proxy_aggregate_request(
         .iter()
         .map(|candidate| (candidate.id.clone(), candidate.url.clone()))
         .collect::<Vec<_>>();
-    for (candidate_idx, candidate) in aggregate_api_candidates.into_iter().enumerate() {
+    'candidates: for (candidate_idx, candidate) in aggregate_api_candidates.into_iter().enumerate()
+    {
         prepare_next_aggregate_candidate_client(
             ordered_candidates.as_slice(),
             candidate_idx,
@@ -1171,10 +1395,11 @@ pub(in super::super) fn proxy_aggregate_request(
             aggregate_upstream_model_for_log(&candidate, model_for_log).map(str::to_string);
         let candidate_supplier_name = candidate.supplier_name.clone();
         let candidate_url = candidate.url.clone();
-        let client = super::super::super::upstream_client_for_aggregate_api_candidate(
-            candidate_id.as_str(),
-            candidate_url.as_str(),
-        );
+        let client =
+            super::super::super::runtime_config::async_upstream_client_for_aggregate_api_candidate(
+                candidate_id.as_str(),
+                candidate_url.as_str(),
+            );
         last_attempt_id = Some(candidate_id.clone());
         last_attempt_upstream_model = candidate_upstream_model.clone();
         let Some(secret) = secrets_by_candidate_id.get(candidate.id.as_str()) else {
@@ -1261,6 +1486,13 @@ pub(in super::super) fn proxy_aggregate_request(
 
         let mut succeeded = false;
         for attempt_idx in 0..=AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
+            if request.as_ref().is_some_and(Request::is_cancelled) {
+                last_attempt_url = Some(candidate_url.clone());
+                last_attempt_supplier_name = candidate_supplier_name.clone();
+                last_attempt_error = Some("broken pipe: downstream HTTP body closed".to_owned());
+                last_failure_status = 499;
+                break 'candidates;
+            }
             if super::super::support::deadline::is_expired(request_deadline) {
                 let message = "aggregate api request timeout".to_string();
                 let request = request.take().ok_or_else(|| {
@@ -1319,7 +1551,7 @@ pub(in super::super) fn proxy_aggregate_request(
                     Some(message.as_str()),
                     Some(started_at.elapsed().as_millis()),
                 );
-                respond_error(request, 504, message.as_str(), Some(trace_id));
+                respond_error(request, 504, message.as_str(), Some(trace_id)).await;
                 return Ok(AggregateAttemptOutcome::Responded);
             }
 
@@ -1377,34 +1609,64 @@ pub(in super::super) fn proxy_aggregate_request(
             };
 
             let attempt_started_at = Instant::now();
-            let upstream = match client.execute(upstream_request) {
-                Ok(resp) => {
-                    let duration_ms =
-                        super::super::super::duration_to_millis(attempt_started_at.elapsed());
-                    super::super::super::metrics::record_gateway_upstream_attempt(
-                        duration_ms,
-                        false,
-                    );
-                    resp
-                }
-                Err(err) => {
-                    let duration_ms =
-                        super::super::super::duration_to_millis(attempt_started_at.elapsed());
-                    super::super::super::metrics::record_gateway_upstream_attempt(
-                        duration_ms,
-                        true,
-                    );
-                    let message = format!("aggregate api upstream error: {err}");
-                    last_attempt_url = Some(url.as_str().to_string());
-                    last_attempt_supplier_name = candidate_supplier_name.clone();
-                    last_attempt_error = Some(message);
-                    last_failure_status = 502;
-                    if attempt_idx < AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
-                        continue;
+            let prepared_headers = upstream_request
+                .headers()
+                .iter()
+                .map(|(name, value)| {
+                    value
+                        .to_str()
+                        .map(|value| (name.as_str().to_owned(), value.to_owned()))
+                        .map_err(|_| "aggregate request header is not textual".to_owned())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let upstream =
+                match super::super::attempt_flow::transport::send_stream_request_with_capture(
+                    &client,
+                    upstream_request.method(),
+                    upstream_request.url().as_str(),
+                    path,
+                    request_deadline,
+                    &prepared_headers,
+                    &upstream_body,
+                    is_stream,
+                    Some(super::super::super::OutboundPayloadContext { trace_id, key_id }),
+                    None,
+                )
+                .await
+                {
+                    Ok(resp) => {
+                        let duration_ms =
+                            super::super::super::duration_to_millis(attempt_started_at.elapsed());
+                        super::super::super::metrics::record_gateway_upstream_attempt(
+                            duration_ms,
+                            false,
+                        );
+                        resp
                     }
-                    break;
-                }
-            };
+                    Err(err) => {
+                        let duration_ms =
+                            super::super::super::duration_to_millis(attempt_started_at.elapsed());
+                        super::super::super::metrics::record_gateway_upstream_attempt(
+                            duration_ms,
+                            true,
+                        );
+                        let message = format!("aggregate api upstream error: {err}");
+                        last_attempt_url = Some(url.as_str().to_string());
+                        last_attempt_supplier_name = candidate_supplier_name.clone();
+                        last_attempt_error = Some(message);
+                        last_failure_status = 502;
+                        if request.as_ref().is_some_and(Request::is_cancelled) {
+                            last_attempt_error =
+                                Some("broken pipe: downstream HTTP body closed".to_owned());
+                            last_failure_status = 499;
+                            break 'candidates;
+                        }
+                        if attempt_idx < AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
+                            continue;
+                        }
+                        break;
+                    }
+                };
 
             if !upstream.status().is_success() {
                 let status_code = upstream.status().as_u16();
@@ -1417,9 +1679,35 @@ pub(in super::super) fn proxy_aggregate_request(
                     first_upstream_header(upstream.headers(), &["x-openai-authorization-error"]);
                 let upstream_identity_error_code =
                     crate::gateway::extract_identity_error_code_from_headers(upstream.headers());
-                let upstream_body = upstream
-                    .bytes()
-                    .map_err(|err| format!("read upstream body failed: {err}"))?;
+                let upstream_body = match upstream
+                    .read_all_bytes_cancellable(
+                        request
+                            .as_ref()
+                            .expect("request retained before bridge")
+                            .cancellation_receiver(),
+                    )
+                    .await
+                {
+                    Ok(body) => body,
+                    Err(error) => {
+                        last_attempt_url = Some(url.as_str().to_owned());
+                        last_attempt_supplier_name = candidate_supplier_name.clone();
+                        last_attempt_error = Some(format!("read upstream body failed: {error}"));
+                        last_failure_status = if request.as_ref().is_some_and(Request::is_cancelled)
+                        {
+                            499
+                        } else {
+                            502
+                        };
+                        if last_failure_status == 499 {
+                            break 'candidates;
+                        }
+                        if attempt_idx < AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
+                            continue;
+                        }
+                        break;
+                    }
+                };
                 let message = aggregate_api_failure_message(
                     status_code,
                     upstream_body.as_ref(),
@@ -1444,128 +1732,81 @@ pub(in super::super) fn proxy_aggregate_request(
             let request = request.take().ok_or_else(|| {
                 "aggregate api request already consumed before bridge".to_string()
             })?;
-            let bridge = super::super::super::respond_with_upstream(
-                request,
-                GatewayUpstreamResponse::Blocking(upstream),
-                inflight_guard,
-                response_adapter_for_candidate,
-                passthrough_sse_protocol,
-                None,
-                path,
-                None,
-                is_stream,
-                false,
-                Some(trace_id),
-                None,
-                started_at,
-            )?;
-            let bridge_output_text_len = bridge
-                .usage
-                .output_text
-                .as_deref()
-                .map(str::trim)
-                .map(str::len)
-                .unwrap_or(0);
-            super::super::super::trace_log::log_bridge_result(
-                super::super::super::trace_log::BridgeResultLog {
-                    trace_id,
-                    adapter: format!("{response_adapter_for_candidate:?}").as_str(),
-                    path,
-                    is_stream,
-                    stream_terminal_seen: bridge.stream_terminal_seen,
-                    stream_terminal_error: bridge.stream_terminal_error.as_deref(),
-                    delivery_error: bridge.delivery_error.as_deref(),
-                    output_text_len: bridge_output_text_len,
-                    output_tokens: bridge.usage.output_tokens,
-                    first_response_ms: bridge.usage.first_response_ms,
-                    delivered_status_code: bridge.delivered_status_code,
-                    upstream_error_hint: bridge.upstream_error_hint.as_deref(),
-                    upstream_request_id: bridge.upstream_request_id.as_deref(),
-                    upstream_cf_ray: bridge.upstream_cf_ray.as_deref(),
-                    upstream_auth_error: bridge.upstream_auth_error.as_deref(),
-                    upstream_identity_error_code: bridge.upstream_identity_error_code.as_deref(),
-                    upstream_content_type: bridge.upstream_content_type.as_deref(),
-                    last_sse_event_type: bridge.last_sse_event_type.as_deref(),
-                },
-            );
-            let bridge_ok = bridge.is_ok(is_stream);
-            let mut final_error = bridge.upstream_error_hint.clone();
-            if final_error.is_none() && !bridge_ok {
-                final_error =
-                    Some(bridge.error_message(is_stream).unwrap_or_else(|| {
-                        "aggregate api upstream response incomplete".to_string()
-                    }));
-            }
-            let status_code =
-                bridge
-                    .delivered_status_code
-                    .unwrap_or(if bridge_ok { 200 } else { 502 });
-            let status_code = if final_error.is_some() && status_code < 400 {
-                502
-            } else {
-                status_code
+            let finalization = AggregateDeliveryContext {
+                trace_id: trace_id.to_owned(),
+                key_id: key_id.to_owned(),
+                original_path: original_path.to_owned(),
+                path: path.to_owned(),
+                request_method: request_method.to_owned(),
+                gateway_mode_for_log: gateway_mode_for_log.map(str::to_owned),
+                route_strategy_for_log: route_strategy_for_log.map(str::to_owned),
+                route_source_for_log: route_source_for_log.map(str::to_owned),
+                client_model_for_log: client_model_for_log.map(str::to_owned),
+                model_for_log: model_for_log.map(str::to_owned),
+                model_source_for_log: model_source_for_log.map(str::to_owned),
+                client_reasoning_for_log: client_reasoning_for_log.map(str::to_owned),
+                reasoning_for_log: reasoning_for_log.map(str::to_owned),
+                reasoning_source_for_log: reasoning_source_for_log.map(str::to_owned),
+                service_tier_for_log: service_tier_for_log.map(str::to_owned),
+                effective_service_tier_for_log: effective_service_tier_for_log.map(str::to_owned),
+                service_tier_source_for_log: service_tier_source_for_log.map(str::to_owned),
+                candidate_supplier_name: candidate_supplier_name.clone(),
+                candidate_url: candidate_url.clone(),
+                url: url.as_str().to_owned(),
+                candidate_upstream_model: candidate_upstream_model.clone(),
+                candidate_id: candidate_id.clone(),
+                attempted_aggregate_api_ids: attempted_aggregate_api_ids.clone(),
+                response_adapter_for_candidate: response_adapter_for_candidate,
+                is_stream: is_stream,
+                started_at: started_at,
+                estimated_input_tokens: estimated_input_tokens,
             };
-            let usage = bridge.usage;
-
-            super::super::super::record_gateway_request_outcome(
-                path,
-                status_code,
-                Some("aggregate_api"),
-            );
-            super::super::super::trace_log::log_request_final(
-                trace_id,
-                status_code,
-                Some(key_id),
-                Some(url.as_str()),
-                final_error.as_deref(),
-                started_at.elapsed().as_millis(),
-            );
-            super::super::super::write_request_log(
-                storage,
-                super::super::super::request_log::RequestLogTraceContext {
-                    trace_id: Some(trace_id),
-                    original_path: Some(original_path),
-                    adapted_path: Some(path),
-                    gateway_mode: gateway_mode_for_log,
-                    route_strategy: route_strategy_for_log,
-                    route_source: route_source_for_log,
-                    client_model: client_model_for_log,
-                    model_source: model_source_for_log,
-                    client_reasoning_effort: client_reasoning_for_log,
-                    reasoning_source: reasoning_source_for_log,
-                    response_adapter: Some(response_adapter_for_candidate),
-                    service_tier: service_tier_for_log,
-                    effective_service_tier: effective_service_tier_for_log,
-                    service_tier_source: service_tier_source_for_log,
-                    aggregate_api_supplier_name: candidate_supplier_name.as_deref(),
-                    aggregate_api_url: Some(candidate_url.as_str()),
-                    attempted_aggregate_api_ids: Some(attempted_aggregate_api_ids.as_slice()),
-                    upstream_model: candidate_upstream_model.as_deref(),
-                    actual_source_kind: Some("aggregate_api"),
-                    actual_source_id: Some(candidate_id.as_str()),
-                    ..Default::default()
-                },
-                Some(key_id),
-                None,
-                path,
-                request_method,
-                model_for_log,
-                reasoning_for_log,
-                Some(url.as_str()),
-                Some(status_code),
-                RequestLogUsage {
-                    input_tokens: usage.input_tokens,
-                    cached_input_tokens: usage.cached_input_tokens,
-                    cache_write_tokens: usage.cache_write_tokens,
-                    output_tokens: usage.output_tokens,
-                    total_tokens: usage.total_tokens,
-                    reasoning_output_tokens: usage.reasoning_output_tokens,
-                    first_response_ms: usage.first_response_ms,
-                    estimated_input_tokens: Some(estimated_input_tokens),
-                },
-                final_error.as_deref(),
-                Some(started_at.elapsed().as_millis()),
-            );
+            if request.is_native() {
+                super::super::super::defer_upstream_response(
+                    request,
+                    GatewayUpstreamResponse::Stream(upstream),
+                    inflight_guard,
+                    response_adapter_for_candidate,
+                    passthrough_sse_protocol,
+                    None,
+                    path,
+                    None,
+                    is_stream,
+                    Some(trace_id),
+                    None,
+                    started_at,
+                    move |bridge| {
+                        let Some(storage) = crate::storage_helpers::open_storage() else {
+                            log::error!(
+                                "event=aggregate_response_finalization_storage_unavailable"
+                            );
+                            return;
+                        };
+                        finalization.finalize(&storage, bridge);
+                    },
+                )?;
+                return Ok(AggregateAttemptOutcome::Responded);
+            }
+            #[cfg(test)]
+            {
+                let bridge = super::super::super::http_bridge::respond_with_upstream_async(
+                    request,
+                    GatewayUpstreamResponse::Stream(upstream),
+                    inflight_guard,
+                    response_adapter_for_candidate,
+                    passthrough_sse_protocol,
+                    None,
+                    path,
+                    None,
+                    is_stream,
+                    false,
+                    Some(trace_id),
+                    None,
+                    started_at,
+                )
+                .await?;
+                finalization.finalize(storage, bridge);
+            }
             succeeded = true;
             break;
         }
@@ -1582,7 +1823,7 @@ pub(in super::super) fn proxy_aggregate_request(
     let message =
         last_attempt_error.unwrap_or_else(|| "aggregate api upstream response failed".to_string());
     let status_code = last_failure_status;
-    if matches!(failure_policy, AggregateFailurePolicy::ReleaseRequest) {
+    if status_code != 499 && matches!(failure_policy, AggregateFailurePolicy::ReleaseRequest) {
         if let Some(released_request) = request.take() {
             // 聚合优先混合轮转：聚合候选全部失败且请求尚未消费，
             // 将请求归还调用方，由其回落账号池。这里不能提前记录请求终态，
@@ -1645,7 +1886,7 @@ pub(in super::super) fn proxy_aggregate_request(
         Some(message.as_str()),
         Some(started_at.elapsed().as_millis()),
     );
-    respond_error(request, status_code, message.as_str(), Some(trace_id));
+    respond_error(request, status_code, message.as_str(), Some(trace_id)).await;
     Ok(AggregateAttemptOutcome::Responded)
 }
 
@@ -1657,7 +1898,7 @@ fn aggregate_api_secrets_by_candidate_id(
         .iter()
         .map(|candidate| candidate.id.clone())
         .collect::<Vec<_>>();
-    storage
+    crate::account::remote_storage::AccountStorage::new(&storage)
         .list_aggregate_api_secrets_for_ids(&candidate_ids)
         .map_err(|err| err.to_string())
 }

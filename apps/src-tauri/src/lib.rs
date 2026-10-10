@@ -82,6 +82,15 @@ fn install_ayatana_deprecation_notice_filter() {}
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     install_ayatana_deprecation_notice_filter();
+    load_env_from_exe_dir();
+    // Desktop IPC and its embedded service share the process executor. Keep
+    // pooled socket drivers alive when the local listener is restarted.
+    tauri::async_runtime::set(
+        codexmanager_service::process_runtime()
+            .expect("initialize desktop service runtime")
+            .handle()
+            .clone(),
+    );
 
     let app = tauri::Builder::default()
         .plugin(
@@ -113,7 +122,6 @@ pub fn run() {
             }
         }))
         .setup(|app| {
-            load_env_from_exe_dir();
             let diagnostics_settings = desktop_diagnostics::initialize_runtime(app.handle());
             if let Err(err) = app.handle().plugin(
                 tauri_plugin_log::Builder::default()

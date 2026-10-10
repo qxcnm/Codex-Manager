@@ -9,10 +9,10 @@ use codexmanager_core::storage::{ProxyProfileUpdateInput, ProxyProfileUrlTestIns
 use super::cloudflare_speedtest::run_cloudflare_speed_test;
 use super::cloudflare_style::config::CfStyleConfig;
 use super::cloudflare_style::model::CfStyleResult;
-use super::download::run_proxy_download_test_with_cancel;
-use super::latency::run_proxy_latency_test;
+use super::download::run_proxy_download_test_with_cancel_async;
+use super::latency::run_proxy_latency_test_async;
 use super::presets::{resolve_download_test_target, upload_endpoint_status};
-use super::upload::run_proxy_upload_test_with_cancel;
+use super::upload::run_proxy_upload_test_with_cancel_async;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -159,15 +159,30 @@ static REGISTRY: OnceLock<Arc<JobRegistry>> = OnceLock::new();
 
 impl JobRegistry {
     pub fn global() -> Arc<Self> {
-        REGISTRY
+        let registry = REGISTRY
             .get_or_init(|| {
-                let registry = Arc::new(Self {
+                Arc::new(Self {
                     jobs: RwLock::new(HashMap::new()),
-                });
-                spawn_scheduler_loop(registry.clone());
-                registry
+                })
             })
-            .clone()
+            .clone();
+        spawn_scheduler_loop(registry.clone());
+        registry
+    }
+
+    fn insert_job(&self, mut job: ActiveJob) -> JobState {
+        let mut jobs = self.jobs.write().unwrap_or_else(|error| error.into_inner());
+        // Share the queue lock with SchedulerGuard's shutdown cleanup. A job
+        // arriving after that cleanup must never survive as queued work.
+        if crate::shutdown_requested() {
+            job.state.status = JobStatus::Cancelled;
+            job.state.phase = JobPhase::Done;
+            job.state.error = Some("Cancelled".into());
+            job.cancel_flag.store(true, Ordering::SeqCst);
+        }
+        let state = job.state.clone();
+        jobs.insert(state.job_id.clone(), job);
+        state
     }
 
     pub fn create_latency_job(&self, id: &str) -> JobState {
@@ -207,8 +222,7 @@ impl JobRegistry {
             },
             cancel_flag: Arc::new(AtomicBool::new(false)),
         };
-        self.jobs.write().unwrap().insert(job_id, active_job);
-        state
+        self.insert_job(active_job)
     }
 
     pub fn create_speed_job(
@@ -259,8 +273,7 @@ impl JobRegistry {
             },
             cancel_flag: Arc::new(AtomicBool::new(false)),
         };
-        self.jobs.write().unwrap().insert(job_id, active_job);
-        state
+        self.insert_job(active_job)
     }
 
     pub fn create_cloudflare_style_speed_job(&self, id: &str, config: CfStyleConfig) -> JobState {
@@ -301,8 +314,7 @@ impl JobRegistry {
             },
             cancel_flag: Arc::new(AtomicBool::new(false)),
         };
-        self.jobs.write().unwrap().insert(job_id, active_job);
-        state
+        self.insert_job(active_job)
     }
 
     pub fn create_account_latency_job(
@@ -347,8 +359,7 @@ impl JobRegistry {
             },
             cancel_flag: Arc::new(AtomicBool::new(false)),
         };
-        self.jobs.write().unwrap().insert(job_id, active_job);
-        state
+        self.insert_job(active_job)
     }
 
     pub fn create_account_speed_job(
@@ -401,8 +412,7 @@ impl JobRegistry {
             },
             cancel_flag: Arc::new(AtomicBool::new(false)),
         };
-        self.jobs.write().unwrap().insert(job_id, active_job);
-        state
+        self.insert_job(active_job)
     }
 
     pub fn create_account_cloudflare_style_speed_job(
@@ -449,8 +459,7 @@ impl JobRegistry {
             },
             cancel_flag: Arc::new(AtomicBool::new(false)),
         };
-        self.jobs.write().unwrap().insert(job_id, active_job);
-        state
+        self.insert_job(active_job)
     }
 
     pub fn get_job(&self, job_id: &str) -> Option<JobState> {
@@ -467,7 +476,7 @@ impl JobRegistry {
             job.cancel_flag.store(true, Ordering::SeqCst);
             // Immediately mark the job as Cancelled regardless of current status.
             // For Running jobs, execute_job will check should_cancel() before writing
-            // final results; even if it continues briefly in block_in_place, the status
+            // final results; while cancellation is being observed, the status
             // is already visible to pollers.
             let is_terminal = matches!(
                 job.state.status,
@@ -601,17 +610,44 @@ impl JobRegistry {
     }
 }
 
-static SCHEDULER_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-
-fn scheduler_runtime() -> &'static tokio::runtime::Runtime {
-    SCHEDULER_RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .thread_name("proxy-jobs-scheduler")
-            .build()
-            .unwrap_or_else(|err| panic!("build scheduler runtime failed: {err}"))
-    })
+static SCHEDULER_RUNNING: AtomicBool = AtomicBool::new(false);
+struct SchedulerGuard(Arc<JobRegistry>);
+impl Drop for SchedulerGuard {
+    fn drop(&mut self) {
+        let mut jobs = self
+            .0
+            .jobs
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        for job in jobs.values_mut() {
+            if job.state.status == JobStatus::Queued {
+                job.state.status = JobStatus::Cancelled;
+                job.state.error = Some("Cancelled".into());
+                job.state.updated_at = codexmanager_core::storage::now_ts();
+            }
+        }
+        SCHEDULER_RUNNING.store(false, Ordering::SeqCst);
+    }
+}
+struct JobCompletionGuard {
+    registry: Arc<JobRegistry>,
+    job_id: String,
+}
+impl Drop for JobCompletionGuard {
+    fn drop(&mut self) {
+        let mut jobs = self
+            .registry
+            .jobs
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(job) = jobs.get_mut(&self.job_id) {
+            if matches!(job.state.status, JobStatus::Queued | JobStatus::Running) {
+                job.state.status = JobStatus::Cancelled;
+                job.state.error = Some("Cancelled".into());
+                job.state.updated_at = codexmanager_core::storage::now_ts();
+            }
+        }
+    }
 }
 
 fn collect_jobs_to_start(jobs_map: &HashMap<String, ActiveJob>) -> Vec<ActiveJob> {
@@ -715,30 +751,219 @@ fn collect_jobs_to_start(jobs_map: &HashMap<String, ActiveJob>) -> Vec<ActiveJob
 }
 
 fn spawn_scheduler_loop(registry: Arc<JobRegistry>) {
-    scheduler_runtime().spawn(async move {
+    if SCHEDULER_RUNNING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+    let guard = SchedulerGuard(registry.clone());
+    if let Err(error) = crate::account::background::spawn("proxy-jobs-scheduler", async move {
+        let _guard = guard;
         loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
             let jobs_to_start = {
                 let jobs_map = registry.jobs.read().unwrap();
                 collect_jobs_to_start(&jobs_map)
             };
-
-            // Запускаем отобранные джобы
             for job in jobs_to_start {
                 registry.update_job_status(&job.state.job_id, JobStatus::Running, None);
+                let cleanup = JobCompletionGuard {
+                    registry: registry.clone(),
+                    job_id: job.state.job_id.clone(),
+                };
                 let registry_clone = registry.clone();
-                scheduler_runtime().spawn(async move {
-                    execute_job(registry_clone, job).await;
-                });
+                if let Err(error) = crate::account::background::spawn("proxy-test", async move {
+                    let _cleanup = cleanup;
+                    run_scheduled_job(registry_clone, job).await;
+                }) {
+                    log::warn!("proxy job was not scheduled: {error}");
+                }
             }
         }
-    });
+    }) {
+        log::warn!("proxy scheduler was not started: {error}");
+    }
+}
+
+async fn run_scheduled_job(registry: Arc<JobRegistry>, job: ActiveJob) {
+    use futures_util::FutureExt;
+    let job_id = job.state.job_id.clone();
+    let cancel_flag = job.cancel_flag.clone();
+    let operation = std::panic::AssertUnwindSafe(execute_job(registry.clone(), job)).catch_unwind();
+    match run_job_until_cancelled(&cancel_flag, operation).await {
+        None => {
+            registry.update_job_status(&job_id, JobStatus::Cancelled, Some("Cancelled".to_string()))
+        }
+        Some(Err(_)) => registry.update_job_status(
+            &job_id,
+            JobStatus::Failed,
+            Some("proxy test failed unexpectedly".to_string()),
+        ),
+        Some(Ok(())) => {}
+    }
+}
+
+async fn run_job_until_cancelled<F: std::future::Future>(
+    cancel_flag: &AtomicBool,
+    operation: F,
+) -> Option<F::Output> {
+    let cancelled = async {
+        loop {
+            if cancel_flag.load(Ordering::SeqCst) || crate::shutdown_requested() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    };
+    tokio::select! {
+        biased;
+        _ = cancelled => None,
+        result = operation => Some(result),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn all_job_types_created_after_shutdown_are_cancelled_and_never_restart() {
+        struct ClearShutdown;
+        impl Drop for ClearShutdown {
+            fn drop(&mut self) {
+                crate::clear_shutdown_flag();
+            }
+        }
+        let _guard = crate::test_env_guard();
+        let _clear = ClearShutdown;
+        crate::request_shutdown("");
+        let registry = JobRegistry {
+            jobs: RwLock::new(HashMap::new()),
+        };
+        let states = [
+            registry.create_latency_job("profile"),
+            registry.create_speed_job("profile", None, None, None, None),
+            registry.create_cloudflare_style_speed_job("profile", CfStyleConfig::default()),
+            registry.create_account_latency_job("account", None, "http://127.0.0.1:1"),
+            registry.create_account_speed_job(
+                "account",
+                None,
+                "http://127.0.0.1:1",
+                None,
+                None,
+                None,
+                None,
+            ),
+            registry.create_account_cloudflare_style_speed_job(
+                "account",
+                None,
+                "http://127.0.0.1:1",
+                CfStyleConfig::default(),
+            ),
+        ];
+        assert!(states
+            .iter()
+            .all(|state| state.status == JobStatus::Cancelled && state.phase == JobPhase::Done));
+        crate::clear_shutdown_flag();
+        assert!(collect_jobs_to_start(&registry.jobs.read().unwrap()).is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn scheduler_shutdown_cancels_queued_jobs_and_can_restart() {
+        struct ClearShutdown;
+        impl Drop for ClearShutdown {
+            fn drop(&mut self) {
+                crate::clear_shutdown_flag();
+            }
+        }
+        let _guard = crate::test_env_guard();
+        let _clear = ClearShutdown;
+        crate::request_shutdown("");
+        crate::account::background::drain_account_background_tasks().await;
+        for cycle in 0..2 {
+            crate::clear_shutdown_flag();
+            let job = make_speed_job(
+                "shutdown-queued",
+                JobStatus::Queued,
+                JobScope::SystemProxy,
+                Some("unused-profile"),
+                None,
+                Some("size_10mb"),
+                cycle,
+            );
+            let registry = Arc::new(JobRegistry {
+                jobs: RwLock::new(HashMap::from([(job.state.job_id.clone(), job)])),
+            });
+            spawn_scheduler_loop(registry.clone());
+            assert!(SCHEDULER_RUNNING.load(Ordering::SeqCst));
+            crate::request_shutdown("");
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                crate::account::background::drain_account_background_tasks(),
+            )
+            .await
+            .unwrap();
+            assert!(!SCHEDULER_RUNNING.load(Ordering::SeqCst));
+            assert_eq!(
+                registry.jobs.read().unwrap()["shutdown-queued"]
+                    .state
+                    .status,
+                JobStatus::Cancelled
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn scheduled_proxy_cancellation_interrupts_silent_headers_and_body() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let _guard = crate::test_env_guard();
+        for reply in ["", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let proxy_url = format!("http://{}", listener.local_addr().unwrap());
+            let flag = Arc::new(AtomicBool::new(false));
+            let server_flag = flag.clone();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = [0; 4096];
+                assert!(socket.read(&mut buffer).await.unwrap() > 0);
+                socket.write_all(reply.as_bytes()).await.unwrap();
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                server_flag.store(true, Ordering::SeqCst);
+                let closed = tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    socket.read(&mut buffer),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                assert_eq!(closed, 0, "cancellation must close the upstream socket");
+            });
+            let (client, _) = super::super::client::build_proxy_test_client(
+                &proxy_url,
+                super::super::client::ProxyTestRedirectPolicy::None,
+                false,
+            )
+            .unwrap();
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                run_job_until_cancelled(&flag, async {
+                    client
+                        .get("http://proxy-target.invalid/test")
+                        .send()
+                        .await
+                        .unwrap()
+                        .bytes()
+                        .await
+                        .unwrap()
+                }),
+            )
+            .await
+            .unwrap();
+            assert!(result.is_none());
+            server.await.unwrap();
+        }
+    }
 
     fn make_speed_job(
         job_id: &str,
@@ -908,7 +1133,7 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
             registry.update_job_phase(&job.state.job_id, JobPhase::Latency);
 
             let storage = match open_storage() {
-                Some(s) => s,
+                Some(s) => s.shared_handle(),
                 None => {
                     registry.update_job_status(
                         &job.state.job_id,
@@ -920,7 +1145,9 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
             };
 
             let (proxy_url, system_profile_id) = if job.state.scope == JobScope::SystemProxy {
-                let profile = match storage.find_proxy_profile(&id) {
+                let profile = match crate::account::remote_storage::AccountStorage::new(&storage)
+                    .find_proxy_profile(&id)
+                {
                     Ok(Some(p)) => p,
                     Ok(None) => {
                         registry.update_job_status(
@@ -971,14 +1198,12 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
                 return;
             }
 
-            // Запускаем тест. Поскольку он синхронный, мы выполняем его в блокирующем пуле tokio::task::block_in_place
-            let outcome = tokio::task::block_in_place(|| {
-                run_proxy_latency_test(
-                    proxy_url.as_str(),
-                    "http://cp.cloudflare.com/generate_204",
-                    true,
-                )
-            });
+            let outcome = run_proxy_latency_test_async(
+                proxy_url.as_str(),
+                "http://cp.cloudflare.com/generate_204",
+                true,
+            )
+            .await;
 
             if should_cancel() {
                 registry.update_job_status(
@@ -1008,16 +1233,15 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
                 let mut as_domain = None;
 
                 if outcome.status == "ok" {
-                    let geo_outcome = tokio::task::block_in_place(|| {
-                        crate::account::proxy_health::check_account_proxy(
-                            &proxy_url,
-                            |country_code| {
-                                storage
-                                    .find_cached_proxy_flag_by_country(country_code)
-                                    .unwrap_or(None)
-                            },
-                        )
-                    });
+                    let geo_outcome = crate::account::proxy_health::check_account_proxy_async(
+                        &proxy_url,
+                        |country_code| {
+                            storage
+                                .find_cached_proxy_flag_by_country(country_code)
+                                .unwrap_or(None)
+                        },
+                    )
+                    .await;
                     if let Some(geo) = geo_outcome.geo {
                         ip = geo.ip;
                         country_code = geo.country_code;
@@ -1036,47 +1260,49 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
                     }
                 }
 
-                let _ = storage.update_proxy_profile(&ProxyProfileUpdateInput {
-                    id: profile_id.clone(),
-                    name: None,
-                    proxy_url: None,
-                    enabled: None,
-                    status: Some(outcome.status.clone()),
-                    last_error: Some(outcome.error.clone().unwrap_or_default()),
-                    last_url_latency_ms: outcome.url_latency_ms,
-                    last_download_mbps: None,
-                    last_upload_mbps: None,
-                    last_tested_at: Some(outcome.tested_at),
-                    ip,
-                    country_code,
-                    country_name,
-                    region_name,
-                    city_name,
-                    asn,
-                    as_org,
-                    isp,
-                    as_domain,
-                    flag_img_url,
-                    flag_emoji,
-                    timezone_id,
-                    timezone_offset,
-                    timezone_utc,
-                    tags_json: None,
-                    notes: None,
-                });
+                let _ = crate::account::remote_storage::AccountStorage::new(&storage)
+                    .update_proxy_profile(&ProxyProfileUpdateInput {
+                        id: profile_id.clone(),
+                        name: None,
+                        proxy_url: None,
+                        enabled: None,
+                        status: Some(outcome.status.clone()),
+                        last_error: Some(outcome.error.clone().unwrap_or_default()),
+                        last_url_latency_ms: outcome.url_latency_ms,
+                        last_download_mbps: None,
+                        last_upload_mbps: None,
+                        last_tested_at: Some(outcome.tested_at),
+                        ip,
+                        country_code,
+                        country_name,
+                        region_name,
+                        city_name,
+                        asn,
+                        as_org,
+                        isp,
+                        as_domain,
+                        flag_img_url,
+                        flag_emoji,
+                        timezone_id,
+                        timezone_offset,
+                        timezone_utc,
+                        tags_json: None,
+                        notes: None,
+                    });
 
-                let _ = storage.insert_proxy_profile_url_test(&ProxyProfileUrlTestInsertInput {
-                    proxy_profile_id: profile_id,
-                    status: outcome.status.clone(),
-                    url_latency_ms: outcome.url_latency_ms,
-                    status_code: outcome.status_code,
-                    test_url: outcome.test_url,
-                    final_url: outcome.final_url,
-                    redirected: outcome.redirected,
-                    tested_at: outcome.tested_at,
-                    error_code: outcome.error_code,
-                    error: outcome.error.clone(),
-                });
+                let _ = crate::account::remote_storage::AccountStorage::new(&storage)
+                    .insert_proxy_profile_url_test(&ProxyProfileUrlTestInsertInput {
+                        proxy_profile_id: profile_id,
+                        status: outcome.status.clone(),
+                        url_latency_ms: outcome.url_latency_ms,
+                        status_code: outcome.status_code,
+                        test_url: outcome.test_url,
+                        final_url: outcome.final_url,
+                        redirected: outcome.redirected,
+                        tested_at: outcome.tested_at,
+                        error_code: outcome.error_code,
+                        error: outcome.error.clone(),
+                    });
             } else {
                 persist_account_latency_outcome(&storage, &id, &outcome);
             }
@@ -1104,7 +1330,7 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
             diagnostic_file_size_id,
         } => {
             let storage = match open_storage() {
-                Some(s) => s,
+                Some(s) => s.shared_handle(),
                 None => {
                     registry.update_job_status(
                         &job.state.job_id,
@@ -1116,7 +1342,9 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
             };
 
             let (proxy_url, system_profile_id) = if job.state.scope == JobScope::SystemProxy {
-                let profile = match storage.find_proxy_profile(&id) {
+                let profile = match crate::account::remote_storage::AccountStorage::new(&storage)
+                    .find_proxy_profile(&id)
+                {
                     Ok(Some(p)) => p,
                     Ok(None) => {
                         registry.update_job_status(
@@ -1260,34 +1488,35 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
                     let status = super::errors::proxy_test_result_status(&err);
 
                     if let Some(profile_id) = system_profile_id.as_ref() {
-                        let _ = storage.update_proxy_profile(&ProxyProfileUpdateInput {
-                            id: profile_id.clone(),
-                            name: None,
-                            proxy_url: None,
-                            enabled: None,
-                            status: Some(status.to_string()),
-                            last_error: Some(err.message.clone()),
-                            last_url_latency_ms: None,
-                            last_download_mbps: None,
-                            last_upload_mbps: None,
-                            last_tested_at: Some(codexmanager_core::storage::now_ts()),
-                            ip: None,
-                            country_code: None,
-                            country_name: None,
-                            region_name: None,
-                            city_name: None,
-                            asn: None,
-                            as_org: None,
-                            isp: None,
-                            as_domain: None,
-                            flag_img_url: None,
-                            flag_emoji: None,
-                            timezone_id: None,
-                            timezone_offset: None,
-                            timezone_utc: None,
-                            tags_json: None,
-                            notes: None,
-                        });
+                        let _ = crate::account::remote_storage::AccountStorage::new(&storage)
+                            .update_proxy_profile(&ProxyProfileUpdateInput {
+                                id: profile_id.clone(),
+                                name: None,
+                                proxy_url: None,
+                                enabled: None,
+                                status: Some(status.to_string()),
+                                last_error: Some(err.message.clone()),
+                                last_url_latency_ms: None,
+                                last_download_mbps: None,
+                                last_upload_mbps: None,
+                                last_tested_at: Some(codexmanager_core::storage::now_ts()),
+                                ip: None,
+                                country_code: None,
+                                country_name: None,
+                                region_name: None,
+                                city_name: None,
+                                asn: None,
+                                as_org: None,
+                                isp: None,
+                                as_domain: None,
+                                flag_img_url: None,
+                                flag_emoji: None,
+                                timezone_id: None,
+                                timezone_offset: None,
+                                timezone_utc: None,
+                                tags_json: None,
+                                notes: None,
+                            });
                     } else {
                         persist_account_speed_result(
                             &storage,
@@ -1338,14 +1567,13 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
                 let cancel_flag_dl = cancel_flag.clone();
                 let should_cancel_dl = move || cancel_flag_dl.load(Ordering::SeqCst);
 
-                let download_outcome = tokio::task::block_in_place(|| {
-                    run_proxy_download_test_with_cancel(
-                        proxy_url.as_str(),
-                        &download_target,
-                        should_cancel_dl,
-                        |bytes| registry_dl.update_download_progress(&job_id_dl, bytes, None),
-                    )
-                });
+                let download_outcome = run_proxy_download_test_with_cancel_async(
+                    proxy_url.as_str(),
+                    &download_target,
+                    should_cancel_dl,
+                    |bytes| registry_dl.update_download_progress(&job_id_dl, bytes, None),
+                )
+                .await;
 
                 if download_outcome.cancelled || should_cancel() {
                     registry.update_job_status(
@@ -1359,34 +1587,37 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
                 if download_outcome.status != "ok" {
                     registry.update_job_phase(&job.state.job_id, JobPhase::Saving);
                     if let Some(profile_id) = system_profile_id.as_ref() {
-                        let _ = storage.update_proxy_profile(&ProxyProfileUpdateInput {
-                            id: profile_id.clone(),
-                            name: None,
-                            proxy_url: None,
-                            enabled: None,
-                            status: Some("failed".to_string()),
-                            last_error: Some(download_outcome.error.clone().unwrap_or_default()),
-                            last_url_latency_ms: None,
-                            last_download_mbps: None,
-                            last_upload_mbps: None,
-                            last_tested_at: Some(codexmanager_core::storage::now_ts()),
-                            ip: None,
-                            country_code: None,
-                            country_name: None,
-                            region_name: None,
-                            city_name: None,
-                            asn: None,
-                            as_org: None,
-                            isp: None,
-                            as_domain: None,
-                            flag_img_url: None,
-                            flag_emoji: None,
-                            timezone_id: None,
-                            timezone_offset: None,
-                            timezone_utc: None,
-                            tags_json: None,
-                            notes: None,
-                        });
+                        let _ = crate::account::remote_storage::AccountStorage::new(&storage)
+                            .update_proxy_profile(&ProxyProfileUpdateInput {
+                                id: profile_id.clone(),
+                                name: None,
+                                proxy_url: None,
+                                enabled: None,
+                                status: Some("failed".to_string()),
+                                last_error: Some(
+                                    download_outcome.error.clone().unwrap_or_default(),
+                                ),
+                                last_url_latency_ms: None,
+                                last_download_mbps: None,
+                                last_upload_mbps: None,
+                                last_tested_at: Some(codexmanager_core::storage::now_ts()),
+                                ip: None,
+                                country_code: None,
+                                country_name: None,
+                                region_name: None,
+                                city_name: None,
+                                asn: None,
+                                as_org: None,
+                                isp: None,
+                                as_domain: None,
+                                flag_img_url: None,
+                                flag_emoji: None,
+                                timezone_id: None,
+                                timezone_offset: None,
+                                timezone_utc: None,
+                                tags_json: None,
+                                notes: None,
+                            });
                     } else {
                         persist_account_speed_result(
                             &storage,
@@ -1422,14 +1653,13 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
                     registry_ul.update_upload_progress(&job_id_ul, bytes, None)
                 });
 
-                let upload_outcome = tokio::task::block_in_place(|| {
-                    run_proxy_upload_test_with_cancel(
-                        proxy_url.as_str(),
-                        upload_bytes,
-                        should_cancel_ul,
-                        move |bytes| progress_ul(bytes),
-                    )
-                });
+                let upload_outcome = run_proxy_upload_test_with_cancel_async(
+                    proxy_url.as_str(),
+                    upload_bytes,
+                    should_cancel_ul,
+                    move |bytes| progress_ul(bytes),
+                )
+                .await;
 
                 if upload_outcome.cancelled || should_cancel() {
                     registry.update_job_status(
@@ -1486,14 +1716,13 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
                                 move || cancel_flag_diag.load(Ordering::SeqCst);
 
                             // Запускаем тест скачивания
-                            let diag_outcome = tokio::task::block_in_place(|| {
-                                run_proxy_download_test_with_cancel(
-                                    proxy_url.as_str(),
-                                    &target,
-                                    should_cancel_diag,
-                                    |_| {}, // Прогресс диагностики отдельно не репортим в общие поля
-                                )
-                            });
+                            let diag_outcome = run_proxy_download_test_with_cancel_async(
+                                proxy_url.as_str(),
+                                &target,
+                                should_cancel_diag,
+                                |_| {}, // Прогресс диагностики отдельно не репортим в общие поля
+                            )
+                            .await;
 
                             let diag_status = if diag_outcome.cancelled {
                                 "cancelled".to_string()
@@ -1521,29 +1750,32 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
                                 .error
                                 .as_ref()
                                 .map(|e| crate::account_proxy::redact_proxy_url_for_log(e));
-                            let _ = storage.insert_proxy_diagnostic_test(
-                                &codexmanager_core::storage::ProxyDiagnosticTestInsertInput {
-                                    scope: scope_str,
-                                    proxy_profile_id: if job.state.scope == JobScope::SystemProxy {
-                                        Some(id.clone())
-                                    } else {
-                                        None
+                            let _ = crate::account::remote_storage::AccountStorage::new(&storage)
+                                .insert_proxy_diagnostic_test(
+                                    &codexmanager_core::storage::ProxyDiagnosticTestInsertInput {
+                                        scope: scope_str,
+                                        proxy_profile_id: if job.state.scope
+                                            == JobScope::SystemProxy
+                                        {
+                                            Some(id.clone())
+                                        } else {
+                                            None
+                                        },
+                                        account_id: if job.state.scope == JobScope::AccountProxy {
+                                            Some(id.clone())
+                                        } else {
+                                            None
+                                        },
+                                        status: diag_status,
+                                        provider: diag_provider.to_string(),
+                                        file_size_id: diag_size.to_string(),
+                                        downloaded_bytes: Some(diag_outcome.bytes_read as i64),
+                                        duration_ms: Some(diag_outcome.duration_ms),
+                                        mbps: diag_outcome.download_mbps,
+                                        tested_at: codexmanager_core::storage::now_ts(),
+                                        error: redacted_diag_error,
                                     },
-                                    account_id: if job.state.scope == JobScope::AccountProxy {
-                                        Some(id.clone())
-                                    } else {
-                                        None
-                                    },
-                                    status: diag_status,
-                                    provider: diag_provider.to_string(),
-                                    file_size_id: diag_size.to_string(),
-                                    downloaded_bytes: Some(diag_outcome.bytes_read as i64),
-                                    duration_ms: Some(diag_outcome.duration_ms),
-                                    mbps: diag_outcome.download_mbps,
-                                    tested_at: codexmanager_core::storage::now_ts(),
-                                    error: redacted_diag_error,
-                                },
-                            );
+                                );
                         }
                         Err(err) => {
                             let diag_result = DownloadDiagnosticResult {
@@ -1561,31 +1793,34 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
                                 JobScope::SystemProxy => "system_proxy".to_string(),
                                 JobScope::AccountProxy => "account_proxy".to_string(),
                             };
-                            let _ = storage.insert_proxy_diagnostic_test(
-                                &codexmanager_core::storage::ProxyDiagnosticTestInsertInput {
-                                    scope: scope_str,
-                                    proxy_profile_id: if job.state.scope == JobScope::SystemProxy {
-                                        Some(id.clone())
-                                    } else {
-                                        None
+                            let _ = crate::account::remote_storage::AccountStorage::new(&storage)
+                                .insert_proxy_diagnostic_test(
+                                    &codexmanager_core::storage::ProxyDiagnosticTestInsertInput {
+                                        scope: scope_str,
+                                        proxy_profile_id: if job.state.scope
+                                            == JobScope::SystemProxy
+                                        {
+                                            Some(id.clone())
+                                        } else {
+                                            None
+                                        },
+                                        account_id: if job.state.scope == JobScope::AccountProxy {
+                                            Some(id.clone())
+                                        } else {
+                                            None
+                                        },
+                                        status: "failed".to_string(),
+                                        provider: diag_provider.to_string(),
+                                        file_size_id: diag_size.to_string(),
+                                        downloaded_bytes: Some(0),
+                                        duration_ms: Some(0),
+                                        mbps: Some(0.0),
+                                        tested_at: codexmanager_core::storage::now_ts(),
+                                        error: Some(
+                                            crate::account_proxy::redact_proxy_url_for_log(&err),
+                                        ),
                                     },
-                                    account_id: if job.state.scope == JobScope::AccountProxy {
-                                        Some(id.clone())
-                                    } else {
-                                        None
-                                    },
-                                    status: "failed".to_string(),
-                                    provider: diag_provider.to_string(),
-                                    file_size_id: diag_size.to_string(),
-                                    downloaded_bytes: Some(0),
-                                    duration_ms: Some(0),
-                                    mbps: Some(0.0),
-                                    tested_at: codexmanager_core::storage::now_ts(),
-                                    error: Some(crate::account_proxy::redact_proxy_url_for_log(
-                                        &err,
-                                    )),
-                                },
-                            );
+                                );
                         }
                     }
                 }
@@ -1604,34 +1839,35 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
             }
 
             if let Some(profile_id) = system_profile_id {
-                let _ = storage.update_proxy_profile(&ProxyProfileUpdateInput {
-                    id: profile_id,
-                    name: None,
-                    proxy_url: None,
-                    enabled: None,
-                    status: Some(final_status.to_string()),
-                    last_error: Some(final_error.clone().unwrap_or_default()),
-                    last_url_latency_ms: final_latency_ms.map(|v| v as i64),
-                    last_download_mbps: final_download_mbps,
-                    last_upload_mbps: final_upload_mbps,
-                    last_tested_at: Some(codexmanager_core::storage::now_ts()),
-                    ip: None,
-                    country_code: None,
-                    country_name: None,
-                    region_name: None,
-                    city_name: None,
-                    asn: None,
-                    as_org: None,
-                    isp: None,
-                    as_domain: None,
-                    flag_img_url: None,
-                    flag_emoji: None,
-                    timezone_id: None,
-                    timezone_offset: None,
-                    timezone_utc: None,
-                    tags_json: None,
-                    notes: None,
-                });
+                let _ = crate::account::remote_storage::AccountStorage::new(&storage)
+                    .update_proxy_profile(&ProxyProfileUpdateInput {
+                        id: profile_id,
+                        name: None,
+                        proxy_url: None,
+                        enabled: None,
+                        status: Some(final_status.to_string()),
+                        last_error: Some(final_error.clone().unwrap_or_default()),
+                        last_url_latency_ms: final_latency_ms.map(|v| v as i64),
+                        last_download_mbps: final_download_mbps,
+                        last_upload_mbps: final_upload_mbps,
+                        last_tested_at: Some(codexmanager_core::storage::now_ts()),
+                        ip: None,
+                        country_code: None,
+                        country_name: None,
+                        region_name: None,
+                        city_name: None,
+                        asn: None,
+                        as_org: None,
+                        isp: None,
+                        as_domain: None,
+                        flag_img_url: None,
+                        flag_emoji: None,
+                        timezone_id: None,
+                        timezone_offset: None,
+                        timezone_utc: None,
+                        tags_json: None,
+                        notes: None,
+                    });
             } else {
                 persist_account_speed_result(
                     &storage,
@@ -1694,8 +1930,8 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
                 .as_ref()
                 .map(|e| crate::account_proxy::redact_proxy_url_for_log(e));
 
-            let _ = storage.insert_proxy_speed_test(
-                &codexmanager_core::storage::ProxySpeedTestInsertInput {
+            let _ = crate::account::remote_storage::AccountStorage::new(&storage)
+                .insert_proxy_speed_test(&codexmanager_core::storage::ProxySpeedTestInsertInput {
                     scope: scope_str,
                     proxy_profile_id: if job.state.scope == JobScope::SystemProxy {
                         Some(id.clone())
@@ -1720,8 +1956,7 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
                     finished_at,
                     error_code: None,
                     error: redacted_error,
-                },
-            );
+                });
 
             registry.update_final_metrics(
                 &job.state.job_id,
@@ -1742,7 +1977,7 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
             config,
         } => {
             let storage = match open_storage() {
-                Some(s) => s,
+                Some(s) => s.shared_handle(),
                 None => {
                     registry.update_job_status(
                         &job.state.job_id,
@@ -1754,7 +1989,9 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
             };
 
             let (proxy_url, system_profile_id) = if job.state.scope == JobScope::SystemProxy {
-                let profile = match storage.find_proxy_profile(&id) {
+                let profile = match crate::account::remote_storage::AccountStorage::new(&storage)
+                    .find_proxy_profile(&id)
+                {
                     Ok(Some(p)) => p,
                     Ok(None) => {
                         registry.update_job_status(
@@ -1871,34 +2108,35 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
             registry.update_job_phase(&job.state.job_id, JobPhase::Saving);
 
             if let Some(profile_id) = system_profile_id {
-                let _ = storage.update_proxy_profile(&ProxyProfileUpdateInput {
-                    id: profile_id,
-                    name: None,
-                    proxy_url: None,
-                    enabled: None,
-                    status: Some(final_status.to_string()),
-                    last_error: Some(final_error.clone().unwrap_or_default()),
-                    last_url_latency_ms: final_latency_ms,
-                    last_download_mbps: final_download_mbps,
-                    last_upload_mbps: final_upload_mbps,
-                    last_tested_at: Some(codexmanager_core::storage::now_ts()),
-                    ip: outcome.endpoint_info.observed_ip.clone(),
-                    country_code: outcome.endpoint_info.observed_country.clone(),
-                    country_name: None,
-                    region_name: None,
-                    city_name: None,
-                    asn: None,
-                    as_org: None,
-                    isp: None,
-                    as_domain: None,
-                    flag_img_url: None,
-                    flag_emoji: None,
-                    timezone_id: None,
-                    timezone_offset: None,
-                    timezone_utc: None,
-                    tags_json: None,
-                    notes: None,
-                });
+                let _ = crate::account::remote_storage::AccountStorage::new(&storage)
+                    .update_proxy_profile(&ProxyProfileUpdateInput {
+                        id: profile_id,
+                        name: None,
+                        proxy_url: None,
+                        enabled: None,
+                        status: Some(final_status.to_string()),
+                        last_error: Some(final_error.clone().unwrap_or_default()),
+                        last_url_latency_ms: final_latency_ms,
+                        last_download_mbps: final_download_mbps,
+                        last_upload_mbps: final_upload_mbps,
+                        last_tested_at: Some(codexmanager_core::storage::now_ts()),
+                        ip: outcome.endpoint_info.observed_ip.clone(),
+                        country_code: outcome.endpoint_info.observed_country.clone(),
+                        country_name: None,
+                        region_name: None,
+                        city_name: None,
+                        asn: None,
+                        as_org: None,
+                        isp: None,
+                        as_domain: None,
+                        flag_img_url: None,
+                        flag_emoji: None,
+                        timezone_id: None,
+                        timezone_offset: None,
+                        timezone_utc: None,
+                        tags_json: None,
+                        notes: None,
+                    });
             } else {
                 persist_account_speed_result(
                     &storage,
@@ -1973,8 +2211,8 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
                 .as_ref()
                 .map(|e| crate::account_proxy::redact_proxy_url_for_log(e));
 
-            let _ = storage.insert_proxy_speed_test(
-                &codexmanager_core::storage::ProxySpeedTestInsertInput {
+            let _ = crate::account::remote_storage::AccountStorage::new(&storage)
+                .insert_proxy_speed_test(&codexmanager_core::storage::ProxySpeedTestInsertInput {
                     scope: scope_str,
                     proxy_profile_id: if job.state.scope == JobScope::SystemProxy {
                         Some(id.clone())
@@ -1999,8 +2237,7 @@ async fn execute_job(registry: Arc<JobRegistry>, job: ActiveJob) {
                     finished_at,
                     error_code: None,
                     error: redacted_error,
-                },
-            );
+                });
 
             if let Some(ref d) = outcome.download {
                 for run in &d.runs {
@@ -2075,6 +2312,7 @@ fn persist_account_latency_outcome(
     account_id: &str,
     outcome: &super::latency::ProxyLatencyTestOutcome,
 ) {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let (last_download_mbps, last_upload_mbps) = storage
         .find_account_proxy_settings(account_id)
         .ok()
@@ -2128,6 +2366,7 @@ fn persist_account_speed_result(
     last_error: Option<&str>,
     tested_at: i64,
 ) {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let _ = storage.update_account_proxy_test_result(
         account_id,
         status,

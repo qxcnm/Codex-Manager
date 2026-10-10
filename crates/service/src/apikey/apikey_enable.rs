@@ -16,6 +16,9 @@ pub(crate) fn enable_api_key(key_id: &str) -> Result<(), String> {
     if key_id.is_empty() {
         return Err("missing id".to_string());
     }
+    if crate::storage_helpers::seaorm_enabled() {
+        return super::remote::set_status(key_id, "active");
+    }
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     storage
         .update_api_key_status(key_id, "active")

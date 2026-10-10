@@ -32,7 +32,7 @@ fn images_generation_request_builds_responses_image_generation_tool() {
     let value: serde_json::Value = serde_json::from_slice(&mapped).expect("parse mapped body");
 
     assert_eq!(adapter, ResponseAdapter::ImagesUrlFromResponses);
-    assert_eq!(value["model"], "gpt-5.4-mini");
+    assert_eq!(value["model"], "gpt-6-luna");
     assert_eq!(value["stream"], true);
     assert_eq!(value["store"], false);
     assert_eq!(value["tool_choice"]["type"], "image_generation");
@@ -46,6 +46,26 @@ fn images_generation_request_builds_responses_image_generation_tool() {
         value["input"][0]["content"][0]["text"],
         "画一张极简风格的猫"
     );
+}
+
+#[test]
+fn image_25_generation_request_forwards_selected_tool_model() {
+    for slug in ["gpt-image-2.5-sunburst", "gpt-image-2.5-flare"] {
+        let body = json!({
+            "model": slug,
+            "prompt": "render a product mockup"
+        });
+
+        let (mapped, adapter) = adapt_openai_images_generations_body_to_responses(
+            serde_json::to_vec(&body).expect("body"),
+        )
+        .expect("adapt Image 2.5 request");
+        let value: serde_json::Value = serde_json::from_slice(&mapped).expect("parse mapped body");
+
+        assert_eq!(adapter, ResponseAdapter::ImagesB64JsonFromResponses);
+        assert_eq!(value["model"], "gpt-6-luna");
+        assert_eq!(value["tools"][0]["model"], slug);
+    }
 }
 
 #[test]
@@ -106,6 +126,53 @@ fn images_edits_json_request_builds_responses_with_input_images_and_mask() {
         value["input"][0]["content"][1]["image_url"],
         "data:image/png;base64,aW1hZ2U="
     );
+}
+
+#[test]
+fn image_25_edits_requests_forward_selected_tool_model() {
+    for slug in ["gpt-image-2.5-sunburst", "gpt-image-2.5-flare"] {
+        let json_body = json!({
+            "model": slug,
+            "prompt": "edit the product photo",
+            "images": [{
+                "image_url": "data:image/png;base64,aW1hZ2U="
+            }]
+        });
+        let (mapped, _) = adapt_openai_images_edits_body_to_responses(
+            serde_json::to_vec(&json_body).expect("body"),
+            Some("application/json"),
+        )
+        .expect("adapt Image 2.5 JSON edit request");
+        let value: serde_json::Value =
+            serde_json::from_slice(&mapped).expect("parse mapped JSON edit body");
+        assert_eq!(value["tools"][0]["model"], slug);
+
+        let multipart_body = format!(
+            concat!(
+                "--test-boundary\r\n",
+                "Content-Disposition: form-data; name=\"model\"\r\n\r\n",
+                "{}\r\n",
+                "--test-boundary\r\n",
+                "Content-Disposition: form-data; name=\"prompt\"\r\n\r\n",
+                "edit the product photo\r\n",
+                "--test-boundary\r\n",
+                "Content-Disposition: form-data; name=\"image\"; filename=\"a.png\"\r\n",
+                "Content-Type: image/png\r\n\r\n",
+                "IMG\r\n",
+                "--test-boundary--\r\n"
+            ),
+            slug
+        )
+        .into_bytes();
+        let (mapped, _) = adapt_openai_images_edits_body_to_responses(
+            multipart_body,
+            Some("multipart/form-data; boundary=test-boundary"),
+        )
+        .expect("adapt Image 2.5 multipart edit request");
+        let value: serde_json::Value =
+            serde_json::from_slice(&mapped).expect("parse mapped multipart edit body");
+        assert_eq!(value["tools"][0]["model"], slug);
+    }
 }
 
 #[test]
@@ -207,6 +274,35 @@ fn allows_gpt_image_model_on_images_paths() {
         Some("gpt-image-2"),
     )
     .is_ok());
+}
+
+#[test]
+fn image_25_models_are_case_insensitive_and_only_allowed_on_images_paths() {
+    let storage = storage();
+    for slug in ["gpt-image-2.5-sunburst", "gpt-image-2.5-flare"] {
+        for request_slug in [slug.to_string(), slug.to_ascii_uppercase()] {
+            for path in ["/v1/images/generations", "/v1/images/edits"] {
+                assert!(
+                    ensure_non_text_model_not_used_for_text_request(
+                        &storage,
+                        path,
+                        Some(request_slug.as_str()),
+                    )
+                    .is_ok(),
+                    "{request_slug} should be accepted on {path}"
+                );
+            }
+
+            let err = ensure_non_text_model_not_used_for_text_request(
+                &storage,
+                "/v1/responses",
+                Some(request_slug.as_str()),
+            )
+            .expect_err("image-only Image 2.5 model must be rejected on text paths");
+            assert_eq!(err.status_code, 400);
+            assert!(err.message.contains("images/generations"));
+        }
+    }
 }
 
 #[test]

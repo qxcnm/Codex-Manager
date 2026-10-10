@@ -1,16 +1,21 @@
 use codexmanager_core::storage::Storage;
+#[cfg(test)]
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
+use futures_util::{FutureExt, TryStreamExt};
 use rand::RngCore;
-use reqwest::blocking::Client;
 use reqwest::header::HeaderMap;
+use reqwest::Client;
 use serde::Serialize;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
-use std::io::{BufRead, BufReader};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio_util::io::StreamReader;
 
 use crate::account_status::{
     load_account_status_context, mark_account_limited_for_test_rate_limit,
@@ -22,10 +27,18 @@ use crate::account_warmup::{
 };
 use crate::storage_helpers::open_storage;
 
+#[path = "account_test_async_events.rs"]
+mod async_events;
+#[cfg(test)]
+pub(crate) use async_events::account_test_async_subscriber_count;
+pub(crate) use async_events::{
+    subscribe_account_test_events_async, AccountTestAsyncEventSubscription,
+};
+
 const DEFAULT_TEXT_TEST_PROMPT: &str = "hi";
 const DEFAULT_IMAGE_TEST_PROMPT: &str =
     "Generate a cute orange cat astronaut sticker on a clean pastel background.";
-const DEFAULT_TEXT_TEST_MODEL: &str = "gpt-5.3-codex";
+const DEFAULT_TEXT_TEST_MODEL: &str = "gpt-6-luna";
 const DEFAULT_IMAGE_TEST_MODEL: &str = "gpt-image-2";
 const ACCOUNT_TEST_OVERALL_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -144,17 +157,20 @@ struct ActiveAccountTest {
     cancel_flag: Arc<AtomicBool>,
 }
 
+#[cfg(test)]
 struct AccountTestSubscriber {
     id: u64,
     sender: Sender<AccountTestEvent>,
 }
 
+#[cfg(test)]
 pub(crate) struct AccountTestEventSubscription {
     test_id: String,
     subscriber_id: u64,
     receiver: Receiver<AccountTestEvent>,
 }
 
+#[cfg(test)]
 impl AccountTestEventSubscription {
     pub(crate) fn recv_timeout(
         &self,
@@ -164,6 +180,7 @@ impl AccountTestEventSubscription {
     }
 }
 
+#[cfg(test)]
 impl Drop for AccountTestEventSubscription {
     fn drop(&mut self) {
         if let Some(subscribers) = ACCOUNT_TEST_EVENT_SUBSCRIBERS.get() {
@@ -184,10 +201,12 @@ impl Drop for AccountTestEventSubscription {
 
 static ACCOUNT_TEST_EVENT_HANDLER: OnceLock<Mutex<Option<AccountTestEventHandler>>> =
     OnceLock::new();
+#[cfg(test)]
 static ACCOUNT_TEST_EVENT_SUBSCRIBERS: OnceLock<
     Mutex<HashMap<String, Vec<AccountTestSubscriber>>>,
 > = OnceLock::new();
 static ACTIVE_ACCOUNT_TESTS: OnceLock<Mutex<HashMap<String, ActiveAccountTest>>> = OnceLock::new();
+#[cfg(test)]
 static ACCOUNT_TEST_SUBSCRIBER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// 函数 `set_account_test_event_handler`
@@ -220,6 +239,7 @@ where
 ///
 /// # 返回
 /// 返回账号测试事件订阅通道
+#[cfg(test)]
 pub(crate) fn subscribe_account_test_events(test_id: &str) -> AccountTestEventSubscription {
     let (sender, receiver) = bounded(64);
     let subscriber_id = ACCOUNT_TEST_SUBSCRIBER_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -258,6 +278,7 @@ pub(crate) fn notify_account_test_event(event: AccountTestEvent) {
     if let Some(handler) = handler {
         handler(event.clone());
     }
+    #[cfg(test)]
     if let Some(subscribers) = ACCOUNT_TEST_EVENT_SUBSCRIBERS.get() {
         let mut guard =
             crate::lock_utils::lock_recover(subscribers, "account_test_event_subscribers");
@@ -274,6 +295,7 @@ pub(crate) fn notify_account_test_event(event: AccountTestEvent) {
             guard.remove(&event.test_id);
         }
     }
+    async_events::publish_account_test_event(event);
 }
 
 pub(crate) fn normalize_account_test_id(value: &str) -> Option<String> {
@@ -326,11 +348,11 @@ pub(crate) fn start_account_test(
     }
 
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let account = storage
+    let account = crate::account::remote_storage::AccountStorage::new(&storage)
         .find_account_by_id(account_id)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| "账号不存在".to_string())?;
-    let token = storage
+    let token = crate::account::remote_storage::AccountStorage::new(&storage)
         .find_token_by_account_id(account_id)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| "账号缺少访问令牌".to_string())?;
@@ -346,7 +368,17 @@ pub(crate) fn start_account_test(
         }
         None => generate_account_test_id(),
     };
+    static TEST_SLOTS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+    let permit = TEST_SLOTS
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(32)))
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| "account test task limit reached".to_string())?;
     let cancel_flag = register_active_test(account_id, &test_id)?;
+    let active_guard = ActiveTestGuard {
+        account_id: account_id.to_string(),
+        test_id: test_id.clone(),
+    };
 
     let test_kind = resolve_test_kind(&storage, model.as_deref(), TestKind::parse(kind.as_deref()));
     let resolved_model = resolve_model_slug(&storage, model.as_deref(), test_kind);
@@ -358,7 +390,9 @@ pub(crate) fn start_account_test(
     let thread_model = resolved_model.clone();
     let thread_prompt = resolved_prompt.clone();
     let thread_kind = test_kind;
-    std::thread::spawn(move || {
+    crate::account::background::spawn("account-test", async move {
+        let _permit = permit;
+        let _active_guard = active_guard;
         run_account_test(
             &thread_account_id,
             &thread_test_id,
@@ -367,8 +401,9 @@ pub(crate) fn start_account_test(
             thread_kind,
             cancel_flag,
             status_context,
-        );
-    });
+        )
+        .await;
+    })?;
 
     Ok(AccountTestStartResult {
         test_id,
@@ -422,7 +457,7 @@ fn register_active_test(account_id: &str, test_id: &str) -> Result<Arc<AtomicBoo
     Ok(flag)
 }
 
-fn remove_active_test(account_id: &str, test_id: &str) {
+fn remove_active_test(account_id: &str, test_id: &str) -> bool {
     if let Some(registry) = ACTIVE_ACCOUNT_TESTS.get() {
         let mut guard = crate::lock_utils::lock_recover(registry, "account_test_active_tests");
         if guard
@@ -430,8 +465,10 @@ fn remove_active_test(account_id: &str, test_id: &str) {
             .is_some_and(|active| active.test_id == test_id)
         {
             guard.remove(account_id);
+            return true;
         }
     }
+    false
 }
 
 /// 依据所选模型的真实能力修正测试类型，避免「文字直连 + 图片专用模型」这类组合把
@@ -441,7 +478,9 @@ fn resolve_test_kind(storage: &Storage, requested: Option<&str>, explicit: TestK
     let Some(slug) = requested.map(str::trim).filter(|value| !value.is_empty()) else {
         return explicit;
     };
-    let Ok(Some(model)) = storage.get_managed_model_v2(slug) else {
+    let Ok(Some(model)) =
+        crate::account::remote_storage::AccountStorage::new(&storage).get_managed_model_v2(slug)
+    else {
         return explicit;
     };
     let supports_image = crate::models_v2::supports_image_generation(&model);
@@ -462,7 +501,7 @@ fn resolve_model_slug(storage: &Storage, requested: Option<&str>, kind: TestKind
     } else {
         crate::models_v2::supports_text_generation
     };
-    storage
+    crate::account::remote_storage::AccountStorage::new(&storage)
         .list_api_models_v2()
         .ok()
         .and_then(|models| models.into_iter().find(predicate).map(|model| model.slug))
@@ -487,7 +526,7 @@ fn resolve_prompt(requested: Option<&str>, kind: TestKind) -> String {
     }
 }
 
-fn run_account_test(
+async fn run_account_test(
     account_id: &str,
     test_id: &str,
     model: &str,
@@ -496,7 +535,26 @@ fn run_account_test(
     cancel_flag: Arc<AtomicBool>,
     status_context: AccountStatusContext,
 ) {
-    let outcome = execute_account_test(account_id, test_id, model, prompt, kind, &cancel_flag);
+    let attempt = std::panic::AssertUnwindSafe(execute_account_test(
+        account_id,
+        test_id,
+        model,
+        prompt,
+        kind,
+        &cancel_flag,
+    ))
+    .catch_unwind();
+    let outcome = await_account_test(test_id, &cancel_flag, async {
+        match attempt.await {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                let message = "account test failed unexpectedly".to_string();
+                emit_redacted_error(test_id, &message, &[]);
+                AccountTestOutcome::Failed(message)
+            }
+        }
+    })
+    .await;
 
     if let Some(storage) = open_storage() {
         match &outcome {
@@ -522,7 +580,7 @@ fn run_account_test(
     remove_active_test(account_id, test_id);
 }
 
-fn execute_account_test(
+async fn execute_account_test(
     account_id: &str,
     test_id: &str,
     model: &str,
@@ -544,7 +602,7 @@ fn execute_account_test(
     };
 
     let storage = match open_storage() {
-        Some(storage) => storage,
+        Some(storage) => storage.shared_handle(),
         None => {
             let message = "storage unavailable".to_string();
             emit_redacted_error(test_id, &message, &[]);
@@ -552,7 +610,9 @@ fn execute_account_test(
         }
     };
 
-    let account = match storage.find_account_by_id(account_id) {
+    let account = match crate::account::remote_storage::AccountStorage::new(&storage)
+        .find_account_by_id(account_id)
+    {
         Ok(Some(account)) => account,
         Ok(None) => {
             let message = "账号不存在".to_string();
@@ -565,7 +625,9 @@ fn execute_account_test(
             return AccountTestOutcome::Failed(message);
         }
     };
-    let token = match storage.find_token_by_account_id(account_id) {
+    let token = match crate::account::remote_storage::AccountStorage::new(&storage)
+        .find_token_by_account_id(account_id)
+    {
         Ok(Some(token)) => token,
         Ok(None) => {
             let message = "账号缺少访问令牌".to_string();
@@ -584,13 +646,14 @@ fn execute_account_test(
         token.refresh_token.clone(),
         token.id_token.clone(),
     ];
-    let authorization = match resolve_warmup_authorization(&storage, &client, &account, &token) {
-        Ok(authorization) => authorization,
-        Err(err) => {
-            emit_redacted_error(test_id, &err, &secrets);
-            return AccountTestOutcome::Failed(redact(&err, &secrets));
-        }
-    };
+    let authorization =
+        match resolve_warmup_authorization(&storage, &client, &account, &token).await {
+            Ok(authorization) => authorization,
+            Err(err) => {
+                emit_redacted_error(test_id, &err, &secrets);
+                return AccountTestOutcome::Failed(redact(&err, &secrets));
+            }
+        };
     let headers = match build_warmup_headers(&account, &authorization) {
         Ok(headers) => headers,
         Err(err) => {
@@ -616,6 +679,7 @@ fn execute_account_test(
     if kind.is_image() {
         execute_image_test(
             &client,
+            WARMUP_UPSTREAM_URL,
             &headers,
             test_id,
             model,
@@ -623,9 +687,11 @@ fn execute_account_test(
             cancel_flag,
             &secrets,
         )
+        .await
     } else {
         execute_text_test(
             &client,
+            WARMUP_UPSTREAM_URL,
             &headers,
             test_id,
             model,
@@ -633,6 +699,7 @@ fn execute_account_test(
             cancel_flag,
             &secrets,
         )
+        .await
     }
 }
 
@@ -650,8 +717,9 @@ fn build_test_client(account_id: &str) -> Result<Client, String> {
     )
 }
 
-fn execute_text_test(
+async fn execute_text_test(
     client: &Client,
+    upstream_url: &str,
     headers: &HeaderMap,
     test_id: &str,
     model: &str,
@@ -675,10 +743,11 @@ fn execute_text_test(
     });
 
     let response = match client
-        .post(WARMUP_UPSTREAM_URL)
+        .post(upstream_url)
         .headers(headers.clone())
         .json(&body)
         .send()
+        .await
     {
         Ok(response) => response,
         Err(err) => {
@@ -690,7 +759,7 @@ fn execute_text_test(
 
     let status = response.status();
     if !status.is_success() {
-        let body_text = response.text().unwrap_or_default();
+        let body_text = response.text().await.unwrap_or_default();
         let message = redact(
             &summarize_warmup_error(status.as_u16(), headers, &body_text),
             secrets,
@@ -701,7 +770,9 @@ fn execute_text_test(
 
     notify_account_test_event(AccountTestEvent::new(test_id, "status").with_status("已连接上游"));
 
-    let mut reader = BufReader::new(response);
+    let mut reader = BufReader::new(StreamReader::new(
+        response.bytes_stream().map_err(std::io::Error::other),
+    ));
     let mut line = String::new();
     let mut event_name: Option<String> = None;
     let mut data_lines: Vec<String> = Vec::new();
@@ -718,7 +789,7 @@ fn execute_text_test(
         }
 
         line.clear();
-        let bytes = match reader.read_line(&mut line) {
+        let bytes = match reader.read_line(&mut line).await {
             Ok(bytes) => bytes,
             Err(err) => {
                 let message = redact(&format!("读取测试流失败: {err}"), secrets);
@@ -827,8 +898,9 @@ fn finish_text_test(
     outcome
 }
 
-fn execute_image_test(
+async fn execute_image_test(
     client: &Client,
+    upstream_url: &str,
     headers: &HeaderMap,
     test_id: &str,
     model: &str,
@@ -883,10 +955,11 @@ fn execute_image_test(
     });
 
     let response = match client
-        .post(WARMUP_UPSTREAM_URL)
+        .post(upstream_url)
         .headers(image_headers.clone())
         .json(&body)
         .send()
+        .await
     {
         Ok(response) => response,
         Err(err) => {
@@ -898,7 +971,7 @@ fn execute_image_test(
 
     let status = response.status();
     if !status.is_success() {
-        let body_text = response.text().unwrap_or_default();
+        let body_text = response.text().await.unwrap_or_default();
         let message = redact(
             &summarize_warmup_error(status.as_u16(), &image_headers, &body_text),
             secrets,
@@ -909,7 +982,9 @@ fn execute_image_test(
 
     notify_account_test_event(AccountTestEvent::new(test_id, "status").with_status("已连接上游"));
 
-    let mut reader = BufReader::new(response);
+    let mut reader = BufReader::new(StreamReader::new(
+        response.bytes_stream().map_err(std::io::Error::other),
+    ));
     let mut line = String::new();
     let mut event_name: Option<String> = None;
     let mut data_lines: Vec<String> = Vec::new();
@@ -927,7 +1002,7 @@ fn execute_image_test(
         }
 
         line.clear();
-        let bytes = match reader.read_line(&mut line) {
+        let bytes = match reader.read_line(&mut line).await {
             Ok(bytes) => bytes,
             Err(err) => {
                 let message = redact(&format!("读取图片流失败: {err}"), secrets);
@@ -1188,6 +1263,11 @@ mod tests {
     }
 
     #[test]
+    fn default_text_test_model_uses_current_frontier_model() {
+        assert_eq!(DEFAULT_TEXT_TEST_MODEL, "gpt-6-luna");
+    }
+
+    #[test]
     fn resolve_test_kind_auto_switches_image_only_model() {
         use codexmanager_core::storage::{ManagedModelV2, ManagedModelV2Upsert, ModelPriceV2};
         let storage = Storage::open_in_memory().expect("open storage");
@@ -1334,3 +1414,57 @@ mod tests {
         remove_active_test(account_id, test_id);
     }
 }
+
+struct ActiveTestGuard {
+    account_id: String,
+    test_id: String,
+}
+impl Drop for ActiveTestGuard {
+    fn drop(&mut self) {
+        if remove_active_test(&self.account_id, &self.test_id) {
+            notify_account_test_event(
+                AccountTestEvent::new(&self.test_id, "status").with_status("已取消测试"),
+            );
+            notify_account_test_event(
+                AccountTestEvent::new(&self.test_id, "test_complete").with_success(false),
+            );
+        }
+    }
+}
+
+async fn await_account_test<F>(
+    test_id: &str,
+    cancel_flag: &AtomicBool,
+    operation: F,
+) -> AccountTestOutcome
+where
+    F: std::future::Future<Output = AccountTestOutcome>,
+{
+    let cancellation = async {
+        loop {
+            if cancel_flag.load(Ordering::Relaxed) || crate::shutdown_requested() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    };
+    tokio::select! {
+        biased;
+        _ = cancellation => {
+            notify_account_test_event(AccountTestEvent::new(test_id, "status").with_status("已取消测试"));
+            notify_account_test_event(AccountTestEvent::new(test_id, "test_complete").with_success(false));
+            AccountTestOutcome::Canceled
+        }
+        result = tokio::time::timeout(ACCOUNT_TEST_OVERALL_TIMEOUT, operation) => {
+            result.unwrap_or_else(|_| {
+                let message = "account test timed out".to_string();
+                emit_redacted_error(test_id, &message, &[]);
+                AccountTestOutcome::Failed(message)
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "account_test_async_tests.rs"]
+mod async_network_tests;

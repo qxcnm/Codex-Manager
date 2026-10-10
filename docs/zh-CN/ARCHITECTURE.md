@@ -27,6 +27,7 @@ CodexManager 由两类运行模式组成：
 ├─ crates/
 │  ├─ core/               # 数据库迁移、存储基础、认证/用量底层能力
 │  ├─ service/            # 本地 HTTP/RPC 服务、网关、协议适配、设置持久化
+│  ├─ storage-seaorm/     # Service 可选 SeaORM 适配层（SQLite/MySQL/PostgreSQL）
 │  ├─ web/                # Web UI 服务壳，可嵌入前端静态资源
 │  └─ start/              # Service 一键启动器（拉起 service + web）
 ├─ scripts/               # 本地构建、统一版本、测试探针、发布辅助脚本
@@ -59,17 +60,17 @@ CodexManager 由两类运行模式组成：
 - `crates/service/src/http/`：HTTP 路由入口
 - `crates/service/src/rpc_dispatch/`：RPC 分发入口
 - `crates/service/src/gateway/mod.rs`：网关聚合入口
-- `crates/service/src/gateway/observability/http_bridge.rs`：请求追踪、协议桥接、日志写入
-- `crates/service/src/gateway/protocol_adapter/request_mapping.rs`：OpenAI/Codex 输入映射
-- `crates/service/src/gateway/protocol_adapter/response_conversion.rs`：非流式结果总转换入口
-- `crates/service/src/gateway/protocol_adapter/response_conversion/sse_conversion.rs`：流式 SSE 转换入口
-- `crates/service/src/gateway/protocol_adapter/response_conversion/openai_chat.rs`：OpenAI Chat 结果适配
-- `crates/service/src/gateway/protocol_adapter/response_conversion/tool_mapping.rs`：工具名缩短与还原
+- `crates/service/src/gateway/observability/http_bridge/mod.rs`：请求追踪、协议桥接、日志写入
+- `crates/service/src/gateway/protocol_adapter/request_router.rs`：OpenAI/Codex 输入映射
+- `crates/service/src/gateway/observability/http_bridge/response_helpers.rs`：非流式结果总转换入口
+- `crates/service/src/gateway/observability/http_bridge/stream_readers/`：流式 SSE 转换入口
+- `crates/service/src/gateway/observability/http_bridge/stream_readers/chat_completions.rs`：OpenAI Chat 结果适配
+- `crates/service/src/gateway/observability/http_bridge/stream_readers/common.rs`：工具名缩短与还原
 
 ### 3.4 设置与运行配置入口
 
 - `crates/service/src/app_settings/`：设置持久化、环境变量覆盖、运行时同步
-- `crates/service/src/web_access.rs`：Web 访问密码与会话令牌
+- `crates/service/src/auth/web_access.rs`：Web 访问密码与会话令牌
 
 ## 4. 运行关系
 
@@ -170,10 +171,25 @@ Service 模式由以下二进制组成：
 
 ### 6.1 数据库
 
-当前项目使用 SQLite。
+桌面模式继续使用 SQLite；Service 模式可通过独立的 `codexmanager-storage-seaorm`
+适配层选择 SQLite、MySQL 或 PostgreSQL。SeaORM 实体和连接不会直接暴露给 HTTP。
+显式数据库 URL 选择 SeaORM（含 SQLite）；默认未设置 URL 的 SQLite 模式保留桌面存储流程。
 数据库迁移位于：
 
-- `crates/core/migrations/`
+- `crates/core/migrations/`：现有桌面 SQLite 迁移。
+- `crates/storage-seaorm/src/migration.rs`：Service SeaORM 跨数据库迁移。
+
+SeaORM 适配层按 Cargo feature 引入驱动：`sqlite`（默认）、`mysql`、`postgres`。
+未选择服务器后端时不会强制安装 MySQL、PostgreSQL 或 Redis。
+Service 部署可使用 `CODEXMANAGER_STORAGE_BACKEND`、
+`CODEXMANAGER_DATABASE_URL`、`CODEXMANAGER_DB_MAX_CONNECTIONS` 和
+`CODEXMANAGER_DB_ACQUIRE_TIMEOUT_MS` 选择后端与连接池参数；密码只存在于环境配置，
+不会进入请求日志。
+
+HTTP 前置代理的短请求超时可通过 `CODEXMANAGER_HTTP_TIMEOUT_MS` 配置（毫秒，默认
+120000；设置为 `0` 禁用该层；SSE/WebSocket 请求始终使用各自的流式超时策略）。
+异步上游并发任务数可通过 `CODEXMANAGER_GATEWAY_ASYNC_STREAM_WORKERS` 配置
+（默认 32，最大 256）；许可覆盖响应体生命周期、背压和取消，不会为每条流创建线程。
 
 数据库里不只存账号，也已经承担：
 
@@ -181,6 +197,17 @@ Service 模式由以下二进制组成：
 - 请求日志
 - token 统计
 - app settings
+
+SeaORM 迁移和 Repository 已覆盖账号/Token、API Key 及其 secret/quota/rollup、
+模型目录与价格/路由、权限 groups、模型组授权、钱包/账本、登录会话、请求日志与
+token 统计、用量汇总、代理配置/历史、插件及聚合 API。Service 远端模式通过领域
+facade 调用这些 Repository；现有 SQLite 迁移和 Storage 保留用于桌面模式。
+远端模式的旧 Storage 参数只承载无 schema 的兼容句柄，不会打开本地业务 SQLite。
+后端配置错误在启动时失败，运行中切换数据库需要重启。
+
+`storage-transfer` 可将旧 SQLite 只读导出为带逐表校验和的 JSONL 快照，再事务导入
+独立空目标库。导入拒绝有数据的未映射表/列，保留历史 ID，并修复 PostgreSQL 序列。
+切换流程与编译 feature 见[环境变量与运行配置](report/环境变量与运行配置说明.md#service-数据库切换与离线导入)。
 
 ### 6.2 运行配置
 
@@ -198,6 +225,36 @@ Service 模式由以下二进制组成：
 - 设置变更不应无边界地散落在桌面端、前端和 service 各处。
 
 ## 7. 请求链路概览
+
+Service 的公开 HTTP 监听器、RPC、网关、SSE、WebSocket 和回调由 Axum/Tokio
+提供，生产依赖已移除 tiny_http。Axum Router 统一负责请求体上限、并发背压、
+panic 隔离、trace 和 `x-request-id`，并通过优雅关闭等待活动请求。
+Service 的 HTTP、OAuth、认证、usage、后台任务、SeaORM 和插件网络共用
+`runtime/service_runtime.rs::process_runtime`；Web 主入口和桌面 Tauri IPC 也使用该执行器。
+listener 退出仍关闭端口并排空响应；后台认证和重启后的 listener 可以继续使用共享客户端的
+keepalive 连接。runtime 线程参数首次初始化时生效。
+auth/usage/aggregate 的同步兼容入口在桥接容量耗尽时返回原有错误类型，拒绝发生在
+网络 future 被轮询前；不会把过载变成 panic 或发出未获准的请求。
+网关入口、上游响应头等待、请求锁等待、重试退避、鉴权恢复及响应转换使用 `async/await`；
+SSE/WS、取消和背压通过 Tokio 通道管理。每个请求在联系 provider 前预留响应容量，
+请求锁保持到最终日志和计费完成；停服先等待路由任务，再排空响应与计费任务。
+模型发现、账户测试和预热、代理测试、用量刷新、OAuth/Token、聚合 provider 管理、
+插件目录和 Skills 仓库下载均提供原生异步入口。已发出的 Token 轮换请求由限并发完成任务
+负责条件写回，调用方断连不会丢弃新凭据；停服等待这些任务、trace 队列排空和文件缓冲 flush。
+该 flush 不包含文件系统 fsync，不提供断电后的持久性保证。
+Service 和 Web 的 WebSocket relay 收到 Close 后，限时 flush 自动排队的应答再释放连接；
+正常关闭测试覆盖发起请求前、响应后及 Web 双向转发的关闭码和原因。
+独立 Service 的 `GET /__shutdown` 要求 RPC token、管理员 actor 和 RPC 相同的来源校验，
+不占用普通请求槽；`request_shutdown` 的跨进程通知携带该 token。Web 的 `/__quit` 仍需要
+有效 Web 登录会话。收到 HTTP 成功或进程最终消失本身不能证明优雅关闭，应核对退出码和排空结果。
+同步数据库 facade 在生产多线程 runtime 的底层短操作边界让出 Tokio 执行线程，SeaORM 池和 SQLite SQLx 池
+由进程复用。ZIP、文件操作、Rhai 同步脚本 ABI 和旧同步兼容接口仍有受控阻塞边界。
+普通同步 RPC、Rhai 和插件调度使用固定 worker，避免等待异步结果时阻塞其内部文件/数据库
+任务所需的 Tokio blocking pool。OAuth listener、设备码登录、取消后的登录清理及插件
+scheduler 登记并在关闭时等待，支持同进程重新启动。废弃的 blocking HTTP client 缓存已删除；
+历史协议测试仍保留测试专用同步适配。边界说明见
+[运行时收敛](report/Axum-SeaORM运行时收敛验收.md)。最新验收范围见
+[迁移实证记录](report/Axum-Tokio-Tower-SeaORM迁移进度与会话交接.md)。
 
 典型请求链路如下：
 
@@ -249,7 +306,7 @@ Rust：
 
 统一修改入口：
 
-- `scripts/bump-version.ps1`
+- 当前没有单独的 `scripts/bump-version.ps1`；发版前按发布清单核对根 `Cargo.toml`、`apps/package.json`、Tauri 配置和两个 `Cargo.lock` 的版本。
 
 ### 8.3 GitHub Release
 

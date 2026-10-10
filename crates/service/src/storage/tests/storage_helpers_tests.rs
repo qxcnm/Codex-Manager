@@ -34,6 +34,30 @@ impl Drop for EnvGuard {
     }
 }
 
+#[test]
+fn incomplete_remote_configuration_cannot_fall_back_to_sqlite() {
+    let _guard = crate::test_env_guard();
+    let _backend = EnvGuard::set("CODEXMANAGER_STORAGE_BACKEND", "mysql");
+    let _url = EnvGuard::set("CODEXMANAGER_DATABASE_URL", "");
+    assert!(super::seaorm_enabled());
+    assert!(initialize_storage()
+        .unwrap_err()
+        .contains("database URL is required"));
+    let _sqlite = EnvGuard::set("CODEXMANAGER_STORAGE_BACKEND", "sqlite");
+    assert!(super::seaorm_enabled());
+    assert!(initialize_storage()
+        .unwrap_err()
+        .contains("database URL is required"));
+    let _wrong_scheme = EnvGuard::set("CODEXMANAGER_DATABASE_URL", "postgres://invalid");
+    assert!(initialize_storage()
+        .unwrap_err()
+        .contains("database URL scheme"));
+    let _unknown = EnvGuard::set("CODEXMANAGER_STORAGE_BACKEND", "unknown");
+    assert!(initialize_storage()
+        .unwrap_err()
+        .contains("unsupported database backend"));
+}
+
 /// 函数 `unique_db_path`
 ///
 /// 作者: gaohongshun
@@ -90,6 +114,23 @@ fn pending_model_catalog_data_migration_requires_backup() {
         ["114_model_catalog_gpt56_prices"],
     )
     .expect("mark GPT-5.6 pricing migration complete");
+
+    assert!(
+        model_catalog_v2_migration_needed(std::path::Path::new(&db_path))
+            .expect("inspect pending revision 9 catalog migration")
+    );
+    conn.execute(
+        "INSERT INTO schema_migrations(version,applied_at) VALUES(?1,4)",
+        ["137_model_catalog_revision9"],
+    )
+    .expect("mark revision 9 catalog migration complete");
+    assert!(model_catalog_v2_migration_needed(Path::new(&db_path))
+        .expect("inspect pending GPT-6.1 Sol migration"));
+    conn.execute(
+        "INSERT INTO schema_migrations(version,applied_at) VALUES(?1,5)",
+        ["138_model_catalog_gpt61_sol"],
+    )
+    .expect("mark GPT-6.1 Sol migration complete");
     drop(conn);
 
     assert!(
@@ -362,6 +403,92 @@ fn open_storage_times_out_when_pool_is_exhausted() {
     assert_eq!(storage_open_count_for_tests(&db_path), 1);
     drop(storage);
 
+    clear_storage_cache_for_tests();
+    clear_storage_open_count_for_tests(&db_path);
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[test]
+fn exhausted_pool_yields_single_tokio_worker_to_the_task_returning_its_lease() {
+    let _env_lock = crate::test_env_guard();
+    let _max_guard = EnvGuard::set("CODEXMANAGER_STORAGE_MAX_CONNECTIONS", "1");
+    let _idle_guard = EnvGuard::set("CODEXMANAGER_STORAGE_MAX_IDLE_CONNECTIONS", "1");
+    let _timeout_guard = EnvGuard::set("CODEXMANAGER_STORAGE_ACQUIRE_TIMEOUT_MS", "1500");
+    let db_path = unique_db_path("codexmanager-storage-async-pool-release");
+    clear_storage_cache_for_tests();
+    clear_storage_open_count_for_tests(&db_path);
+    let held = open_storage_at_path(&db_path).expect("reserve the only storage lease");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let (acquiring, started) = tokio::sync::oneshot::channel();
+        let releaser = tokio::spawn(async move {
+            started.await.unwrap();
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            drop(held);
+        });
+        let waiter_path = db_path.clone();
+        let waiter = tokio::spawn(async move {
+            acquiring.send(()).unwrap();
+            // This runs on the sole async worker. A Condvar wait without
+            // block_in_place would prevent the releaser above from running.
+            open_storage_at_path(&waiter_path)
+        });
+        let acquired = tokio::time::timeout(Duration::from_secs(3), waiter)
+            .await
+            .expect("the lease holder must keep making progress")
+            .unwrap()
+            .expect("the returned lease must satisfy the pending acquisition");
+        releaser.await.unwrap();
+        drop(acquired);
+    });
+    drop(runtime);
+    assert_eq!(storage_open_count_for_tests(&db_path), 1);
+    clear_storage_cache_for_tests();
+    clear_storage_open_count_for_tests(&db_path);
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[test]
+fn exhausted_pool_fails_fast_on_current_thread_and_allows_async_lease_release() {
+    let _env_lock = crate::test_env_guard();
+    let _max_guard = EnvGuard::set("CODEXMANAGER_STORAGE_MAX_CONNECTIONS", "1");
+    let _idle_guard = EnvGuard::set("CODEXMANAGER_STORAGE_MAX_IDLE_CONNECTIONS", "1");
+    let _timeout_guard = EnvGuard::set("CODEXMANAGER_STORAGE_ACQUIRE_TIMEOUT_MS", "2000");
+    let db_path = unique_db_path("codexmanager-storage-current-thread-pool");
+    clear_storage_cache_for_tests();
+    clear_storage_open_count_for_tests(&db_path);
+    let held = open_storage_at_path(&db_path).expect("reserve the only storage lease");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let (release, released) = tokio::sync::oneshot::channel();
+        let releaser = tokio::spawn(async move {
+            released.await.unwrap();
+            drop(held);
+        });
+        release.send(()).unwrap();
+        let started = Instant::now();
+        assert!(open_storage_at_path(&db_path).is_none());
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "a current-thread executor must not enter the configured two-second pool wait"
+        );
+        tokio::time::timeout(Duration::from_millis(250), releaser)
+            .await
+            .expect("the lease holder must run as soon as acquisition returns")
+            .unwrap();
+        let acquired = open_storage_at_path(&db_path)
+            .expect("a retry must reuse the lease returned by the async task");
+        drop(acquired);
+    });
+    drop(runtime);
+    assert_eq!(storage_open_count_for_tests(&db_path), 1);
     clear_storage_cache_for_tests();
     clear_storage_open_count_for_tests(&db_path);
     let _ = std::fs::remove_file(&db_path);

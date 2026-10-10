@@ -122,7 +122,7 @@ fn is_anthropic_count_tokens_request_path(path: &str) -> bool {
 /// # 返回
 /// 返回函数执行结果
 pub(super) fn maybe_respond_local_count_tokens(
-    request: tiny_http::Request,
+    request: crate::http::gateway_request::GatewayRequest,
     trace_id: &str,
     key_id: &str,
     protocol_type: &str,
@@ -134,7 +134,7 @@ pub(super) fn maybe_respond_local_count_tokens(
     model_for_log: Option<&str>,
     reasoning_for_log: Option<&str>,
     storage: &codexmanager_core::storage::Storage,
-) -> Result<Option<tiny_http::Request>, String> {
+) -> Result<Option<crate::http::gateway_request::GatewayRequest>, String> {
     let is_anthropic_count_tokens = protocol_type == PROTOCOL_ANTHROPIC_NATIVE
         && request_method.eq_ignore_ascii_case("POST")
         && (is_anthropic_count_tokens_request_path(original_path)

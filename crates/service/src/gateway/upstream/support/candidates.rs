@@ -28,6 +28,7 @@ pub(crate) fn prepare_gateway_candidates(
     account_plan_filter: Option<&str>,
     low_quota_mode: super::super::super::LowQuotaCandidateMode,
 ) -> Result<Vec<(Account, Token)>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let normalized_group_filter = account_group_filter
         .map(str::trim)
         .filter(|value| !value.is_empty());
@@ -123,6 +124,7 @@ fn collect_luna_reserve_candidates(
     account_ids: &[String],
     snapshots: &HashMap<String, UsageSnapshotRecord>,
 ) -> Result<Vec<(Account, Token)>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     if account_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -163,38 +165,8 @@ fn request_exceeds_free_account_model_ceiling(
     request_model: Option<&str>,
 ) -> Result<bool, String> {
     let configured = super::super::super::current_free_account_max_model();
-    let ceiling = configured.trim();
-    let Some(request_model) = request_model
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return Ok(false);
-    };
-    if ceiling.is_empty() || ceiling.eq_ignore_ascii_case("auto") {
-        return Ok(false);
-    }
-
-    let ceiling_catalog_slug = crate::models_v2::policy_catalog_slug(ceiling);
-    let request_catalog_slug = crate::models_v2::policy_catalog_slug(request_model);
-    if ceiling_catalog_slug.eq_ignore_ascii_case(request_catalog_slug) {
-        return Ok(false);
-    }
-
-    let ceiling_model = storage
-        .get_enabled_model_v2(ceiling_catalog_slug)
-        .map_err(|err| format!("read free account model ceiling failed: {err}"))?;
-    let request_model = storage
-        .get_enabled_model_v2(request_catalog_slug)
-        .map_err(|err| format!("read requested model rank failed: {err}"))?;
-
-    // 中文注释：模型目录的 sort_order 越小优先级越高。未知模型无法证明未超过上限，
-    // 因此在配置了具体上限时保守地跳过 Free 账号。
-    Ok(match (request_model, ceiling_model) {
-        (Some(request_model), Some(ceiling_model)) => {
-            request_model.sort_order < ceiling_model.sort_order
-        }
-        _ => true,
-    })
+    crate::models_v2::request_exceeds_model_ceiling(storage, request_model, &configured)
+        .map_err(|err| format!("read free account model ceiling failed: {err}"))
 }
 
 /// 函数 `allow_openai_fallback_for_account`

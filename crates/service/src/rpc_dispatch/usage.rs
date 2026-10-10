@@ -55,11 +55,15 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
         "account/usage/resetCredit/consume" => {
             let account_id =
                 super::str_param(req, "accountId").or_else(|| super::str_param(req, "account_id"));
-            super::value_or_error(
-                account_id
-                    .ok_or_else(|| "accountId is required".to_string())
-                    .and_then(crate::usage_reset_credits::consume_reset_credit),
-            )
+            let operation_id = super::str_param(req, "operationId")
+                .or_else(|| super::str_param(req, "operation_id"));
+            super::value_or_error(match (account_id, operation_id) {
+                (None, _) => Err("accountId is required".to_string()),
+                (_, None) => Err("operationId is required".to_string()),
+                (Some(account_id), Some(operation_id)) => {
+                    crate::usage_reset_credits::consume_reset_credit(account_id, operation_id)
+                }
+            })
         }
         _ => return None,
     };

@@ -263,3 +263,224 @@ fn token_refresh_client_id_falls_back_to_id_token_then_env() {
         "client-from-env"
     );
 }
+
+#[test]
+fn async_refresh_is_shared_per_account_and_independent_accounts_progress() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let _env = crate::test_env_guard();
+    let _ = crate::usage_http::usage_http_client();
+    let storage = Arc::new(Storage::open_in_memory().unwrap());
+    storage.init().unwrap();
+    for id in ["async-refresh-a", "async-refresh-b"] {
+        insert_account(&storage, id);
+        storage.insert_token(&token_with_refresh(id, id)).unwrap();
+    }
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let endpoint = format!("http://{}/oauth/token", listener.local_addr().unwrap());
+    let _url = EnvVarRestore::set("CODEX_REFRESH_TOKEN_URL_OVERRIDE", &endpoint);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let app = axum::Router::new().fallback({
+            let requests = requests.clone();
+            let started = started.clone();
+            let release = release.clone();
+            move |body: String| {
+                let requests = requests.clone();
+                let started = started.clone();
+                let release = release.clone();
+                async move {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    started.notify_one();
+                    let permit = release.acquire().await.unwrap();
+                    permit.forget();
+                    let suffix = if body.contains("refresh_token=async-refresh-a") {
+                        "a"
+                    } else {
+                        "b"
+                    };
+                    axum::Json(serde_json::json!({
+                        "access_token": format!("access-new-{suffix}"),
+                        "refresh_token": format!("refresh-new-{suffix}"),
+                    }))
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let refresh = |id: &'static str| {
+            let storage = storage.clone();
+            async move {
+                let mut token = token_with_refresh(id, id);
+                refresh_and_persist_access_token_async(
+                    &storage,
+                    &mut token,
+                    "https://auth.openai.com",
+                    "client",
+                    60,
+                )
+                .await?;
+                Ok::<_, String>(token)
+            }
+        };
+        let first = tokio::spawn(refresh("async-refresh-a"));
+        tokio::time::timeout(Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        let (cancel, cancelled) = tokio::sync::watch::channel(false);
+        let cancelled_waiter =
+            tokio::spawn(crate::http::gateway_request::scope_response_cancellation(
+                cancelled,
+                refresh("async-refresh-a"),
+            ));
+        tokio::task::yield_now().await;
+        cancel.send_replace(true);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), cancelled_waiter)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err(),
+            "token refresh cancelled",
+        );
+        let duplicate = tokio::spawn(refresh("async-refresh-a"));
+        let independent = tokio::spawn(refresh("async-refresh-b"));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while requests.load(Ordering::SeqCst) < 2 {
+                started.notified().await;
+            }
+        })
+        .await
+        .expect("the other account refresh runs while the first account waits");
+        // Simulate another service instance winning the database update while
+        // this instance's refresh HTTP request is still in flight.
+        let external_winner = Token {
+            access_token: "external-access-a".into(),
+            refresh_token: "external-refresh-a".into(),
+            ..token_with_refresh("async-refresh-a", "async-refresh-a")
+        };
+        storage.insert_token(&external_winner).unwrap();
+        release.add_permits(2);
+        let first = first.await.unwrap().unwrap();
+        let duplicate = duplicate.await.unwrap().unwrap();
+        let independent = independent.await.unwrap().unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        assert_eq!(first.refresh_token, "external-refresh-a");
+        assert_eq!(duplicate.refresh_token, "external-refresh-a");
+        assert_eq!(independent.refresh_token, "refresh-new-b");
+        assert_eq!(
+            storage
+                .find_token_by_account_id("async-refresh-a")
+                .unwrap()
+                .unwrap()
+                .refresh_token,
+            "external-refresh-a"
+        );
+        assert_eq!(
+            storage
+                .find_token_by_account_id("async-refresh-b")
+                .unwrap()
+                .unwrap()
+                .refresh_token,
+            "refresh-new-b"
+        );
+        server.abort();
+        let _ = server.await;
+    });
+}
+
+#[test]
+fn cancelled_refresh_persists_rotated_grant_and_preserves_concurrent_credentials() {
+    let _env = crate::test_env_guard();
+    let _override = EnvVarRestore::remove("CODEX_REFRESH_TOKEN_URL_OVERRIDE");
+    let _proxy = EnvVarRestore::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "");
+    crate::clear_shutdown_flag();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        for phase in 0..3 {
+            let storage = Arc::new(Storage::open_in_memory().unwrap());
+            storage.init().unwrap();
+            let account_id = format!("cancel-rotation-{phase}");
+            insert_account(&storage, &account_id);
+            let initial = token_with_refresh(&account_id, "old-grant");
+            storage.insert_token(&initial).unwrap();
+            let (stage_tx, mut stage_rx) = tokio::sync::mpsc::unbounded_channel();
+            let release_grant = Arc::new(tokio::sync::Semaphore::new(0));
+            let release_exchange = Arc::new(tokio::sync::Semaphore::new(0));
+            let app = axum::Router::new().fallback({
+                let release_grant = release_grant.clone();
+                let release_exchange = release_exchange.clone();
+                move |body: String| {
+                    let stage_tx = stage_tx.clone();
+                    let release_grant = release_grant.clone();
+                    let release_exchange = release_exchange.clone();
+                    async move {
+                        if body.contains("refresh_token=") {
+                            stage_tx.send(0).unwrap();
+                            release_grant.acquire().await.unwrap().forget();
+                            axum::Json(serde_json::json!({"access_token":"rotated-access", "refresh_token":"rotated-grant", "id_token":"new-id"}))
+                        } else {
+                            stage_tx.send(1).unwrap();
+                            release_exchange.acquire().await.unwrap().forget();
+                            axum::Json(serde_json::json!({"access_token":"exchanged-api-key"}))
+                        }
+                    }
+                }
+            });
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let issuer = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+            let waiter = tokio::spawn({
+                let storage = storage.clone();
+                async move {
+                    let mut token = initial;
+                    refresh_and_persist_access_token_async(&storage, &mut token, &issuer, "client", 60).await
+                }
+            });
+            assert_eq!(tokio::time::timeout(Duration::from_secs(3), stage_rx.recv()).await.unwrap(), Some(0));
+            if phase != 0 {
+                release_grant.add_permits(1);
+                assert_eq!(tokio::time::timeout(Duration::from_secs(3), stage_rx.recv()).await.unwrap(), Some(1));
+                assert_eq!(storage.find_token_by_account_id(&account_id).unwrap().unwrap().refresh_token, "rotated-grant");
+                if phase == 1 {
+                    let winner = Token { access_token: "imported-access".into(), refresh_token: "imported-grant".into(), ..token_with_refresh(&account_id, "ignored") };
+                    storage.insert_token(&winner).unwrap();
+                } else {
+                    storage.delete_account(&account_id).unwrap();
+                }
+            }
+            waiter.abort();
+            assert!(waiter.await.unwrap_err().is_cancelled());
+            release_grant.add_permits(1);
+            release_exchange.add_permits(1);
+            tokio::time::timeout(Duration::from_secs(5), drain_token_refresh_tasks()).await.expect("detached credential completion drains");
+            let stored = storage.find_token_by_account_id(&account_id).unwrap();
+            match phase {
+                0 => {
+                    let stored = stored.unwrap();
+                    assert_eq!(stored.refresh_token, "rotated-grant");
+                    assert_eq!(stored.api_key_access_token.as_deref(), Some("exchanged-api-key"));
+                }
+                1 => {
+                    let stored = stored.unwrap();
+                    assert_eq!(stored.refresh_token, "imported-grant");
+                    assert_eq!(stored.api_key_access_token, None);
+                }
+                _ => assert!(stored.is_none(), "completion must not resurrect deleted credentials"),
+            }
+            server.abort();
+            let _ = server.await;
+        }
+    });
+}

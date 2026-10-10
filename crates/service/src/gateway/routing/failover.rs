@@ -61,7 +61,7 @@ pub(super) fn should_failover_from_low_quota_snapshot_value(snap: &UsageSnapshot
 /// # 返回
 /// 返回函数执行结果
 fn should_failover_by_snapshot(storage: &Storage, account_id: &str, fail_on_missing: bool) -> bool {
-    let snap = storage
+    let snap = crate::account::remote_storage::AccountStorage::new(&storage)
         .latest_usage_snapshot_for_account(account_id)
         .ok()
         .flatten();

@@ -59,6 +59,141 @@ fn build_token(account_id: &str, now: i64) -> Token {
     }
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn cancelled_header_wait_logs_one_499_without_retrying_or_failing_over() {
+    use crate::http::gateway_request::{scope_response_cancellation, GatewayRequest};
+    use tokio::io::AsyncReadExt;
+
+    let _env_lock = crate::test_env_guard();
+    let storage = Storage::open_in_memory().unwrap();
+    storage.init().unwrap();
+    let first = build_account("cancelled-header-first", now_ts());
+    let second = build_account("cancelled-header-second", now_ts());
+    let candidates = vec![
+        (first.clone(), build_token(&first.id, now_ts())),
+        (second.clone(), build_token(&second.id, now_ts())),
+    ];
+    for (account, token) in &candidates {
+        storage.insert_account(account).unwrap();
+        storage.insert_token(token).unwrap();
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1/responses", listener.local_addr().unwrap());
+    let setup = super::super::request_setup::UpstreamRequestSetup {
+        upstream_base: url.clone(),
+        upstream_fallback_base: None,
+        url,
+        url_alt: None,
+        candidate_count: 2,
+        account_max_inflight: 1,
+        anthropic_has_thread_anchor: false,
+        has_sticky_fallback_session: false,
+        has_sticky_fallback_conversation: false,
+        has_body_encrypted_content: false,
+        conversation_routing: None,
+        route_strategy_for_log: "ordered",
+        route_source_for_log: "test",
+    };
+    let trace_id = "cancelled-header-final-accounting";
+    let context = super::super::execution_context::GatewayUpstreamExecutionContext::new(
+        trace_id,
+        &storage,
+        "cancelled-header-key",
+        "/v1/responses",
+        "/v1/responses",
+        "POST",
+        ResponseAdapter::Passthrough,
+        crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some("account_rotation"),
+        Some("ordered"),
+        Some("test"),
+        5,
+        2,
+        1,
+    );
+    let body = Bytes::from_static(b"{\"model\":\"gpt-5.5\",\"input\":\"hi\"}");
+    let (parts, ()) = axum::http::Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .body(())
+        .unwrap()
+        .into_parts();
+    let (request, response_rx) = GatewayRequest::new(parts, body.clone());
+    let cancellation = request.cancellation_receiver();
+    let cancellation_guard = request.cancellation_guard();
+    let headers = IncomingHeaderSnapshot::default();
+    let tools = ToolNameRestoreMap::new();
+    let attempt = execute_candidate_sequence(
+        request,
+        candidates,
+        CandidateExecutorParams {
+            storage: &storage,
+            method: &reqwest::Method::POST,
+            incoming_headers: &headers,
+            body: &body,
+            path: "/v1/responses",
+            request_shape: Some("responses"),
+            trace_id,
+            model_for_log: None,
+            response_adapter: ResponseAdapter::Passthrough,
+            gemini_stream_output_mode: None,
+            tool_name_restore_map: &tools,
+            context: &context,
+            setup: &setup,
+            request_deadline: None,
+            started_at: Instant::now(),
+            client_is_stream: true,
+            upstream_is_stream: true,
+            debug: false,
+            allow_openai_fallback: false,
+            disable_challenge_stateless_retry: false,
+        },
+    );
+    let (outcome, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(scope_response_cancellation(cancellation, attempt), async {
+            let (mut connection, _) = listener.accept().await.unwrap();
+            let mut buffer = [0_u8; 1024];
+            assert!(connection.read(&mut buffer).await.unwrap() > 0);
+            drop(cancellation_guard);
+            while let Ok(read) = connection.read(&mut buffer).await {
+                if read == 0 {
+                    break;
+                }
+            }
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                    .await
+                    .is_err(),
+                "a disconnected request cannot start another provider attempt"
+            );
+        })
+    })
+    .await
+    .expect("silent header cancellation completes promptly");
+    assert!(matches!(
+        outcome.unwrap(),
+        CandidateExecutionResult::Handled
+    ));
+    drop(response_rx);
+    let logs = storage.list_request_logs(None, 10).unwrap();
+    assert_eq!(
+        logs.len(),
+        1,
+        "one final accounting event per cancelled request"
+    );
+    assert_eq!(logs[0].status_code, Some(499));
+    assert_eq!(logs[0].account_id.as_deref(), Some(first.id.as_str()));
+}
+
 fn codex_session_headers() -> IncomingHeaderSnapshot {
     let mut headers = HeaderMap::new();
     for (name, value) in [
@@ -230,8 +365,8 @@ fn run_candidate_sequence_with_model_and_statuses(
         .with_path("/v1/responses")
         .into();
 
-    let result = execute_candidate_sequence(
-        request,
+    let result = crate::gateway::run_upstream_io(execute_candidate_sequence(
+        request.into(),
         candidates,
         CandidateExecutorParams {
             storage: &storage,
@@ -255,7 +390,8 @@ fn run_candidate_sequence_with_model_and_statuses(
             allow_openai_fallback: false,
             disable_challenge_stateless_retry: false,
         },
-    )
+    ))
+    .expect("gateway async test runtime")
     .expect("execute candidate sequence");
 
     assert!(matches!(result, CandidateExecutionResult::Handled));

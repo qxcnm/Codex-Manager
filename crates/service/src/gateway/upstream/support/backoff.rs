@@ -54,6 +54,7 @@ pub(in super::super) fn exponential_jitter_delay(
 ///
 /// # 返回
 /// 返回函数执行结果
+#[cfg(test)]
 pub(in super::super) fn sleep_with_exponential_jitter(
     base: Duration,
     cap: Duration,
@@ -68,6 +69,22 @@ pub(in super::super) fn sleep_with_exponential_jitter(
         std::thread::sleep(delay);
     }
     true
+}
+
+pub(in super::super) async fn sleep_with_exponential_jitter_async(
+    base: Duration,
+    cap: Duration,
+    attempt: u32,
+    deadline: Option<Instant>,
+) -> bool {
+    let Some(delay) =
+        super::deadline::cap_wait(exponential_jitter_delay(base, cap, attempt), deadline)
+    else {
+        return false;
+    };
+    crate::http::gateway_request::with_response_cancellation(tokio::time::sleep(delay))
+        .await
+        .is_ok()
 }
 
 #[cfg(test)]

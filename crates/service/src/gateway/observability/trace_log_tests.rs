@@ -135,3 +135,58 @@ fn sanitize_text_redacts_image_generation_result_payloads() {
     assert!(!sanitized.contains("QUJDREVGRw=="));
     assert!(!sanitized.contains("cGFydA=="));
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn native_flush_waits_for_queued_lines_and_reports_disk_errors() {
+    let path = std::env::temp_dir().join(format!(
+        "codexmanager-trace-async-{}.log",
+        rand::random::<u64>()
+    ));
+    let writer = super::TraceAsyncWriter::with_capacity(path.clone(), 8);
+    writer.append_line("final-accounting-event".to_string(), false);
+    writer
+        .flush()
+        .await
+        .expect("trace barrier flushes accepted lines");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap().trim(),
+        "final-accounting-event"
+    );
+
+    // Opening a directory as a log file fails on all supported platforms.
+    let failed = super::TraceAsyncWriter::with_capacity(std::env::temp_dir(), 8);
+    failed.append_line("failed-event".to_string(), true);
+    assert!(
+        failed.flush().await.is_err(),
+        "a failed write cannot acknowledge success"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn native_full_trace_queue_never_blocks_and_flush_yields_until_capacity() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let writer = super::TraceAsyncWriter {
+        tx: super::TraceCommandSender::Bounded(tx),
+        dropped: std::sync::atomic::AtomicU64::new(0),
+        queue_capacity: 1,
+    };
+    writer.append_line("first".to_string(), false);
+    writer.append_line("error-when-full".to_string(), true);
+    assert_eq!(writer.dropped.load(std::sync::atomic::Ordering::Relaxed), 1);
+
+    let receiver = async {
+        tokio::task::yield_now().await;
+        assert!(matches!(
+            rx.recv().await,
+            Some(super::TraceCommand::Append { .. })
+        ));
+        match rx.recv().await.unwrap() {
+            super::TraceCommand::Flush(ack) => {
+                let _ = ack.send(Ok(()));
+            }
+            _ => panic!("expected flush after the accepted line"),
+        }
+    };
+    let (flushed, ()) = tokio::join!(writer.flush(), receiver);
+    flushed.unwrap();
+}

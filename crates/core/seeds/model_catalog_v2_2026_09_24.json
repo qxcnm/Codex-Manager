@@ -1,0 +1,183 @@
+{
+  "revision": 9,
+  "source_sha256": "2e714bc5650848e1ca1a7684f331e42d1933ea8935593b78f1805e519be7deb0",
+  "models": [
+    {
+      "slug": "gpt-6-astra",
+      "display_name": "GPT-6-Astra",
+      "description": "Our most capable model for complex, demanding work.",
+      "visibility": "list",
+      "priority": 1,
+      "default_reasoning_effort": "low",
+      "context_window": 272000,
+      "max_context_window": 872000,
+      "capabilities": {"reasoning_efforts":["low","medium","high","xhigh","max","ultra"],"service_tiers":["priority"],"additional_speed_tiers":["fast"],"input_modalities":["text","image"],"supported_endpoints":["/v1/responses","/v1/chat/completions"],"api_context_window":1050000,"max_output_tokens":128000,"prefer_websockets":true,"supports_parallel_tool_calls":true,"supports_reasoning_summaries":true,"default_reasoning_summary":"none","reasoning_summary_format":"experimental","supports_verbosity":true,"default_verbosity":"low","supports_image_detail_original":true,"supports_search_tool":true,"apply_patch_tool_type":"freeform","web_search_tool_type":"text_and_image","shell_type":"unified_exec","truncation_mode":"tokens","truncation_limit":10000,"experimental_supported_tools":[],"effective_context_window_percent":95,"minimal_client_version":"0.153.0","default_service_tier":null,"auto_compact_token_limit":null,"auto_review_model_override":null,"comp_hash":"3000","tool_mode":"code_mode_only","multi_agent_version":"v2","multi_agent_reasoning_effort":"xhigh","use_responses_lite":true,"include_skills_usage_instructions":false},
+      "price_status": "official",
+      "price_source": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+      "price_tiers": [
+        {"min_input_tokens":0,"input_microusd_per_1m":10000000,"cached_input_microusd_per_1m":1000000,"cache_write_microusd_per_1m":12500000,"output_microusd_per_1m":50000000},
+        {"min_input_tokens":272001,"input_microusd_per_1m":20000000,"cached_input_microusd_per_1m":2000000,"cache_write_microusd_per_1m":25000000,"output_microusd_per_1m":75000000}
+      ]
+    },
+    {
+      "slug": "gpt-5.6-sol",
+      "display_name": "GPT-5.6-Sol",
+      "description": "Latest frontier agentic coding model.",
+      "visibility": "list",
+      "priority": 4,
+      "default_reasoning_effort": "low",
+      "context_window": 272000,
+      "max_context_window": 872000,
+      "capabilities": {"reasoning_efforts":["low","medium","high","xhigh","max","ultra"],"service_tiers":["priority","ultrafast"],"additional_speed_tiers":["fast"],"input_modalities":["text","image"],"prefer_websockets":true,"supports_parallel_tool_calls":true,"supports_reasoning_summaries":true,"default_reasoning_summary":"none","reasoning_summary_format":"experimental","supports_verbosity":true,"default_verbosity":"low","supports_image_detail_original":true,"supports_search_tool":true,"apply_patch_tool_type":"freeform","web_search_tool_type":"text_and_image","shell_type":"unified_exec","truncation_mode":"tokens","truncation_limit":10000,"experimental_supported_tools":[],"effective_context_window_percent":95,"minimal_client_version":"0.144.0","default_service_tier":null,"auto_compact_token_limit":null,"auto_review_model_override":null,"comp_hash":"3000","tool_mode":"code_mode_only","multi_agent_version":"v2","use_responses_lite":true,"include_skills_usage_instructions":false,"upgrade":{"model":"gpt-6-sol","upgrade_copy":"Use the newer GPT-6 Sol model"}},
+      "price_status": "official",
+      "price_source": "https://developers.openai.com/api/docs/models/compare",
+      "price_tiers": [
+        {"min_input_tokens":0,"input_microusd_per_1m":5000000,"cached_input_microusd_per_1m":500000,"cache_write_microusd_per_1m":6250000,"output_microusd_per_1m":30000000},
+        {"min_input_tokens":272001,"input_microusd_per_1m":10000000,"cached_input_microusd_per_1m":1000000,"cache_write_microusd_per_1m":12500000,"output_microusd_per_1m":45000000}
+      ]
+    },
+    {
+      "slug": "gpt-5.6-terra",
+      "display_name": "GPT-5.6-Terra",
+      "description": "Balanced agentic coding model for everyday work.",
+      "visibility": "list",
+      "priority": 7,
+      "default_reasoning_effort": "medium",
+      "context_window": 272000,
+      "max_context_window": 872000,
+      "capabilities": {"reasoning_efforts":["low","medium","high","xhigh","max","ultra"],"service_tiers":["priority"],"additional_speed_tiers":["fast"],"input_modalities":["text","image"],"prefer_websockets":true,"supports_parallel_tool_calls":true,"supports_reasoning_summaries":true,"default_reasoning_summary":"none","reasoning_summary_format":"experimental","supports_verbosity":true,"default_verbosity":"low","supports_image_detail_original":true,"supports_search_tool":true,"apply_patch_tool_type":"freeform","web_search_tool_type":"text_and_image","shell_type":"unified_exec","truncation_mode":"tokens","truncation_limit":10000,"experimental_supported_tools":[],"effective_context_window_percent":95,"minimal_client_version":"0.144.0","default_service_tier":null,"auto_compact_token_limit":null,"auto_review_model_override":null,"comp_hash":"3000","tool_mode":"code_mode_only","multi_agent_version":"v2","use_responses_lite":true,"include_skills_usage_instructions":false,"upgrade":{"model":"gpt-6-sol","upgrade_copy":"Use the newer GPT-6 Sol model"}},
+      "price_status": "official",
+      "price_source": "https://developers.openai.com/api/docs/models/compare",
+      "price_tiers": [
+        {"min_input_tokens":0,"input_microusd_per_1m":2000000,"cached_input_microusd_per_1m":200000,"cache_write_microusd_per_1m":2500000,"output_microusd_per_1m":12000000},
+        {"min_input_tokens":272001,"input_microusd_per_1m":4000000,"cached_input_microusd_per_1m":400000,"cache_write_microusd_per_1m":5000000,"output_microusd_per_1m":18000000}
+      ]
+    },
+    {
+      "slug": "gpt-5.6-luna",
+      "display_name": "GPT-5.6-Luna",
+      "description": "Fast and affordable agentic coding model.",
+      "visibility": "list",
+      "priority": 8,
+      "default_reasoning_effort": "medium",
+      "context_window": 272000,
+      "max_context_window": 872000,
+      "capabilities": {"reasoning_efforts":["low","medium","high","xhigh","max"],"service_tiers":["priority"],"additional_speed_tiers":["fast"],"input_modalities":["text","image"],"prefer_websockets":true,"supports_parallel_tool_calls":true,"supports_reasoning_summaries":true,"default_reasoning_summary":"none","reasoning_summary_format":"experimental","supports_verbosity":true,"default_verbosity":"low","supports_image_detail_original":true,"supports_search_tool":true,"apply_patch_tool_type":"freeform","web_search_tool_type":"text_and_image","shell_type":"unified_exec","truncation_mode":"tokens","truncation_limit":10000,"experimental_supported_tools":[],"effective_context_window_percent":95,"minimal_client_version":"0.144.0","default_service_tier":null,"auto_compact_token_limit":null,"auto_review_model_override":null,"comp_hash":"3000","tool_mode":"code_mode_only","multi_agent_version":"v1","use_responses_lite":true,"include_skills_usage_instructions":false,"upgrade":{"model":"gpt-6-luna","upgrade_copy":"Use the newer GPT-6 Luna model"}},
+      "price_status": "official",
+      "price_source": "https://developers.openai.com/api/docs/models/compare",
+      "price_tiers": [
+        {"min_input_tokens":0,"input_microusd_per_1m":200000,"cached_input_microusd_per_1m":20000,"cache_write_microusd_per_1m":250000,"output_microusd_per_1m":1200000},
+        {"min_input_tokens":272001,"input_microusd_per_1m":400000,"cached_input_microusd_per_1m":40000,"cache_write_microusd_per_1m":500000,"output_microusd_per_1m":1800000}
+      ]
+    },
+    {
+      "slug": "gpt-5.5",
+      "display_name": "GPT-5.5",
+      "description": "Frontier model for complex coding, research, and real-world work.",
+      "visibility": "list",
+      "priority": 7,
+      "default_reasoning_effort": "medium",
+      "context_window": 272000,
+      "max_context_window": 272000,
+      "capabilities": {"reasoning_efforts":["low","medium","high","xhigh"],"service_tiers":["priority"],"additional_speed_tiers":["fast"],"input_modalities":["text","image"],"prefer_websockets":true,"supports_parallel_tool_calls":true,"supports_reasoning_summaries":true,"default_reasoning_summary":"none","reasoning_summary_format":"experimental","supports_verbosity":true,"default_verbosity":"low","supports_image_detail_original":true,"supports_search_tool":true,"apply_patch_tool_type":"freeform","web_search_tool_type":"text_and_image","shell_type":"unified_exec","truncation_mode":"tokens","truncation_limit":10000,"experimental_supported_tools":[],"effective_context_window_percent":95,"minimal_client_version":"0.124.0","default_service_tier":null,"auto_compact_token_limit":null,"auto_review_model_override":null,"comp_hash":"2911","tool_mode":null,"multi_agent_version":null,"use_responses_lite":false,"include_skills_usage_instructions":false,"upgrade":{"model":"gpt-6-sol","upgrade_copy":"Use the newer GPT-6 Sol model"}},
+      "price_status": "official",
+      "price_source": "verified_seed_2026-05-11",
+      "price_tiers": [
+        {"min_input_tokens":0,"input_microusd_per_1m":5000000,"cached_input_microusd_per_1m":500000,"output_microusd_per_1m":30000000},
+        {"min_input_tokens":272000,"input_microusd_per_1m":10000000,"cached_input_microusd_per_1m":1000000,"output_microusd_per_1m":45000000}
+      ]
+    },
+    {
+      "slug": "gpt-image-2",
+      "display_name": "GPT Image 2",
+      "description": "State-of-the-art image generation and editing model.",
+      "visibility": "list",
+      "priority": 44,
+      "default_reasoning_effort": null,
+      "context_window": null,
+      "max_context_window": null,
+      "capabilities": {"reasoning_efforts":[],"service_tiers":[],"additional_speed_tiers":[],"input_modalities":["text","image"],"output_modalities":["image"],"supported_endpoints":["/v1/images/generations","/v1/images/edits"],"snapshot":"gpt-image-2-2026-04-21","supports_text_generation":false,"supports_image_generation":true,"supports_image_editing":true,"supports_transparent_background":false,"include_skills_usage_instructions":false},
+      "price_status": "official",
+      "price_source": "https://developers.openai.com/api/docs/pricing#image-generation",
+      "price_tiers": [
+        {"min_input_tokens":0,"input_microusd_per_1m":8000000,"cached_input_microusd_per_1m":2000000,"output_microusd_per_1m":30000000}
+      ]
+    },
+    {
+      "slug": "gpt-6-sol",
+      "display_name": "GPT-6-Sol",
+      "description": "Latest frontier agentic coding model.",
+      "visibility": "list",
+      "priority": 2,
+      "default_reasoning_effort": "medium",
+      "context_window": 272000,
+      "max_context_window": 872000,
+      "capabilities": {"reasoning_efforts":["low","medium","high","xhigh","max","ultra"],"service_tiers":["priority","ultrafast"],"additional_speed_tiers":["fast"],"input_modalities":["text","image"],"supported_endpoints":["/v1/responses","/v1/chat/completions"],"api_context_window":1050000,"max_output_tokens":128000,"prefer_websockets":true,"supports_parallel_tool_calls":true,"supports_reasoning_summaries":true,"default_reasoning_summary":"none","reasoning_summary_format":"experimental","supports_verbosity":true,"default_verbosity":"low","supports_image_detail_original":true,"supports_search_tool":true,"apply_patch_tool_type":"freeform","web_search_tool_type":"text_and_image","shell_type":"shell_command","truncation_mode":"tokens","truncation_limit":10000,"effective_context_window_percent":95,"minimal_client_version":"0.155.0","default_service_tier":null,"auto_compact_token_limit":null,"auto_review_model_override":null,"comp_hash":"3000","tool_mode":"code_mode_only","multi_agent_version":"v2","multi_agent_reasoning_effort":null,"use_responses_lite":true,"include_skills_usage_instructions":false},
+      "price_status": "official",
+      "price_source": "https://developers.openai.com/api/docs/models/gpt-6-sol",
+      "price_tiers": [
+        {"min_input_tokens":0,"input_microusd_per_1m":2000000,"cached_input_microusd_per_1m":200000,"cache_write_microusd_per_1m":2500000,"output_microusd_per_1m":10000000},
+        {"min_input_tokens":272001,"input_microusd_per_1m":4000000,"cached_input_microusd_per_1m":400000,"cache_write_microusd_per_1m":5000000,"output_microusd_per_1m":15000000}
+      ]
+    },
+    {
+      "slug": "gpt-6-luna",
+      "display_name": "GPT-6-Luna",
+      "description": "Fast and affordable agentic coding model.",
+      "visibility": "list",
+      "priority": 3,
+      "default_reasoning_effort": "high",
+      "context_window": 272000,
+      "max_context_window": 872000,
+      "capabilities": {"reasoning_efforts":["low","medium","high","xhigh","max"],"service_tiers":["priority"],"additional_speed_tiers":["fast"],"input_modalities":["text","image"],"supported_endpoints":["/v1/responses","/v1/chat/completions"],"api_context_window":1050000,"max_output_tokens":128000,"prefer_websockets":true,"supports_parallel_tool_calls":true,"supports_reasoning_summaries":true,"default_reasoning_summary":"none","reasoning_summary_format":"experimental","supports_verbosity":true,"default_verbosity":"low","supports_image_detail_original":true,"supports_search_tool":true,"apply_patch_tool_type":"freeform","web_search_tool_type":"text_and_image","shell_type":"shell_command","truncation_mode":"tokens","truncation_limit":10000,"effective_context_window_percent":95,"minimal_client_version":"0.155.0","default_service_tier":null,"auto_compact_token_limit":null,"auto_review_model_override":null,"comp_hash":"3000","tool_mode":"code_mode_only","multi_agent_version":"v2","use_responses_lite":true,"include_skills_usage_instructions":false},
+      "price_status": "official",
+      "price_source": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+      "price_tiers": [
+        {"min_input_tokens":0,"input_microusd_per_1m":100000,"cached_input_microusd_per_1m":10000,"cache_write_microusd_per_1m":125000,"output_microusd_per_1m":500000},
+        {"min_input_tokens":272001,"input_microusd_per_1m":200000,"cached_input_microusd_per_1m":20000,"cache_write_microusd_per_1m":250000,"output_microusd_per_1m":750000}
+      ]
+    },
+    {
+      "slug": "gpt-image-2.5-sunburst",
+      "display_name": "GPT Image 2.5 Sunburst",
+      "description": "Advanced image generation with high instruction following and image fidelity.",
+      "visibility": "list",
+      "priority": 45,
+      "default_reasoning_effort": null,
+      "context_window": null,
+      "max_context_window": null,
+      "capabilities": {"reasoning_efforts":[],"service_tiers":[],"additional_speed_tiers":[],"quality_settings":["low","medium","high","xhigh","max","auto"],"input_modalities":["text","image"],"output_modalities":["image"],"supported_endpoints":["/v1/images/generations","/v1/images/edits"],"snapshot":"gpt-image-2.5-sunburst-2026-09-08","supports_text_generation":false,"supports_image_generation":true,"supports_image_editing":true,"supports_transparent_background":true,"include_skills_usage_instructions":false},
+      "price_status": "missing",
+      "price_source": "https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst",
+      "price_tiers": []
+    },
+    {
+      "slug": "gpt-image-2.5-flare",
+      "display_name": "GPT Image 2.5 Flare",
+      "description": "Fast, high-quality everyday image generation.",
+      "visibility": "list",
+      "priority": 46,
+      "default_reasoning_effort": null,
+      "context_window": null,
+      "max_context_window": null,
+      "capabilities": {"reasoning_efforts":[],"service_tiers":[],"additional_speed_tiers":[],"quality_settings":["low","medium","high","xhigh","max","auto"],"input_modalities":["text","image"],"output_modalities":["image"],"supported_endpoints":["/v1/images/generations","/v1/images/edits"],"snapshot":"gpt-image-2.5-flare-2026-09-08","supports_text_generation":false,"supports_image_generation":true,"supports_image_editing":true,"supports_transparent_background":true,"include_skills_usage_instructions":false},
+      "price_status": "missing",
+      "price_source": "https://developers.openai.com/api/docs/models/gpt-image-2.5-flare",
+      "price_tiers": []
+    },
+    {
+      "slug": "codex-auto-review",
+      "display_name": "Codex Auto Review",
+      "description": "Automatic approval review model for Codex.",
+      "visibility": "hide",
+      "priority": 43,
+      "default_reasoning_effort": "medium",
+      "context_window": 272000,
+      "max_context_window": 1000000,
+      "capabilities": {"reasoning_efforts":["low","medium","high","xhigh"],"service_tiers":[],"additional_speed_tiers":[],"input_modalities":["text","image"],"prefer_websockets":true,"supports_parallel_tool_calls":true,"supports_reasoning_summaries":true,"default_reasoning_summary":"none","reasoning_summary_format":"experimental","supports_verbosity":true,"default_verbosity":"low","supports_image_detail_original":true,"supports_search_tool":true,"apply_patch_tool_type":"freeform","web_search_tool_type":"text_and_image","shell_type":"shell_command","truncation_mode":"tokens","truncation_limit":10000,"experimental_supported_tools":[],"effective_context_window_percent":95,"minimal_client_version":"0.98.0","default_service_tier":null,"auto_compact_token_limit":null,"auto_review_model_override":null,"comp_hash":null,"tool_mode":null,"multi_agent_version":null,"use_responses_lite":false,"include_skills_usage_instructions":false},
+      "price_status": "missing",
+      "price_source": null,
+      "price_tiers": []
+    }
+  ]
+}

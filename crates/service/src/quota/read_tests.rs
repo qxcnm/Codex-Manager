@@ -143,18 +143,19 @@ fn api_available_model_slugs_preserves_catalog_sort_order() {
     storage.init().expect("init storage");
     let models = api_available_model_slugs(&storage).expect("available models");
 
-    assert_eq!(models.len(), 9);
+    assert_eq!(models.len(), 10);
     assert_eq!(
         &models[..4],
-        [
-            "gpt-5.6-sol",
-            "gpt-6-astra",
-            "gpt-5.6-terra",
-            "gpt-5.6-luna"
-        ]
+        ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol"]
     );
     assert!(!models.iter().any(|model| model == "codex-auto-review"));
-    assert!(models.iter().any(|model| model == "gpt-image-2"));
+    for slug in [
+        "gpt-image-2",
+        "gpt-image-2.5-sunburst",
+        "gpt-image-2.5-flare",
+    ] {
+        assert!(models.iter().any(|model| model == slug));
+    }
 }
 
 #[test]
@@ -163,7 +164,7 @@ fn api_available_model_slugs_does_not_seed_legacy_price_rules() {
     storage.init().expect("init storage");
     let models = api_available_model_slugs(&storage).expect("available models");
 
-    assert_eq!(models.len(), 9);
+    assert_eq!(models.len(), 10);
     assert_eq!(
         storage
             .list_enabled_model_price_rules()
@@ -413,7 +414,7 @@ fn quota_model_usage_reads_aggregate_balance_from_balance_snapshots_only() {
             request_log_id: 1,
             key_id: Some("key-model".to_string()),
             account_id: None,
-            model: Some("gpt-5.4-mini".to_string()),
+            model: Some("gpt-6-luna".to_string()),
             input_tokens: Some(10),
             output_tokens: Some(5),
             total_tokens: Some(15),
@@ -513,7 +514,8 @@ fn quota_source_list_uses_account_summaries_and_v2_routes() {
     assert_eq!(item.metric_kind, "window_percent");
     assert_eq!(item.remaining, Some(58.0));
     assert_eq!(item.used, Some(42.0));
-    assert!(item.models.contains(&"gpt-5.4".to_string()));
+    assert!(item.models.contains(&"gpt-6-sol".to_string()));
+    assert!(!item.models.contains(&"gpt-5.4".to_string()));
     assert!(!item.models.contains(&"gpt-source".to_string()));
     assert!(!result
         .items
@@ -584,13 +586,13 @@ fn route_assignment_map_reads_only_model_catalog_v2_routes() {
     let mut storage = Storage::open_in_memory().expect("open storage");
     storage.init().expect("init storage");
     let mut model = storage
-        .get_managed_model_v2("gpt-5.4")
+        .get_managed_model_v2("gpt-6-sol")
         .expect("read model")
         .expect("seeded model");
     model.routes.push(ModelRouteV2 {
         source_kind: "aggregate_api".to_string(),
         source_id: "agg-source".to_string(),
-        upstream_model: "provider-gpt-5.4".to_string(),
+        upstream_model: "provider-gpt-6-sol".to_string(),
         enabled: true,
         weight: 1,
         ..Default::default()
@@ -678,20 +680,21 @@ fn target_model_assignment_map_expands_v2_default_account_pool_route() {
             .upsert_account_quota_capacity_override(account_id, Some(100), None)
             .expect("insert capacity");
     }
-    let assignments = route_assignment_map(&storage, Some("gpt-5.4")).expect("build V2 route map");
-    let target_models = HashSet::from(["gpt-5.4".to_string()]);
+    let assignments =
+        route_assignment_map(&storage, Some("gpt-6-sol")).expect("build V2 route map");
+    let target_models = HashSet::from(["gpt-6-sol".to_string()]);
     let capacity_config = load_account_capacity_config(&storage).expect("load capacity");
     let pools = build_model_pool_accumulators_for_models(
         &storage,
         &[],
-        &["gpt-5.4".to_string(), "gpt-5.2".to_string()],
+        &["gpt-6-sol".to_string(), "gpt-5.6-sol".to_string()],
         &assignments,
         Some(&target_models),
         &capacity_config,
     )
     .expect("build targeted pools");
 
-    let pool = pools.get("gpt-5.4").expect("target pool exists");
+    let pool = pools.get("gpt-6-sol").expect("target pool exists");
     let source_ids = pool
         .sources
         .iter()

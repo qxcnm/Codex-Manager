@@ -10,21 +10,25 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { normalizeLocale } from "@/lib/i18n/config";
+import { normalizeLocalePreference } from "@/lib/i18n/config";
 import { getLocaleLabel, useI18n } from "@/lib/i18n/provider";
 
 interface LanguageSwitcherProps {
   className?: string;
   triggerClassName?: string;
   compact?: boolean;
+  triggerId?: string;
+  descriptionId?: string;
 }
 
 export function LanguageSwitcher({
   className,
   triggerClassName,
   compact = false,
+  triggerId,
+  descriptionId,
 }: LanguageSwitcherProps) {
-  const { locale, localeOptions, setLocale, isSwitchingLocale, t } = useI18n();
+  const { locale, localePreference, localeOptions, setLocale, isSwitchingLocale, t } = useI18n();
 
   return (
     <div
@@ -37,22 +41,24 @@ export function LanguageSwitcher({
         </span>
       ) : null}
       <Select
-        value={locale}
-        onValueChange={(value) => void setLocale(normalizeLocale(value))}
+        value={localePreference}
+        onValueChange={(value) => void setLocale(normalizeLocalePreference(value))}
         disabled={isSwitchingLocale}
       >
         <SelectTrigger
+          id={triggerId}
+          aria-describedby={descriptionId}
           className={cn("h-9 min-w-[116px] gap-2 text-xs", triggerClassName)}
           aria-label={t("选择语言")}
         >
           <div className="flex min-w-0 flex-1 items-center justify-center gap-2 overflow-hidden">
-            <Globe className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <Globe className="shrink-0 text-muted-foreground" />
             <span
               data-slot="language-switcher-label"
               className="flex min-w-0 flex-1 overflow-hidden"
             >
               <SelectValue className="min-w-0 truncate">
-                {(value) => getLocaleLabel(normalizeLocale(value))}
+                {(value) => getLocaleLabel(normalizeLocalePreference(value), locale)}
               </SelectValue>
             </span>
           </div>
@@ -61,7 +67,7 @@ export function LanguageSwitcher({
           <SelectGroup>
             {localeOptions.map((item) => (
               <SelectItem key={item} value={item}>
-                {getLocaleLabel(item)}
+                {getLocaleLabel(item, locale)}
               </SelectItem>
             ))}
           </SelectGroup>

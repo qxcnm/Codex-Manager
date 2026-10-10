@@ -3,6 +3,7 @@ import http from "node:http";
 import { dirname, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import net from "node:net";
+import { PassThrough } from "node:stream";
 import {
   findDesktopDevProcess,
   getDesktopDevProcessInfo,
@@ -134,87 +135,125 @@ async function waitForDesktopAppPage() {
   while (Date.now() <= deadline) {
     try {
       if (await fetchDesktopDevPath("/", 1500, desktopNextPort)) {
-        break;
+        console.log(`前端首页已就绪: http://${desktopDevHost}:${desktopNextPort}/`);
+        return;
       }
     } catch {
       // Keep waiting until Next starts serving static files.
     }
 
     if (Date.now() >= deadline) {
-      console.error(`等待前端首页就绪超时: http://${desktopDevHost}:${desktopNextPort}/`);
-      process.exit(1);
+      break;
     }
 
     await sleep(desktopDevWaitIntervalMs);
   }
 
-  console.log(`前端首页已就绪: http://${desktopDevHost}:${desktopNextPort}/`);
+  throw new Error(`等待前端首页就绪超时: http://${desktopDevHost}:${desktopNextPort}/`);
 }
 
 function isExpectedDesktopDevProxyDisconnect(error) {
   return ["ECONNABORTED", "ECONNRESET", "EPIPE", "ERR_STREAM_DESTROYED"].includes(error?.code);
 }
 
-function createDesktopDevProxy() {
+function respondWithProxyNotReady(response) {
+  if (response.destroyed || response.headersSent) {
+    return;
+  }
+  response.writeHead(503, {
+    "content-type": "text/plain; charset=utf-8",
+    "retry-after": "1",
+  });
+  response.end("Frontend dev server is not ready yet");
+}
+
+function createDesktopDevProxy(nextReadyPromise) {
   const server = http.createServer((request, response) => {
-    const proxyRequest = http.request(
-      {
-        hostname: desktopDevHost,
-        port: desktopNextPort,
-        path: request.url,
-        method: request.method,
-        headers: {
-          ...request.headers,
-          host: `${desktopDevHost}:${desktopNextPort}`,
-        },
-      },
-      (proxyResponse) => {
-        if (response.destroyed) {
-          proxyResponse.destroy();
+    const gatedRequest = new PassThrough();
+    request.pipe(gatedRequest);
+
+    void nextReadyPromise.then(
+      () => {
+        if (request.aborted || response.destroyed) {
+          gatedRequest.destroy();
           return;
         }
-        response.writeHead(proxyResponse.statusCode ?? 502, proxyResponse.headers);
-        proxyResponse.on("error", (error) => {
-          response.destroy();
+
+        const proxyRequest = http.request(
+          {
+            hostname: desktopDevHost,
+            port: desktopNextPort,
+            path: request.url,
+            method: request.method,
+            headers: {
+              ...request.headers,
+              host: `${desktopDevHost}:${desktopNextPort}`,
+            },
+          },
+          (proxyResponse) => {
+            if (response.destroyed) {
+              proxyResponse.destroy();
+              return;
+            }
+            response.writeHead(proxyResponse.statusCode ?? 502, proxyResponse.headers);
+            proxyResponse.on("error", (error) => {
+              response.destroy();
+              if (!isExpectedDesktopDevProxyDisconnect(error)) {
+                console.warn(`Next dev proxy response failed: ${error.message}`);
+              }
+            });
+            proxyResponse.pipe(response);
+          },
+        );
+
+        proxyRequest.on("error", (error) => {
+          if (response.destroyed || isExpectedDesktopDevProxyDisconnect(error)) {
+            response.destroy();
+            return;
+          }
+          if (response.headersSent) {
+            console.warn(`Next dev proxy failed after sending headers: ${error.message}`);
+            response.destroy();
+            return;
+          }
+          response.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+          response.end(`Next dev proxy error: ${error.message}`);
+        });
+
+        request.on("aborted", () => {
+          proxyRequest.destroy();
+        });
+        request.on("error", (error) => {
+          proxyRequest.destroy();
           if (!isExpectedDesktopDevProxyDisconnect(error)) {
-            console.warn(`Next dev proxy response failed: ${error.message}`);
+            console.warn(`Desktop dev proxy request failed: ${error.message}`);
           }
         });
-        proxyResponse.pipe(response);
+        response.on("error", (error) => {
+          proxyRequest.destroy();
+          if (!isExpectedDesktopDevProxyDisconnect(error)) {
+            console.warn(`Desktop dev proxy client response failed: ${error.message}`);
+          }
+        });
+
+        gatedRequest.pipe(proxyRequest);
+      },
+      () => {
+        gatedRequest.destroy();
+        request.resume();
+        respondWithProxyNotReady(response);
       },
     );
 
-    proxyRequest.on("error", (error) => {
-      if (response.destroyed || isExpectedDesktopDevProxyDisconnect(error)) {
-        response.destroy();
-        return;
-      }
-      if (response.headersSent) {
-        console.warn(`Next dev proxy failed after sending headers: ${error.message}`);
-        response.destroy();
-        return;
-      }
-      response.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
-      response.end(`Next dev proxy error: ${error.message}`);
-    });
-
     request.on("aborted", () => {
-      proxyRequest.destroy();
+      gatedRequest.destroy();
     });
     request.on("error", (error) => {
-      proxyRequest.destroy();
+      gatedRequest.destroy();
       if (!isExpectedDesktopDevProxyDisconnect(error)) {
         console.warn(`Desktop dev proxy request failed: ${error.message}`);
       }
     });
-    response.on("error", (error) => {
-      proxyRequest.destroy();
-      if (!isExpectedDesktopDevProxyDisconnect(error)) {
-        console.warn(`Desktop dev proxy client response failed: ${error.message}`);
-      }
-    });
-
-    request.pipe(proxyRequest);
   });
 
   // Reloading a WebView closes its HTTP/HMR sockets immediately. On Windows
@@ -229,31 +268,41 @@ function createDesktopDevProxy() {
   });
 
   server.on("upgrade", (request, socket, head) => {
-    const upstream = net.connect(desktopNextPort, desktopDevHost, () => {
-      upstream.write(
-        [
-          `${request.method} ${request.url} HTTP/${request.httpVersion}`,
-          `Host: ${desktopDevHost}:${desktopNextPort}`,
-          ...Object.entries(request.headers)
-            .filter(([key]) => key.toLowerCase() !== "host")
-            .map(([key, value]) => `${key}: ${value}`),
-          "",
-          "",
-        ].join("\r\n"),
-      );
-      if (head.length > 0) {
-        upstream.write(head);
-      }
-      upstream.pipe(socket);
-      socket.pipe(upstream);
-    });
+    void nextReadyPromise.then(
+      () => {
+        if (socket.destroyed) {
+          return;
+        }
+        const upstream = net.connect(desktopNextPort, desktopDevHost, () => {
+          upstream.write(
+            [
+              `${request.method} ${request.url} HTTP/${request.httpVersion}`,
+              `Host: ${desktopDevHost}:${desktopNextPort}`,
+              ...Object.entries(request.headers)
+                .filter(([key]) => key.toLowerCase() !== "host")
+                .map(([key, value]) => `${key}: ${value}`),
+              "",
+              "",
+            ].join("\r\n"),
+          );
+          if (head.length > 0) {
+            upstream.write(head);
+          }
+          upstream.pipe(socket);
+          socket.pipe(upstream);
+        });
 
-    upstream.on("error", () => {
-      socket.destroy();
-    });
-    socket.on("close", () => {
-      upstream.destroy();
-    });
+        upstream.on("error", () => {
+          socket.destroy();
+        });
+        socket.on("close", () => {
+          upstream.destroy();
+        });
+      },
+      () => {
+        socket.destroy();
+      },
+    );
   });
 
   server.on("error", (error) => {
@@ -367,27 +416,52 @@ function resolvePnpmCommand() {
         ]
       : ["--dir", frontendDir, "run", task];
   const nodeBinDir = dirname(process.execPath);
+  const windowsShell = process.env.ComSpec || "cmd.exe";
+  // cmd.exe consumes the /c remainder as one command string, so quote every token explicitly.
+  const quoteWindowsCommandArgument = (value) => `"${String(value).replaceAll('"', '""')}"`;
+  const buildWindowsCommandLine = (command, args) =>
+    `"${[command, ...args].map(quoteWindowsCommandArgument).join(" ")}"`;
+  const wrapWindowsCommand = (
+    command,
+    commandArgs = baseArgs,
+    probeCommandArgs = ["--version"],
+  ) => ({
+    command: windowsShell,
+    targetCommand: command,
+    args: ["/d", "/s", "/c", buildWindowsCommandLine(command, commandArgs)],
+    probeArgs: ["/d", "/s", "/c", buildWindowsCommandLine(command, probeCommandArgs)],
+    shell: false,
+    windowsVerbatimArguments: true,
+  });
   const windowsCandidates = [
-    { command: resolve(nodeBinDir, "pnpm.cmd"), args: baseArgs },
-    { command: resolve(nodeBinDir, "corepack.cmd"), args: ["pnpm", ...baseArgs] },
-    { command: "pnpm.cmd", args: baseArgs },
-    { command: "corepack.cmd", args: ["pnpm", ...baseArgs] },
+    wrapWindowsCommand(resolve(nodeBinDir, "pnpm.cmd")),
+    wrapWindowsCommand(
+      resolve(nodeBinDir, "corepack.cmd"),
+      ["pnpm", ...baseArgs],
+      ["pnpm", "--version"],
+    ),
+    wrapWindowsCommand("pnpm.cmd"),
+    wrapWindowsCommand("corepack.cmd", ["pnpm", ...baseArgs], ["pnpm", "--version"]),
   ];
   const defaultCandidates = [
-    { command: "pnpm", args: baseArgs },
-    { command: "corepack", args: ["pnpm", ...baseArgs] },
+    { command: "pnpm", args: baseArgs, probeArgs: ["--version"], shell: false },
+    { command: "corepack", args: ["pnpm", ...baseArgs], probeArgs: ["pnpm", "--version"], shell: false },
   ];
 
   const candidates = process.platform === "win32" ? windowsCandidates : defaultCandidates;
   const existingPathCandidates = candidates.filter(
-    (candidate) => !candidate.command.includes(":") || existsSync(candidate.command),
+    (candidate) =>
+      !candidate.targetCommand ||
+      !candidate.targetCommand.includes(":") ||
+      existsSync(candidate.targetCommand),
   );
 
   for (const candidate of existingPathCandidates) {
-    const probeArgs = candidate.args[0] === "pnpm" ? ["pnpm", "--version"] : ["--version"];
+    const probeArgs = candidate.probeArgs || ["--version"];
     const probe = spawnSync(candidate.command, probeArgs, {
       encoding: "utf8",
-      shell: process.platform === "win32" && /\.cmd$/i.test(candidate.command),
+      shell: candidate.shell ?? false,
+      windowsVerbatimArguments: candidate.windowsVerbatimArguments ?? false,
       stdio: "ignore",
     });
     if (!probe.error && probe.status === 0) {
@@ -445,27 +519,37 @@ const needsShell = process.platform === "win32" && /\.cmd$/i.test(packageManager
 if (task === "dev:desktop") {
   const child = spawn(packageManager.command, packageManager.args, {
     stdio: "inherit",
-    shell: needsShell,
+    shell: packageManager.shell ?? needsShell,
+    windowsVerbatimArguments: packageManager.windowsVerbatimArguments ?? false,
     windowsHide: true,
   });
   child.once("error", (error) => {
     console.error(`前端开发服务启动失败: ${error.message}`);
     process.exit(1);
   });
-  await waitForDesktopAppPage();
-  createDesktopDevProxy();
-  child.on("exit", (code, signal) => {
-    if (signal) {
-      process.exit(0);
-    }
-    process.exit(code ?? 0);
+  // Observe early exits too: startup can fail before the first page is ready.
+  child.once("exit", (code, signal) => {
+    process.exit(signal ? 0 : (code ?? 0));
   });
+  const nextReadyPromise = waitForDesktopAppPage();
+  // Bind the Tauri dev URL immediately, but hold requests until Next has
+  // served the home page so the WebView cannot receive a startup 502.
+  const proxy = createDesktopDevProxy(nextReadyPromise);
+  try {
+    await nextReadyPromise;
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    proxy.close();
+    if (child.pid) terminateDesktopDevProcessTree(child.pid);
+    process.exit(1);
+  }
   await new Promise(() => {});
 }
 
 const result = spawnSync(packageManager.command, packageManager.args, {
   stdio: "inherit",
-  shell: needsShell,
+  shell: packageManager.shell ?? needsShell,
+  windowsVerbatimArguments: packageManager.windowsVerbatimArguments ?? false,
 });
 
 if (result.error) {

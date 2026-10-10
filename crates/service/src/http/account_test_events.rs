@@ -1,4 +1,5 @@
 use std::convert::Infallible;
+#[cfg(test)]
 use std::io::{self, Read};
 use std::time::Duration;
 
@@ -8,13 +9,16 @@ use axum::http::{
     HeaderMap as AxumHeaderMap, HeaderValue as AxumHeaderValue, StatusCode as AxumStatusCode,
 };
 use axum::response::{IntoResponse, Response as AxumResponse};
+#[cfg(test)]
 use crossbeam_channel::RecvTimeoutError;
 use futures_util::stream;
+#[cfg(test)]
 use tiny_http::{Header, Request, Response, StatusCode};
 
 const EVENT_NAME: &str = "account-test-event";
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
+#[cfg(test)]
 fn request_header_value<'a>(request: &'a Request, name: &str) -> Option<&'a str> {
     request
         .headers()
@@ -24,6 +28,7 @@ fn request_header_value<'a>(request: &'a Request, name: &str) -> Option<&'a str>
         .filter(|value| !value.is_empty())
 }
 
+#[cfg(test)]
 fn rpc_token_valid(request: &Request) -> bool {
     request_header_value(request, "X-CodexManager-Rpc-Token")
         .is_some_and(crate::rpc_auth_token_matches)
@@ -38,6 +43,7 @@ fn axum_rpc_token_valid(headers: &AxumHeaderMap) -> bool {
         .is_some_and(crate::rpc_auth_token_matches)
 }
 
+#[cfg(test)]
 fn response_header(name: &'static str, value: &'static str) -> Header {
     Header::from_bytes(name.as_bytes(), value.as_bytes()).expect("valid static header")
 }
@@ -67,17 +73,20 @@ fn account_test_id_from_query(query: Option<&str>) -> Option<String> {
     crate::account_test::normalize_account_test_id(&value)
 }
 
-fn next_account_test_event_chunk(
-    receiver: crate::account_test::AccountTestEventSubscription,
-) -> Option<(crate::account_test::AccountTestEventSubscription, Vec<u8>)> {
-    let chunk = match receiver.recv_timeout(KEEPALIVE_INTERVAL) {
-        Ok(event) => account_test_sse_frame(&event),
-        Err(RecvTimeoutError::Timeout) => b": keep-alive\n\n".to_vec(),
-        Err(RecvTimeoutError::Disconnected) => return None,
-    };
-    Some((receiver, chunk))
+async fn next_account_test_event_chunk(
+    receiver: &mut crate::account_test::AccountTestAsyncEventSubscription,
+) -> Option<Vec<u8>> {
+    loop {
+        match tokio::time::timeout(KEEPALIVE_INTERVAL, receiver.recv()).await {
+            Ok(Ok(event)) => return Some(account_test_sse_frame(&event)),
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => return None,
+            Err(_) => return Some(b": keep-alive\n\n".to_vec()),
+        }
+    }
 }
 
+#[cfg(test)]
 struct AccountTestEventStream {
     receiver: crate::account_test::AccountTestEventSubscription,
     pending: Vec<u8>,
@@ -85,6 +94,7 @@ struct AccountTestEventStream {
     opened: bool,
 }
 
+#[cfg(test)]
 impl AccountTestEventStream {
     fn new(receiver: crate::account_test::AccountTestEventSubscription) -> Self {
         Self {
@@ -113,6 +123,7 @@ impl AccountTestEventStream {
     }
 }
 
+#[cfg(test)]
 impl Read for AccountTestEventStream {
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
         if out.is_empty() {
@@ -131,6 +142,7 @@ impl Read for AccountTestEventStream {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn handle_account_test_events(request: Request) {
     if request.method().as_str() != "GET" {
         let _ = request.respond(Response::from_string("{}").with_status_code(405));
@@ -174,8 +186,8 @@ pub(crate) async fn handle_account_test_events_http(
     let Some(test_id) = account_test_id_from_query(query.as_deref()) else {
         return (AxumStatusCode::BAD_REQUEST, "{}").into_response();
     };
-    let receiver = crate::account_test::subscribe_account_test_events(&test_id);
-    let event_stream = stream::unfold((receiver, false), |(receiver, opened)| async move {
+    let receiver = crate::account_test::subscribe_account_test_events_async(&test_id);
+    let event_stream = stream::unfold((receiver, false), |(mut receiver, opened)| async move {
         if !opened {
             return Some((
                 Ok::<Bytes, Infallible>(Bytes::from_static(b": connected\n\n")),
@@ -183,11 +195,8 @@ pub(crate) async fn handle_account_test_events_http(
             ));
         }
 
-        let next = tokio::task::spawn_blocking(move || next_account_test_event_chunk(receiver))
-            .await
-            .ok()
-            .flatten()?;
-        Some((Ok(Bytes::from(next.1)), (next.0, true)))
+        let chunk = next_account_test_event_chunk(&mut receiver).await?;
+        Some((Ok(Bytes::from(chunk)), (receiver, true)))
     });
 
     let mut response = AxumResponse::new(Body::from_stream(event_stream));

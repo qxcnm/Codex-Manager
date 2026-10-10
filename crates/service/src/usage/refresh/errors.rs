@@ -32,6 +32,7 @@ static FAILURE_EVENT_THROTTLE: OnceLock<Mutex<HashMap<FailureThrottleKey, i64>>>
 /// # 返回
 /// 无
 pub(super) fn record_usage_refresh_failure(storage: &Storage, account_id: &str, message: &str) {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let created_at = now_ts();
     let error_class = classify_usage_refresh_error(message);
     let dedupe_window_secs = usage_refresh_failure_event_window_secs();
@@ -47,6 +48,14 @@ pub(super) fn record_usage_refresh_failure(storage: &Storage, account_id: &str, 
         created_at,
     });
     if let Some(reason) = status_reason_for_refresh_failure(&error_class) {
+        // A gateway usage-limit response is authoritative for the current
+        // request. Its failover path also queues a best-effort usage refresh;
+        // when that refresh cannot reach the fixture/provider, its connection
+        // error must not overwrite the confirmed `usage_limit_exhausted`
+        // reason before the caller observes the terminal account state.
+        if preserve_confirmed_usage_limit_reason(storage, account_id) {
+            return;
+        }
         let _ = storage.insert_event(&Event {
             account_id: Some(account_id.to_string()),
             event_type: "account_status_update".to_string(),
@@ -54,6 +63,23 @@ pub(super) fn record_usage_refresh_failure(storage: &Storage, account_id: &str, 
             created_at,
         });
     }
+}
+
+fn preserve_confirmed_usage_limit_reason(
+    storage: &crate::account::remote_storage::AccountStorage<'_>,
+    account_id: &str,
+) -> bool {
+    let Ok(Some(account)) = storage.find_account_by_id(account_id) else {
+        return false;
+    };
+    if account.status.trim().eq_ignore_ascii_case("limited") {
+        return storage
+            .latest_account_status_reasons(&[account_id.to_owned()])
+            .ok()
+            .and_then(|reasons| reasons.get(account_id).cloned())
+            .is_some_and(|reason| reason == "usage_limit_exhausted");
+    }
+    false
 }
 
 /// 函数 `mark_usage_unreachable_if_needed`
@@ -68,6 +94,7 @@ pub(super) fn record_usage_refresh_failure(storage: &Storage, account_id: &str, 
 /// # 返回
 /// 无
 pub(super) fn mark_usage_unreachable_if_needed(storage: &Storage, account_id: &str, err: &str) {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     if mark_account_unavailable_for_refresh_token_error(storage, account_id, err) {
         return;
     }

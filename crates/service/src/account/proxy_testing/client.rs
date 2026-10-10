@@ -51,26 +51,6 @@ pub(crate) fn build_proxy_test_client(
     Ok((client, context))
 }
 
-pub(crate) fn build_blocking_proxy_test_client(
-    proxy_url: &str,
-    redirect_policy: ProxyTestRedirectPolicy,
-    accept_invalid_certs: bool,
-) -> Result<(reqwest::blocking::Client, ProxyTestClientContext), ProxyTestError> {
-    let (proxy, context) = build_proxy_components(proxy_url)?;
-    let client = reqwest::blocking::Client::builder()
-        .no_proxy()
-        .proxy(proxy)
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .connect_timeout(PROXY_TEST_CONNECT_TIMEOUT)
-        .timeout(PROXY_TEST_TOTAL_TIMEOUT)
-        .pool_max_idle_per_host(10)
-        .redirect(redirect_policy.into_reqwest_policy())
-        .danger_accept_invalid_certs(accept_invalid_certs)
-        .build()
-        .map_err(|err| proxy_client_build_error(proxy_url, err))?;
-    Ok((client, context))
-}
-
 fn build_proxy_components(
     proxy_url: &str,
 ) -> Result<(Proxy, ProxyTestClientContext), ProxyTestError> {
@@ -90,14 +70,14 @@ fn build_proxy_components(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_blocking_proxy_test_client, ProxyTestRedirectPolicy};
+    use super::{build_proxy_test_client, ProxyTestRedirectPolicy};
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::mpsc;
     use std::thread;
 
-    #[test]
-    fn blocking_builder_uses_explicit_proxy_and_ignores_env_proxy() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn async_builder_uses_explicit_proxy_and_ignores_env_proxy() {
         let _env_lock = crate::test_env_guard();
         let fake_env_proxy_port = reserve_free_port();
         let (proxy_url, rx, handle) = start_fake_http_proxy();
@@ -114,16 +94,14 @@ mod tests {
             format!("http://127.0.0.1:{fake_env_proxy_port}"),
         );
 
-        let (client, context) = build_blocking_proxy_test_client(
-            proxy_url.as_str(),
-            ProxyTestRedirectPolicy::None,
-            false,
-        )
-        .expect("build blocking proxy test client");
+        let (client, context) =
+            build_proxy_test_client(proxy_url.as_str(), ProxyTestRedirectPolicy::None, false)
+                .expect("build async proxy test client");
 
         let response = client
             .get("http://example.test/probe?token=secret")
             .send()
+            .await
             .expect("proxy request succeeds");
 
         let request = rx.recv().expect("proxy recorded request");
@@ -132,19 +110,6 @@ mod tests {
         assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
         assert!(request.starts_with("GET http://example.test/probe?token=secret HTTP/1.1"));
         assert_eq!(context.proxy_url_redacted, proxy_url);
-    }
-
-    #[test]
-    fn blocking_builder_preserves_socks5h_scheme() {
-        let (_, context) = build_blocking_proxy_test_client(
-            "socks5h://user:pass@example.com:1080",
-            ProxyTestRedirectPolicy::None,
-            false,
-        )
-        .expect("build socks5h proxy client");
-
-        assert_eq!(context.parsed_proxy_url.scheme(), "socks5h");
-        assert_eq!(context.proxy_url_redacted, "socks5h://example.com:1080");
     }
 
     #[test]

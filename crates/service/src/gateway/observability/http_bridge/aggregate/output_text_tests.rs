@@ -219,6 +219,27 @@ fn bridge_error_message_reports_stream_incomplete_in_chinese() {
 }
 
 #[test]
+fn completed_stream_with_trailing_client_disconnect_remains_client_cancelled() {
+    let bridge = UpstreamResponseBridgeResult {
+        stream_terminal_seen: true,
+        stream_terminal_delivered: true,
+        delivery_error: Some("broken pipe: downstream HTTP body closed".to_string()),
+        ..UpstreamResponseBridgeResult::default()
+    };
+    assert!(!bridge.is_ok(true));
+}
+
+#[test]
+fn client_disconnect_before_terminal_event_remains_failed() {
+    let bridge = UpstreamResponseBridgeResult {
+        stream_terminal_seen: true,
+        delivery_error: Some("broken pipe: downstream HTTP body closed".to_string()),
+        ..UpstreamResponseBridgeResult::default()
+    };
+    assert!(!bridge.is_ok(true));
+}
+
+#[test]
 fn output_text_limit_defaults_to_unbounded_when_env_missing() {
     let _guard = crate::test_env_guard();
     let _env_guard = EnvGuard::clear("CODEXMANAGER_HTTP_BRIDGE_OUTPUT_TEXT_LIMIT_BYTES");

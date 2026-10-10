@@ -6,7 +6,7 @@ use super::super::attempt_flow::transport::UpstreamRequestContext;
 use super::CandidateUpstreamDecision;
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn execute<F>(
+pub(super) async fn execute<F>(
     storage: &Storage,
     method: &reqwest::Method,
     request_ctx: UpstreamRequestContext<'_>,
@@ -55,4 +55,5 @@ where
         has_more_candidates,
         log_gateway_result,
     )
+    .await
 }

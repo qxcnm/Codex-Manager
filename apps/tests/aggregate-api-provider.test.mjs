@@ -47,3 +47,12 @@ test("only compatible aggregate APIs require the incoming request path", () => {
   assert.equal(usesIncomingPath("codex"), false);
   assert.equal(usesIncomingPath("claude"), false);
 });
+
+test("aggregate API status filters match active and disabled connections", () => {
+  const matches = providerModule.aggregateApiStatusMatchesFilter;
+
+  assert.equal(matches("active", "all"), true);
+  assert.equal(matches("active", "active"), true);
+  assert.equal(matches("disabled", "active"), false);
+  assert.equal(matches(" DISABLED ", "disabled"), true);
+});

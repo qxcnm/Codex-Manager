@@ -1,6 +1,57 @@
 use super::super::support::deadline;
 use std::time::Instant;
 
+pub(in super::super) async fn acquire_request_gate_async(
+    trace_id: &str,
+    key_id: &str,
+    path: &str,
+    model_for_log: Option<&str>,
+    request_deadline: Option<Instant>,
+) -> Option<super::super::super::request_gate::RequestGateGuard> {
+    let lock = super::super::super::request_gate_lock(key_id, path, model_for_log);
+    super::super::super::trace_log::log_request_gate_wait(trace_id, key_id, path, model_for_log);
+    let started = Instant::now();
+    let timeout = match super::super::super::request_gate_wait_timeout() {
+        Some(timeout) => deadline::cap_wait(timeout, request_deadline),
+        None => deadline::remaining(request_deadline),
+    };
+    let wait = async {
+        if let Some(guard) = lock.try_acquire()? {
+            return Ok(Some(guard));
+        }
+        match timeout {
+            Some(timeout) => tokio::time::timeout(timeout, lock.acquire_async())
+                .await
+                .map_or(Ok(None), |result| result.map(Some)),
+            None if deadline::is_expired(request_deadline) => Ok(None),
+            None => lock.acquire_async().await.map(Some),
+        }
+    };
+    let result = crate::http::gateway_request::with_response_cancellation(wait).await;
+    if let Ok(Ok(Some(guard))) = result {
+        super::super::super::trace_log::log_request_gate_acquired(
+            trace_id,
+            key_id,
+            path,
+            model_for_log,
+            started.elapsed().as_millis(),
+        );
+        return Some(guard);
+    }
+    let reason = match result {
+        Err(()) => "client_cancelled",
+        Ok(Err(_)) => "lock_poisoned",
+        _ if deadline::is_expired(request_deadline) => "total_timeout",
+        _ => "gate_wait_timeout",
+    };
+    super::super::super::trace_log::log_request_gate_skip(
+        trace_id,
+        reason,
+        started.elapsed().as_millis(),
+    );
+    None
+}
+
 /// 函数 `acquire_request_gate`
 ///
 /// 作者: gaohongshun
@@ -12,6 +63,7 @@ use std::time::Instant;
 ///
 /// # 返回
 /// 返回函数执行结果
+#[cfg(test)]
 pub(in super::super) fn acquire_request_gate(
     trace_id: &str,
     key_id: &str,

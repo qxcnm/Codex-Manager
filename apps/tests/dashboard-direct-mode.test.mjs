@@ -13,28 +13,48 @@ async function readSource(relativePath) {
   return fs.readFile(path.join(appsRoot, relativePath), "utf8");
 }
 
-test("账号直连模式在网关状态块内提示并遮罩用量分析", async () => {
+test("账号直连模式保留网关统计并明确数据口径", async () => {
   const source = await readDashboardSource();
   const gatewayStatusSource = await readSource("src/components/dashboard/dashboard-gateway-status.tsx");
   assert.match(source, /useCodexProfileModeStatus/);
-  assert.match(source, /function DirectModeUnavailable/);
-  assert.match(source, /账号直连模式下不可用/);
-  assert.match(source, /切换到本地网关后可统计请求日志、Token 和费用/);
-  assert.match(source, /buildStaticRouteUrl\("\/platform-mode"\)/);
-  assert.match(gatewayStatusSource, /当前为账号直连模式/);
-  assert.match(gatewayStatusSource, /CodexManager 无法统计 CLI 请求日志和用量。/);
+  assert.doesNotMatch(source, /function DirectModeUnavailable/);
+  assert.doesNotMatch(source, /账号直连模式下不可用/);
+  assert.match(source, /<AdminUsageAnalyticsCard/);
+  assert.match(gatewayStatusSource, /const title = connected \? t\("网关运行正常"\)/);
   assert.match(
-    source,
-    /<DirectModeUnavailable active=\{isDirectAccountMode\}>\s*<AdminUsageAnalyticsCard/s,
+    gatewayStatusSource,
+    /本机 Codex 的直连请求不会经过网关；下方仍展示 CodexManager 已记录的网关流量。/,
   );
+  assert.match(gatewayStatusSource, /const actionHref = "\/logs"/);
+  assert.match(gatewayStatusSource, /connected\s*\? "border-emerald-500 text-emerald-600"/);
   assert.doesNotMatch(source, /当前活跃账号/);
   assert.doesNotMatch(source, /智能推荐/);
 });
 
 test("日志页 direct 模式只提示日志口径不遮罩历史日志", async () => {
   const source = await readSource("src/app/logs/page.tsx");
+  const sectionsSource = await readSource("src/app/logs/page-sections.tsx");
   assert.match(source, /useCodexProfileModeStatus/);
   assert.doesNotMatch(source, /DirectModeUnavailable/);
+  assert.match(sectionsSource, /本机 Codex 的账号直连请求不会写入此日志/);
+  assert.match(
+    sectionsSource,
+    /下方仍展示 CodexManager 已记录的网关请求，包括其他客户端通过平台密钥产生的流量。/,
+  );
+  assert.doesNotMatch(sectionsSource, /这里仅展示历史网关请求/);
+  assert.doesNotMatch(sectionsSource, /如需记录请求，请切换到本地网关模式/);
+});
+
+test("账号直连说明不再宣称整个仪表盘不可用", async () => {
+  const platformModeSource = await readSource("src/app/platform-mode/page-sections.tsx");
+  const onboardingSource = await readSource(
+    "src/components/layout/codex-cli-onboarding-dialog.tsx",
+  );
+
+  for (const source of [platformModeSource, onboardingSource]) {
+    assert.match(source, /仪表盘仍会展示已记录的其他网关流量/);
+    assert.doesNotMatch(source, /仪表盘用量统计不可用/);
+  }
 });
 
 test("启动快照只预取轻量日志样本", async () => {

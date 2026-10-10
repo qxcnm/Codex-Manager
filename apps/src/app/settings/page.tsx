@@ -77,6 +77,7 @@ import {
 } from "@/app/settings/components/general-tab-cards";
 import { GeneralBasicsCard } from "@/app/settings/components/general-basics-card";
 import { DesktopDiagnosticsCard } from "@/app/settings/components/desktop-diagnostics-card";
+import { StorageSpaceCard } from "@/app/settings/components/storage-space-card";
 import { TasksTabContent } from "@/app/settings/components/tasks-tab-content";
 import {
   CUSTOM_WORKER_MODE_VALUE,
@@ -156,7 +157,7 @@ import {
   });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       <div>
         <h2 className="text-xl font-bold tracking-tight">{t("个人设置")}</h2>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -1356,9 +1357,9 @@ function AdminSettingsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex w-full max-w-[1120px] flex-col gap-3">
       <div>
-        <h2 className="text-xl font-bold tracking-tight">{t("系统设置")}</h2>
+        <h2 className="text-xl font-semibold">{t("系统设置")}</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           {t("管理应用行为、网关策略及后台任务")}
         </p>
@@ -1373,27 +1374,25 @@ function AdminSettingsPage() {
         }}
         className="w-full"
       >
-        <TabsList className="glass-card mission-panel mb-6 grid h-auto w-full grid-cols-3 gap-1 rounded-lg p-1 lg:flex lg:h-11 lg:w-fit lg:gap-0">
-          <TabsTrigger value="general" className="min-w-0 gap-1 px-2 sm:gap-2 sm:px-4 lg:px-5">
+        <TabsList variant="line" className="mb-3 flex h-10 w-full justify-start gap-1 overflow-x-auto rounded-none border-b border-border/60 p-0 no-scrollbar">
+          <TabsTrigger value="general" className="h-10 shrink-0 rounded-none border-b-2 px-3 data-active:border-primary data-active:bg-transparent data-active:shadow-none">
             <SettingsIcon className="h-4 w-4" /> {t("通用")}
           </TabsTrigger>
-          <TabsTrigger value="appearance" className="min-w-0 gap-1 px-2 sm:gap-2 sm:px-4 lg:px-5">
+          <TabsTrigger value="appearance" className="h-10 shrink-0 rounded-none border-b-2 px-3 data-active:border-primary data-active:bg-transparent data-active:shadow-none">
             <Palette className="h-4 w-4" /> {t("外观")}
           </TabsTrigger>
-          <TabsTrigger value="gateway" className="min-w-0 gap-1 px-2 sm:gap-2 sm:px-4 lg:px-5">
+          <TabsTrigger value="gateway" className="h-10 shrink-0 rounded-none border-b-2 px-3 data-active:border-primary data-active:bg-transparent data-active:shadow-none">
             <Globe className="h-4 w-4" /> {t("网关")}
           </TabsTrigger>
-          <TabsTrigger value="tasks" className="min-w-0 gap-1 px-2 sm:gap-2 sm:px-4 lg:px-5">
+          <TabsTrigger value="tasks" className="h-10 shrink-0 rounded-none border-b-2 px-3 data-active:border-primary data-active:bg-transparent data-active:shadow-none">
             <Cpu className="h-4 w-4" /> {t("任务")}
           </TabsTrigger>
-          <TabsTrigger value="env" className="min-w-0 gap-1 px-2 sm:gap-2 sm:px-4 lg:px-5">
+          <TabsTrigger value="env" className="h-10 shrink-0 rounded-none border-b-2 px-3 data-active:border-primary data-active:bg-transparent data-active:shadow-none">
             <Variable className="h-4 w-4" /> {t("环境")}
           </TabsTrigger>
         </TabsList>
 
         <TabsContent value="general" className="space-y-6">
-          <AboutCodexManagerCard t={t} />
-
           <GeneralBasicsCard
             t={t}
             updateActionLabel={updateActionLabel}
@@ -1416,7 +1415,9 @@ function AdminSettingsPage() {
             canCloseToTray={canCloseToTray}
             updateSettings={updateSettings}
           />
-          {isDesktopRuntime ? <DesktopDiagnosticsCard t={t} /> : null}
+          {isDesktopRuntime ? (
+            <DesktopDiagnosticsCard t={t} active={isPageActive} />
+          ) : null}
           <ServiceListenCard
             t={t}
             snapshot={snapshot}
@@ -1431,6 +1432,8 @@ function AdminSettingsPage() {
             webAuthModeLabel={webAuthModeLabel}
             onOpen={() => setWebPasswordModalOpen(true)}
           />
+
+          <AboutCodexManagerCard t={t} />
         </TabsContent>
 
         <TabsContent value="appearance" className="space-y-6">
@@ -1475,6 +1478,9 @@ function AdminSettingsPage() {
             upstreamProxyBypassDraft={upstreamProxyBypassDraft}
             setUpstreamProxyBypassDraft={setUpstreamProxyBypassDraft}
           />
+          {canAccessManagementRpc ? (
+            <StorageSpaceCard t={t} active={isPageActive} />
+          ) : null}
         </TabsContent>
 
         <TabsContent value="tasks" className="space-y-4">

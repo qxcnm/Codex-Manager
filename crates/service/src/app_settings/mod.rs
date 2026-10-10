@@ -6,6 +6,7 @@ mod runtime_sync;
 mod service;
 mod shared;
 mod store;
+pub(crate) use store::remote_settings as initialize_remote_settings;
 mod ui;
 
 pub use api::{
@@ -16,7 +17,6 @@ pub(crate) use env_overrides::{
     apply_env_overrides_to_process, persisted_env_overrides_missing_process_env,
     reload_runtime_after_env_override_apply,
 };
-pub(crate) use gateway::sync_gateway_user_agent_version_from_codex_latest;
 pub(crate) use gateway::QuotaGuardInput;
 #[allow(unused_imports)]
 pub use gateway::{
@@ -39,6 +39,9 @@ pub use gateway::{
     set_gateway_upstream_proxy_bypass_hosts, set_gateway_upstream_proxy_url,
     set_gateway_upstream_stream_timeout_ms, set_gateway_upstream_total_timeout_ms,
     set_gateway_user_agent, set_gateway_user_agent_version, BackgroundTasksInput,
+};
+pub(crate) use gateway::{
+    fetch_codex_latest_version_async, sync_gateway_user_agent_version_from_codex_latest_async,
 };
 pub use runtime_sync::sync_runtime_settings_from_storage;
 pub use service::{

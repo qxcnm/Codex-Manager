@@ -103,6 +103,7 @@ pub(crate) enum LowQuotaCandidateMode {
 pub(crate) fn collect_gateway_candidates(
     storage: &Storage,
 ) -> Result<Vec<(Account, Token)>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     collect_gateway_candidates_with_low_quota_mode(storage, LowQuotaCandidateMode::NormalOnly)
 }
 
@@ -110,6 +111,7 @@ pub(crate) fn collect_gateway_candidates_with_low_quota_mode(
     storage: &Storage,
     low_quota_mode: LowQuotaCandidateMode,
 ) -> Result<Vec<(Account, Token)>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     if let Some(cached) = read_candidate_cache(low_quota_mode) {
         return Ok(cached);
     }
@@ -124,6 +126,7 @@ pub(crate) fn collect_gateway_candidates_for_account_ids_with_low_quota_mode(
     account_ids: &[String],
     low_quota_mode: LowQuotaCandidateMode,
 ) -> Result<Vec<(Account, Token)>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     // Restricted pools deliberately bypass the global snapshot cache. The quota guard must be
     // evaluated inside the authorized pool so an unrelated account cannot suppress its fallback.
     collect_gateway_candidates_uncached(storage, low_quota_mode, Some(account_ids))
@@ -145,6 +148,7 @@ fn collect_gateway_candidates_uncached(
     low_quota_mode: LowQuotaCandidateMode,
     account_ids: Option<&[String]>,
 ) -> Result<Vec<(Account, Token)>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     // 选择可用账号作为网关上游候选
     let candidates = match account_ids {
         Some(account_ids) => storage.list_gateway_candidates_for_accounts(account_ids),
@@ -179,6 +183,7 @@ fn apply_quota_guard(
     candidates: &mut Vec<(Account, Token)>,
     low_quota_mode: LowQuotaCandidateMode,
 ) {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     if candidates.is_empty() {
         return;
     }
@@ -224,6 +229,7 @@ fn load_low_quota_account_ids(
     account_ids: &[String],
     config: QuotaGuardConfig,
 ) -> std::collections::HashSet<String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     storage
         .low_quota_account_ids_for_accounts(
             account_ids,
@@ -479,6 +485,7 @@ fn current_db_path() -> String {
 /// # 返回
 /// 无
 fn log_no_candidates(storage: &Storage) {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let account_count = storage.account_count().unwrap_or_default();
     let token_account_count = storage.token_account_count().unwrap_or_default();
     let snapshot_count = storage.usage_snapshot_count().unwrap_or_default();

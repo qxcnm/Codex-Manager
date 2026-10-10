@@ -190,3 +190,87 @@ fn builtin_market_never_uses_custom_source() {
         ""
     );
 }
+
+#[test]
+fn native_catalog_download_install_update_and_script_run_persist_results() {
+    let _guard = crate::test_env_guard();
+    struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            for (key, value) in &self.0 {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+    let _restore = Restore(
+        [
+            "CODEXMANAGER_DB_PATH",
+            "CODEXMANAGER_STORAGE_BACKEND",
+            "CODEXMANAGER_DATABASE_URL",
+        ]
+        .into_iter()
+        .map(|key| (key, std::env::var_os(key)))
+        .collect(),
+    );
+    let path = std::env::temp_dir().join(format!("plugin-native-{}.sqlite", rand::random::<u64>()));
+    std::env::set_var("CODEXMANAGER_DB_PATH", &path);
+    std::env::set_var("CODEXMANAGER_STORAGE_BACKEND", "sqlite");
+    std::env::remove_var("CODEXMANAGER_DATABASE_URL");
+    crate::storage_helpers::initialize_storage().unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let version = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(1));
+        let catalog_hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let app = axum::Router::new().route("/catalog", axum::routing::get({
+            let base = base.clone(); let version = version.clone(); let hits = catalog_hits.clone();
+            move || {
+                let base = base.clone();
+                let version = version.load(std::sync::atomic::Ordering::SeqCst);
+                hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async move { axum::Json(serde_json::json!({"items": [{
+                    "id": "native-plugin", "name": "Native plugin", "version": version.to_string(),
+                    "scriptUrl": format!("{base}/script"), "permissions": ["network"],
+                    "tasks": [{"id": "run", "name": "Run", "entrypoint": "run", "scheduleKind": "manual"}]
+                }]})) }
+            }
+        })).route("/script", axum::routing::get(|| async { "fn run(context) { #{ accepted: true } }" }));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let mut req = catalog_request(serde_json::json!({
+            "marketMode": "custom", "sourceUrl": format!("{base}/catalog"), "pluginId": "native-plugin"
+        }));
+        let catalog = super::handle_catalog_list_async(&req).await;
+        assert_eq!(catalog.result["items"][0]["version"], "1");
+        req.method = "plugin/install".to_string();
+        let installed = super::handle_install_async(&req, false).await;
+        assert_eq!(installed.result["plugin"]["version"], "1");
+        version.store(2, std::sync::atomic::Ordering::SeqCst);
+        req.method = "plugin/update".to_string();
+        let updated = super::handle_install_async(&req, true).await;
+        assert_eq!(updated.result["plugin"]["version"], "2");
+        assert_eq!(catalog_hits.load(std::sync::atomic::Ordering::SeqCst), 3);
+        req.method = "plugin/tasks/run".to_string();
+        req.params = Some(serde_json::json!({"taskId": "native-plugin::run"}));
+        let ran = super::super::runtime::handle_task_run_async(&req).await;
+        assert_eq!(ran.result["output"]["accepted"], true);
+        server.abort();
+    });
+    let storage = crate::storage_helpers::open_storage().unwrap();
+    let plugin = storage
+        .find_plugin_install("native-plugin")
+        .unwrap()
+        .unwrap();
+    assert_eq!(plugin.version, "2");
+    let task = storage
+        .find_plugin_task("native-plugin::run")
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.last_status.as_deref(), Some("ok"));
+}

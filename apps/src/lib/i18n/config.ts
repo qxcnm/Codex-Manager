@@ -3,8 +3,11 @@
 export const SUPPORTED_LOCALES = ["zh-CN", "en", "ru", "ko"] as const;
 
 export type AppLocale = (typeof SUPPORTED_LOCALES)[number];
+export const LOCALE_PREFERENCES = ["auto", ...SUPPORTED_LOCALES] as const;
+export type AppLocalePreference = (typeof LOCALE_PREFERENCES)[number];
+export const DEFAULT_LOCALE_PREFERENCE: AppLocalePreference = "auto";
 
-export const DEFAULT_LOCALE: AppLocale = "zh-CN";
+export const DEFAULT_LOCALE: AppLocale = "en";
 
 export const LOCALE_LABELS: Record<AppLocale, string> = {
   "zh-CN": "简体中文",
@@ -13,28 +16,38 @@ export const LOCALE_LABELS: Record<AppLocale, string> = {
   ko: "한국어",
 };
 
-export function normalizeLocale(value: unknown): AppLocale {
-  const normalized = String(value || "")
+function localeLanguage(value: unknown): string {
+  return String(value || "")
     .trim()
-    .toLowerCase();
+    .toLowerCase()
+    .split(/[-_.@]/)[0];
+}
 
-  switch (normalized) {
+export function normalizeLocale(value: unknown): AppLocale {
+  switch (localeLanguage(value)) {
     case "zh":
-    case "zh-cn":
-    case "zh_hans":
-    case "zh-hans":
       return "zh-CN";
     case "en":
-    case "en-us":
-    case "en-gb":
       return "en";
     case "ru":
-    case "ru-ru":
       return "ru";
     case "ko":
-    case "ko-kr":
       return "ko";
     default:
       return DEFAULT_LOCALE;
   }
+}
+
+export function normalizeLocalePreference(value: unknown): AppLocalePreference {
+  const language = localeLanguage(value);
+  return ["zh", "en", "ru", "ko"].includes(language)
+    ? normalizeLocale(value)
+    : DEFAULT_LOCALE_PREFERENCE;
+}
+
+export function resolveLocale(
+  preference: AppLocalePreference,
+  systemLocale: unknown,
+): AppLocale {
+  return preference === "auto" ? normalizeLocale(systemLocale) : preference;
 }

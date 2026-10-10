@@ -172,11 +172,13 @@ test("Codex CLI guide keeps its panels and footer from overlapping", async ({
     .getByRole("heading", { name: "基础步骤" })
     .locator("xpath=ancestor::section[1]");
   const configPanel = dialog
-    .getByRole("heading", { name: "基础配置示例" })
+    .getByRole("heading", { name: "Codex 接入方式" })
     .locator("xpath=ancestor::section[1]");
   const scrollArea = dialog.getByTestId("codex-guide-scroll");
   const footer = dialog.locator('[data-slot="dialog-footer"]');
-  const stepTitles = dialog.getByTestId("codex-guide-step-title");
+  const stepTitles = dialog
+    .locator("button")
+    .filter({ hasText: /第一步|第二步|第三步/ });
 
   await expect(stepTitles).toHaveCount(3);
   const titleOverflow = await stepTitles.evaluateAll((titles) =>

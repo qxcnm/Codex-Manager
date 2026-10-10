@@ -478,22 +478,16 @@ mod tests {
             backup_path.file_name().and_then(|value| value.to_str()),
             Some("codexmanager.db.pre-0.5.1.bak")
         );
+        let backup_contents = std::fs::read(&backup_path).expect("read backup");
 
-        let backup_modified = std::fs::metadata(&backup_path)
-            .expect("backup metadata")
-            .modified()
-            .expect("backup modified time");
         std::fs::write(&db_path, b"replaced after backup").expect("replace source db");
         let second_path = create_pre_migration_backup(&db_path, "0.5.1")
             .expect("reuse backup")
             .expect("backup path");
         assert_eq!(second_path, backup_path);
         assert_eq!(
-            std::fs::metadata(&backup_path)
-                .expect("backup metadata")
-                .modified()
-                .expect("backup modified time"),
-            backup_modified
+            std::fs::read(&backup_path).expect("read backup again"),
+            backup_contents
         );
 
         let backup_storage = Storage::open(&backup_path).expect("open backup");

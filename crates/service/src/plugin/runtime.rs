@@ -13,21 +13,24 @@ use std::time::Duration;
 use crate::account_cleanup::{delete_banned_accounts, delete_unavailable_free_accounts};
 use crate::storage_helpers::open_storage;
 
-static PLUGIN_HTTP_CLIENT: OnceLock<Mutex<Option<reqwest::blocking::Client>>> = OnceLock::new();
+static PLUGIN_HTTP_CLIENT: OnceLock<Mutex<Option<reqwest::Client>>> = OnceLock::new();
+static PLUGIN_SCRIPT_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(8);
+static PLUGIN_TASK_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(8);
+static PLUGIN_STORAGE_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(16);
 #[cfg(test)]
 static PLUGIN_HTTP_CLIENT_BUILD_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-fn build_plugin_http_client() -> Result<reqwest::blocking::Client, String> {
+fn build_plugin_http_client() -> Result<reqwest::Client, String> {
     #[cfg(test)]
     PLUGIN_HTTP_CLIENT_BUILD_COUNT.fetch_add(1, Ordering::SeqCst);
 
-    reqwest::blocking::Client::builder()
+    reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|err| format!("build http client failed: {err}"))
 }
 
-fn plugin_http_client() -> Result<reqwest::blocking::Client, String> {
+fn plugin_http_client() -> Result<reqwest::Client, String> {
     let lock = PLUGIN_HTTP_CLIENT.get_or_init(|| Mutex::new(None));
     let mut cached = crate::lock_utils::lock_recover(lock, "plugin_http_client");
     if let Some(client) = cached.as_ref() {
@@ -36,6 +39,53 @@ fn plugin_http_client() -> Result<reqwest::blocking::Client, String> {
     let client = build_plugin_http_client()?;
     *cached = Some(client.clone());
     Ok(client)
+}
+
+/// The Rhai host ABI and legacy synchronous RPC callers execute on controlled
+/// workers. Their network futures share one runtime instead of a blocking HTTP
+/// client or a runtime/thread created for every request.
+pub(super) fn run_network_future<T: Send>(
+    future: impl std::future::Future<Output = Result<T, String>> + Send,
+) -> Result<T, String> {
+    crate::runtime::service_runtime::run_sync(future)?
+}
+
+/// Only short synchronous storage phases cross this boundary. Network waits
+/// in catalog/install run directly on the caller's async task.
+pub(super) async fn run_storage<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let permit = PLUGIN_STORAGE_WORKERS
+        .acquire()
+        .await
+        .map_err(|_| "plugin storage unavailable".to_string())?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work()
+    })
+    .await
+    .map_err(|error| format!("plugin storage worker failed: {error}"))?
+}
+
+pub(super) async fn handle_task_run_async(req: &JsonRpcRequest) -> JsonRpcResponse {
+    let Ok(permit) = PLUGIN_TASK_WORKERS.try_acquire() else {
+        return super::json_response(
+            req,
+            crate::error_codes::rpc_error_payload("plugin script execution busy".to_string()),
+        );
+    };
+    let request = req.clone();
+    let result = crate::runtime::blocking::run("plugin-script", move || {
+        let _permit = permit;
+        handle_task_run(&request)
+    })
+    .await;
+    result.unwrap_or_else(|error| {
+        super::json_response(
+            req,
+            crate::error_codes::rpc_error_payload(format!("plugin script worker failed: {error}")),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -107,6 +157,7 @@ pub(crate) fn handle_task_run(req: &JsonRpcRequest) -> JsonRpcResponse {
 /// 返回函数执行结果
 pub(crate) fn run_plugin_task(task_id: &str, input: Option<Value>) -> Result<Value, String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     let Some(task) = storage
         .find_plugin_task(task_id)
         .map_err(|err| err.to_string())?
@@ -121,6 +172,7 @@ pub(super) fn run_loaded_plugin_task(
     task: PluginTaskExecutionRow,
     input: Option<Value>,
 ) -> Result<Value, String> {
+    let storage = crate::account::remote_storage::AccountStorage::new(storage);
     let Some(plugin) = storage
         .find_plugin_runtime_install(&task.plugin_id)
         .map_err(|err| err.to_string())?
@@ -191,11 +243,12 @@ pub(super) fn run_loaded_plugin_task(
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(crate) fn fetch_text(url: &str) -> Result<String, String> {
+pub(crate) async fn fetch_text(url: &str) -> Result<String, String> {
     let client = plugin_http_client()?;
     let response = client
         .get(url)
         .send()
+        .await
         .map_err(|err| format!("fetch {url} failed: {err}"))?;
     if !response.status().is_success() {
         return Err(format!(
@@ -205,6 +258,7 @@ pub(crate) fn fetch_text(url: &str) -> Result<String, String> {
     }
     response
         .text()
+        .await
         .map_err(|err| format!("read {url} response failed: {err}"))
 }
 
@@ -230,6 +284,9 @@ fn execute_plugin_script(
     permissions: &HashSet<String>,
     run_started_at: i64,
 ) -> Result<Value, String> {
+    let _permit = PLUGIN_SCRIPT_WORKERS
+        .try_acquire()
+        .map_err(|_| "plugin script execution busy".to_string())?;
     let mut engine = Engine::new();
     engine.set_max_operations(50_000);
     engine.on_print(|text| {
@@ -336,6 +393,14 @@ fn execute_plugin_script(
 /// # 返回
 /// 返回函数执行结果
 fn fetch_http_value(method: &str, url: &str, body: Option<String>) -> Result<Value, String> {
+    run_network_future(fetch_http_value_async(method, url, body))
+}
+
+async fn fetch_http_value_async(
+    method: &str,
+    url: &str,
+    body: Option<String>,
+) -> Result<Value, String> {
     let client = plugin_http_client()?;
     let request = match method {
         "POST" => client.post(url),
@@ -348,10 +413,12 @@ fn fetch_http_value(method: &str, url: &str, body: Option<String>) -> Result<Val
     };
     let response = request
         .send()
+        .await
         .map_err(|err| format!("http {method} {url} failed: {err}"))?;
     let status = response.status().as_u16();
     let body_text = response
         .text()
+        .await
         .map_err(|err| format!("read {url} response failed: {err}"))?;
     Ok(json!({
         "ok": true,

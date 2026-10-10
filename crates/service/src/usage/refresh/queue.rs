@@ -1,133 +1,131 @@
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use futures_util::FutureExt;
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::Ordering;
-use std::sync::{Mutex, OnceLock};
-use std::thread;
+#[cfg(test)]
+use std::sync::mpsc as std_mpsc;
+use std::sync::{Arc, Mutex, OnceLock};
+use tokio::sync::{mpsc, Mutex as AsyncMutex};
 
 use super::{ensure_background_tasks_config_loaded, USAGE_REFRESH_WORKERS};
 
+const USAGE_REFRESH_QUEUE_CAPACITY: usize = 1024;
 static PENDING_USAGE_REFRESH_TASKS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-static USAGE_REFRESH_EXECUTOR: OnceLock<UsageRefreshExecutor> = OnceLock::new();
+static USAGE_REFRESH_EXECUTOR: Mutex<Option<UsageRefreshExecutor>> = Mutex::new(None);
 
-/// 函数 `enqueue_usage_refresh_with_worker`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - crate: 参数 crate
-///
-/// # 返回
-/// 返回函数执行结果
-pub(crate) fn enqueue_usage_refresh_with_worker<F>(account_id: &str, worker: F) -> bool
+type UsageRefreshFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+
+pub(super) fn enqueue_usage_refresh_async<F, Fut>(account_id: &str, worker: F) -> bool
 where
-    F: FnOnce(String) + Send + 'static,
+    F: FnOnce(String) -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
 {
     let id = account_id.trim();
-    if id.is_empty() {
-        return false;
-    }
-    if !mark_usage_refresh_task_pending(id) {
+    if crate::shutdown_requested() || id.is_empty() || !mark_usage_refresh_task_pending(id) {
         return false;
     }
     let task = UsageRefreshTask {
         account_id: id.to_string(),
-        worker: Box::new(worker),
+        worker: Box::new(move |id| Box::pin(worker(id))),
     };
-    if usage_refresh_executor().sender.send(task).is_err() {
+    let sent = {
+        let mut slot =
+            crate::lock_utils::lock_recover(&USAGE_REFRESH_EXECUTOR, "usage_refresh_executor");
+        if slot
+            .as_ref()
+            .is_none_or(|executor| executor.sender.is_closed())
+        {
+            *slot = UsageRefreshExecutor::new().ok();
+        }
+        slot.as_ref()
+            .is_some_and(|executor| executor.sender.try_send(task).is_ok())
+    };
+    if !sent {
         clear_usage_refresh_task_pending(id);
-        return false;
     }
-    true
+    sent
+}
+
+// Existing queue behavior tests use deliberately blocking callbacks. Production
+// callbacks return futures, so socket waits never occupy a blocking worker.
+#[cfg(test)]
+pub(crate) fn enqueue_usage_refresh_with_worker<F>(account_id: &str, worker: F) -> bool
+where
+    F: FnOnce(String) + Send + 'static,
+{
+    enqueue_usage_refresh_async(account_id, move |id| async move {
+        let _ = tokio::task::spawn_blocking(move || worker(id)).await;
+    })
 }
 
 struct UsageRefreshTask {
     account_id: String,
-    worker: Box<dyn FnOnce(String) + Send + 'static>,
+    worker: Box<dyn FnOnce(String) -> UsageRefreshFuture + Send + 'static>,
 }
 
 struct UsageRefreshExecutor {
-    sender: Sender<UsageRefreshTask>,
+    sender: mpsc::Sender<UsageRefreshTask>,
+    #[cfg(test)]
+    worker_count: usize,
+    #[cfg(test)]
+    worker_finished: std_mpsc::Receiver<()>,
 }
 
 impl UsageRefreshExecutor {
-    /// 函数 `new`
-    ///
-    /// 作者: gaohongshun
-    ///
-    /// 时间: 2026-04-02
-    ///
-    /// # 参数
-    /// 无
-    ///
-    /// # 返回
-    /// 返回函数执行结果
-    fn new() -> Self {
-        let worker_count = usage_refresh_worker_count();
-        let (sender, receiver) = unbounded::<UsageRefreshTask>();
-        for index in 0..worker_count {
-            let receiver = receiver.clone();
-            let _ = thread::Builder::new()
-                .name(format!("usage-refresh-worker-{index}"))
-                .spawn(move || usage_refresh_worker_loop(receiver));
+    fn new() -> Result<Self, String> {
+        ensure_background_tasks_config_loaded();
+        let worker_count = USAGE_REFRESH_WORKERS.load(Ordering::Relaxed).max(1);
+        let (sender, receiver) = mpsc::channel::<UsageRefreshTask>(USAGE_REFRESH_QUEUE_CAPACITY);
+        let receiver = Arc::new(AsyncMutex::new(receiver));
+        #[cfg(test)]
+        let (worker_finished_tx, worker_finished) = std_mpsc::channel();
+        for _ in 0..worker_count {
+            let receiver = Arc::clone(&receiver);
+            #[cfg(test)]
+            let worker_finished_tx = worker_finished_tx.clone();
+            super::background::spawn(async move {
+                loop {
+                    let task = tokio::select! {
+                        biased;
+                        _ = super::runner::wait_for_shutdown() => break,
+                        task = async { receiver.lock().await.recv().await } => match task {
+                            Some(task) => task,
+                            None => break,
+                        },
+                    };
+                    let _guard = PendingGuard(task.account_id.clone());
+                    let future = async move { (task.worker)(task.account_id).await };
+                    tokio::select! {
+                        biased;
+                        _ = super::runner::wait_for_shutdown() => break,
+                        _ = std::panic::AssertUnwindSafe(future).catch_unwind() => {},
+                    }
+                }
+                // Shutdown releases queued deduplication entries too.
+                let mut receiver = receiver.lock().await;
+                while let Ok(task) = receiver.try_recv() {
+                    clear_usage_refresh_task_pending(&task.account_id);
+                }
+                #[cfg(test)]
+                let _ = worker_finished_tx.send(());
+            })?;
         }
-        Self { sender }
+        Ok(Self {
+            sender,
+            #[cfg(test)]
+            worker_count,
+            #[cfg(test)]
+            worker_finished,
+        })
     }
 }
 
-/// 函数 `usage_refresh_executor`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// 无
-///
-/// # 返回
-/// 返回函数执行结果
-fn usage_refresh_executor() -> &'static UsageRefreshExecutor {
-    USAGE_REFRESH_EXECUTOR.get_or_init(UsageRefreshExecutor::new)
-}
-
-/// 函数 `usage_refresh_worker_loop`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - receiver: 参数 receiver
-///
-/// # 返回
-/// 无
-fn usage_refresh_worker_loop(receiver: Receiver<UsageRefreshTask>) {
-    while let Ok(task) = receiver.recv() {
-        let UsageRefreshTask { account_id, worker } = task;
-        let account_id_for_clear = account_id.clone();
-        // worker 若 panic 需要强制清理 pending，避免该账号后续刷新被永久去重。
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            worker(account_id);
-        }));
-        clear_usage_refresh_task_pending(&account_id_for_clear);
+struct PendingGuard(String);
+impl Drop for PendingGuard {
+    fn drop(&mut self) {
+        clear_usage_refresh_task_pending(&self.0);
     }
-}
-
-/// 函数 `usage_refresh_worker_count`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// 无
-///
-/// # 返回
-/// 返回函数执行结果
-fn usage_refresh_worker_count() -> usize {
-    ensure_background_tasks_config_loaded();
-    USAGE_REFRESH_WORKERS.load(Ordering::Relaxed).max(1)
 }
 
 /// 函数 `mark_usage_refresh_task_pending`
@@ -166,7 +164,7 @@ fn clear_usage_refresh_task_pending(account_id: &str) {
     pending.remove(account_id);
 }
 
-/// 函数 `clear_pending_usage_refresh_tasks_for_tests`
+/// 函数 `reset_usage_refresh_executor_for_tests`
 ///
 /// 作者: gaohongshun
 ///
@@ -178,9 +176,27 @@ fn clear_usage_refresh_task_pending(account_id: &str) {
 /// # 返回
 /// 无
 #[cfg(test)]
-pub(crate) fn clear_pending_usage_refresh_tasks_for_tests() {
+pub(crate) fn reset_usage_refresh_executor_for_tests() {
+    let executor = {
+        let mut slot =
+            crate::lock_utils::lock_recover(&USAGE_REFRESH_EXECUTOR, "usage_refresh_executor");
+        slot.take()
+    };
+    if let Some(executor) = executor {
+        drop(executor.sender);
+        for _ in 0..executor.worker_count {
+            executor
+                .worker_finished
+                .recv()
+                .expect("usage refresh worker exits after its queue is drained");
+        }
+    }
+
     if let Some(mutex) = PENDING_USAGE_REFRESH_TASKS.get() {
-        let mut pending = crate::lock_utils::lock_recover(mutex, "pending_usage_refresh_tasks");
-        pending.clear();
+        let pending = crate::lock_utils::lock_recover(mutex, "pending_usage_refresh_tasks");
+        assert!(
+            pending.is_empty(),
+            "usage refresh executor reset left pending accounts: {pending:?}"
+        );
     }
 }

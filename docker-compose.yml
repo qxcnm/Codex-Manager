@@ -4,6 +4,8 @@ services:
     image: registry.cn-hangzhou.aliyuncs.com/kilimiao/codex-manager:latest
     pull_policy: always
     restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     init: true
     # NAS Docker panels often create bind-mounted folders with host-only ownership
     # and do not expose chown/chmod controls. Run as root so /data stays writable.
@@ -30,3 +32,36 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     stop_grace_period: 20s
+
+  codexmanager-ota:
+    image: containrrr/watchtower:1.7.1
+    profiles:
+      - ota
+    restart: unless-stopped
+    command:
+      - --label-enable
+      - --interval
+      - "${CODEXMANAGER_OTA_INTERVAL:-300}"
+      - --monitor-only
+      - --cleanup
+      - --rolling-restart
+      - --stop-timeout
+      - 20s
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  codexmanager-ota-auto:
+    image: containrrr/watchtower:1.7.1
+    profiles:
+      - ota-auto
+    restart: unless-stopped
+    command:
+      - --label-enable
+      - --interval
+      - "${CODEXMANAGER_OTA_INTERVAL:-300}"
+      - --cleanup
+      - --rolling-restart
+      - --stop-timeout
+      - 20s
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro

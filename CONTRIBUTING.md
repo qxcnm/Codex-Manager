@@ -30,7 +30,7 @@ CodexManager 不是单一前端项目，也不是单一 Rust 服务项目。当�
 - `ARCHITECTURE.md`：结构边界与运行关系
 - `TESTING.md`：仓库级验证基线
 - `SECURITY.md`：安全问题与敏感信息处理规则
-- `docs/README.md`：治理文档目录与提交规则
+- `docs/zh-CN/README.md`：治理文档目录与提交规则
 
 ## 2. 开发环境
 

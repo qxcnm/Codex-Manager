@@ -10,7 +10,7 @@ export const ENV_DESCRIPTION_MAP: Record<string, string> = {
   CODEXMANAGER_CODEX_IMAGE_GENERATION_ENABLED:
     "控制 OpenAI Images 兼容入口是否启用；默认 1，填 0 会关闭 /v1/images/generations 和 /v1/images/edits。",
   CODEXMANAGER_CODEX_IMAGE_MAIN_MODEL:
-    "控制 Images API 兼容入口内部使用的 Codex 主模型；默认 gpt-5.4-mini。",
+    "控制 Images API 兼容入口内部使用的 Codex 主模型；默认 gpt-6-luna。",
   CODEXMANAGER_CODEX_IMAGE_TOOL_MODEL:
     "控制 Images API 兼容入口注入的图片工具模型；默认 gpt-image-2。",
   CODEXMANAGER_COMPACT_API_PATH:

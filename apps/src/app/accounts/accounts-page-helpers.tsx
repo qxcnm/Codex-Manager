@@ -216,82 +216,84 @@ function QuotaProgress({
   );
 }
 
-export function QuotaOverviewCell({ items }: { items: QuotaSummaryItem[] }) {
+export function QuotaOverviewCell({
+  items,
+  compact = false,
+}: {
+  items: QuotaSummaryItem[];
+  compact?: boolean;
+}) {
   const { t } = useI18n();
+  const visibleItems = compact ? items.slice(0, 2) : items;
 
   return (
     <Tooltip>
-      <TooltipTrigger render={<div />} className="block min-w-0 cursor-help">
-        <div className="rounded-xl border border-primary/5 bg-accent/10 px-3 py-2.5">
+      <TooltipTrigger render={<div />} className="account-pool-quota-trigger block min-w-0 cursor-help">
+        <div className="rounded-md border border-primary/5 bg-accent/10 px-2 py-1.5">
           <div className="account-pool-quota-grid">
-            {items.map((item) => (
-              <div
-                key={item.id}
-                className="account-pool-quota-item min-w-0 rounded-lg border border-border/40 bg-background/20 p-2"
-              >
-                <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-1 text-[11px] leading-4">
+            {visibleItems.map((item) => {
+              const resetTime = formatTsFromSeconds(
+                item.resetsAt,
+                item.emptyResetText ?? t("未知"),
+              );
+              const refreshLabel = item.resetsAt
+                ? `${formatRemainingDurationFromSeconds(
+                    item.resetsAt,
+                    item.resetDurationMode ??
+                      (item.id.endsWith("-primary") ? "hours" : "days"),
+                    item.emptyResetText ?? t("未知"),
+                  )}${t("后刷新")}`
+                : resetTime;
+              return (
+                <div
+                  key={item.id}
+                  className="account-pool-quota-item flex min-w-0 flex-col gap-1 rounded-md border border-border/40 bg-background/20 px-2 py-1.5"
+                >
+                  <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-1 text-[11px] leading-4">
+                    <span className="min-w-0 truncate text-muted-foreground" title={item.label}>
+                      {item.label}
+                    </span>
+                    <span className="shrink-0 whitespace-nowrap font-medium text-foreground/80">
+                      {item.remainPercent == null
+                        ? (item.emptyText ?? "--")
+                        : `${item.remainPercent}%`}
+                    </span>
+                  </div>
+                  <Progress
+                    value={item.remainPercent ?? 0}
+                    trackClassName={
+                      item.tone === "blue"
+                        ? "bg-blue-500/20"
+                        : item.tone === "amber"
+                          ? "bg-amber-500/20"
+                          : "bg-green-500/20"
+                    }
+                    indicatorClassName={
+                      item.tone === "blue"
+                        ? "bg-blue-500"
+                        : item.tone === "amber"
+                          ? "bg-amber-500"
+                          : "bg-green-500"
+                    }
+                  />
                   <span
-                    className={fitLongTextClassName(
-                      item.label,
-                      "min-w-0 break-words text-muted-foreground [overflow-wrap:anywhere]",
-                      "text-[11px]",
-                    )}
-                    title={item.label}
+                    className="min-w-0 truncate text-[10px] leading-4 text-muted-foreground"
+                    title={resetTime}
                   >
-                    {item.label}
-                  </span>
-                  <span className="shrink-0 whitespace-nowrap font-medium text-foreground/80">
-                    {item.remainPercent == null
-                      ? (item.emptyText ?? "--")
-                      : `${item.remainPercent}%`}
+                    {refreshLabel}
                   </span>
                 </div>
-                <Progress
-                  value={item.remainPercent ?? 0}
-                  trackClassName={
-                    item.tone === "blue"
-                      ? "bg-blue-500/20"
-                      : item.tone === "amber"
-                        ? "bg-amber-500/20"
-                        : "bg-green-500/20"
-                  }
-                  indicatorClassName={
-                    item.tone === "blue"
-                      ? "bg-blue-500"
-                      : item.tone === "amber"
-                        ? "bg-amber-500"
-                        : "bg-green-500"
-                  }
-                />
-                <div className="mt-1.5 space-y-0.5 text-[11px] text-muted-foreground">
-                  <span
-                    className={fitLongTextClassName(
-                      formatTsFromSeconds(
-                        item.resetsAt,
-                        item.emptyResetText ?? t("未知"),
-                      ),
-                      "block min-w-0 max-w-full break-all leading-tight [overflow-wrap:anywhere]",
-                      "text-[10px]",
-                    )}
-                  >
-                    {formatTsFromSeconds(
-                      item.resetsAt,
-                      item.emptyResetText ?? t("未知"),
-                    )}
-                  </span>
-                  <span className="block min-w-0 max-w-full break-words whitespace-normal leading-tight text-foreground/70 [overflow-wrap:anywhere]">
-                    {formatRemainingDurationFromSeconds(
-                      item.resetsAt,
-                      item.resetDurationMode ??
-                        (item.id.endsWith("-primary") ? "hours" : "days"),
-                      item.emptyResetText ?? t("未知"),
-                    )}
-                    {t("后刷新")}
-                  </span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
+          {compact && items.length > visibleItems.length ? (
+            <div
+              className="mt-1 text-right text-[10px] leading-4 text-muted-foreground"
+              title={t("额度详情（悬停查看所有额度）")}
+            >
+              {t("额度详情")} +{items.length - visibleItems.length}
+            </div>
+          ) : null}
         </div>
       </TooltipTrigger>
       <TooltipContent

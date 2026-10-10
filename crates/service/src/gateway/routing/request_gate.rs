@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
+#[cfg(test)]
 use std::time::Duration;
 
 use codexmanager_core::storage::now_ts;
@@ -33,6 +34,7 @@ struct RequestGateState {
 pub(crate) struct RequestGateLock {
     state: Mutex<RequestGateState>,
     available: Condvar,
+    async_available: tokio::sync::Notify,
 }
 
 impl RequestGateLock {
@@ -51,6 +53,7 @@ impl RequestGateLock {
         Self {
             state: Mutex::new(RequestGateState::default()),
             available: Condvar::new(),
+            async_available: tokio::sync::Notify::new(),
         }
     }
 
@@ -85,6 +88,23 @@ impl RequestGateLock {
         }))
     }
 
+    pub(crate) async fn acquire_async(
+        self: &Arc<Self>,
+    ) -> Result<RequestGateGuard, RequestGateAcquireError> {
+        loop {
+            // Register before checking the state so release cannot be lost
+            // between the check and the first poll of the notification.
+            let notified = self.async_available.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(guard) = self.try_acquire()? {
+                return Ok(guard);
+            }
+            notified.await;
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn acquire(self: &Arc<Self>) -> Result<RequestGateGuard, RequestGateAcquireError> {
         let state = match self.state.lock() {
             Ok(guard) => guard,
@@ -115,6 +135,7 @@ impl RequestGateLock {
     ///
     /// # 返回
     /// 返回函数执行结果
+    #[cfg(test)]
     pub(crate) fn acquire_with_timeout(
         self: &Arc<Self>,
         timeout: Duration,
@@ -170,6 +191,7 @@ impl Drop for RequestGateGuard {
         };
         state.held = false;
         self.lock.available.notify_one();
+        self.lock.async_available.notify_one();
     }
 }
 

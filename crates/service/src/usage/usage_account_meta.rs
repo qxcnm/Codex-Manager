@@ -106,6 +106,7 @@ pub(crate) fn resolve_workspace_id_for_account(
     storage: &Storage,
     account_id: &str,
 ) -> Option<String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     storage
         .find_account_workspace_identity_by_id(account_id)
         .ok()
@@ -178,6 +179,7 @@ pub(crate) fn patch_account_meta(
     chatgpt_account_id: Option<String>,
     workspace_id: Option<String>,
 ) {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let Ok(account) = storage.find_account_workspace_identity_by_id(account_id) else {
         return;
     };
@@ -213,6 +215,7 @@ pub(crate) fn patch_account_meta_cached(
     chatgpt_account_id: Option<String>,
     workspace_id: Option<String>,
 ) {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     if let Some(account) = accounts.get_mut(account_id) {
         if apply_account_meta_patch(account, chatgpt_account_id, workspace_id) {
             account.updated_at = now_ts();

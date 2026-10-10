@@ -6,16 +6,14 @@ use codexmanager_core::storage::{now_ts, Account, Storage, Token};
 
 use crate::account_status::mark_account_unavailable_for_auth_error;
 use crate::auth_tokens;
-use crate::usage_http::{
-    log_account_data_route, refresh_access_token, refresh_access_token_with_explicit_proxy,
-};
+use crate::usage_http::{log_account_data_route, refresh_access_token_async};
 
 const ACCOUNT_TOKEN_EXCHANGE_LOCK_TTL_SECS: i64 = 30 * 60;
 const ACCOUNT_TOKEN_EXCHANGE_LOCK_CLEANUP_INTERVAL_SECS: i64 = 60;
 const API_KEY_ACCESS_TOKEN_REFRESH_AHEAD_SECS: i64 = 60;
 
 struct AccountTokenExchangeLockEntry {
-    lock: Arc<Mutex<()>>,
+    lock: Arc<tokio::sync::Mutex<()>>,
     last_seen_at: i64,
 }
 
@@ -39,7 +37,7 @@ static ACCOUNT_TOKEN_EXCHANGE_LOCKS: OnceLock<Mutex<AccountTokenExchangeLockTabl
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(super) fn account_token_exchange_lock(account_id: &str) -> Arc<Mutex<()>> {
+pub(super) fn account_token_exchange_lock(account_id: &str) -> Arc<tokio::sync::Mutex<()>> {
     let lock = ACCOUNT_TOKEN_EXCHANGE_LOCKS
         .get_or_init(|| Mutex::new(AccountTokenExchangeLockTable::default()));
     let mut table = crate::lock_utils::lock_recover(lock, "account_token_exchange_locks");
@@ -49,7 +47,7 @@ pub(super) fn account_token_exchange_lock(account_id: &str) -> Arc<Mutex<()>> {
         .entries
         .entry(account_id.to_string())
         .or_insert_with(|| AccountTokenExchangeLockEntry {
-            lock: Arc::new(Mutex::new(())),
+            lock: Arc::new(tokio::sync::Mutex::new(())),
             last_seen_at: now,
         });
     entry.last_seen_at = now;
@@ -95,7 +93,7 @@ fn maybe_cleanup_exchange_locks(table: &mut AccountTokenExchangeLockTable, now: 
 /// # 返回
 /// 返回函数执行结果
 fn find_cached_api_key_access_token(storage: &Storage, account_id: &str) -> Option<String> {
-    storage
+    crate::account::remote_storage::AccountStorage::new(&storage)
         .find_token_by_account_id(account_id)
         .ok()?
         .and_then(|t| t.api_key_access_token)
@@ -133,7 +131,7 @@ fn access_token_expires_within(token: &str, ahead_secs: i64) -> bool {
 ///
 /// # 返回
 /// 返回函数执行结果
-fn exchange_and_persist_api_key_access_token(
+async fn exchange_and_persist_api_key_access_token(
     storage: &Storage,
     token: &mut Token,
     issuer: &str,
@@ -142,14 +140,38 @@ fn exchange_and_persist_api_key_access_token(
     let Some(subject_token) = api_key_exchange_subject_token(token) else {
         return Err("id_token is unavailable for API key token exchange".to_string());
     };
-    match auth_tokens::obtain_api_key(issuer, client_id, &subject_token) {
+    let expected = token.clone();
+    match auth_tokens::obtain_api_key_async(issuer, client_id, &subject_token).await {
         Ok(exchanged) => {
-            token.api_key_access_token = Some(exchanged.clone());
-            let _ = storage.insert_token(token);
-            Ok(exchanged)
+            let mut next = expected.clone();
+            next.api_key_access_token = Some(exchanged);
+            *token = persist_token_if_current(storage, &expected, &next)?;
+            token
+                .api_key_access_token
+                .as_deref()
+                .and_then(usable_api_key_access_token)
+                .ok_or_else(|| "account credentials changed during API token exchange".to_owned())
         }
         Err(err) => Err(err),
     }
+}
+
+fn persist_token_if_current(
+    storage: &Storage,
+    expected: &Token,
+    next: &Token,
+) -> Result<Token, String> {
+    let storage = crate::account::remote_storage::AccountStorage::new(storage);
+    if storage
+        .compare_and_swap_token(expected, next)
+        .map_err(|error| error.to_string())?
+    {
+        return Ok(next.clone());
+    }
+    storage
+        .find_token_by_account_id(&expected.account_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "account credentials disappeared during token exchange".to_owned())
 }
 
 fn api_key_exchange_subject_token(token: &Token) -> Option<String> {
@@ -223,7 +245,7 @@ fn should_mark_account_unavailable_after_refresh_failure_for_bearer_exchange(
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(super) fn resolve_openai_bearer_token(
+pub(super) async fn resolve_openai_bearer_token(
     storage: &Storage,
     account: &Account,
     token: &mut Token,
@@ -237,8 +259,7 @@ pub(super) fn resolve_openai_bearer_token(
     }
 
     let exchange_lock = account_token_exchange_lock(&account.id);
-    let _guard =
-        crate::lock_utils::lock_recover(exchange_lock.as_ref(), "account_token_exchange_lock");
+    let _guard = exchange_lock.lock().await;
 
     if let Some(existing) = token
         .api_key_access_token
@@ -263,7 +284,7 @@ pub(super) fn resolve_openai_bearer_token(
         account.issuer.clone()
     };
 
-    match exchange_and_persist_api_key_access_token(storage, token, &issuer, &client_id) {
+    match exchange_and_persist_api_key_access_token(storage, token, &issuer, &client_id).await {
         Ok(token) => return Ok(token),
         Err(exchange_err) => {
             if !token.refresh_token.trim().is_empty() {
@@ -276,17 +297,20 @@ pub(super) fn resolve_openai_bearer_token(
                     "refresh_token",
                     true,
                 );
+                let expected = token.clone();
                 let refresh_result = match &proxy_mode {
                     crate::account_proxy::AccountProxyMode::Disabled => {
-                        refresh_access_token(&issuer, &client_id, &token.refresh_token)
+                        refresh_access_token_async(&issuer, &client_id, &token.refresh_token, None)
+                            .await
                     }
                     crate::account_proxy::AccountProxyMode::Explicit { proxy_url, .. } => {
-                        refresh_access_token_with_explicit_proxy(
+                        refresh_access_token_async(
                             &issuer,
                             &client_id,
                             &token.refresh_token,
-                            proxy_url,
+                            Some(proxy_url),
                         )
+                        .await
                     }
                     crate::account_proxy::AccountProxyMode::Invalid { error, .. } => {
                         Err(error.clone())
@@ -294,14 +318,15 @@ pub(super) fn resolve_openai_bearer_token(
                 };
                 match refresh_result {
                     Ok(refreshed) => {
-                        token.access_token = refreshed.access_token;
+                        let mut next = expected.clone();
+                        next.access_token = refreshed.access_token;
                         if let Some(refresh_token) = refreshed.refresh_token {
-                            token.refresh_token = refresh_token;
+                            next.refresh_token = refresh_token;
                         }
                         if let Some(id_token) = refreshed.id_token {
-                            token.id_token = id_token;
+                            next.id_token = id_token;
                         }
-                        let _ = storage.insert_token(token);
+                        *token = persist_token_if_current(storage, &expected, &next)?;
 
                         if !token.id_token.trim().is_empty() {
                             let refreshed_client_id = api_key_exchange_client_id(token, &client_id);
@@ -310,7 +335,9 @@ pub(super) fn resolve_openai_bearer_token(
                                 token,
                                 &issuer,
                                 &refreshed_client_id,
-                            ) {
+                            )
+                            .await
+                            {
                                 return Ok(exchanged);
                             }
                         }

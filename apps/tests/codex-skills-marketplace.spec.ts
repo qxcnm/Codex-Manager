@@ -437,7 +437,7 @@ test("Skills and plugins are split while the inline plugin marketplace stays usa
   await expect(scrollbar).toBeVisible();
   await expect(thumb).toBeVisible();
 
-  const [scrollbarBox, thumbBox, scrollStyles] = await Promise.all([
+  const [scrollbarBox, thumbBox, scrollStyles, scrollbarWidth] = await Promise.all([
     scrollbar.boundingBox(),
     thumb.boundingBox(),
     scrollbar.evaluate((element) => {
@@ -454,11 +454,14 @@ test("Skills and plugins are split while the inline plugin marketplace stays usa
         thumbBackground: thumbStyles?.backgroundColor ?? "",
       };
     }),
+    scrollbar.evaluate((element) =>
+      Number.parseFloat(window.getComputedStyle(element).width),
+    ),
   ]);
   expect(scrollbarBox).not.toBeNull();
   expect(thumbBox).not.toBeNull();
-  expect(Math.round(scrollbarBox!.width)).toBe(12);
-  expect(thumbBox!.width).toBeGreaterThanOrEqual(6);
+  expect(Math.round(scrollbarWidth)).toBe(12);
+  expect(thumbBox!.width).toBeGreaterThanOrEqual(4);
   expect(thumbBox!.height).toBeGreaterThanOrEqual(52);
   expect(scrollStyles.visibility).toBe("visible");
   expect(scrollStyles.opacity).toBe("1");

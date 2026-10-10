@@ -8,8 +8,46 @@ use crate::{time_bounds, RpcActor};
 pub(crate) fn read_api_key_usage_stats_for_actor(
     actor: &RpcActor,
 ) -> Result<Vec<ApiKeyUsageStatSummary>, String> {
-    let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
     let (today_start, today_end) = time_bounds::local_day_bounds_ts()?;
+    if crate::storage_helpers::seaorm_enabled() {
+        let keys = if actor.is_admin() {
+            None
+        } else {
+            Some(
+                super::remote::list(actor)?
+                    .into_iter()
+                    .map(|key| key.id)
+                    .collect::<Vec<_>>(),
+            )
+        };
+        return crate::storage_helpers::seaorm_block_on(move |storage| async move {
+            use codexmanager_storage_seaorm::ApiKeyDetailsRepository;
+            let mut totals =
+                ApiKeyDetailsRepository::usage_by_key(storage.connection(), None, None)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            if let Some(keys) = keys.as_ref() {
+                totals.retain(|row| keys.contains(&row.key_id));
+            }
+            let today = ApiKeyDetailsRepository::usage_by_key_model(
+                storage.connection(),
+                Some(today_start),
+                Some(today_end),
+                keys.as_deref(),
+            )
+            .await
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|row| ApiKeyTokenUsageSummary {
+                key_id: row.key_id,
+                total_tokens: row.total_tokens,
+                estimated_cost_usd: row.estimated_cost_usd,
+            })
+            .collect();
+            Ok(map_api_key_usage_stats(totals, today))
+        });
+    }
+    let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
 
     if actor.is_admin() {
         let total_items = storage

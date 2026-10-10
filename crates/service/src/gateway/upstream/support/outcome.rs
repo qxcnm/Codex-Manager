@@ -22,7 +22,7 @@ fn latest_cached_usage_snapshot<'a>(
 ) -> Option<&'a UsageSnapshotRecord> {
     if cache.is_none() {
         *cache = Some(
-            storage
+            crate::account::remote_storage::AccountStorage::new(&storage)
                 .latest_usage_snapshot_for_account(account_id)
                 .ok()
                 .flatten(),

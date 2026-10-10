@@ -613,7 +613,7 @@ fn synthesize_response_body_from_sse(synthesis: &ResponsesSseSynthesis) -> Optio
             synthesis
                 .model
                 .clone()
-                .unwrap_or_else(|| "gpt-5.3-codex".to_string()),
+                .unwrap_or_else(|| super::super::DEFAULT_BRIDGE_MODEL.to_string()),
         ),
     );
     out.insert("status".to_string(), Value::String("completed".to_string()));
@@ -692,7 +692,7 @@ fn synthesize_chat_completion_body(synthesis: &ChatCompletionSseSynthesis) -> Op
             synthesis
                 .model
                 .clone()
-                .unwrap_or_else(|| "gpt-5.3-codex".to_string()),
+                .unwrap_or_else(|| super::super::DEFAULT_BRIDGE_MODEL.to_string()),
         ),
     );
     out.insert("choices".to_string(), Value::Array(choices));

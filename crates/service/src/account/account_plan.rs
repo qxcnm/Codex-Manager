@@ -1,6 +1,6 @@
 use codexmanager_core::{
     auth::parse_id_token_claims,
-    storage::{AccountSubscription, AccountTokenPlan, Token, UsageSnapshotRecord},
+    storage::{now_ts, AccountSubscription, AccountTokenPlan, Token, UsageSnapshotRecord},
 };
 use serde_json::Value;
 
@@ -141,6 +141,24 @@ pub(crate) fn resolve_effective_account_plan(
     snapshot: Option<&UsageSnapshotRecord>,
     subscription: Option<&AccountSubscription>,
 ) -> Option<ResolvedAccountPlan> {
+    resolve_effective_account_plan_at(token, snapshot, subscription, now_ts())
+}
+
+fn resolve_effective_account_plan_at(
+    token: Option<&AccountTokenPlan>,
+    snapshot: Option<&UsageSnapshotRecord>,
+    subscription: Option<&AccountSubscription>,
+    now: i64,
+) -> Option<ResolvedAccountPlan> {
+    if subscription.is_some_and(|value| {
+        !value.has_subscription || value.expires_at.is_some_and(|expires_at| expires_at <= now)
+    }) {
+        return Some(ResolvedAccountPlan {
+            normalized: "free".to_string(),
+            raw: None,
+        });
+    }
+
     if let Some(plan) = subscription
         .and_then(|value| value.account_plan_type.as_deref())
         .and_then(normalize_plan_type)

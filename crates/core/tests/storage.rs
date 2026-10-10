@@ -599,7 +599,7 @@ fn delete_aggregate_api_removes_aggregate_model_source_routes() {
         })
         .expect("upsert non-aggregate source model");
     let mut managed_model = storage
-        .get_managed_model_v2("gpt-5.4-mini")
+        .get_managed_model_v2("gpt-6-luna")
         .expect("get managed model")
         .expect("seeded managed model");
     managed_model.routes = vec![
@@ -616,7 +616,7 @@ fn delete_aggregate_api_removes_aggregate_model_source_routes() {
             id: String::new(),
             source_kind: "account_pool".to_string(),
             source_id: "default".to_string(),
-            upstream_model: "gpt-5.4-mini".to_string(),
+            upstream_model: "gpt-6-luna".to_string(),
             enabled: true,
             priority: 0,
             weight: 1,
@@ -662,7 +662,7 @@ fn delete_aggregate_api_removes_aggregate_model_source_routes() {
         "legacy model preferences are read-only during V2 cutover"
     );
     let managed_model = storage
-        .get_managed_model_v2("gpt-5.4-mini")
+        .get_managed_model_v2("gpt-6-luna")
         .expect("get managed model after aggregate deletion")
         .expect("managed model remains");
     assert_eq!(managed_model.routes.len(), 1);

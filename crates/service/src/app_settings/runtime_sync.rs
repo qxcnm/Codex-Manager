@@ -149,8 +149,18 @@ pub fn sync_runtime_settings_from_storage() {
     if !process_env_has_value("CODEXMANAGER_FREE_ACCOUNT_MAX_MODEL") {
         if let Some(model) = settings.get(APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY) {
             if let Some(model) = normalize_optional_text(Some(model)) {
-                if let Err(err) = gateway::set_free_account_max_model(&model) {
-                    log::warn!("sync persisted free account max model failed: {err}");
+                match gateway::set_free_account_max_model(&model) {
+                    Ok(applied) => {
+                        if !applied.eq_ignore_ascii_case(&model) {
+                            let _ = save_persisted_app_setting(
+                                APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY,
+                                Some(&applied),
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        log::warn!("sync persisted free account max model failed: {err}");
+                    }
                 }
             }
         }
@@ -184,6 +194,18 @@ pub fn sync_runtime_settings_from_storage() {
         gateway::set_thread_aware_account_distribution_enabled(super::parse_bool_with_default(
             raw, true,
         ));
+    }
+    if let Some(raw) =
+        settings.get(super::shared::APP_SETTING_GATEWAY_REQUEST_LOG_PAYLOAD_REDACTION_ENABLED_KEY)
+    {
+        gateway::set_request_log_payload_redaction_enabled(super::parse_bool_with_default(
+            raw, true,
+        ));
+    }
+    if let Some(raw) =
+        settings.get(super::shared::APP_SETTING_GATEWAY_REQUEST_LOG_PAYLOAD_PREVIEW_ENABLED_KEY)
+    {
+        gateway::set_request_log_payload_preview_enabled(super::parse_bool_with_default(raw, true));
     }
     if !process_env_has_value("CODEXMANAGER_ENABLE_REQUEST_COMPRESSION") {
         if let Some(raw) = settings.get(APP_SETTING_GATEWAY_REQUEST_COMPRESSION_ENABLED_KEY) {

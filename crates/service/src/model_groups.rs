@@ -1,3 +1,7 @@
+#[path = "model_groups_injected.rs"]
+pub(crate) mod injected;
+#[path = "model_groups_seaorm.rs"]
+mod seaorm;
 use std::collections::{HashMap, HashSet};
 
 use codexmanager_core::rpc::types::{
@@ -102,6 +106,9 @@ fn result_from_storage(storage: &Storage) -> Result<ModelGroupListResult, String
 }
 
 pub(crate) fn read_model_groups() -> Result<ModelGroupListResult, String> {
+    if storage_helpers::seaorm_enabled() {
+        return storage_helpers::seaorm_block_on(seaorm::list);
+    }
     let storage =
         storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     result_from_storage(&storage)
@@ -110,6 +117,9 @@ pub(crate) fn read_model_groups() -> Result<ModelGroupListResult, String> {
 pub(crate) fn upsert_model_group(
     params: ModelGroupUpsertParams,
 ) -> Result<ModelGroupEntry, String> {
+    if storage_helpers::seaorm_enabled() {
+        return storage_helpers::seaorm_block_on(move |s| seaorm::upsert(s, params));
+    }
     let storage =
         storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     let id = normalize_optional_text(params.id.as_deref()).unwrap_or_else(|| generate_id("mg", 8));
@@ -149,6 +159,10 @@ pub(crate) fn upsert_model_group(
 }
 
 pub(crate) fn delete_model_group(id: &str) -> Result<ModelGroupListResult, String> {
+    if storage_helpers::seaorm_enabled() {
+        let id = id.to_owned();
+        return storage_helpers::seaorm_block_on(move |s| seaorm::delete(s, id));
+    }
     let storage =
         storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     let group = storage
@@ -167,6 +181,9 @@ pub(crate) fn delete_model_group(id: &str) -> Result<ModelGroupListResult, Strin
 pub(crate) fn set_model_group_models(
     params: ModelGroupModelsSetParams,
 ) -> Result<ModelGroupListResult, String> {
+    if storage_helpers::seaorm_enabled() {
+        return storage_helpers::seaorm_block_on(move |s| seaorm::models(s, params));
+    }
     let storage =
         storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     let group_id = normalize_optional_text(Some(params.group_id.as_str()))
@@ -227,6 +244,9 @@ pub(crate) fn set_model_group_models(
 pub(crate) fn set_model_group_users(
     params: ModelGroupUsersSetParams,
 ) -> Result<ModelGroupListResult, String> {
+    if storage_helpers::seaorm_enabled() {
+        return storage_helpers::seaorm_block_on(move |s| seaorm::users(s, params));
+    }
     let storage =
         storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     let group_id = normalize_optional_text(Some(params.group_id.as_str()))
@@ -291,6 +311,11 @@ pub(crate) fn resolve_api_key_model_group_access(
     key_id: &str,
     platform_model_slug: &str,
 ) -> Result<Option<ModelGroupAccess>, String> {
+    if storage_helpers::seaorm_enabled() {
+        let key = key_id.to_owned();
+        let slug = platform_model_slug.to_owned();
+        return storage_helpers::seaorm_block_on(move |s| seaorm::access(s, key, slug));
+    }
     let requested_model_slug = platform_model_slug.trim();
     let catalog_model_slug = crate::models_v2::policy_catalog_slug(requested_model_slug);
     let owner = storage
@@ -325,6 +350,10 @@ pub(crate) fn allowed_model_slugs_for_api_key(
     storage: &Storage,
     key_id: &str,
 ) -> Result<Option<HashSet<String>>, String> {
+    if storage_helpers::seaorm_enabled() {
+        let key = key_id.to_owned();
+        return storage_helpers::seaorm_block_on(move |s| seaorm::allowed(s, key));
+    }
     let owner = storage
         .find_api_key_owner(key_id)
         .map_err(|err| format!("read api key owner failed: {err}"))?;

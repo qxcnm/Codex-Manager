@@ -52,6 +52,8 @@ test("Codex 接入方式页面展示当前状态和切换影响", async () => {
   assert.match(source, /\/api\/rpc 写入 codexmanager-service/);
   assert.match(source, /当前 Codex 接入/);
   assert.match(source, /直接连接 OpenAI/);
+  assert.match(source, /直连聚合 API/);
+  assert.match(source, /applyDirectAggregateMutation/);
   assert.match(source, /通过 CodexManager/);
   assert.match(source, /启用 Responses WebSocket/);
   assert.match(source, /onSupportsWebsocketsChange/);
@@ -62,7 +64,9 @@ test("Codex 接入方式页面展示当前状态和切换影响", async () => {
   assert.match(source, /CodexManager 本地目录/);
   assert.match(source, /应用后/);
   assert.match(source, /高级与恢复/);
-  assert.match(source, /不会产生 CodexManager 请求日志/);
+  assert.match(source, /本机 Codex 的直连请求不会写入网关日志/);
+  assert.match(source, /仪表盘仍会展示已记录的其他网关流量/);
+  assert.doesNotMatch(source, /仪表盘用量统计不可用/);
   assert.match(source, /请求日志、Token、费用估算和仪表盘统计可用/);
   assert.match(source, /CodexManager 管理文件/);
   assert.match(source, /备份保存在 CodexManager 数据目录/);
@@ -92,7 +96,15 @@ test("模型目录不再暴露 Codex models_cache 覆盖入口", async () => {
   assert.match(readme, /不提供写入或下载 `~\/\.codex\/models_cache\.json`/);
   assert.match(page, /当前 Codex 模型来源/);
   assert.match(page, /本地目录是否影响当前 Codex/);
-  assert.match(page, /刷新本地目录/);
+  assert.match(page, /<Card className="glass-card">/);
+  assert.match(page, /应用模型/);
+  assert.match(
+    page,
+    /selectedSlugs\.length > 0\s*\? \[\.\.\.selectedSlugs\]\s*:\s*models\.map\(\(model\) => model\.slug\)/s,
+  );
+  assert.match(page, /未勾选模型时会应用全部模型/);
+  assert.doesNotMatch(page, /数据不会删除/);
+  assert.doesNotMatch(hook, /已隐藏内置模型/);
   assert.match(page, /新增网关自定义模型/);
   assert.match(page, /导入到本地网关目录/);
   assert.doesNotMatch(page, /本地模型目录是唯一运行时真相源/);
@@ -128,5 +140,27 @@ test("平台密钥弹窗创建和编辑会刷新 Codex profile 候选密钥", as
   assert.match(
     source,
     /queryClient\.invalidateQueries\(\{\s*queryKey:\s*CODEX_PROFILE_CANDIDATES_QUERY_KEY\s*,?\s*\}\)/s,
+  );
+});
+
+test("聚合 API 创建、编辑、删除和启停会刷新 Codex profile 候选列表", async () => {
+  const modalSource = await readSource(
+    "src/components/modals/aggregate-api-modal.tsx",
+  );
+  const pageSource = await readSource("src/app/aggregate-api/page.tsx");
+  const candidateInvalidation =
+    /queryClient\.invalidateQueries\(\{\s*queryKey:\s*CODEX_PROFILE_CANDIDATES_QUERY_KEY\s*,?\s*\}\)/gs;
+
+  assert.match(modalSource, /CODEX_PROFILE_CANDIDATES_QUERY_KEY/);
+  assert.equal(
+    [...modalSource.matchAll(candidateInvalidation)].length,
+    2,
+    "create and edit should both invalidate aggregate profile candidates",
+  );
+  assert.match(pageSource, /CODEX_PROFILE_CANDIDATES_QUERY_KEY/);
+  assert.equal(
+    [...pageSource.matchAll(candidateInvalidation)].length,
+    2,
+    "delete and status toggle should both invalidate aggregate profile candidates",
   );
 });

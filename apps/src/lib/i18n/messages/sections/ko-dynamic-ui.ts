@@ -47,8 +47,8 @@ export const KO_DYNAMIC_UI_MESSAGES: MessageCatalog = {
   简体中文: "중국어 간체",
   "控制 compact 请求实际转发到哪个上游路径；默认 /v1/responses/compact，可改成 /v1/chat/completions。":
     "compact 요청을 실제로 전달할 상위 경로를 제어합니다. 기본값은 /v1/responses/compact이며 /v1/chat/completions로 변경할 수 있습니다.",
-  "控制 Images API 兼容入口内部使用的 Codex 主模型；默认 gpt-5.4-mini。":
-    "Images API 호환 엔드포인트 내부에서 사용하는 Codex 주 모델을 제어합니다. 기본값은 gpt-5.4-mini입니다.",
+  "控制 Images API 兼容入口内部使用的 Codex 主模型；默认 gpt-6-luna。":
+    "Images API 호환 엔드포인트 내부에서 사용하는 Codex 주 모델을 제어합니다. 기본값은 gpt-6-luna입니다.",
   "控制 Images API 兼容入口注入的图片工具模型；默认 gpt-image-2。":
     "Images API 호환 엔드포인트가 주입하는 이미지 도구 모델을 제어합니다. 기본값은 gpt-image-2입니다.",
   "控制 OpenAI Images 兼容入口是否启用；默认 1，填 0 会关闭 /v1/images/generations 和 /v1/images/edits。":

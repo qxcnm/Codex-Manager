@@ -1,7 +1,6 @@
 use codexmanager_core::auth::DEFAULT_ORIGINATOR;
 use codexmanager_core::auth::{DEFAULT_CLIENT_ID, DEFAULT_ISSUER};
 use codexmanager_core::storage::Storage;
-use reqwest::blocking::Client;
 use reqwest::header::HeaderValue;
 use reqwest::Proxy;
 use std::collections::HashMap;
@@ -9,21 +8,15 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 
-static UPSTREAM_CLIENT: OnceLock<RwLock<Client>> = OnceLock::new();
 static ASYNC_UPSTREAM_CLIENT: OnceLock<RwLock<reqwest::Client>> = OnceLock::new();
-static RETRY_UPSTREAM_CLIENT: OnceLock<RwLock<Client>> = OnceLock::new();
+static ASYNC_DIRECT_UPSTREAM_CLIENT: OnceLock<RwLock<reqwest::Client>> = OnceLock::new();
 static ASYNC_RETRY_UPSTREAM_CLIENT: OnceLock<RwLock<reqwest::Client>> = OnceLock::new();
-static DIRECT_UPSTREAM_CLIENT: OnceLock<RwLock<Client>> = OnceLock::new();
 static UPSTREAM_CLIENT_POOL: OnceLock<RwLock<UpstreamClientPool>> = OnceLock::new();
 static ACCOUNT_CANDIDATE_CLIENTS: OnceLock<
     RwLock<HashMap<AccountCandidateClientKey, AccountCandidateClients>>,
 > = OnceLock::new();
 static ACCOUNT_PROXY_CLIENTS: OnceLock<RwLock<HashMap<String, AccountProxyClientCacheEntry>>> =
     OnceLock::new();
-static AGGREGATE_CANDIDATE_CLIENTS: OnceLock<RwLock<HashMap<AggregateCandidateClientKey, Client>>> =
-    OnceLock::new();
-#[cfg(test)]
-static UPSTREAM_CLIENT_BUILD_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static ASYNC_UPSTREAM_CLIENT_BUILD_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
@@ -85,13 +78,27 @@ const DEFAULT_TRACE_BODY_PREVIEW_MAX_BYTES: usize = 0;
 const DEFAULT_FRONT_PROXY_MAX_BODY_BYTES: usize = 0;
 const DEFAULT_FRONT_PROXY_ZSTD_MAX_BODY_BYTES: usize = 256 * 1024 * 1024;
 const DEFAULT_FREE_ACCOUNT_MAX_MODEL: &str = "auto";
+const OBSOLETE_FREE_ACCOUNT_MAX_MODELS: &[&str] = &[
+    "gpt-5",
+    "gpt-5-codex",
+    "gpt-5-codex-mini",
+    "gpt-5.1",
+    "gpt-5.1-codex",
+    "gpt-5.1-codex-max",
+    "gpt-5.1-codex-mini",
+    "gpt-5.2",
+    "gpt-5.2-codex",
+    "gpt-5.3-codex",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+];
 const DEFAULT_COMPACT_MODEL: &str = "auto";
 const DEFAULT_COMPACT_API_PATH: &str = "/v1/responses/compact";
 const DEFAULT_MODEL_FORWARD_RULES: &str = "";
 const DEFAULT_COMPACT_MODEL_FORWARD_RULES: &str = "";
-const DEFAULT_CODEX_IMAGE_MAIN_MODEL: &str = "gpt-5.4-mini";
+const DEFAULT_CODEX_IMAGE_MAIN_MODEL: &str = "gpt-6-luna";
 const DEFAULT_CODEX_IMAGE_TOOL_MODEL: &str = "gpt-image-2";
-const DEFAULT_CODEX_USER_AGENT_VERSION: &str = "0.153.0";
+const DEFAULT_CODEX_USER_AGENT_VERSION: &str = "0.155.0";
 const MAX_GATEWAY_USER_AGENT_BYTES: usize = 512;
 const MAX_UPSTREAM_PROXY_POOL_SIZE: usize = 5;
 const MAX_CANDIDATE_CLIENT_CACHE_ENTRIES: usize = 512;
@@ -129,7 +136,6 @@ pub(crate) const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residenc
 #[derive(Default, Clone)]
 struct UpstreamClientPool {
     proxies: Vec<String>,
-    retry_clients: Vec<Client>,
     async_retry_clients: Vec<reqwest::Client>,
 }
 
@@ -150,7 +156,6 @@ impl AccountCandidateClientKey {
 
 #[derive(Clone)]
 struct AccountCandidateClients {
-    blocking: Client,
     async_client: reqwest::Client,
 }
 
@@ -163,7 +168,6 @@ enum AccountProxyClientCacheEntry {
     },
     Ready {
         proxy_url: String,
-        blocking_client: Client,
         async_client: reqwest::Client,
     },
 }
@@ -204,11 +208,6 @@ pub(crate) struct ModelForwardRule {
 }
 
 impl UpstreamClientPool {
-    fn retry_client_for_account(&self, account_id: &str) -> Option<&Client> {
-        let idx = stable_proxy_index(account_id, self.retry_clients.len())?;
-        self.retry_clients.get(idx)
-    }
-
     fn async_retry_client_for_account(&self, account_id: &str) -> Option<&reqwest::Client> {
         let idx = stable_proxy_index(account_id, self.async_retry_clients.len())?;
         self.async_retry_clients.get(idx)
@@ -232,58 +231,16 @@ impl UpstreamClientPool {
     }
 }
 
-/// 函数 `upstream_client`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - crate: 参数 crate
-///
-/// # 返回
-/// 返回函数执行结果
-pub(crate) fn upstream_client() -> Client {
-    ensure_runtime_config_loaded();
-    crate::lock_utils::read_recover(upstream_client_lock(), "upstream_client").clone()
-}
-
-pub(crate) fn upstream_client_for_aggregate_url(url: &str) -> Client {
+pub(crate) fn async_upstream_client_for_aggregate_url(url: &str) -> reqwest::Client {
     ensure_runtime_config_loaded();
     if aggregate_api_should_bypass_upstream_proxy(url) {
-        return direct_upstream_client();
+        #[cfg(test)]
+        DIRECT_UPSTREAM_CLIENT_USE_COUNT.fetch_add(1, Ordering::SeqCst);
+        let cell = ASYNC_DIRECT_UPSTREAM_CLIENT
+            .get_or_init(|| RwLock::new(build_async_direct_upstream_client()));
+        return crate::lock_utils::read_recover(cell, "async_direct_upstream_client").clone();
     }
-    upstream_client()
-}
-
-/// 函数 `upstream_client_for_account`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - crate: 参数 crate
-///
-/// # 返回
-/// 返回函数执行结果
-pub(crate) fn upstream_client_for_account(account_id: &str) -> Result<Client, String> {
-    ensure_runtime_config_loaded();
-    let account_id = account_id.trim();
-    if account_id.is_empty() {
-        return Ok(upstream_client());
-    }
-    match account_proxy_client_cache_entry(account_id) {
-        AccountProxyClientCacheEntry::Ready {
-            blocking_client, ..
-        } => Ok(blocking_client),
-        AccountProxyClientCacheEntry::Invalid { proxy_url, error } => Err(format!(
-            "account explicit proxy for {account_id} is invalid and fail-closed: {proxy_url}. {error}"
-        )),
-        AccountProxyClientCacheEntry::NotConfigured => {
-            Ok(account_candidate_clients_for_account(account_id).blocking)
-        }
-    }
+    async_upstream_client()
 }
 
 pub(crate) fn prepare_upstream_client_for_account(account_id: &str) -> Result<(), String> {
@@ -292,37 +249,7 @@ pub(crate) fn prepare_upstream_client_for_account(account_id: &str) -> Result<()
     if account_id.is_empty() {
         return Err("account id is required".to_string());
     }
-    upstream_client_for_account(account_id).map(|_| ())
-}
-
-/// 函数 `fresh_upstream_client_for_account`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - crate: 参数 crate
-///
-/// # 返回
-/// 返回函数执行结果
-pub(crate) fn fresh_upstream_client_for_account(account_id: &str) -> Result<Client, String> {
-    ensure_runtime_config_loaded();
-    match account_proxy_client_cache_entry(account_id) {
-        AccountProxyClientCacheEntry::Ready { proxy_url, .. } => {
-            build_blocking_client_with_proxy_strict(Some(proxy_url.as_str()))
-        }
-        AccountProxyClientCacheEntry::Invalid { proxy_url, error } => Err(format!(
-            "account explicit proxy for {account_id} is invalid and fail-closed: {proxy_url}. {error}"
-        )),
-        AccountProxyClientCacheEntry::NotConfigured => {
-            let cached =
-                crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool")
-                    .retry_client_for_account(account_id)
-                    .cloned();
-            Ok(cached.unwrap_or_else(retry_upstream_client))
-        }
-    }
+    async_upstream_client_for_account(account_id).map(|_| ())
 }
 
 pub(crate) fn async_upstream_client_for_account(
@@ -418,12 +345,12 @@ pub(crate) fn account_test_proxy_url_for_account(
 /// - overall_timeout: 参数 overall_timeout
 ///
 /// # 返回
-/// 返回带整体超时的阻塞式上游客户端，用于有界生命周期的账号测试请求。
+/// 返回带整体超时的异步上游客户端，用于有界生命周期的账号测试请求。
 pub(crate) fn build_account_test_client_with_timeouts(
     proxy_url: Option<&str>,
     overall_timeout: Duration,
-) -> Result<Client, String> {
-    let mut builder = Client::builder()
+) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder()
         .timeout(overall_timeout)
         .connect_timeout(upstream_connect_timeout_cached())
         .pool_max_idle_per_host(32)
@@ -591,15 +518,31 @@ fn split_no_proxy_host_port(entry: &str) -> (&str, Option<u16>) {
     (entry, None)
 }
 
-pub(crate) fn upstream_client_for_aggregate_api_candidate(
+static ASYNC_AGGREGATE_CANDIDATE_CLIENTS: OnceLock<
+    RwLock<HashMap<AggregateCandidateClientKey, reqwest::Client>>,
+> = OnceLock::new();
+
+pub(crate) fn async_upstream_client_for_aggregate_api_candidate(
     aggregate_api_id: &str,
     url: &str,
-) -> Client {
+) -> reqwest::Client {
     ensure_runtime_config_loaded();
     let Ok(key) = aggregate_candidate_client_key(aggregate_api_id, url) else {
-        return upstream_client();
+        return async_upstream_client();
     };
-    aggregate_candidate_client_for_key(key)
+    let cache = ASYNC_AGGREGATE_CANDIDATE_CLIENTS.get_or_init(|| RwLock::new(HashMap::new()));
+    if let Some(client) = crate::lock_utils::read_recover(cache, "async_aggregate_clients")
+        .get(&key)
+        .cloned()
+    {
+        return client;
+    }
+    let client = build_async_upstream_client_with_proxy(key.proxy_profile.as_deref());
+    let mut cache = crate::lock_utils::write_recover(cache, "async_aggregate_clients");
+    if cache.len() >= MAX_CANDIDATE_CLIENT_CACHE_ENTRIES {
+        cache.clear();
+    }
+    cache.entry(key).or_insert(client).clone()
 }
 
 pub(crate) fn prepare_upstream_client_for_aggregate_api_candidate(
@@ -608,7 +551,7 @@ pub(crate) fn prepare_upstream_client_for_aggregate_api_candidate(
 ) -> Result<(), String> {
     ensure_runtime_config_loaded();
     let key = aggregate_candidate_client_key(aggregate_api_id, url)?;
-    let _ = aggregate_candidate_client_for_key(key);
+    let _ = async_upstream_client_for_aggregate_api_candidate(&key.aggregate_api_id, &key.url);
     Ok(())
 }
 
@@ -626,7 +569,6 @@ fn account_candidate_clients_for_account(account_id: &str) -> AccountCandidateCl
     }
 
     let clients = AccountCandidateClients {
-        blocking: build_upstream_client_with_proxy(key.proxy_profile.as_deref()),
         async_client: build_async_upstream_client_with_proxy(key.proxy_profile.as_deref()),
     };
     let mut cache = crate::lock_utils::write_recover(
@@ -664,32 +606,6 @@ fn aggregate_candidate_client_key(
     AggregateCandidateClientKey::new(aggregate_api_id, url, proxy_profile)
 }
 
-fn aggregate_candidate_client_for_key(key: AggregateCandidateClientKey) -> Client {
-    if let Some(client) = crate::lock_utils::read_recover(
-        aggregate_candidate_clients_lock(),
-        "aggregate_candidate_clients",
-    )
-    .get(&key)
-    .cloned()
-    {
-        return client;
-    }
-
-    let client = build_upstream_client_with_proxy(key.proxy_profile.as_deref());
-    let mut cache = crate::lock_utils::write_recover(
-        aggregate_candidate_clients_lock(),
-        "aggregate_candidate_clients",
-    );
-    if let Some(existing) = cache.get(&key).cloned() {
-        return existing;
-    }
-    if cache.len() >= MAX_CANDIDATE_CLIENT_CACHE_ENTRIES {
-        cache.clear();
-    }
-    cache.insert(key, client.clone());
-    client
-}
-
 /// 函数 `upstream_connect_timeout_cached`
 ///
 /// 作者: gaohongshun
@@ -710,43 +626,20 @@ pub(crate) fn current_upstream_connect_timeout() -> Duration {
     upstream_connect_timeout_cached()
 }
 
-/// 函数 `build_upstream_client`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// 无
-///
-/// # 返回
-/// 返回函数执行结果
-fn build_upstream_client() -> Client {
-    let proxy_url = current_upstream_proxy_url();
-    build_upstream_client_with_proxy(proxy_url.as_deref())
-}
-
 fn build_async_upstream_client() -> reqwest::Client {
     let proxy_url = current_upstream_proxy_url();
     build_async_upstream_client_with_proxy(proxy_url.as_deref())
 }
 
-fn build_direct_upstream_client() -> Client {
-    Client::builder()
+fn build_async_direct_upstream_client() -> reqwest::Client {
+    reqwest::Client::builder()
         .no_proxy()
-        .timeout(None::<Duration>)
         .connect_timeout(upstream_connect_timeout_cached())
         .pool_max_idle_per_host(32)
         .pool_idle_timeout(Some(Duration::from_secs(90)))
         .tcp_keepalive(Some(Duration::from_secs(30)))
         .build()
-        .unwrap_or_else(|err| {
-            log::warn!(
-                "event=gateway_direct_upstream_client_build_failed err={}",
-                err
-            );
-            Client::new()
-        })
+        .expect("build direct async upstream client")
 }
 
 pub(crate) fn apply_async_upstream_proxy(
@@ -767,22 +660,6 @@ pub(crate) fn apply_async_upstream_proxy(
     builder
 }
 
-fn build_blocking_client_with_proxy_strict(proxy_url: Option<&str>) -> Result<Client, String> {
-    let mut builder = Client::builder()
-        .timeout(None::<Duration>)
-        .connect_timeout(upstream_connect_timeout_cached())
-        .pool_max_idle_per_host(32)
-        .pool_idle_timeout(Some(Duration::from_secs(90)))
-        .tcp_keepalive(Some(Duration::from_secs(30)));
-    if let Some(proxy_url) = proxy_url.map(str::trim).filter(|value| !value.is_empty()) {
-        let proxy = Proxy::all(proxy_url).map_err(|err| format!("invalid proxy url: {err}"))?;
-        builder = builder.proxy(proxy);
-    }
-    builder
-        .build()
-        .map_err(|err| format!("build upstream client failed: {err}"))
-}
-
 fn build_async_client_with_proxy_strict(
     proxy_url: Option<&str>,
 ) -> Result<reqwest::Client, String> {
@@ -798,49 +675,6 @@ fn build_async_client_with_proxy_strict(
     builder
         .build()
         .map_err(|err| format!("build async upstream client failed: {err}"))
-}
-
-/// 函数 `build_upstream_client_with_proxy`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - proxy_url: 参数 proxy_url
-///
-/// # 返回
-/// 返回函数执行结果
-fn build_upstream_client_with_proxy(proxy_url: Option<&str>) -> Client {
-    #[cfg(test)]
-    UPSTREAM_CLIENT_BUILD_COUNT.fetch_add(1, Ordering::SeqCst);
-
-    let mut builder = Client::builder()
-        // 中文注释：显式关闭总超时，避免长时流式响应在客户端层被误判超时中断。
-        .timeout(None::<Duration>)
-        // 中文注释：连接阶段设置超时，避免网络异常时线程长期卡死占满并发槽位。
-        .connect_timeout(upstream_connect_timeout_cached())
-        .pool_max_idle_per_host(32)
-        .pool_idle_timeout(Some(Duration::from_secs(90)))
-        .tcp_keepalive(Some(Duration::from_secs(30)));
-    if let Some(proxy_url) = proxy_url {
-        let proxy = match Proxy::all(proxy_url) {
-            Ok(proxy) => proxy,
-            Err(err) => {
-                log::warn!(
-                    "event=gateway_proxy_pool_invalid_proxy proxy={} err={}",
-                    proxy_url,
-                    err
-                );
-                return build_upstream_client();
-            }
-        };
-        builder = builder.proxy(proxy);
-    }
-    builder.build().unwrap_or_else(|err| {
-        log::warn!("event=gateway_upstream_client_build_failed err={}", err);
-        Client::new()
-    })
 }
 
 fn build_async_upstream_client_with_proxy(proxy_url: Option<&str>) -> reqwest::Client {
@@ -1967,42 +1801,8 @@ fn ensure_runtime_config_loaded() {
     let _ = RUNTIME_CONFIG_LOADED.get_or_init(|| reload_from_env());
 }
 
-/// 函数 `upstream_client_lock`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// 无
-///
-/// # 返回
-/// 返回函数执行结果
-fn upstream_client_lock() -> &'static RwLock<Client> {
-    UPSTREAM_CLIENT.get_or_init(|| RwLock::new(build_upstream_client()))
-}
-
 fn async_upstream_client_lock() -> &'static RwLock<reqwest::Client> {
     ASYNC_UPSTREAM_CLIENT.get_or_init(|| RwLock::new(build_async_upstream_client()))
-}
-
-fn retry_upstream_client() -> Client {
-    crate::lock_utils::read_recover(retry_upstream_client_lock(), "retry_upstream_client").clone()
-}
-
-fn retry_upstream_client_lock() -> &'static RwLock<Client> {
-    RETRY_UPSTREAM_CLIENT.get_or_init(|| RwLock::new(build_upstream_client()))
-}
-
-fn direct_upstream_client() -> Client {
-    #[cfg(test)]
-    DIRECT_UPSTREAM_CLIENT_USE_COUNT.fetch_add(1, Ordering::SeqCst);
-
-    crate::lock_utils::read_recover(direct_upstream_client_lock(), "direct_upstream_client").clone()
-}
-
-fn direct_upstream_client_lock() -> &'static RwLock<Client> {
-    DIRECT_UPSTREAM_CLIENT.get_or_init(|| RwLock::new(build_direct_upstream_client()))
 }
 
 fn async_retry_upstream_client() -> reqwest::Client {
@@ -2060,11 +1860,6 @@ fn clear_account_proxy_client_cache() {
         .clear();
 }
 
-fn aggregate_candidate_clients_lock(
-) -> &'static RwLock<HashMap<AggregateCandidateClientKey, Client>> {
-    AGGREGATE_CANDIDATE_CLIENTS.get_or_init(|| RwLock::new(HashMap::new()))
-}
-
 /// 函数 `refresh_upstream_clients_from_runtime_config`
 ///
 /// 作者: gaohongshun
@@ -2077,43 +1872,36 @@ fn aggregate_candidate_clients_lock(
 /// # 返回
 /// 无
 fn refresh_upstream_clients_from_runtime_config() {
-    let client = build_upstream_client();
-    let mut client_lock =
-        crate::lock_utils::write_recover(upstream_client_lock(), "upstream_client");
-    *client_lock = client;
-    drop(client_lock);
+    if let Some(cache) = ASYNC_AGGREGATE_CANDIDATE_CLIENTS.get() {
+        crate::lock_utils::write_recover(cache, "async_aggregate_clients").clear();
+    }
 
-    let async_client = build_async_upstream_client();
-    let mut async_client_lock =
-        crate::lock_utils::write_recover(async_upstream_client_lock(), "async_upstream_client");
-    *async_client_lock = async_client;
-    drop(async_client_lock);
-
-    let retry_client = build_upstream_client();
-    let mut retry_client_lock =
-        crate::lock_utils::write_recover(retry_upstream_client_lock(), "retry_upstream_client");
-    *retry_client_lock = retry_client;
-    drop(retry_client_lock);
-
-    let async_retry_client = build_async_upstream_client();
-    let mut async_retry_client_lock = crate::lock_utils::write_recover(
-        async_retry_upstream_client_lock(),
-        "async_retry_upstream_client",
-    );
-    *async_retry_client_lock = async_retry_client;
-    drop(async_retry_client_lock);
-
-    let direct_client = build_direct_upstream_client();
-    let mut direct_client_lock =
-        crate::lock_utils::write_recover(direct_upstream_client_lock(), "direct_upstream_client");
-    *direct_client_lock = direct_client;
-    drop(direct_client_lock);
-
-    let pool = build_upstream_client_pool();
-    let mut pool_lock =
-        crate::lock_utils::write_recover(upstream_client_pool_lock(), "upstream_client_pool");
-    *pool_lock = pool;
-    drop(pool_lock);
+    for (cell, build, label) in [
+        (
+            &ASYNC_UPSTREAM_CLIENT,
+            build_async_upstream_client as fn() -> reqwest::Client,
+            "async_upstream_client",
+        ),
+        (
+            &ASYNC_RETRY_UPSTREAM_CLIENT,
+            build_async_upstream_client as fn() -> reqwest::Client,
+            "async_retry_upstream_client",
+        ),
+        (
+            &ASYNC_DIRECT_UPSTREAM_CLIENT,
+            build_async_direct_upstream_client as fn() -> reqwest::Client,
+            "async_direct_upstream_client",
+        ),
+    ] {
+        if let Some(lock) = cell.get() {
+            let client = build();
+            *crate::lock_utils::write_recover(lock, label) = client;
+        }
+    }
+    if let Some(lock) = UPSTREAM_CLIENT_POOL.get() {
+        let pool = build_upstream_client_pool();
+        *crate::lock_utils::write_recover(lock, "upstream_client_pool") = pool;
+    }
 
     clear_candidate_client_caches();
 }
@@ -2125,11 +1913,9 @@ fn clear_candidate_client_caches() {
         "account_candidate_clients",
     )
     .clear();
-    crate::lock_utils::write_recover(
-        aggregate_candidate_clients_lock(),
-        "aggregate_candidate_clients",
-    )
-    .clear();
+    if let Some(cache) = ASYNC_AGGREGATE_CANDIDATE_CLIENTS.get() {
+        crate::lock_utils::write_recover(cache, "async_aggregate_clients").clear();
+    }
 }
 
 /// 函数 `build_upstream_client_pool`
@@ -2152,7 +1938,6 @@ fn build_upstream_client_pool() -> UpstreamClientPool {
         return UpstreamClientPool::default();
     }
     let mut proxies = Vec::with_capacity(raw_proxies.len());
-    let mut retry_clients = Vec::with_capacity(raw_proxies.len());
     let mut async_retry_clients = Vec::with_capacity(raw_proxies.len());
     for proxy in raw_proxies.into_iter() {
         if let Err(err) = Proxy::all(proxy.as_str()) {
@@ -2163,35 +1948,22 @@ fn build_upstream_client_pool() -> UpstreamClientPool {
             );
             continue;
         }
-        let retry_client = build_upstream_client_with_proxy(Some(proxy.as_str()));
         let async_retry_client = build_async_upstream_client_with_proxy(Some(proxy.as_str()));
         proxies.push(proxy);
-        retry_clients.push(retry_client);
         async_retry_clients.push(async_retry_client);
     }
-    if retry_clients.is_empty() {
+    if async_retry_clients.is_empty() {
         UpstreamClientPool::default()
     } else {
         log::info!(
             "event=gateway_proxy_pool_initialized size={}",
-            retry_clients.len()
+            async_retry_clients.len()
         );
         UpstreamClientPool {
             proxies,
-            retry_clients,
             async_retry_clients,
         }
     }
-}
-
-#[cfg(test)]
-fn reset_upstream_client_build_count_for_test() {
-    UPSTREAM_CLIENT_BUILD_COUNT.store(0, Ordering::SeqCst);
-}
-
-#[cfg(test)]
-fn upstream_client_build_count_for_test() -> usize {
-    UPSTREAM_CLIENT_BUILD_COUNT.load(Ordering::SeqCst)
 }
 
 #[cfg(test)]
@@ -2420,16 +2192,6 @@ fn load_account_proxy_client_cache_entry_from_storage(
             return AccountProxyClientCacheEntry::Invalid { proxy_url, error };
         }
     };
-    let blocking_client =
-        match build_blocking_client_with_proxy_strict(Some(normalized_proxy_url.as_str())) {
-            Ok(client) => client,
-            Err(error) => {
-                return AccountProxyClientCacheEntry::Invalid {
-                    proxy_url: normalized_proxy_url,
-                    error,
-                };
-            }
-        };
     let async_client =
         match build_async_client_with_proxy_strict(Some(normalized_proxy_url.as_str())) {
             Ok(client) => client,
@@ -2443,7 +2205,6 @@ fn load_account_proxy_client_cache_entry_from_storage(
 
     AccountProxyClientCacheEntry::Ready {
         proxy_url: normalized_proxy_url,
-        blocking_client,
         async_client,
     }
 }
@@ -2784,7 +2545,16 @@ fn normalize_model_forward_lookup_model(raw: &str) -> Option<String> {
 /// # 返回
 /// 返回函数执行结果
 fn normalize_model_slug(raw: &str) -> Result<String, String> {
-    normalize_model_slug_with_error(raw, "freeAccountMaxModel")
+    let normalized = normalize_model_slug_with_error(raw, "freeAccountMaxModel")?;
+    if is_obsolete_free_account_max_model(&normalized) {
+        return Ok(DEFAULT_FREE_ACCOUNT_MAX_MODEL.to_string());
+    }
+    Ok(normalized)
+}
+
+pub(crate) fn is_obsolete_free_account_max_model(raw: &str) -> bool {
+    let normalized = raw.trim().to_ascii_lowercase();
+    OBSOLETE_FREE_ACCOUNT_MAX_MODELS.contains(&normalized.as_str())
 }
 
 fn normalize_model_slug_with_error(raw: &str, field_name: &str) -> Result<String, String> {

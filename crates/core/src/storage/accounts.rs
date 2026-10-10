@@ -1344,8 +1344,8 @@ impl Storage {
     ///
     /// # 返回
     /// 返回函数执行结果
-    pub fn delete_account(&mut self, account_id: &str) -> Result<()> {
-        let tx = self.conn.transaction()?;
+    pub fn delete_account(&self, account_id: &str) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
         tx.execute(delete_account_metadata_for_account_sql(), [account_id])?;
         tx.execute(delete_account_subscription_for_account_sql(), [account_id])?;
         tx.execute(
@@ -1377,13 +1377,13 @@ impl Storage {
         Ok(())
     }
 
-    pub fn delete_accounts(&mut self, account_ids: &[String]) -> Result<usize> {
+    pub fn delete_accounts(&self, account_ids: &[String]) -> Result<usize> {
         let account_ids = normalize_text_ids(account_ids);
         if account_ids.is_empty() {
             return Ok(0);
         }
 
-        let tx = self.conn.transaction()?;
+        let tx = self.conn.unchecked_transaction()?;
         let mut deleted = 0usize;
         for chunk in account_ids.chunks(SQLITE_IN_CLAUSE_BATCH_SIZE) {
             delete_accounts_from_table(&tx, "account_metadata", "account_id", chunk)?;
@@ -1484,9 +1484,9 @@ impl Storage {
     ///
     /// # 返回
     /// 返回函数执行结果
-    pub fn set_preferred_account(&mut self, account_id: Option<&str>) -> Result<()> {
+    pub fn set_preferred_account(&self, account_id: Option<&str>) -> Result<()> {
         let now = now_ts();
-        let tx = self.conn.transaction()?;
+        let tx = self.conn.unchecked_transaction()?;
         tx.execute(clear_preferred_accounts_sql(), [])?;
         if let Some(account_id) = account_id {
             let normalized_account_id = account_id.trim();

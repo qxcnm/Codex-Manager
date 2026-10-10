@@ -120,6 +120,7 @@ pub(crate) fn export_accounts_to_directory(
     })?;
 
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let accounts = select_accounts_for_export(&storage, selected_account_ids)?;
     let metadata = load_export_metadata(&storage, &accounts)?;
     let tokens = load_export_tokens(&storage, &accounts)?;
@@ -196,6 +197,7 @@ pub(crate) fn export_accounts_data(
     export_mode: Option<&str>,
 ) -> Result<AccountExportDataResult, String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let accounts = select_accounts_for_export(&storage, selected_account_ids)?;
     let metadata = load_export_metadata(&storage, &accounts)?;
     let tokens = load_export_tokens(&storage, &accounts)?;
@@ -307,6 +309,7 @@ fn select_accounts_for_export(
     storage: &Storage,
     selected_account_ids: &[String],
 ) -> Result<Vec<Account>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let selected = normalize_selected_account_ids(selected_account_ids);
     if selected.is_empty() {
         return storage.list_accounts().map_err(|err| err.to_string());
@@ -331,6 +334,7 @@ fn load_export_tokens(
     storage: &codexmanager_core::storage::Storage,
     accounts: &[Account],
 ) -> Result<HashMap<String, Token>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let account_ids = accounts
         .iter()
         .map(|account| account.id.clone())
@@ -350,6 +354,7 @@ fn load_export_metadata(
     storage: &codexmanager_core::storage::Storage,
     accounts: &[Account],
 ) -> Result<HashMap<String, codexmanager_core::storage::AccountMetadata>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let account_ids = accounts
         .iter()
         .map(|account| account.id.clone())
@@ -369,6 +374,7 @@ fn load_export_agent_identities(
     storage: &Storage,
     accounts: &[Account],
 ) -> Result<HashMap<String, AccountAgentIdentity>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let mut identities = HashMap::new();
     for account in accounts {
         if let Some(identity) = storage

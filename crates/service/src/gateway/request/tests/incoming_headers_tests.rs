@@ -120,7 +120,7 @@ fn current_codex_hyphenated_headers_are_captured_from_tiny_http_requests() {
         )
         .into();
 
-    let snapshot = IncomingHeaderSnapshot::from_request(&request);
+    let snapshot = IncomingHeaderSnapshot::from_request(&request.into());
 
     assert_eq!(snapshot.session_id(), Some("session-current"));
     assert_eq!(snapshot.conversation_id(), Some("thread-current"));

@@ -22,6 +22,35 @@ pub(super) use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub(super) static TEST_DIR_SEQ: AtomicUsize = AtomicUsize::new(0);
 pub(super) static TEST_PORT_SEQ: AtomicUsize = AtomicUsize::new(41000);
 
+pub(super) fn wait_for_upstream_attempts(
+    storage: &Storage,
+    trace_id: &str,
+    count: usize,
+) -> Vec<codexmanager_core::storage::RequestLogUpstreamAttempt> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let stages = storage
+            .list_request_log_upstream_attempt_stages(trace_id)
+            .expect("list request attempts");
+        if stages.len() >= count {
+            return stages
+                .iter()
+                .map(|stage| {
+                    storage
+                        .find_request_log_upstream_attempt(trace_id, stage)
+                        .expect("read attempt")
+                        .expect("attempt exists")
+                })
+                .collect();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "request capture writer did not persist {count} attempt(s)"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// 函数 `new_test_dir`
 ///
 /// 作者: gaohongshun
@@ -319,7 +348,7 @@ fn test_managed_model(storage: &Storage, slug: &str) -> codexmanager_core::stora
         return model;
     }
     let mut model = storage
-        .get_managed_model_v2("gpt-5.4-mini")
+        .get_managed_model_v2("gpt-6-luna")
         .expect("get V2 test model template")
         .expect("seeded V2 test model template");
     model.id.clear();
@@ -630,7 +659,16 @@ pub(super) fn start_mock_upstream_sequence_lenient_with_content_types(
                 .to_string();
         let fallback_ct = "application/json".to_string();
         loop {
-            let Some((mut stream, captured)) = accept_http_request(&listener, idle_timeout) else {
+            // The short idle window detects unexpected failover after the first
+            // response. Initial database migration and HTTP-client construction
+            // happen after this fixture starts and need a separate startup bound.
+            let accept_timeout = if idx == 0 {
+                idle_timeout.max(Duration::from_secs(3))
+            } else {
+                idle_timeout
+            };
+            let Some((mut stream, captured)) = accept_http_request(&listener, accept_timeout)
+            else {
                 break;
             };
             let _ = tx.send(captured);

@@ -2,14 +2,16 @@
 
 import { useI18n } from "@/lib/i18n/provider";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
+import { useDesktopPageActive } from "@/hooks/useDesktopPageActive";
 import { ProxySettingsCard } from "@/app/settings/components/proxy-settings-card";
 
 export default function ProxySettingsPage() {
   const { t } = useI18n();
   const { canAccessManagementRpc } = useRuntimeCapabilities();
+  const isPageActive = useDesktopPageActive("/proxy-settings/");
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       <div>
         <h2 className="text-xl font-bold tracking-tight">{t("代理设置")}</h2>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -17,7 +19,7 @@ export default function ProxySettingsPage() {
         </p>
       </div>
 
-      <ProxySettingsCard canManage={canAccessManagementRpc} />
+      <ProxySettingsCard canManage={canAccessManagementRpc} active={isPageActive} />
     </div>
   );
 }

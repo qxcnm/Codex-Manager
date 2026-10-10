@@ -3,15 +3,14 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
+use tokio::sync::{mpsc, oneshot};
 
 const DEFAULT_TRACE_QUEUE_CAPACITY: usize = 0;
-const TRACE_FLUSH_WAIT_TIMEOUT_MS: u64 = 200;
 const ENV_TRACE_QUEUE_CAPACITY: &str = "CODEXMANAGER_TRACE_QUEUE_CAPACITY";
 const ENV_GEMINI_TRACE_DIAGNOSTICS: &str = "CODEXMANAGER_GEMINI_TRACE_DIAGNOSTICS";
 const ENV_GATEWAY_TRACE_STDOUT: &str = "CODEXMANAGER_GATEWAY_TRACE_STDOUT";
@@ -24,17 +23,28 @@ static TRACE_ERROR_TRACES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static TRACE_PENDING_LINES: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
 
 enum TraceCommand {
-    Append {
-        line: String,
-        flush: bool,
-        ack: Option<SyncSender<()>>,
-    },
+    Append { line: String, flush: bool },
     ResetPath(PathBuf),
+    Flush(oneshot::Sender<Result<(), String>>),
 }
 
 enum TraceCommandSender {
-    Bounded(SyncSender<TraceCommand>),
-    Unbounded(Sender<TraceCommand>),
+    Bounded(mpsc::Sender<TraceCommand>),
+    Unbounded(mpsc::UnboundedSender<TraceCommand>),
+}
+
+enum TraceCommandReceiver {
+    Bounded(mpsc::Receiver<TraceCommand>),
+    Unbounded(mpsc::UnboundedReceiver<TraceCommand>),
+}
+
+impl TraceCommandReceiver {
+    fn blocking_recv(&mut self) -> Option<TraceCommand> {
+        match self {
+            Self::Bounded(rx) => rx.blocking_recv(),
+            Self::Unbounded(rx) => rx.blocking_recv(),
+        }
+    }
 }
 
 enum TraceSendError {
@@ -43,9 +53,12 @@ enum TraceSendError {
 }
 
 impl TraceCommandSender {
-    fn send(&self, command: TraceCommand) -> Result<(), TraceSendError> {
+    async fn send(&self, command: TraceCommand) -> Result<(), TraceSendError> {
         match self {
-            Self::Bounded(tx) => tx.send(command).map_err(|_| TraceSendError::Disconnected),
+            Self::Bounded(tx) => tx
+                .send(command)
+                .await
+                .map_err(|_| TraceSendError::Disconnected),
             Self::Unbounded(tx) => tx.send(command).map_err(|_| TraceSendError::Disconnected),
         }
     }
@@ -54,8 +67,8 @@ impl TraceCommandSender {
         match self {
             Self::Bounded(tx) => match tx.try_send(command) {
                 Ok(()) => Ok(()),
-                Err(TrySendError::Full(_)) => Err(TraceSendError::Full),
-                Err(TrySendError::Disconnected(_)) => Err(TraceSendError::Disconnected),
+                Err(mpsc::error::TrySendError::Full(_)) => Err(TraceSendError::Full),
+                Err(mpsc::error::TrySendError::Closed(_)) => Err(TraceSendError::Disconnected),
             },
             Self::Unbounded(tx) => tx.send(command).map_err(|_| TraceSendError::Disconnected),
         }
@@ -81,13 +94,22 @@ impl TraceAsyncWriter {
     /// # 返回
     /// 返回函数执行结果
     fn new(path: PathBuf) -> Self {
-        let queue_capacity = trace_queue_capacity();
+        Self::with_capacity(path, trace_queue_capacity())
+    }
+
+    fn with_capacity(path: PathBuf, queue_capacity: usize) -> Self {
         let (tx, rx) = if queue_capacity == 0 {
-            let (tx, rx) = mpsc::channel::<TraceCommand>();
-            (TraceCommandSender::Unbounded(tx), rx)
+            let (tx, rx) = mpsc::unbounded_channel::<TraceCommand>();
+            (
+                TraceCommandSender::Unbounded(tx),
+                TraceCommandReceiver::Unbounded(rx),
+            )
         } else {
-            let (tx, rx) = mpsc::sync_channel::<TraceCommand>(queue_capacity);
-            (TraceCommandSender::Bounded(tx), rx)
+            let (tx, rx) = mpsc::channel::<TraceCommand>(queue_capacity);
+            (
+                TraceCommandSender::Bounded(tx),
+                TraceCommandReceiver::Bounded(rx),
+            )
         };
         let _ = thread::Builder::new()
             .name("gateway-trace-writer".to_string())
@@ -113,29 +135,7 @@ impl TraceAsyncWriter {
     /// # 返回
     /// 无
     fn append_line(&self, line: String, flush: bool) {
-        if flush {
-            let (ack_tx, ack_rx) = mpsc::sync_channel(0);
-            if self
-                .tx
-                .send(TraceCommand::Append {
-                    line,
-                    flush: true,
-                    ack: Some(ack_tx),
-                })
-                .is_err()
-            {
-                log::warn!("gateway trace enqueue failed: writer channel closed");
-                return;
-            }
-            let _ = ack_rx.recv_timeout(Duration::from_millis(TRACE_FLUSH_WAIT_TIMEOUT_MS));
-            return;
-        }
-
-        match self.tx.try_send(TraceCommand::Append {
-            line,
-            flush: false,
-            ack: None,
-        }) {
+        match self.tx.try_send(TraceCommand::Append { line, flush }) {
             Ok(()) => {}
             Err(TraceSendError::Full) => {
                 let dropped = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
@@ -166,9 +166,19 @@ impl TraceAsyncWriter {
     /// # 返回
     /// 无
     fn reset_path(&self, path: PathBuf) {
-        if self.tx.send(TraceCommand::ResetPath(path)).is_err() {
-            log::warn!("gateway trace reset-path failed: writer channel closed");
+        if self.tx.try_send(TraceCommand::ResetPath(path)).is_err() {
+            log::warn!("gateway trace reset-path failed: writer queue full or closed");
         }
+    }
+
+    async fn flush(&self) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(TraceCommand::Flush(tx))
+            .await
+            .map_err(|_| "gateway trace writer channel closed".to_string())?;
+        rx.await
+            .map_err(|_| "gateway trace writer stopped before flush".to_string())?
     }
 }
 
@@ -644,7 +654,6 @@ fn flush_trace_lines(trace_id: &str) {
         .and_then(|mut pending| pending.remove(trace_id));
     if let Some(lines) = lines {
         for line in lines {
-            mirror_trace_line_to_stdout(&line);
             append_trace_line(line, false);
         }
     }
@@ -731,25 +740,50 @@ fn trace_writer() -> &'static TraceAsyncWriter {
 ///
 /// # 返回
 /// 无
-fn trace_writer_loop(rx: Receiver<TraceCommand>, mut writer: TraceFileWriter) {
-    while let Ok(command) = rx.recv() {
+fn trace_writer_loop(mut rx: TraceCommandReceiver, mut writer: TraceFileWriter) {
+    let mut pending_error = None;
+    while let Some(command) = rx.blocking_recv() {
         match command {
-            TraceCommand::Append { line, flush, ack } => {
+            TraceCommand::Append { line, flush } => {
+                mirror_trace_line_to_stdout(&line);
                 if let Err(err) = writer.append_line(&line, flush) {
                     log::warn!(
                         "gateway trace write failed: path={}, err={}",
                         writer.path.display(),
                         err
                     );
+                    pending_error = Some(err.to_string());
                     writer.writer = None;
                 }
-                if let Some(ack) = ack {
-                    let _ = ack.send(());
-                }
             }
-            TraceCommand::ResetPath(path) => writer.reset_path(path),
+            TraceCommand::ResetPath(path) => {
+                if let Some(file) = writer.writer.as_mut() {
+                    if let Err(error) = file.flush() {
+                        pending_error = Some(error.to_string());
+                    }
+                }
+                writer.reset_path(path);
+            }
+            TraceCommand::Flush(ack) => {
+                if let Some(file) = writer.writer.as_mut() {
+                    if let Err(error) = file.flush() {
+                        pending_error = Some(error.to_string());
+                    }
+                }
+                let result = pending_error.take().map_or(Ok(()), Err);
+                let _ = ack.send(result);
+            }
         }
     }
+}
+
+/// Called after routing and deferred accounting finish, so the barrier follows
+/// every accepted final trace without blocking an async executor thread.
+pub(crate) async fn drain_trace_writer() -> Result<(), String> {
+    if let Some(writer) = TRACE_WRITER.get() {
+        writer.flush().await?;
+    }
+    Ok(())
 }
 
 /// 函数 `trace_queue_capacity`
@@ -1165,6 +1199,7 @@ pub(crate) struct BridgeResultLog<'a> {
     pub path: &'a str,
     pub is_stream: bool,
     pub stream_terminal_seen: bool,
+    pub stream_terminal_delivered: bool,
     pub stream_terminal_error: Option<&'a str>,
     pub delivery_error: Option<&'a str>,
     pub output_text_len: usize,
@@ -1187,6 +1222,7 @@ pub(crate) fn log_bridge_result(params: BridgeResultLog<'_>) {
         path,
         is_stream,
         stream_terminal_seen,
+        stream_terminal_delivered,
         stream_terminal_error,
         delivery_error,
         output_text_len,
@@ -1211,13 +1247,14 @@ pub(crate) fn log_bridge_result(params: BridgeResultLog<'_>) {
         mark_trace_has_error(trace_id);
     }
     let line = format!(
-        "ts={} event=BRIDGE_RESULT trace_id={} adapter={} path={} stream={} terminal_seen={} terminal_error={} delivery_error={} output_text_len={} output_tokens={} first_response_ms={} delivered_status={} upstream_hint={} upstream_request_id={} upstream_cf_ray={} upstream_auth_error={} upstream_identity_error_code={} upstream_content_type={} last_sse_event={}",
+        "ts={} event=BRIDGE_RESULT trace_id={} adapter={} path={} stream={} terminal_seen={} terminal_delivered={} terminal_error={} delivery_error={} output_text_len={} output_tokens={} first_response_ms={} delivered_status={} upstream_hint={} upstream_request_id={} upstream_cf_ray={} upstream_auth_error={} upstream_identity_error_code={} upstream_content_type={} last_sse_event={}",
         current_trace_ts(),
         sanitize_text(trace_id),
         sanitize_text(adapter),
         sanitize_text(path),
         if is_stream { "true" } else { "false" },
         if stream_terminal_seen { "true" } else { "false" },
+        if stream_terminal_delivered { "true" } else { "false" },
         sanitize_text(stream_terminal_error.unwrap_or("-")),
         sanitize_text(delivery_error.unwrap_or("-")),
         output_text_len,
@@ -1414,7 +1451,6 @@ pub(crate) fn log_failed_request(params: FailedRequestLog<'_>) {
         sanitize_text(code),
         sanitize_text(error.unwrap_or("-")),
     );
-    mirror_trace_line_to_stdout(&line);
     append_trace_line(line, true);
     if let Some(trace_id) = trace_id {
         clear_trace_state(trace_id);

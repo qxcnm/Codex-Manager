@@ -22,14 +22,16 @@ use support::{test_env_guard, EnvGuard};
 /// 返回函数执行结果
 fn post_rpc(addr: &str, body: &str) -> String {
     let mut stream = TcpStream::connect(addr).expect("connect server");
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+        .expect("read timeout");
     let token = codexmanager_service::rpc_auth_token().to_string();
     let request = format!(
-        "POST /rpc HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nX-CodexManager-Rpc-Token: {token}\r\nContent-Length: {}\r\n\r\n{}",
+        "POST /rpc HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nContent-Type: application/json\r\nX-CodexManager-Rpc-Token: {token}\r\nContent-Length: {}\r\n\r\n{}",
         body.len(),
         body
     );
     stream.write_all(request.as_bytes()).expect("write");
-    stream.shutdown(std::net::Shutdown::Write).ok();
     let mut buf = String::new();
     stream.read_to_string(&mut buf).expect("read");
     buf

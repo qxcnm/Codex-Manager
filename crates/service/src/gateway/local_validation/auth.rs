@@ -40,7 +40,7 @@ pub(super) fn load_active_api_key(
     debug: bool,
 ) -> Result<ApiKey, super::LocalValidationError> {
     let key_hash = hash_platform_key(platform_key);
-    let api_key = storage.find_api_key_by_hash(&key_hash).map_err(|err| {
+    let api_key = crate::apikey::remote::find_by_hash(storage, &key_hash).map_err(|err| {
         super::LocalValidationError::new(
             500,
             crate::gateway::bilingual_error("读取存储失败", format!("storage read failed: {err}")),
@@ -69,7 +69,7 @@ pub(super) fn load_active_api_key_by_id(
     key_id: &str,
     request_url: &str,
 ) -> Result<ApiKey, super::LocalValidationError> {
-    let api_key = storage.find_api_key_by_id(key_id).map_err(|err| {
+    let api_key = crate::apikey::remote::find_by_id(storage, key_id).map_err(|err| {
         super::LocalValidationError::new(
             500,
             crate::gateway::bilingual_error("读取存储失败", format!("storage read failed: {err}")),
@@ -104,29 +104,21 @@ fn ensure_active_api_key(
         ));
     }
 
-    if let Some(limit) = storage
-        .find_api_key_quota_limit(&api_key.id)
-        .map_err(|err| {
+    if let Some(limit) = crate::apikey::remote::quota(storage, &api_key.id).map_err(|err| {
+        super::LocalValidationError::new(
+            500,
+            crate::gateway::bilingual_error("读取存储失败", format!("storage read failed: {err}")),
+        )
+    })? {
+        let used = crate::apikey::remote::token_usage(storage, &api_key.id).map_err(|err| {
             super::LocalValidationError::new(
                 500,
                 crate::gateway::bilingual_error(
-                    "读取存储失败",
-                    format!("storage read failed: {err}"),
+                    "读取用量失败",
+                    format!("read api key usage failed: {err}"),
                 ),
             )
-        })?
-    {
-        let used = storage
-            .api_key_total_token_usage(&api_key.id)
-            .map_err(|err| {
-                super::LocalValidationError::new(
-                    500,
-                    crate::gateway::bilingual_error(
-                        "读取用量失败",
-                        format!("read api key usage failed: {err}"),
-                    ),
-                )
-            })?;
+        })?;
         if limit > 0 && used >= limit {
             if debug {
                 log::warn!(

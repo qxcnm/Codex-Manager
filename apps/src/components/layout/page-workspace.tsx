@@ -45,7 +45,7 @@ export function PageWorkspace({ children, className }: PageWorkspaceProps) {
   return (
     <div
       className={cn(
-        "mx-auto flex w-full max-w-[1680px] flex-col gap-4",
+        "mx-auto flex w-full max-w-[1680px] flex-col gap-2.5",
         className,
       )}
     >
@@ -65,23 +65,18 @@ export function PageHeader({
   return (
     <section
       className={cn(
-        "mission-panel glass-card relative overflow-hidden rounded-lg px-4 py-3 lg:flex lg:items-center lg:justify-between",
+        "flex flex-col gap-1.5 border-b border-border/60 pb-2 lg:flex-row lg:items-center lg:justify-between",
         className,
       )}
     >
-      <div className="pointer-events-none absolute right-3 top-3 hidden grid-cols-3 gap-0.5 opacity-15 sm:grid">
-        {Array.from({ length: 9 }).map((_, index) => (
-          <span key={index} className="h-0.5 w-0.5 rounded-full bg-primary/50" />
-        ))}
-      </div>
-      <div className="relative flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5">
-        <div className="flex min-w-0 items-center gap-2">
-          <h1 className="truncate text-xl font-semibold text-foreground">
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <h2 className="min-w-0 text-lg font-semibold text-foreground">
             {title}
-          </h1>
+          </h2>
           {eyebrow ? (
             typeof eyebrow === "string" ? (
-              <Badge variant="secondary" className="h-5 shrink-0 rounded-md border-primary/20 bg-primary/10 px-2 font-mono text-[10px] uppercase text-primary">
+              <Badge variant="secondary" className="h-5 shrink-0 rounded-md px-2 font-mono text-[10px] uppercase">
                 {eyebrow}
               </Badge>
             ) : (
@@ -90,14 +85,14 @@ export function PageHeader({
           ) : null}
         </div>
         {description ? (
-          <p className="line-clamp-2 min-w-0 basis-full flex-1 text-xs leading-5 text-muted-foreground sm:basis-auto sm:min-w-[220px] sm:line-clamp-1">
+          <p className="max-w-3xl text-sm leading-5 text-muted-foreground">
             {description}
           </p>
         ) : null}
-        {meta ? <div className="flex shrink-0 flex-wrap gap-1.5">{meta}</div> : null}
+        {meta ? <div className="flex flex-wrap gap-1.5">{meta}</div> : null}
       </div>
       {actions ? (
-        <div className="relative mt-3 flex w-full flex-wrap items-center gap-2 sm:w-auto lg:mt-0 lg:ml-4 lg:justify-end">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto lg:ml-4 lg:justify-end">
           {actions}
         </div>
       ) : null}

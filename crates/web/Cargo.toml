@@ -4,12 +4,15 @@ version.workspace = true
 edition = "2021"
 
 [features]
-default = ["embedded-ui"]
+default = ["embedded-ui", "storage-sqlite"]
 # 发行物/容器内使用：将前端静态资源（apps/out）打进二进制，做到“单文件启动”。
 embedded-ui = ["dep:include_dir", "dep:mime_guess"]
+storage-sqlite = ["codexmanager-service/storage-sqlite"]
+storage-mysql = ["codexmanager-service/storage-mysql"]
+storage-postgres = ["codexmanager-service/storage-postgres"]
 
 [dependencies]
-codexmanager-service = { path = "../service" }
+codexmanager-service = { path = "../service", default-features = false }
 axum = { version = "0.8", features = ["ws"] }
 futures-util = "0.3"
 include_dir = { version = "0.7", optional = true }

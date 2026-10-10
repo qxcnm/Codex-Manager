@@ -155,7 +155,10 @@ impl Drop for RpcTestContext {
 /// 返回函数执行结果
 fn post_rpc_raw(addr: &str, body: &str, headers: &[(&str, &str)]) -> (u16, String) {
     let mut stream = TcpStream::connect(addr).expect("connect server");
-    let mut request = format!("POST /rpc HTTP/1.1\r\nHost: {addr}\r\n");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .expect("read timeout");
+    let mut request = format!("POST /rpc HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n");
     for (name, value) in headers {
         request.push_str(name);
         request.push_str(": ");
@@ -164,7 +167,6 @@ fn post_rpc_raw(addr: &str, body: &str, headers: &[(&str, &str)]) -> (u16, Strin
     }
     request.push_str(&format!("Content-Length: {}\r\n\r\n{}", body.len(), body));
     stream.write_all(request.as_bytes()).expect("write");
-    stream.shutdown(std::net::Shutdown::Write).ok();
 
     let mut buf = String::new();
     stream.read_to_string(&mut buf).expect("read");
@@ -258,6 +260,23 @@ fn rpc_gateway_transport_round_trips_sse_keepalive_enabled() {
     );
     codexmanager_service::set_gateway_sse_keepalive_enabled(previous_enabled)
         .expect("restore sse keepalive setting");
+}
+
+// A mock provider finishing its response only proves transport completion.
+// Async login and usage jobs still need to commit their domain result before
+// the fixture can inspect it or restore the process-wide database environment.
+fn wait_for_background_result<T>(label: &str, mut read: impl FnMut() -> Option<T>) -> T {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(result) = read() {
+            return result;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{label} did not reach its persisted terminal state"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 fn wait_for_proxy_test_job(job_id: &str) -> serde_json::Value {
@@ -557,17 +576,26 @@ struct RecordedRequest {
 fn start_mock_device_login_server() -> (
     String,
     std::sync::mpsc::Receiver<RecordedRequest>,
+    std::sync::mpsc::Sender<()>,
     thread::JoinHandle<()>,
 ) {
     let server = Server::http("127.0.0.1:0").expect("start mock device server");
     let addr = format!("http://{}", server.server_addr());
     let (tx, rx) = std::sync::mpsc::channel();
+    let (continue_tx, continue_rx) = std::sync::mpsc::channel();
     let handle = thread::spawn(move || {
+        let mut first_peer = None;
         for _ in 0..4 {
             let mut request = server
                 .recv_timeout(Duration::from_secs(5))
                 .expect("device login server timeout")
                 .expect("receive device request");
+            let peer = request.remote_addr().copied().expect("provider peer");
+            assert_eq!(
+                *first_peer.get_or_insert(peer),
+                peer,
+                "device login must reuse its provider keepalive connection"
+            );
             let path = request.url().to_string();
             let mut body = String::new();
             request
@@ -588,6 +616,12 @@ fn start_mock_device_login_server() -> (
                 })
                 .to_string(),
                 "/api/accounts/deviceauth/token" => {
+                    // Keep the provider response in flight until the first
+                    // Axum listener has fully stopped. Its connection driver
+                    // must survive for background login and later listeners.
+                    continue_rx
+                        .recv_timeout(Duration::from_secs(5))
+                        .expect("first listener closed before provider continues");
                     assert!(body.contains("\"device_auth_id\":\"device-auth-123\""));
                     assert!(body.contains("\"user_code\":\"ABCD-1234\""));
                     serde_json::json!({
@@ -638,7 +672,7 @@ fn start_mock_device_login_server() -> (
             request.respond(response).expect("respond device request");
         }
     });
-    (addr, rx, handle)
+    (addr, rx, continue_tx, handle)
 }
 
 fn start_mock_pending_device_login_server() -> (
@@ -2048,7 +2082,7 @@ fn rpc_app_settings_can_roundtrip_free_account_max_model() {
         id: 31.into(),
         method: "appSettings/set".to_string(),
         params: Some(serde_json::json!({
-            "freeAccountMaxModel": "gpt-5.3-codex"
+            "freeAccountMaxModel": "gpt-5.6-luna"
         })),
         trace: None,
     };
@@ -2059,7 +2093,7 @@ fn rpc_app_settings_can_roundtrip_free_account_max_model() {
         set_result
             .get("freeAccountMaxModel")
             .and_then(|value| value.as_str()),
-        Some("gpt-5.3-codex")
+        Some("gpt-5.6-luna")
     );
 
     let get_server = codexmanager_service::start_one_shot_server().expect("start server");
@@ -2076,7 +2110,7 @@ fn rpc_app_settings_can_roundtrip_free_account_max_model() {
         get_result
             .get("freeAccountMaxModel")
             .and_then(|value| value.as_str()),
-        Some("gpt-5.3-codex")
+        Some("gpt-5.6-luna")
     );
 }
 
@@ -2630,7 +2664,7 @@ fn rpc_login_start_returns_api_key_variant() {
 #[test]
 fn rpc_login_start_chatgpt_device_code_returns_user_code() {
     let ctx = RpcTestContext::new("rpc-login-device-code");
-    let (issuer, request_rx, request_join) = start_mock_device_login_server();
+    let (issuer, request_rx, continue_tx, request_join) = start_mock_device_login_server();
     let _issuer_guard = EnvGuard::set("CODEXMANAGER_ISSUER", &issuer);
 
     let server = codexmanager_service::start_one_shot_server().expect("start server");
@@ -2662,11 +2696,22 @@ fn rpc_login_start_chatgpt_device_code_returns_user_code() {
         .to_string();
 
     let mut requests = Vec::new();
-    for _ in 0..4 {
+    for _ in 0..2 {
         requests.push(
             request_rx
                 .recv_timeout(Duration::from_secs(5))
                 .expect("receive device request"),
+        );
+    }
+    server.join();
+    continue_tx
+        .send(())
+        .expect("continue provider after first listener closes");
+    for _ in 0..2 {
+        requests.push(
+            request_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("receive token exchange after first listener closes"),
         );
     }
     request_join.join().expect("join mock device server");
@@ -2688,7 +2733,6 @@ fn rpc_login_start_chatgpt_device_code_returns_user_code() {
         .body
         .contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange"));
 
-    let status_server = codexmanager_service::start_one_shot_server().expect("start server");
     let status_req = JsonRpcRequest {
         id: 5.into(),
         method: "account/login/status".to_string(),
@@ -2696,8 +2740,16 @@ fn rpc_login_start_chatgpt_device_code_returns_user_code() {
         trace: None,
     };
     let status_json = serde_json::to_string(&status_req).expect("serialize status");
-    let status_resp = post_rpc(&status_server.addr, &status_json);
-    let status_result = status_resp.get("result").expect("status result");
+    let status_result = wait_for_background_result("device login", || {
+        let status_server = codexmanager_service::start_one_shot_server().expect("start server");
+        let status_resp = post_rpc(&status_server.addr, &status_json);
+        let result = status_resp.get("result").expect("status result");
+        let status = result
+            .get("status")
+            .and_then(|value| value.as_str())
+            .expect("login status");
+        (!matches!(status, "pending" | "completing")).then(|| result.clone())
+    });
     assert_eq!(
         status_result.get("status").and_then(|value| value.as_str()),
         Some("success")
@@ -3149,10 +3201,11 @@ fn rpc_chatgpt_auth_tokens_login_enqueues_usage_refresh() {
         .find(|account| account.chatgpt_account_id.as_deref() == Some("org-usage-refresh"))
         .map(|account| account.id)
         .expect("account id");
-    let snapshot = storage
-        .latest_usage_snapshot_for_account(&account_id)
-        .expect("find usage snapshot")
-        .expect("usage snapshot exists");
+    let snapshot = wait_for_background_result("automatic usage refresh", || {
+        storage
+            .latest_usage_snapshot_for_account(&account_id)
+            .expect("find usage snapshot")
+    });
     assert_eq!(snapshot.used_percent, Some(25.0));
     assert_eq!(snapshot.secondary_used_percent, Some(10.0));
 }
@@ -4275,7 +4328,7 @@ fn rpc_account_manager_assigns_key_and_bills_wallet() {
         "apikey/create",
         Some(serde_json::json!({
             "name": "Member key",
-            "modelSlug": "gpt-5.4-mini",
+            "modelSlug": "gpt-5.6-luna",
             "rotationStrategy": "account_rotation"
         })),
     );
@@ -4290,7 +4343,7 @@ fn rpc_account_manager_assigns_key_and_bills_wallet() {
             key_id: Some(key_id.clone()),
             request_path: "/v1/responses".to_string(),
             method: "POST".to_string(),
-            model: Some("gpt-5.4-mini".to_string()),
+            model: Some("gpt-5.6-luna".to_string()),
             status_code: Some(200),
             created_at: codexmanager_core::storage::now_ts(),
             ..Default::default()
@@ -4300,7 +4353,7 @@ fn rpc_account_manager_assigns_key_and_bills_wallet() {
         &storage,
         Some(&key_id),
         unassigned_request_log_id,
-        "gpt-5.4-mini",
+        "gpt-5.6-luna",
         None,
         "actual",
         1,
@@ -4410,7 +4463,7 @@ fn rpc_account_manager_assigns_key_and_bills_wallet() {
             key_id: Some(key_id.clone()),
             request_path: "/v1/responses".to_string(),
             method: "POST".to_string(),
-            model: Some("gpt-5.4-mini".to_string()),
+            model: Some("gpt-5.6-luna".to_string()),
             status_code: Some(200),
             created_at: codexmanager_core::storage::now_ts(),
             ..Default::default()
@@ -4420,7 +4473,7 @@ fn rpc_account_manager_assigns_key_and_bills_wallet() {
         &storage,
         Some(&key_id),
         request_log_id,
-        "gpt-5.4-mini",
+        "gpt-5.6-luna",
         None,
         "actual",
         333_333,
@@ -4431,14 +4484,14 @@ fn rpc_account_manager_assigns_key_and_bills_wallet() {
         true,
     )
     .expect("charge wallet");
-    assert_eq!(charge_snapshot.base_cost_microusd, 250_000);
-    assert_eq!(charge_snapshot.charged_cost_microusd, 375_000);
+    assert_eq!(charge_snapshot.base_cost_microusd, 133_334);
+    assert_eq!(charge_snapshot.charged_cost_microusd, 200_000);
     assert_eq!(charge_snapshot.rate_multiplier_millis, 1_500);
     let charged_wallet = storage
         .find_wallet_by_owner("user", &user_id)
         .expect("read wallet")
         .expect("wallet");
-    assert_eq!(charged_wallet.balance_credit_micros, 625_000);
+    assert_eq!(charged_wallet.balance_credit_micros, 800_000);
 
     let owners = call_rpc(205, "accountManager/apiKeyOwners/list", None);
     let owners = owners.as_array().expect("owners array");

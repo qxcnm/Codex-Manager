@@ -4,7 +4,6 @@ import {
   useEffect,
   useMemo,
   useState,
-  type ReactNode,
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import {
@@ -71,6 +70,7 @@ import { useMemberDashboardSummary } from "@/hooks/useMemberDashboardSummary";
 import { usePageTransitionReady } from "@/hooks/usePageTransitionReady";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
 import { useCodexProfileModeStatus } from "@/hooks/useCodexProfileModeStatus";
+import { useDesktopPageActive } from "@/hooks/useDesktopPageActive";
 import {
   estimateChartYAxisWidth,
   formatCompactTokenAmount,
@@ -349,45 +349,6 @@ function DashboardInitialSkeleton() {
   );
 }
 
-function DirectModeUnavailable({
-  active,
-  children,
-  className,
-}: {
-  active: boolean;
-  children: ReactNode;
-  className?: string;
-}) {
-  const { t } = useI18n();
-  if (!active) return <>{children}</>;
-
-  return (
-    <div className={cn("relative overflow-hidden rounded-xl", className)}>
-      <div className="pointer-events-none select-none opacity-60 blur-[1px] grayscale">
-        {children}
-      </div>
-      <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/45 p-4 backdrop-blur-sm">
-        <div className="grid max-w-md justify-items-center gap-3 rounded-2xl border border-amber-500/40 bg-background/80 px-5 py-4 text-center shadow-lg shadow-amber-500/10">
-          <div>
-            <div className="text-sm font-semibold text-amber-700 dark:text-amber-200">
-              {t("账号直连模式下不可用")}
-            </div>
-            <div className="mt-1 text-xs text-muted-foreground">
-              {t("切换到本地网关后可统计请求日志、Token 和费用")}
-            </div>
-          </div>
-          <a
-            href={buildStaticRouteUrl("/platform-mode")}
-            className="inline-flex h-8 items-center justify-center rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            {t("去切换为本地网关")}
-          </a>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function sumDashboardTokenUsages(usages: DashboardTokenUsage[]): DashboardTokenUsage {
   return usages.reduce<DashboardTokenUsage>(
     (total, usage) => ({
@@ -658,7 +619,7 @@ function AdminUsageAnalyticsCard({
   }, [summary?.dailyUsage.length, summary?.rangeEndTs, summary?.rangeStartTs]);
 
   if (isLoading) {
-    return <Skeleton className="h-[420px] w-full rounded-xl" />;
+    return <Skeleton className="h-[320px] w-full rounded-lg" />;
   }
   if (isError) {
     return (
@@ -717,23 +678,18 @@ function AdminUsageAnalyticsCard({
       id="admin-usage-analytics"
       className="dashboard-analytics-card dashboard-primary-panel glass-card mission-panel scroll-mt-4 overflow-hidden shadow-sm"
     >
-      <CardHeader className="flex flex-col gap-4">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <div>
+      <CardHeader className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-1.5 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <CardTitle className="flex items-center gap-2 text-base font-semibold">
               <LineChart className="h-4 w-4 text-primary" />
               {t("管理员用量分析")}
             </CardTitle>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t("按模型查看 token 和请求趋势，支持小时粒度")}
-            </p>
-            <div className="mt-2 text-[11px] text-muted-foreground">
+            <span className="text-xs text-muted-foreground">
               {t("当前区间")} {formatShortDateRange(summary.rangeStartTs, summary.rangeEndTs, locale)}
-              {" · "}
-              {t("图表区域支持鼠标滚轮缩放")}
-            </div>
+            </span>
           </div>
-          <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+          <div className="flex flex-wrap items-center gap-2 md:justify-end">
             <div className="flex flex-wrap items-center gap-2">
               <Select
                 value={rangePreset}
@@ -741,7 +697,7 @@ function AdminUsageAnalyticsCard({
                   onRangePresetChange(value as AdminUsageRangePreset)
                 }
               >
-                <SelectTrigger className="w-[132px] bg-background/40">
+                <SelectTrigger className="h-8 w-[120px] bg-background/40">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -756,28 +712,30 @@ function AdminUsageAnalyticsCard({
                   </SelectGroup>
                 </SelectContent>
               </Select>
-              <Input
-                type="date"
-                className="w-[144px] bg-background/40 text-xs"
-                value={rangeStartInput}
-                disabled={rangePreset !== "custom"}
-                onChange={(event) => onRangeStartInputChange(event.target.value)}
-              />
-              <Input
-                type="date"
-                className="w-[144px] bg-background/40 text-xs"
-                value={rangeEndInput}
-                disabled={rangePreset !== "custom"}
-                onChange={(event) => onRangeEndInputChange(event.target.value)}
-              />
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={rangePreset !== "custom" || isCustomRangeInvalid}
-                onClick={onApplyCustomRange}
-              >
-                {t("应用")}
-              </Button>
+              {rangePreset === "custom" ? (
+                <>
+                  <Input
+                    type="date"
+                    className="h-8 w-[144px] bg-background/40 text-xs"
+                    value={rangeStartInput}
+                    onChange={(event) => onRangeStartInputChange(event.target.value)}
+                  />
+                  <Input
+                    type="date"
+                    className="h-8 w-[144px] bg-background/40 text-xs"
+                    value={rangeEndInput}
+                    onChange={(event) => onRangeEndInputChange(event.target.value)}
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={isCustomRangeInvalid}
+                    onClick={onApplyCustomRange}
+                  >
+                    {t("应用")}
+                  </Button>
+                </>
+              ) : null}
               {hasZoomWindow ? (
                 <Button
                   size="sm"
@@ -796,7 +754,7 @@ function AdminUsageAnalyticsCard({
           </div>
         </div>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="space-y-2">
         {summary.seriesUsage.length > 0 ? (
           <AdminUsageTrendChart
             summary={summary}
@@ -815,7 +773,7 @@ function AdminUsageAnalyticsCard({
           />
         )}
         <div className="grid gap-3 text-xs sm:grid-cols-2 xl:grid-cols-4">
-          <div className="mission-panel rounded-md border border-primary/20 bg-primary/10 px-3 py-2">
+          <div className="min-w-0 border-t border-border/60 pt-3">
             <div className="text-muted-foreground">{rangeBadgeLabel}</div>
             <div className="mt-1 font-mono font-semibold text-primary">
               {formatCompactTokenAmount(rangeUsage.totalTokens)}
@@ -824,7 +782,7 @@ function AdminUsageAnalyticsCard({
               {formatUsd(rangeUsage.estimatedCostUsd)}
             </div>
           </div>
-          <div className="mission-panel rounded-md border border-primary/20 bg-primary/10 px-3 py-2">
+          <div className="min-w-0 border-t border-border/60 pt-3">
             <div className="text-muted-foreground">
               {isTodayOnlyRange ? t("今日请求") : t("区间请求")}
             </div>
@@ -832,7 +790,7 @@ function AdminUsageAnalyticsCard({
               {rangeUsage.requestCount} · {t("成功")} {rangeUsage.successCount}
             </div>
           </div>
-          <div className="mission-panel rounded-md border border-primary/20 bg-primary/10 px-3 py-2">
+          <div className="min-w-0 border-t border-border/60 pt-3">
             <div className="text-muted-foreground">
               {isTodayOnlyRange ? t("输入 / 输出") : t("区间输入 / 输出")}
             </div>
@@ -841,7 +799,7 @@ function AdminUsageAnalyticsCard({
               {formatCompactTokenAmount(rangeUsage.outputTokens)}
             </div>
           </div>
-          <div className="mission-panel rounded-md border border-primary/20 bg-primary/10 px-3 py-2">
+          <div className="min-w-0 border-t border-border/60 pt-3">
             <div className="text-muted-foreground">
               {isTodayOnlyRange ? t("缓存 / 推理") : t("区间缓存 / 推理")}
             </div>
@@ -860,6 +818,7 @@ function AdminUsageAnalyticsCard({
 }
 
 function AdminDashboard() {
+  const isPageActive = useDesktopPageActive("/");
   const { stats, isLoading, isServiceReady } = useDashboardStats({
     requestLogLimit: 0,
     includeAccountHints: false,
@@ -871,7 +830,7 @@ function AdminDashboard() {
     includeAccountDetails: false,
   });
   const { isDirectAccountMode } = useCodexProfileModeStatus({
-    enabled: true,
+    enabled: isPageActive,
     refetchIntervalMs: 10_000,
   });
   const localDayRange = useLocalDayRange();
@@ -940,7 +899,7 @@ function AdminDashboard() {
     })();
 
   return (
-    <div className="space-y-5 animate-in fade-in duration-500 xl:space-y-7">
+    <div className="space-y-2 animate-in fade-in duration-500">
       <DashboardGatewayStatus
         connected={isServiceReady}
         directMode={isDirectAccountMode}
@@ -968,53 +927,50 @@ function AdminDashboard() {
         isLoading={isLoading}
       />
 
-      <DirectModeUnavailable active={isDirectAccountMode}>
-        <AdminUsageAnalyticsCard
-          summary={adminUsageSummary}
-          isLoading={isLoading || isAdminUsageLoading}
-          isRefreshing={isAdminUsageFetching && !isAdminUsageLoading}
-          isError={isAdminUsageError}
-          rangePreset={adminUsageRangePreset}
-          rangeStartInput={adminUsageRangeStartInput}
-          rangeEndInput={adminUsageRangeEndInput}
-          onRangePresetChange={(preset) => {
-            setAdminUsageRangePreset(preset);
-            if (preset === "custom") {
-              return;
-            }
-            const nextRange = buildAdminUsagePresetRange(
-              preset,
-              localDayRange.dayStartTs,
-              localDayRange.dayEndTs,
-            );
-            setAdminUsageRangeStartInput(nextRange.startInput);
-            setAdminUsageRangeEndInput(nextRange.endInput);
-            setAdminUsageRangeParams(nextRange);
-          }}
-          onRangeStartInputChange={setAdminUsageRangeStartInput}
-          onRangeEndInputChange={setAdminUsageRangeEndInput}
-          onApplyCustomRange={() => {
-            const startTs = parseDateInputStartTs(adminUsageRangeStartInput);
-            const endTs = parseDateInputEndTs(adminUsageRangeEndInput);
-            if (startTs == null || endTs == null || endTs <= startTs) {
-              return;
-            }
-            if (endTs - startTs > 31 * 86_400) {
-              setAdminUsageGranularity("day");
-            }
-            setAdminUsageRangeParams({
-              startTs,
-              endTs,
-              startInput: adminUsageRangeStartInput,
-              endInput: adminUsageRangeEndInput,
-            });
-          }}
-          isCustomRangeInvalid={isCustomAdminUsageRangeInvalid}
-          granularity={adminUsageGranularity}
-          onGranularityChange={setAdminUsageGranularity}
-        />
-      </DirectModeUnavailable>
-
+      <AdminUsageAnalyticsCard
+        summary={adminUsageSummary}
+        isLoading={isLoading || isAdminUsageLoading}
+        isRefreshing={isAdminUsageFetching && !isAdminUsageLoading}
+        isError={isAdminUsageError}
+        rangePreset={adminUsageRangePreset}
+        rangeStartInput={adminUsageRangeStartInput}
+        rangeEndInput={adminUsageRangeEndInput}
+        onRangePresetChange={(preset) => {
+          setAdminUsageRangePreset(preset);
+          if (preset === "custom") {
+            return;
+          }
+          const nextRange = buildAdminUsagePresetRange(
+            preset,
+            localDayRange.dayStartTs,
+            localDayRange.dayEndTs,
+          );
+          setAdminUsageRangeStartInput(nextRange.startInput);
+          setAdminUsageRangeEndInput(nextRange.endInput);
+          setAdminUsageRangeParams(nextRange);
+        }}
+        onRangeStartInputChange={setAdminUsageRangeStartInput}
+        onRangeEndInputChange={setAdminUsageRangeEndInput}
+        onApplyCustomRange={() => {
+          const startTs = parseDateInputStartTs(adminUsageRangeStartInput);
+          const endTs = parseDateInputEndTs(adminUsageRangeEndInput);
+          if (startTs == null || endTs == null || endTs <= startTs) {
+            return;
+          }
+          if (endTs - startTs > 31 * 86_400) {
+            setAdminUsageGranularity("day");
+          }
+          setAdminUsageRangeParams({
+            startTs,
+            endTs,
+            startInput: adminUsageRangeStartInput,
+            endInput: adminUsageRangeEndInput,
+          });
+        }}
+        isCustomRangeInvalid={isCustomAdminUsageRangeInvalid}
+        granularity={adminUsageGranularity}
+        onGranularityChange={setAdminUsageGranularity}
+      />
     </div>
   );
 }

@@ -2,6 +2,7 @@ export type CodexProfileMode =
   | "missing"
   | "unmanaged"
   | "direct_account"
+  | "direct_aggregate"
   | "gateway"
   | "managed_unknown";
 
@@ -18,12 +19,15 @@ export interface CodexProfileStatus {
   mode: CodexProfileMode;
   selectedAccountId: string | null;
   selectedApiKeyId: string | null;
+  selectedAggregateApiId: string | null;
   gatewayBaseUrl: string | null;
+  aggregateApiBaseUrl: string | null;
   supportsWebsockets: boolean;
   providerId: string;
   hasBackup: boolean;
   lastAppliedAt: number | null;
   profileWritable: boolean;
+  managedCatalogActive: boolean;
   error: string | null;
   warnings: string[];
   historyRepair: CodexProfileHistoryRepairSummary | null;
@@ -89,7 +93,19 @@ export interface CodexProfileApiKeyCandidate {
   catalogSource: "official" | "managed";
 }
 
+export interface CodexProfileAggregateApiCandidate {
+  id: string;
+  label: string;
+  supplierName: string | null;
+  providerType: string;
+  baseUrl: string;
+  sort: number;
+  modelOverride: string | null;
+  userAgent: string | null;
+}
+
 export interface CodexProfileCandidates {
   accounts: CodexProfileAccountCandidate[];
   apiKeys: CodexProfileApiKeyCandidate[];
+  aggregateApis: CodexProfileAggregateApiCandidate[];
 }

@@ -231,7 +231,7 @@ impl Storage {
             params![HARDENING_MIGRATION_VERSION, now_ts()],
         )?;
         tx.commit()?;
-        if let Some(migrations) = self.applied_migrations.borrow_mut().as_mut() {
+        if let Some(migrations) = self.migration_cache().as_mut() {
             migrations.insert(HARDENING_MIGRATION_VERSION.to_string());
         }
         Ok(())
@@ -577,11 +577,11 @@ mod tests {
         let storage = Storage::open_in_memory().unwrap();
         storage.init().unwrap();
         let (_, low) = storage
-            .select_model_price_tier_v2("gpt-5.4", 271_999)
+            .select_model_price_tier_v2("gpt-5.5", 271_999)
             .unwrap()
             .unwrap();
         let (_, high) = storage
-            .select_model_price_tier_v2("gpt-5.4", 272_000)
+            .select_model_price_tier_v2("gpt-5.5", 272_000)
             .unwrap()
             .unwrap();
         assert_eq!(low.min_input_tokens, 0);
@@ -616,13 +616,41 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("model_price_missing"));
-        input.model_slug = "gpt-5.4-mini".into();
+        input.model_slug = "gpt-6-luna".into();
         input.input_tokens = 10;
         input.cached_input_tokens = 20;
         let first = storage.record_charge_snapshot_v2(&input).unwrap();
         let second = storage.record_charge_snapshot_v2(&input).unwrap();
         assert_eq!(first, second);
         assert_eq!(first.cached_input_tokens, 10);
+    }
+
+    #[test]
+    fn image25_composite_input_prices_do_not_create_unified_charge_snapshots() {
+        let storage = Storage::open_in_memory().unwrap();
+        storage.init().unwrap();
+
+        for slug in ["gpt-image-2.5-sunburst", "gpt-image-2.5-flare"] {
+            storage.conn.execute("INSERT INTO request_logs(request_path,method,model,created_at) VALUES('/v1/images/generations','POST',?1,1)",[slug]).unwrap();
+            let request_log_id = storage.conn.last_insert_rowid();
+            let error = storage
+                .record_charge_snapshot_v2(&ChargeSnapshotInputV2 {
+                    request_log_id,
+                    model_slug: slug.into(),
+                    usage_source: "actual".into(),
+                    input_tokens: 1_000,
+                    cached_input_tokens: 100,
+                    output_tokens: 2_000,
+                    rate_multiplier_millis: 1_000,
+                    ..Default::default()
+                })
+                .expect_err("mixed text/image pricing must not use one input rate");
+            assert!(error.to_string().contains("model_price_missing"));
+            assert!(storage
+                .get_charge_snapshot_v2(request_log_id)
+                .unwrap()
+                .is_none());
+        }
     }
 
     #[test]
@@ -642,7 +670,7 @@ mod tests {
         let request_log_id = storage.conn.last_insert_rowid();
         let input = ChargeSnapshotInputV2 {
             request_log_id,
-            model_slug: "gpt-5.4-mini".into(),
+            model_slug: "gpt-6-luna".into(),
             usage_source: "estimated".into(),
             input_tokens: 100,
             cached_input_tokens: 0,
@@ -696,7 +724,7 @@ mod tests {
         let error = storage
             .record_charge_snapshot_v2(&ChargeSnapshotInputV2 {
                 request_log_id,
-                model_slug: "gpt-5.4-mini".into(),
+                model_slug: "gpt-6-luna".into(),
                 usage_source: "actual".into(),
                 input_tokens: 1_000,
                 cached_input_tokens: 0,

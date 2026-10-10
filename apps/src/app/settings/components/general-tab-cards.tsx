@@ -29,24 +29,20 @@ export function AboutCodexManagerCard({ t }: { t: (value: string) => string }) {
           {t("查看软件名称、功能简介和当前版本信息")}
         </CardDescription>
       </CardHeader>
-      <CardContent>
-        <Card size="sm">
-          <CardContent className="space-y-2 text-sm">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-base font-semibold text-foreground">
-                CodexManager
-              </span>
-              <Badge variant="secondary" className="font-mono">
-                v{APP_VERSION}
-              </Badge>
-            </div>
-            <p className="leading-6 text-muted-foreground">
-              {t(
-                "CodexManager 用于统一管理 Codex CLI 账号、本地网关、平台密钥、请求日志和用量统计，让 Codex 接入与运维更集中可控。",
-              )}
-            </p>
-          </CardContent>
-        </Card>
+      <CardContent className="space-y-2 text-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-base font-semibold text-foreground">
+            CodexManager
+          </span>
+          <Badge variant="secondary" className="font-mono">
+            v{APP_VERSION}
+          </Badge>
+        </div>
+        <p className="leading-6 text-muted-foreground">
+          {t(
+            "CodexManager 用于统一管理 Codex CLI 账号、本地网关、平台密钥、请求日志和用量统计，让 Codex 接入与运维更集中可控。",
+          )}
+        </p>
       </CardContent>
     </Card>
   );
@@ -113,26 +109,24 @@ export function ServiceListenCard({
           </Select>
         </div>
 
-        <Card size="sm">
-          <CardContent className="text-sm">
-            <div className="flex items-center justify-between gap-4">
-              <span className="text-muted-foreground">{t("当前访问地址")}</span>
-              <code className="text-xs text-primary">{snapshot.serviceAddr}</code>
-            </div>
-            <Separator className="my-2" />
-            <div className="mt-2 flex items-center justify-between gap-4">
-              <span className="text-muted-foreground">{t("实际监听地址")}</span>
-              <code className="text-xs text-primary">
-                {inferServiceBindPreview(
-                  snapshot.serviceAddr,
-                  snapshot.serviceListenMode || "loopback",
-                )}
-              </code>
-            </div>
-          </CardContent>
-        </Card>
+        <div className="space-y-2 border-t border-border/60 pt-4 text-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-muted-foreground">{t("当前访问地址")}</span>
+            <code className="break-all text-xs text-foreground">{snapshot.serviceAddr}</code>
+          </div>
+          <Separator />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-muted-foreground">{t("实际监听地址")}</span>
+            <code className="break-all text-xs text-foreground">
+              {inferServiceBindPreview(
+                snapshot.serviceAddr,
+                snapshot.serviceListenMode || "loopback",
+              )}
+            </code>
+          </div>
+        </div>
 
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-xs leading-5 text-muted-foreground">
           {t("切换到")} <code>0.0.0.0</code>{" "}
           {t(
             "后，局域网设备可通过当前机器 IP 访问；设置保存后需要重启相关进程才会生效，Web 监听地址会默认跟随这里的模式。",
@@ -173,31 +167,27 @@ export function AccessControlCard({
           {t("统一管理 Web 登录方式、访问密码和团队额度分发。")}
         </CardDescription>
       </CardHeader>
-      <CardContent>
-        <Card size="sm">
-          <CardContent className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div className="space-y-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <Label>{t("当前访问方式")}</Label>
-                <Badge variant="secondary">{t(webAuthModeLabel)}</Badge>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {snapshot.distributionEnabled
-                  ? t("额度分发已开启，平台 Key 会按归属钱包扣减额度。")
-                  : t("额度分发未开启，平台 Key 不会扣减成员钱包额度。")}
-              </p>
-            </div>
-            <Button
-              variant="outline"
-              className="gap-2 self-start md:self-auto"
-              disabled={!canAccessManagementRpc}
-              onClick={onOpen}
-            >
-              <ShieldCheck className="h-4 w-4" />
-              {t("访问控制")}
-            </Button>
-          </CardContent>
-        </Card>
+      <CardContent className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <Label>{t("当前访问方式")}</Label>
+            <Badge variant="secondary">{t(webAuthModeLabel)}</Badge>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {snapshot.distributionEnabled
+              ? t("额度分发已开启，平台 Key 会按归属钱包扣减额度。")
+              : t("额度分发未开启，平台 Key 不会扣减成员钱包额度。")}
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          className="gap-2 self-start md:self-auto"
+          disabled={!canAccessManagementRpc}
+          onClick={onOpen}
+        >
+          <ShieldCheck className="h-4 w-4" />
+          {t("访问控制")}
+        </Button>
       </CardContent>
     </Card>
   );

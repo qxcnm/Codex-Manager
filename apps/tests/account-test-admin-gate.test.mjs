@@ -49,3 +49,18 @@ test("account test IDs never fall back to predictable browser randomness", () =>
   assert.match(modalSource, /cryptoApi\.getRandomValues\(new Uint8Array\(16\)\)/);
   assert.doesNotMatch(modalSource, /Math\.random|Date\.now/);
 });
+
+test("account text tests prefer the backend GPT-6 Luna default", () => {
+  assert.match(
+    modalSource,
+    /const DEFAULT_ACCOUNT_TEST_MODEL = "gpt-6-luna";/,
+  );
+  assert.match(
+    modalSource,
+    /model\.slug\.toLowerCase\(\) === DEFAULT_ACCOUNT_TEST_MODEL/,
+  );
+  assert.match(
+    modalSource,
+    /preferredTextModel \?\? textModel \?\? enabled\[0\]/,
+  );
+});

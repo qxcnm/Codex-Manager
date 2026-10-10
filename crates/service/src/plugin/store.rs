@@ -57,6 +57,7 @@ pub(crate) fn rearm_enabled_interval_tasks_for_plugin(
     plugin_id: Option<&str>,
     now: i64,
 ) -> Result<(), String> {
+    let storage = crate::account::remote_storage::AccountStorage::new(storage);
     storage
         .repair_plugin_task_schedules(plugin_id, now)
         .map(|_| ())
@@ -112,6 +113,7 @@ pub(crate) fn handle_enable(
     let Some(storage) = open_storage() else {
         return super::json_response(req, error_result("storage unavailable"));
     };
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     if enabled
         && rearm_enabled_interval_tasks_for_plugin(&storage, Some(&plugin_id), now_ts()).is_err()
     {
@@ -175,6 +177,7 @@ pub(crate) fn handle_task_update(
     let Some(storage) = open_storage() else {
         return super::json_response(req, error_result("storage unavailable"));
     };
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     let Some(task) = storage.find_plugin_task(&task_id).ok().flatten() else {
         return super::json_response(req, error_result("task not found"));
     };
@@ -309,6 +312,7 @@ pub(crate) fn handle_log_list(
 /// 返回函数执行结果
 pub(crate) fn list_installed_plugins() -> Result<Vec<InstalledPluginSummary>, String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     let installs = storage
         .list_plugin_install_summaries()
         .map_err(|err| err.to_string())?;
@@ -345,6 +349,7 @@ pub(crate) fn list_installed_plugins() -> Result<Vec<InstalledPluginSummary>, St
 /// 返回函数执行结果
 pub(crate) fn list_plugin_tasks(plugin_id: Option<&str>) -> Result<Vec<PluginTaskSummary>, String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     let tasks = storage
         .list_plugin_task_summaries(plugin_id)
         .map_err(|err| err.to_string())?;
@@ -387,6 +392,7 @@ pub(crate) fn list_plugin_run_logs(
     limit: i64,
 ) -> Result<Vec<PluginRunLogSummary>, String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     let logs = storage
         .list_plugin_run_log_summaries(plugin_id, task_id, limit)
         .map_err(|err| err.to_string())?;
@@ -427,7 +433,7 @@ pub(crate) fn list_plugin_run_logs(
 ///
 /// # 返回
 /// 返回函数执行结果
-fn to_installed_plugin_summary(
+pub(crate) fn to_installed_plugin_summary(
     plugin: &PluginInstallListSummary,
     task_count: i64,
     enabled_task_count: i64,

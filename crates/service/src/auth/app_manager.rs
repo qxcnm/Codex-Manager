@@ -1,3 +1,5 @@
+#[path = "app_manager_seaorm.rs"]
+mod seaorm;
 use codexmanager_core::storage::{
     now_ts, ApiKeyOwner, AppUser, AppUserAccessSummary, AppUserSession, AppWallet,
     AppWalletLedgerEntry, BillingRule, PublicAppUserWithWallet, Storage,
@@ -153,6 +155,9 @@ pub fn distribution_enabled() -> bool {
 }
 
 pub(crate) fn distribution_enabled_for_storage(storage: &Storage) -> bool {
+    if seaorm::enabled() {
+        return distribution_enabled();
+    }
     let raw = storage
         .get_app_setting(APP_SETTING_DISTRIBUTION_ENABLED_KEY)
         .ok()
@@ -181,6 +186,9 @@ pub fn set_distribution_enabled(enabled: bool) -> Result<bool, String> {
 }
 
 pub fn billing_mode_lock_status() -> Result<BillingModeLockResult, String> {
+    if seaorm::enabled() {
+        return seaorm::run(seaorm::lock_status);
+    }
     let storage = open_storage_or_error()?;
     billing_mode_lock_status_for_storage(&storage)
 }
@@ -245,6 +253,12 @@ fn billing_mode_lock_reasons(storage: &Storage) -> Result<Vec<String>, String> {
 }
 
 pub fn app_auth_status_value() -> Result<Value, String> {
+    if seaorm::enabled() {
+        let (users, admins) = seaorm::run(seaorm::counts)?;
+        return Ok(
+            serde_json::json!({"mode":current_web_auth_mode(),"modeOptions":[WEB_AUTH_MODE_NONE,WEB_AUTH_MODE_PASSWORD,WEB_AUTH_MODE_ACCOUNTS],"passwordConfigured":super::web_access::web_access_password_configured(),"appUsersConfigured":admins>0,"appUserCount":users,"activeAdminCount":admins,"distributionEnabled":distribution_enabled(),"billingModeLock":billing_mode_lock_status()?}),
+        );
+    }
     crate::initialize_storage_if_needed()?;
     let storage = open_storage_or_error()?;
     let user_count = storage
@@ -271,6 +285,25 @@ pub fn app_auth_status_value() -> Result<Value, String> {
 }
 
 pub fn app_session_result(actor: &RpcActor) -> Result<AppSessionResult, String> {
+    if seaorm::enabled() {
+        let current_user = actor
+            .user_id
+            .clone()
+            .map(|id| seaorm::run(move |s| seaorm::public_by_id(s, id)))
+            .transpose()?;
+        return Ok(AppSessionResult {
+            mode: current_web_auth_mode(),
+            current_user,
+            role: actor.role.clone(),
+            permissions: actor
+                .permissions()
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            distribution_enabled: distribution_enabled(),
+            billing_mode_lock: billing_mode_lock_status()?,
+        });
+    }
     crate::initialize_storage_if_needed()?;
     let current_user = actor
         .user_id
@@ -303,6 +336,16 @@ pub fn bootstrap_app_admin(
     password: &str,
     display_name: Option<&str>,
 ) -> Result<AppLoginResult, String> {
+    if seaorm::enabled() {
+        let input = AppUserCreateInput {
+            username: username.into(),
+            password: password.into(),
+            display_name: display_name.map(str::to_string),
+            role: Some("admin".into()),
+            initial_balance_credit_micros: Some(0),
+        };
+        return seaorm::run(move |s| seaorm::bootstrap(s, input));
+    }
     crate::initialize_storage_if_needed()?;
     let storage = open_storage_or_error()?;
     let active_admin_count = storage
@@ -327,6 +370,11 @@ pub fn bootstrap_app_admin(
 }
 
 pub fn login_app_user(username: &str, password: &str) -> Result<AppLoginResult, String> {
+    if seaorm::enabled() {
+        let username = username.to_owned();
+        let password = password.to_owned();
+        return seaorm::run(move |s| seaorm::login(s, username, password));
+    }
     crate::initialize_storage_if_needed()?;
     let storage = open_storage_or_error()?;
     let username = normalize_username(username)?;
@@ -350,6 +398,10 @@ pub fn login_app_user(username: &str, password: &str) -> Result<AppLoginResult, 
 }
 
 pub fn resolve_app_user_session(token: &str) -> Result<Option<AppSessionUserResult>, String> {
+    if seaorm::enabled() {
+        let token = token.to_owned();
+        return seaorm::run(move |s| seaorm::resolve(s, token));
+    }
     let token = token.trim();
     if token.is_empty() {
         return Ok(None);
@@ -373,6 +425,10 @@ pub fn resolve_app_user_session(token: &str) -> Result<Option<AppSessionUserResu
 }
 
 pub fn logout_app_user_session(token: &str) -> Result<(), String> {
+    if seaorm::enabled() {
+        let token = token.to_owned();
+        return seaorm::run(move |s| seaorm::logout(s, token));
+    }
     let token = token.trim();
     if token.is_empty() {
         return Ok(());
@@ -386,12 +442,18 @@ pub fn logout_app_user_session(token: &str) -> Result<(), String> {
 }
 
 pub fn create_app_user(input: AppUserCreateInput) -> Result<AppUserPublicResult, String> {
+    if seaorm::enabled() {
+        return seaorm::run(move |s| seaorm::create_user(s, input));
+    }
     crate::initialize_storage_if_needed()?;
     let storage = open_storage_or_error()?;
     create_app_user_with_storage(&storage, input)
 }
 
 pub fn list_app_users() -> Result<Vec<AppUserPublicResult>, String> {
+    if seaorm::enabled() {
+        return seaorm::run(seaorm::list);
+    }
     crate::initialize_storage_if_needed()?;
     let storage = open_storage_or_error()?;
     Ok(storage
@@ -403,6 +465,9 @@ pub fn list_app_users() -> Result<Vec<AppUserPublicResult>, String> {
 }
 
 pub fn update_app_user(input: AppUserUpdateInput) -> Result<AppUserPublicResult, String> {
+    if seaorm::enabled() {
+        return seaorm::run(move |s| seaorm::update(s, input));
+    }
     crate::initialize_storage_if_needed()?;
     let storage = open_storage_or_error()?;
     let user_id = input.id.trim();
@@ -474,6 +539,10 @@ pub fn update_app_user(input: AppUserUpdateInput) -> Result<AppUserPublicResult,
 }
 
 pub fn delete_app_user(user_id: &str) -> Result<(), String> {
+    if seaorm::enabled() {
+        let id = user_id.to_owned();
+        return seaorm::run(move |s| seaorm::delete(s, id));
+    }
     crate::initialize_storage_if_needed()?;
     let storage = open_storage_or_error()?;
     let user_id = user_id.trim();
@@ -502,6 +571,9 @@ pub fn delete_app_user(user_id: &str) -> Result<(), String> {
 }
 
 pub fn list_api_key_owners() -> Result<Vec<ApiKeyOwnerResult>, String> {
+    if seaorm::enabled() {
+        return seaorm::run(seaorm::owners);
+    }
     crate::initialize_storage_if_needed()?;
     let storage = open_storage_or_error()?;
     Ok(storage
@@ -513,6 +585,10 @@ pub fn list_api_key_owners() -> Result<Vec<ApiKeyOwnerResult>, String> {
 }
 
 pub fn list_api_key_ids_for_user(user_id: &str) -> Result<Vec<String>, String> {
+    if seaorm::enabled() {
+        let id = user_id.to_owned();
+        return seaorm::run(move |s| seaorm::keys_for_user(s, id));
+    }
     let user_id = user_id.trim();
     if user_id.is_empty() {
         return Ok(Vec::new());
@@ -525,6 +601,11 @@ pub fn list_api_key_ids_for_user(user_id: &str) -> Result<Vec<String>, String> {
 }
 
 pub fn api_key_belongs_to_user(key_id: &str, user_id: &str) -> Result<bool, String> {
+    if seaorm::enabled() {
+        let key = key_id.to_owned();
+        let user = user_id.to_owned();
+        return seaorm::run(move |s| seaorm::belongs(s, key, user));
+    }
     let key_id = key_id.trim();
     let user_id = user_id.trim();
     if key_id.is_empty() || user_id.is_empty() {
@@ -544,6 +625,17 @@ pub fn update_app_user_profile(
     actor: &RpcActor,
     display_name: Option<&str>,
 ) -> Result<AppUserPublicResult, String> {
+    if seaorm::enabled() {
+        let id = actor
+            .user_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .ok_or("permission_denied: profile requires user session")?
+            .to_owned();
+        let name = display_name.map(str::to_string);
+        return seaorm::run(move |s| seaorm::profile(s, id, name));
+    }
     let Some(user_id) = actor
         .user_id
         .as_deref()
@@ -569,6 +661,18 @@ pub fn change_app_user_password(
     current_password: &str,
     new_password: &str,
 ) -> Result<(), String> {
+    if seaorm::enabled() {
+        let id = actor
+            .user_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .ok_or("permission_denied: password change requires user session")?
+            .to_owned();
+        let current = current_password.to_owned();
+        let next = new_password.to_owned();
+        return seaorm::run(move |s| seaorm::password(s, id, current, next));
+    }
     let Some(user_id) = actor
         .user_id
         .as_deref()
@@ -600,6 +704,15 @@ pub fn wallet_top_up(
     note: Option<&str>,
     created_by_user_id: Option<&str>,
 ) -> Result<AppWalletResult, String> {
+    if seaorm::enabled() {
+        let kind = owner_kind.to_owned();
+        let id = owner_id.to_owned();
+        let note = note.map(str::to_string);
+        let actor = created_by_user_id.map(str::to_string);
+        return seaorm::run(move |s| {
+            seaorm::adjust(s, kind, id, amount_credit_micros, note, actor, false)
+        });
+    }
     if amount_credit_micros <= 0 {
         return Err("充值金额必须大于 0".to_string());
     }
@@ -648,6 +761,15 @@ pub fn wallet_set_available_credit(
     note: Option<&str>,
     created_by_user_id: Option<&str>,
 ) -> Result<AppWalletResult, String> {
+    if seaorm::enabled() {
+        let kind = owner_kind.to_owned();
+        let id = owner_id.to_owned();
+        let note = note.map(str::to_string);
+        let actor = created_by_user_id.map(str::to_string);
+        return seaorm::run(move |s| {
+            seaorm::adjust(s, kind, id, available_credit_micros, note, actor, true)
+        });
+    }
     if available_credit_micros < 0 {
         return Err("可用额度必须是非负数字".to_string());
     }
@@ -700,6 +822,13 @@ pub fn set_api_key_owner(
     owner_user_id: Option<&str>,
     project_id: Option<&str>,
 ) -> Result<ApiKeyOwnerResult, String> {
+    if seaorm::enabled() {
+        let key = key_id.to_owned();
+        let kind = owner_kind.to_owned();
+        let user = owner_user_id.map(str::to_string);
+        let project = project_id.map(str::to_string);
+        return seaorm::run(move |s| seaorm::set_owner(s, key, kind, user, project));
+    }
     crate::initialize_storage_if_needed()?;
     let storage = open_storage_or_error()?;
     let key_id = key_id.trim();
@@ -756,6 +885,10 @@ pub(crate) fn wallet_precheck_for_api_key_rate(
     key_id: &str,
     rate_multiplier_millis: Option<i64>,
 ) -> Result<(), String> {
+    if seaorm::enabled() {
+        let key = key_id.to_owned();
+        return seaorm::run(move |s| seaorm::precheck(s, key, rate_multiplier_millis));
+    }
     if !distribution_enabled_for_storage(storage) {
         return Ok(());
     }
@@ -800,6 +933,23 @@ pub fn record_request_charge_v2(
     raw_usage_json: Option<String>,
     charge_wallet: bool,
 ) -> Result<codexmanager_core::storage::ChargeSnapshotV2, String> {
+    if seaorm::enabled() {
+        let key = key_id.map(str::to_string);
+        let tier = service_tier.map(str::to_string);
+        let input = codexmanager_core::storage::ChargeSnapshotInputV2 {
+            request_log_id,
+            model_slug: model.into(),
+            usage_source: usage_source.into(),
+            input_tokens,
+            cached_input_tokens,
+            cache_write_tokens,
+            output_tokens,
+            rate_multiplier_millis: 1000,
+            raw_usage_json,
+            ..Default::default()
+        };
+        return seaorm::run(move |s| seaorm::charge(s, input, key, tier, charge_wallet));
+    }
     let model = model.trim();
     if model.is_empty() {
         return Err("model_slug_required".to_string());
@@ -1173,7 +1323,7 @@ fn ensure_user_can_own_wallet(
     Ok(user)
 }
 
-fn public_user(user: AppUser, wallet: Option<AppWallet>) -> AppUserPublicResult {
+pub(crate) fn public_user(user: AppUser, wallet: Option<AppWallet>) -> AppUserPublicResult {
     let can_own_wallet = app_user_can_own_wallet(&user);
     AppUserPublicResult {
         id: user.id,
@@ -1281,7 +1431,7 @@ fn normalize_owner_kind(raw: &str) -> Result<&'static str, String> {
     }
 }
 
-fn normalize_role(raw: Option<&str>) -> Result<String, String> {
+pub(crate) fn normalize_role(raw: Option<&str>) -> Result<String, String> {
     let role = raw
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -1301,7 +1451,7 @@ fn normalize_status(raw: &str) -> Result<String, String> {
     }
 }
 
-fn normalize_username(raw: &str) -> Result<String, String> {
+pub(crate) fn normalize_username(raw: &str) -> Result<String, String> {
     let value = raw.trim().to_ascii_lowercase();
     if value.len() < 3 || value.len() > 64 {
         return Err("用户名长度需要在 3 到 64 之间".to_string());
@@ -1315,14 +1465,14 @@ fn normalize_username(raw: &str) -> Result<String, String> {
     Ok(value)
 }
 
-fn validate_password(password: &str) -> Result<(), String> {
+pub(crate) fn validate_password(password: &str) -> Result<(), String> {
     if password.len() < 8 {
         return Err("密码至少需要 8 位".to_string());
     }
     Ok(())
 }
 
-fn hash_password(password: &str) -> String {
+pub(crate) fn hash_password(password: &str) -> String {
     let mut salt = [0u8; 16];
     rand::rngs::OsRng.fill_bytes(&mut salt);
     let salt_hex = hex_encode(&salt);
@@ -1330,7 +1480,7 @@ fn hash_password(password: &str) -> String {
     format!("sha256${salt_hex}${digest}")
 }
 
-fn verify_password_hash(password: &str, stored_hash: &str) -> bool {
+pub(crate) fn verify_password_hash(password: &str, stored_hash: &str) -> bool {
     let mut parts = stored_hash.split('$');
     let Some(kind) = parts.next() else {
         return false;
@@ -1358,7 +1508,7 @@ fn generate_session_token() -> String {
     format!("cms_{}", random_hex(32))
 }
 
-fn generate_id(prefix: &str, bytes_len: usize) -> String {
+pub(crate) fn generate_id(prefix: &str, bytes_len: usize) -> String {
     format!("{prefix}_{}", random_hex(bytes_len))
 }
 

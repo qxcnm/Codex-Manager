@@ -247,6 +247,17 @@ pub async fn service_account_update_sorts(
     rpc_call_in_background("account/updateSorts", addr, Some(params)).await
 }
 
+/// Update the automatic quota-reset warmup switch for the selected accounts.
+#[tauri::command]
+pub async fn service_account_reset_warmup_update(
+    addr: Option<String>,
+    account_ids: Vec<String>,
+    enabled: bool,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({ "accountIds": account_ids, "enabled": enabled });
+    rpc_call_in_background("account/resetWarmup/update", addr, Some(params)).await
+}
+
 /// 函数 `service_account_warmup`
 ///
 /// 作者: gaohongshun

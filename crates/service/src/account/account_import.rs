@@ -102,6 +102,7 @@ impl ExistingAccountIndex {
     /// # 返回
     /// 返回函数执行结果
     fn build(storage: &Storage) -> Result<Self, String> {
+        let storage = &crate::account::remote_storage::AccountStorage::new(storage);
         let accounts = storage
             .list_account_import_snapshots()
             .map_err(|e| e.to_string())?;
@@ -396,6 +397,7 @@ pub(crate) fn import_account_auth_json(
     contents: Vec<String>,
 ) -> Result<AccountImportResult, String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     import_account_auth_json_with_storage(&storage, contents, true)
 }
 
@@ -404,6 +406,7 @@ fn import_account_auth_json_with_storage(
     contents: Vec<String>,
     enqueue_usage_refresh: bool,
 ) -> Result<AccountImportResult, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let mut index = ExistingAccountIndex::build(&storage)?;
     let mut result = AccountImportResult {
         total: 0,
@@ -484,6 +487,7 @@ fn import_items_in_batches(
     batch_size: usize,
     enqueue_usage_refresh: bool,
 ) {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     if items.is_empty() {
         return;
     }
@@ -823,6 +827,7 @@ fn import_single_item(
     item: &Value,
     sequence: usize,
 ) -> Result<bool, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     import_single_item_with_account_id(storage, index, item, sequence)
         .map(|imported| imported.created)
 }
@@ -833,6 +838,7 @@ fn import_single_item_with_account_id(
     item: &Value,
     sequence: usize,
 ) -> Result<ImportedAccount, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let payload = extract_token_payload(item)?;
     let meta = extract_account_meta(item);
     let id_token_claims = parse_id_token_claims(&payload.id_token).ok();

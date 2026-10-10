@@ -3,12 +3,12 @@ use crate::apikey_profile::{
     PROTOCOL_ANTHROPIC_NATIVE, PROTOCOL_GEMINI_NATIVE, ROTATION_AGGREGATE_API,
 };
 use crate::gateway::request_helpers::ParsedRequestMetadata;
+use crate::http::gateway_request::GatewayRequest as Request;
 use base64::Engine;
 use bytes::Bytes;
 use codexmanager_core::storage::{ApiKey, ConversationBinding};
 use reqwest::Method;
 use serde_json::Value;
-use tiny_http::Request;
 
 use super::super::conversation_binding::RouteConversationSource;
 use super::{LocalValidationError, LocalValidationResult};
@@ -99,12 +99,14 @@ fn apply_model_instructions_policy(
     let Some(model_slug) = model_slug.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(body);
     };
-    let model = storage
-        .get_enabled_model_v2(crate::models_v2::policy_catalog_slug(model_slug))
-        .map_err(|err| {
-            LocalValidationError::new(500, format!("model_catalog_v2_read_failed: {err}"))
-        })?
-        .ok_or_else(|| LocalValidationError::new(404, format!("model_not_found: {model_slug}")))?;
+    let model =
+        crate::models_v2::enabled_model(storage, crate::models_v2::policy_catalog_slug(model_slug))
+            .map_err(|err| {
+                LocalValidationError::new(500, format!("model_catalog_v2_read_failed: {err}"))
+            })?
+            .ok_or_else(|| {
+                LocalValidationError::new(404, format!("model_not_found: {model_slug}"))
+            })?;
     let Ok(mut value) = serde_json::from_slice::<Value>(&body) else {
         return Ok(body);
     };
@@ -127,12 +129,14 @@ fn apply_model_fast_policy(
     let Some(model_slug) = model_slug.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok((body, false));
     };
-    let model = storage
-        .get_enabled_model_v2(crate::models_v2::policy_catalog_slug(model_slug))
-        .map_err(|err| {
-            LocalValidationError::new(500, format!("model_catalog_v2_read_failed: {err}"))
-        })?
-        .ok_or_else(|| LocalValidationError::new(404, format!("model_not_found: {model_slug}")))?;
+    let model =
+        crate::models_v2::enabled_model(storage, crate::models_v2::policy_catalog_slug(model_slug))
+            .map_err(|err| {
+                LocalValidationError::new(500, format!("model_catalog_v2_read_failed: {err}"))
+            })?
+            .ok_or_else(|| {
+                LocalValidationError::new(404, format!("model_not_found: {model_slug}"))
+            })?;
     crate::models_v2::fast_policy::apply(body, &model, client_service_tier).map_err(|_| {
         LocalValidationError::new(
             400,
@@ -408,16 +412,32 @@ fn transport_request_path(path: &str) -> String {
     path.to_string()
 }
 
-fn is_codex_image_tool_model(model: Option<&str>) -> bool {
+fn is_codex_image_tool_model(
+    storage: &codexmanager_core::storage::Storage,
+    model: Option<&str>,
+) -> bool {
     let Some(value) = model.map(str::trim).filter(|value| !value.is_empty()) else {
         return false;
     };
-    if value.eq_ignore_ascii_case(DEFAULT_IMAGES_TOOL_MODEL) {
+    if value.eq_ignore_ascii_case(DEFAULT_IMAGES_TOOL_MODEL)
+        || value.eq_ignore_ascii_case(
+            super::super::runtime_config::current_codex_image_tool_model().as_str(),
+        )
+    {
         return true;
     }
-    value.eq_ignore_ascii_case(
-        super::super::runtime_config::current_codex_image_tool_model().as_str(),
-    )
+    let normalized_value = value.to_ascii_lowercase();
+    if normalized_value.starts_with("gpt-image-") || normalized_value.starts_with("chatgpt-image-")
+    {
+        return true;
+    }
+    crate::models_v2::managed_model(storage, crate::models_v2::policy_catalog_slug(value))
+        .ok()
+        .flatten()
+        .is_some_and(|model| {
+            crate::models_v2::supports_image_generation(&model)
+                && !crate::models_v2::supports_text_generation(&model)
+        })
 }
 
 fn is_openai_text_generation_path(normalized_path: &str) -> bool {
@@ -438,21 +458,23 @@ fn ensure_non_text_model_not_used_for_text_request(
         return Ok(());
     };
 
-    if is_codex_image_tool_model(Some(model_slug)) {
+    if is_codex_image_tool_model(storage, Some(model_slug)) {
         return Err(LocalValidationError::new(
             400,
             crate::gateway::bilingual_error(
-                "gpt-image-2 只能用于图片接口",
-                "model gpt-image-2 is only supported on /v1/images/generations and /v1/images/edits",
+                format!("模型 {model_slug} 只能用于图片接口"),
+                format!(
+                    "model {model_slug} is only supported on /v1/images/generations and /v1/images/edits"
+                ),
             ),
         ));
     }
 
-    let catalog_model = storage
-        .get_managed_model_v2(crate::models_v2::policy_catalog_slug(model_slug))
-        .map_err(|err| {
-            LocalValidationError::new(500, format!("model_catalog_v2_read_failed: {err}"))
-        })?;
+    let catalog_model =
+        crate::models_v2::managed_model(storage, crate::models_v2::policy_catalog_slug(model_slug))
+            .map_err(|err| {
+                LocalValidationError::new(500, format!("model_catalog_v2_read_failed: {err}"))
+            })?;
     if catalog_model
         .as_ref()
         .is_none_or(crate::models_v2::supports_text_generation)
@@ -507,6 +529,48 @@ fn chat_content_to_responses_parts(
             })
             .collect(),
         _ => Vec::new(),
+    }
+}
+
+/// Chat completions permits tool message content to be a plain string or an
+/// array of content parts, while the Responses API `function_call_output`
+/// expects a string `output`. Flatten array content (string parts joined with
+/// newlines, image parts as placeholders) so compliant chat clients are not
+/// rejected upstream with `output[0].type` errors.
+fn chat_tool_content_to_output_string(content: &serde_json::Value) -> serde_json::Value {
+    match content {
+        serde_json::Value::String(_) => content.clone(),
+        serde_json::Value::Array(parts) => {
+            let text = parts
+                .iter()
+                .filter_map(chat_tool_output_part_text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            serde_json::Value::String(text)
+        }
+        serde_json::Value::Null => serde_json::Value::String(String::new()),
+        other => serde_json::Value::String(other.to_string()),
+    }
+}
+
+fn chat_tool_output_part_text(part: &serde_json::Value) -> Option<String> {
+    match part {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Object(obj) => {
+            let kind = obj
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("text");
+            match kind {
+                "text" | "input_text" | "output_text" => obj
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                "image_url" => Some("[image]".to_string()),
+                _ => None,
+            }
+        }
+        other => Some(other.to_string()),
     }
 }
 
@@ -671,7 +735,7 @@ fn adapt_openai_chat_completions_body_to_responses(body: Vec<u8>) -> Result<Vec<
             if role == "tool" {
                 let output = message_obj
                     .get("content")
-                    .cloned()
+                    .map(chat_tool_content_to_output_string)
                     .unwrap_or_else(|| serde_json::Value::String(String::new()));
                 input.push(serde_json::json!({
                     "type": "function_call_output",
@@ -1861,13 +1925,14 @@ pub(super) fn build_local_validation_result(
     trace_id: String,
     incoming_headers: super::super::IncomingHeaderSnapshot,
     storage: crate::storage_helpers::StorageHandle,
-    mut body: Vec<u8>,
+    client_body: Bytes,
     api_key: ApiKey,
 ) -> Result<LocalValidationResult, LocalValidationError> {
+    // `client_body` is shared with the request log client capture; the
+    // forwarding path takes owned copies only where it rewrites the body.
     // 按当前策略取消每次请求都更新 api_keys.last_used_at，减少并发写入冲突。
-    let account_group_filter = storage
-        .find_api_key_account_group_filter(&api_key.id)
-        .map_err(|err| {
+    let account_group_filter =
+        crate::apikey::remote::group_filter(&storage, &api_key.id).map_err(|err| {
             LocalValidationError::new(
                 500,
                 crate::gateway::bilingual_error(
@@ -1906,7 +1971,7 @@ pub(super) fn build_local_validation_result(
             crate::gateway::bilingual_error("不支持的请求方法", "unsupported method"),
         )
     })?;
-    let initial_request_value = super::super::parse_request_json_value(&body);
+    let initial_request_value = super::super::parse_request_json_value(&client_body);
     let initial_service_tier_diagnostic = initial_request_value
         .as_ref()
         .map(|value| super::super::inspect_service_tier_value(value.get("service_tier")))
@@ -1976,7 +2041,7 @@ pub(super) fn build_local_validation_result(
             request_shape,
         ) = apply_passthrough_request_overrides(
             &logical_path,
-            body,
+            client_body.to_vec(),
             &api_key,
             initial_request_meta.service_tier.clone(),
             compact_model_override_for_logical_request.as_deref(),
@@ -2100,7 +2165,7 @@ pub(super) fn build_local_validation_result(
     let passthrough_path = logical_path.clone();
     let mut passthrough_body = apply_passthrough_request_overrides(
         &logical_path,
-        body.clone(),
+        client_body.to_vec(),
         &api_key,
         initial_request_meta.service_tier.clone(),
         compact_model_override_for_logical_request.as_deref(),
@@ -2146,7 +2211,8 @@ pub(super) fn build_local_validation_result(
         passthrough_body_value_for_validation.as_ref(),
     )
     .map_err(|err| LocalValidationError::new(400, err.message()))?;
-    let original_body = body.clone();
+    let original_body = client_body;
+    let mut body: Vec<u8> = original_body.to_vec();
     let (mut path, mut response_adapter, mut gemini_stream_output_mode, mut tool_name_restore_map) =
         if effective_protocol_type == crate::apikey_profile::PROTOCOL_OPENAI_COMPAT
             && is_openai_images_generations_path(normalized_path.as_str())
@@ -2259,7 +2325,7 @@ pub(super) fn build_local_validation_result(
             path
         );
         path = normalized_path.clone();
-        body = original_body;
+        body = original_body.to_vec();
         response_adapter = super::super::ResponseAdapter::Passthrough;
         gemini_stream_output_mode = None;
         tool_name_restore_map.clear();

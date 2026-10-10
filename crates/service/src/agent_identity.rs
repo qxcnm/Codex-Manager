@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashMap};
-use std::io::Read as _;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -26,8 +25,10 @@ const AGENT_TASK_REGISTRATION_OPERATION: &str = "task";
 const AGENT_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
 const AGENT_TASK_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(30);
 const AGENT_TASK_REGISTRATION_RESPONSE_LIMIT: u64 = 64 * 1024;
+const AGENT_REGISTRATION_CANCELLED: &str = "agent registration cancelled";
 
-static ACCOUNT_AGENT_TASK_LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+static ACCOUNT_AGENT_TASK_LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    OnceLock::new();
 static ACCOUNT_AGENT_BOOTSTRAP_FAILURES: OnceLock<Mutex<HashMap<String, BootstrapFailure>>> =
     OnceLock::new();
 
@@ -111,165 +112,32 @@ pub(crate) fn validate_agent_identity(identity: &AccountAgentIdentity) -> Result
     Ok(())
 }
 
-/// Reuses a matching Agent Identity or creates the missing durable identity
-/// material for a ChatGPT bearer account. Existing identities are never reused
-/// across a different ChatGPT user or selected account scope.
-pub(crate) fn resolve_or_bootstrap_account_agent_identity_authorization(
-    storage: &Storage,
-    client: &reqwest::blocking::Client,
-    account: &Account,
-    token: &Token,
-) -> Result<Option<ResolvedAgentIdentityAuthorization>, String> {
-    resolve_or_bootstrap_account_agent_identity_authorization_with_base_url(
-        storage,
-        client,
-        account,
-        token,
-        AGENT_IDENTITY_AUTHAPI_BASE_URL,
-        None,
-    )
-}
-
+#[cfg(test)]
 fn resolve_or_bootstrap_account_agent_identity_authorization_with_base_url(
     storage: &Storage,
-    client: &reqwest::blocking::Client,
+    client: &reqwest::Client,
     account: &Account,
     token: &Token,
     authapi_base_url: &str,
     failed_task_id: Option<&str>,
 ) -> Result<Option<ResolvedAgentIdentityAuthorization>, String> {
-    let binding = resolve_agent_identity_binding(account, token);
-    let existing = load_account_agent_identity(storage, &account.id)?;
-    if let Some(identity) = existing.as_ref() {
-        if agent_identity_matches_binding(identity, &binding)
-            && validate_agent_identity(identity).is_ok()
-        {
-            return apply_binding_scope(
-                resolve_account_agent_identity_authorization_with_validation(
-                    storage,
-                    &account.id,
-                    failed_task_id,
-                    |candidate| agent_identity_matches_binding(candidate, &binding),
-                    |candidate| register_agent_identity_task(client, candidate, authapi_base_url),
-                ),
-                &binding,
-            );
-        }
-    }
-
-    if binding.access_token.is_empty() {
-        if existing.is_some() {
-            return Err("stored agent identity does not match the account binding".to_string());
-        }
-        return Ok(None);
-    }
-    let Some(chatgpt_user_id) = binding.chatgpt_user_id.as_ref() else {
-        return Ok(None);
-    };
-    let Some(account_scope_id) = binding.account_scope_id.as_ref() else {
-        return Ok(None);
-    };
-    let registration_digest = access_token_digest(&binding.access_token);
-
-    let task_lock = account_agent_task_lock(&account.id);
-    {
-        let _guard = crate::lock_utils::lock_recover(
-            task_lock.as_ref(),
-            "account_agent_identity_bootstrap_lock",
-        );
-        let current = load_account_agent_identity(storage, &account.id)?;
-        if current.as_ref().is_some_and(|identity| {
-            agent_identity_matches_binding(identity, &binding)
-                && validate_agent_identity(identity).is_ok()
-        }) {
-            // A concurrent request completed identity registration while this
-            // request was waiting. Task resolution below will reuse its work.
-        } else {
-            if bootstrap_failure_is_active(
-                &account.id,
-                AGENT_IDENTITY_REGISTRATION_OPERATION,
-                registration_digest,
-            ) {
-                return Err(
-                    "agent identity registration is cooling down after a recent failure"
-                        .to_string(),
-                );
-            }
-
-            let registration_result = (|| {
-                let key_material = generate_agent_key_material()?;
-                let is_fedramp = token_chatgpt_account_is_fedramp(&binding.access_token)
-                    || token_chatgpt_account_is_fedramp(&token.id_token);
-                let agent_runtime_id = register_agent_identity(
-                    client,
-                    authapi_base_url,
-                    &binding.access_token,
-                    is_fedramp,
-                    &key_material,
-                )?;
-                let now = now_ts();
-                let identity = AccountAgentIdentity {
-                    account_id: account.id.clone(),
-                    agent_runtime_id,
-                    agent_private_key: key_material.private_key_pkcs8_base64,
-                    task_id: None,
-                    chatgpt_user_id: chatgpt_user_id.clone(),
-                    chatgpt_account_is_fedramp: is_fedramp,
-                    auth_mode: "agentIdentity".to_string(),
-                    workspace_id: Some(account_scope_id.clone()),
-                    created_at: now,
-                    updated_at: now,
-                };
-                validate_agent_identity(&identity)?;
-                storage
-                    .upsert_account_agent_identity(&identity)
-                    .map_err(|err| format!("persist bootstrapped agent identity failed: {err}"))
-            })();
-            if let Err(err) = registration_result {
-                remember_bootstrap_failure(
-                    &account.id,
-                    AGENT_IDENTITY_REGISTRATION_OPERATION,
-                    registration_digest,
-                );
-                return Err(err);
-            }
-            clear_bootstrap_failure(
-                &account.id,
-                AGENT_IDENTITY_REGISTRATION_OPERATION,
-                registration_digest,
-            );
-        }
-    }
-
-    apply_binding_scope(
-        resolve_account_agent_identity_authorization_with_validation(
-            storage,
-            &account.id,
-            failed_task_id,
-            |identity| agent_identity_matches_binding(identity, &binding),
-            |identity| register_agent_identity_task(client, identity, authapi_base_url),
-        ),
-        &binding,
-    )
-}
-
-pub(crate) fn recover_account_agent_identity_authorization(
-    storage: &Storage,
-    client: &reqwest::blocking::Client,
-    account: &Account,
-    token: &Token,
-    failed_task_id: &str,
-) -> Result<Option<ResolvedAgentIdentityAuthorization>, String> {
-    let failed_task_id = required_value(failed_task_id, "failed task_id")?;
-    resolve_or_bootstrap_account_agent_identity_authorization_with_base_url(
+    crate::gateway::run_upstream_io(async_completion::resolve_with_base_url(
         storage,
         client,
         account,
         token,
-        AGENT_IDENTITY_AUTHAPI_BASE_URL,
-        Some(failed_task_id),
-    )
+        authapi_base_url,
+        failed_task_id,
+    ))?
 }
+
+mod async_completion;
+#[cfg(test)]
+mod async_tests;
+pub(crate) use async_completion::{
+    recover_account_agent_identity_authorization_async,
+    resolve_or_bootstrap_account_agent_identity_authorization_async,
+};
 
 fn resolve_agent_identity_binding(account: &Account, token: &Token) -> AgentIdentityBinding {
     let access_token = token.access_token.trim().to_string();
@@ -345,6 +213,7 @@ fn resolve_account_agent_identity_authorization_with<F>(
 where
     F: FnOnce(&AccountAgentIdentity) -> Result<String, String>,
 {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     resolve_account_agent_identity_authorization_with_validation(
         storage,
         account_id,
@@ -354,6 +223,7 @@ where
     )
 }
 
+#[cfg(test)]
 fn resolve_account_agent_identity_authorization_with_validation<F, V>(
     storage: &Storage,
     account_id: &str,
@@ -365,6 +235,7 @@ where
     F: FnOnce(&AccountAgentIdentity) -> Result<String, String>,
     V: Fn(&AccountAgentIdentity) -> bool,
 {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let account_id = required_value(account_id, "account_id")?;
     let identity = load_account_agent_identity(storage, account_id)?;
     let Some(identity) = identity else {
@@ -378,7 +249,7 @@ where
     }
 
     let task_lock = account_agent_task_lock(account_id);
-    let _guard = crate::lock_utils::lock_recover(&task_lock, "account_agent_task_lock");
+    let _guard = task_lock.blocking_lock();
 
     // Re-read under the per-account lock. Request paths use separate SQLite
     // handles, so the caller's snapshot cannot prove that registration is
@@ -433,11 +304,11 @@ where
     result
 }
 
-fn account_agent_task_lock(account_id: &str) -> Arc<Mutex<()>> {
+fn account_agent_task_lock(account_id: &str) -> Arc<tokio::sync::Mutex<()>> {
     let locks = ACCOUNT_AGENT_TASK_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
     crate::lock_utils::lock_recover(locks, "account_agent_task_locks")
         .entry(account_id.to_string())
-        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
         .clone()
 }
 
@@ -445,6 +316,7 @@ fn load_account_agent_identity(
     storage: &Storage,
     account_id: &str,
 ) -> Result<Option<AccountAgentIdentity>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     storage
         .find_account_agent_identity(account_id)
         .map_err(|err| format!("load agent identity failed: {err}"))
@@ -483,8 +355,35 @@ fn resolved_authorization(
     })
 }
 
-fn register_agent_identity(
-    client: &reqwest::blocking::Client,
+async fn send_registration_request(
+    request: reqwest::RequestBuilder,
+    operation: &str,
+) -> Result<(reqwest::StatusCode, Vec<u8>), String> {
+    crate::http::gateway_request::with_response_cancellation(async {
+        use futures_util::StreamExt;
+        let response = request
+            .send()
+            .await
+            .map_err(|error| format!("{operation} request failed: {error}"))?;
+        let status = response.status();
+        let mut body = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk =
+                chunk.map_err(|error| format!("read {operation} response failed: {error}"))?;
+            if (body.len() + chunk.len()) as u64 > AGENT_TASK_REGISTRATION_RESPONSE_LIMIT {
+                return Err(format!("{operation} response exceeded 64 KiB"));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok((status, body))
+    })
+    .await
+    .map_err(|_| AGENT_REGISTRATION_CANCELLED.to_owned())?
+}
+
+async fn register_agent_identity(
+    client: &reqwest::Client,
     authapi_base_url: &str,
     access_token: &str,
     is_fedramp: bool,
@@ -518,18 +417,8 @@ fn register_agent_identity(
     if is_fedramp {
         request_builder = request_builder.header("x-openai-fedramp", "true");
     }
-    let response = request_builder
-        .send()
-        .map_err(|err| format!("agent identity registration request failed: {err}"))?;
-    let status = response.status();
-    let mut body = Vec::new();
-    response
-        .take(AGENT_TASK_REGISTRATION_RESPONSE_LIMIT + 1)
-        .read_to_end(&mut body)
-        .map_err(|err| format!("read agent identity registration response failed: {err}"))?;
-    if body.len() as u64 > AGENT_TASK_REGISTRATION_RESPONSE_LIMIT {
-        return Err("agent identity registration response exceeded 64 KiB".to_string());
-    }
+    let (status, body) =
+        send_registration_request(request_builder, "agent identity registration").await?;
     if !status.is_success() {
         return Err(format!(
             "agent identity registration returned status {}",
@@ -655,8 +544,8 @@ fn clear_bootstrap_failure(account_id: &str, operation: &str, material_digest: [
     }
 }
 
-fn register_agent_identity_task(
-    client: &reqwest::blocking::Client,
+async fn register_agent_identity_task_async(
+    client: &reqwest::Client,
     identity: &AccountAgentIdentity,
     authapi_base_url: &str,
 ) -> Result<String, String> {
@@ -674,25 +563,16 @@ fn register_agent_identity_task(
         authapi_base_url.trim_end_matches('/'),
         runtime_id
     );
-    let response = client
+    let request_builder = client
         .post(&url)
         .timeout(AGENT_TASK_REGISTRATION_TIMEOUT)
         // The official Codex auth client applies the same identity headers to
         // task registration as to runtime registration.
         .header("originator", crate::gateway::current_wire_originator())
         .header("User-Agent", crate::gateway::current_gateway_user_agent())
-        .json(&request)
-        .send()
-        .map_err(|err| format!("agent task registration request failed: {err}"))?;
-    let status = response.status();
-    let mut body = Vec::new();
-    response
-        .take(AGENT_TASK_REGISTRATION_RESPONSE_LIMIT + 1)
-        .read_to_end(&mut body)
-        .map_err(|err| format!("read agent task registration response failed: {err}"))?;
-    if body.len() as u64 > AGENT_TASK_REGISTRATION_RESPONSE_LIMIT {
-        return Err("agent task registration response exceeded 64 KiB".to_string());
-    }
+        .json(&request);
+    let (status, body) =
+        send_registration_request(request_builder, "agent task registration").await?;
     if !status.is_success() {
         return Err(format!(
             "agent task registration returned status {}",
@@ -1047,7 +927,7 @@ mod tests {
         let authorization =
             resolve_or_bootstrap_account_agent_identity_authorization_with_base_url(
                 &storage,
-                &reqwest::blocking::Client::new(),
+                &reqwest::Client::new(),
                 &account,
                 &token,
                 &base_url,
@@ -1141,7 +1021,7 @@ mod tests {
         assert!(
             resolve_or_bootstrap_account_agent_identity_authorization_with_base_url(
                 &storage,
-                &reqwest::blocking::Client::new(),
+                &reqwest::Client::new(),
                 &account,
                 &token,
                 "http://127.0.0.1:9",
@@ -1217,17 +1097,19 @@ mod tests {
         let requests = Arc::new(AtomicUsize::new(0));
         let server_requests = Arc::clone(&requests);
         let server_handle = thread::spawn(move || {
-            while let Ok(Some(request)) = server.recv_timeout(Duration::from_millis(300)) {
-                server_requests.fetch_add(1, Ordering::SeqCst);
-                request
-                    .respond(Response::empty(StatusCode(503)))
-                    .expect("respond task registration");
-            }
+            let request = server
+                .recv_timeout(Duration::from_secs(5))
+                .expect("receive task registration")
+                .expect("task registration request");
+            server_requests.fetch_add(1, Ordering::SeqCst);
+            request
+                .respond(Response::empty(StatusCode(503)))
+                .expect("respond task registration");
         });
 
         let first = resolve_or_bootstrap_account_agent_identity_authorization_with_base_url(
             &storage,
-            &reqwest::blocking::Client::new(),
+            &reqwest::Client::new(),
             &account,
             &token,
             &base_url,
@@ -1237,7 +1119,7 @@ mod tests {
         assert!(first.contains("status 503"));
         let second = resolve_or_bootstrap_account_agent_identity_authorization_with_base_url(
             &storage,
-            &reqwest::blocking::Client::new(),
+            &reqwest::Client::new(),
             &account,
             &token,
             &base_url,
@@ -1411,9 +1293,8 @@ mod tests {
                 .expect("respond registration request");
         });
         let (identity, signing_key) = identity();
-        let task_id =
-            register_agent_identity_task(&reqwest::blocking::Client::new(), &identity, &base_url)
-                .expect("register task");
+        let task_id = register_agent_identity_task(&reqwest::Client::new(), &identity, &base_url)
+            .expect("register task");
         assert_eq!(task_id, "task-from-server");
         let (path, originator, user_agent, body) = request_rx
             .recv_timeout(Duration::from_secs(5))
@@ -1459,9 +1340,8 @@ mod tests {
                 .expect("respond registration request");
         });
         let (identity, _) = identity();
-        let error =
-            register_agent_identity_task(&reqwest::blocking::Client::new(), &identity, &base_url)
-                .expect_err("registration should fail");
+        let error = register_agent_identity_task(&reqwest::Client::new(), &identity, &base_url)
+            .expect_err("registration should fail");
         server_handle.join().expect("join server");
 
         assert_eq!(error, "agent task registration returned status 401");
@@ -1506,4 +1386,13 @@ mod tests {
             "usage endpoint failed: status=500 body=task expired"
         ));
     }
+}
+
+#[cfg(test)]
+fn register_agent_identity_task(
+    client: &reqwest::Client,
+    identity: &AccountAgentIdentity,
+    base: &str,
+) -> Result<String, String> {
+    crate::gateway::run_upstream_io(register_agent_identity_task_async(client, identity, base))?
 }

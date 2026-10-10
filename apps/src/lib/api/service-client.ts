@@ -17,6 +17,7 @@ import {
 import {
   normalizeAppSettings,
   normalizeBackgroundTasks,
+  normalizeRequestLogDetail,
   normalizeRequestLogFilterSummary,
   normalizeRequestLogListResult,
   normalizeRequestLogListWithSummaryResult,
@@ -25,13 +26,17 @@ import {
 } from "./normalize";
 import {
   BackgroundTaskSettings,
+  RequestLogDetail,
+  RequestLogDetailStage,
   RequestLogFilterSummary,
   RequestLogListResult,
   RequestLogListWithSummaryResult,
+  RequestLogPayloadQueueStats,
   RequestLogTodaySummary,
   ServiceInitializationResult,
   StartupSnapshot,
 } from "../../types";
+import { normalizeRequestLogPayloadQueueStats } from "./request-log-payload-queue";
 import { readInitializeResult } from "@/lib/utils/service";
 
 export const serviceClient = {
@@ -173,6 +178,21 @@ export const serviceClient = {
     );
     return normalizeRequestLogListWithSummaryResult(result);
   },
+  async requestLogDetail(
+    params: { traceId: string; stage?: RequestLogDetailStage | null; addr?: string | null },
+    options?: RequestOptions,
+  ): Promise<RequestLogDetail> {
+    const result = await invoke<unknown>(
+      "service_requestlog_detail",
+      withAddr({
+        traceId: params.traceId,
+        ...(params.stage ? { stage: params.stage } : {}),
+        ...(params.addr === undefined ? {} : { addr: params.addr || null }),
+      }),
+      options
+    );
+    return normalizeRequestLogDetail(result);
+  },
   async getRequestLogSummary(params?: {
     query?: string;
     statusFilter?: string;
@@ -204,6 +224,20 @@ export const serviceClient = {
       withAddr(params)
     );
     return normalizeTodaySummary(result);
+  },
+  async getRequestLogPayloadQueueStats(
+    params?: { traceId?: string | null; addr?: string | null },
+    options?: RequestOptions,
+  ): Promise<RequestLogPayloadQueueStats> {
+    const result = await invoke<unknown>(
+      "service_requestlog_payload_queue_stats",
+      withAddr({
+        traceId: params?.traceId?.trim() || null,
+        ...(params?.addr === undefined ? {} : { addr: params.addr || null }),
+      }),
+      options
+    );
+    return normalizeRequestLogPayloadQueueStats(result);
   },
 
   async getListenConfig(): Promise<ServiceListenConfig> {

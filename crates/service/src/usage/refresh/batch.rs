@@ -3,12 +3,10 @@ use codexmanager_core::storage::AccountTokenCandidate;
 #[cfg(test)]
 use codexmanager_core::storage::AccountUsageRefreshTarget;
 use codexmanager_core::storage::{Storage, Token};
-use crossbeam_channel::unbounded;
+use futures_util::StreamExt;
 #[cfg(test)]
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
-use std::thread;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use super::{
@@ -20,7 +18,15 @@ use super::{
 };
 
 pub(crate) fn refresh_usage_for_all_accounts_result() -> Result<UsageRefreshRunResult, String> {
-    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    super::run_usage_future(refresh_usage_for_all_accounts_result_async())
+}
+
+pub(crate) async fn refresh_usage_for_all_accounts_result_async(
+) -> Result<UsageRefreshRunResult, String> {
+    let storage = open_storage()
+        .map(|storage| storage.shared_handle())
+        .ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let tasks = load_refreshable_usage_refresh_tasks(&storage)?;
     if tasks.is_empty() {
         return Ok(UsageRefreshRunResult {
@@ -33,7 +39,7 @@ pub(crate) fn refresh_usage_for_all_accounts_result() -> Result<UsageRefreshRunR
         });
     }
     let total = tasks.len();
-    let processed = run_usage_refresh_tasks(tasks)?;
+    let processed = run_usage_refresh_tasks(tasks).await?;
     notify_usage_refresh_completed("manual_all", processed, total);
     Ok(UsageRefreshRunResult {
         ok: processed > 0,
@@ -56,8 +62,11 @@ pub(crate) fn refresh_usage_for_all_accounts_result() -> Result<UsageRefreshRunR
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(crate) fn refresh_usage_for_polling_batch() -> Result<(), String> {
-    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+pub(crate) async fn refresh_usage_for_polling_batch() -> Result<(), String> {
+    let storage = open_storage()
+        .map(|storage| storage.shared_handle())
+        .ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let tasks = load_refreshable_usage_refresh_tasks(&storage)?;
     if tasks.is_empty() {
         return Ok(());
@@ -73,7 +82,7 @@ pub(crate) fn refresh_usage_for_polling_batch() -> Result<(), String> {
         .into_iter()
         .map(|index| tasks[index].clone())
         .collect::<Vec<_>>();
-    let processed = run_usage_refresh_tasks(selected_tasks)?;
+    let processed = run_usage_refresh_tasks(selected_tasks).await?;
 
     if processed > 0 {
         USAGE_POLL_CURSOR.store(
@@ -105,9 +114,9 @@ pub(crate) fn refresh_usage_for_polling_batch() -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn refresh_usage_and_aggregate_balances_for_polling_cycle() -> Result<(), String> {
-    let usage_result = refresh_usage_for_polling_batch();
-    let aggregate_result = refresh_aggregate_api_balances_for_polling_cycle();
+pub(crate) async fn refresh_usage_and_aggregate_balances_for_polling_cycle() -> Result<(), String> {
+    let usage_result = refresh_usage_for_polling_batch().await;
+    let aggregate_result = refresh_aggregate_api_balances_for_polling_cycle().await;
 
     match (usage_result, aggregate_result) {
         (Ok(()), Ok(())) => Ok(()),
@@ -119,12 +128,17 @@ pub(crate) fn refresh_usage_and_aggregate_balances_for_polling_cycle() -> Result
     }
 }
 
-fn refresh_aggregate_api_balances_for_polling_cycle() -> Result<(), String> {
-    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let api_ids = storage
-        .list_active_balance_query_aggregate_api_ids()
-        .map_err(|err| format!("list aggregate API balance query IDs failed: {err}"))?;
-    drop(storage);
+async fn refresh_aggregate_api_balances_for_polling_cycle() -> Result<(), String> {
+    let api_ids = crate::aggregate_api::run_aggregate_storage(|| {
+        let storage_handle = open_storage()
+            .map(|storage| storage.shared_handle())
+            .ok_or_else(|| "storage unavailable".to_string())?;
+        let storage = crate::account::remote_storage::AccountStorage::new(&storage_handle);
+        storage
+            .list_active_balance_query_aggregate_api_ids()
+            .map_err(|err| format!("list aggregate API balance query IDs failed: {err}"))
+    })
+    .await?;
 
     if api_ids.is_empty() {
         return Ok(());
@@ -135,7 +149,7 @@ fn refresh_aggregate_api_balances_for_polling_cycle() -> Result<(), String> {
     let mut failed_count = 0usize;
 
     for api_id in api_ids {
-        match crate::refresh_aggregate_api_balance(api_id.as_str()) {
+        match crate::aggregate_api::refresh_aggregate_api_balance_async(api_id.as_str()).await {
             Ok(result) if result.ok => {
                 success_count = success_count.saturating_add(1);
             }
@@ -174,6 +188,7 @@ fn refresh_aggregate_api_balances_for_polling_cycle() -> Result<(), String> {
 pub(crate) fn load_refreshable_accounts(
     storage: &Storage,
 ) -> Result<Vec<AccountUsageRefreshTarget>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     load_refreshable_accounts_impl(storage)
 }
 
@@ -181,6 +196,7 @@ pub(crate) fn load_refreshable_accounts(
 fn load_refreshable_accounts_impl(
     storage: &Storage,
 ) -> Result<Vec<AccountUsageRefreshTarget>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     storage
         .list_account_usage_refresh_targets_by_statuses(&refreshable_account_statuses())
         .map_err(|err| format!("list refreshable accounts failed: {err}"))
@@ -189,6 +205,7 @@ fn load_refreshable_accounts_impl(
 fn load_refreshable_usage_refresh_tasks(
     storage: &Storage,
 ) -> Result<Vec<UsageRefreshBatchTask>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     storage
         .list_account_usage_refresh_token_targets_by_statuses(&refreshable_account_statuses())
         .map_err(|err| format!("list refreshable token accounts failed: {err}"))
@@ -349,83 +366,29 @@ fn hydrate_usage_refresh_tasks(
 ///
 /// # 返回
 /// 返回函数执行结果
-fn run_usage_refresh_tasks(tasks: Vec<UsageRefreshBatchTask>) -> Result<usize, String> {
+async fn run_usage_refresh_tasks(tasks: Vec<UsageRefreshBatchTask>) -> Result<usize, String> {
     let total = tasks.len();
     if total == 0 {
         return Ok(0);
     }
-
-    let worker_count = usage_refresh_worker_count().min(total);
-    if worker_count <= 1 {
-        let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-        let mut succeeded = 0usize;
-        let mut first_error: Option<String> = None;
-        for task in tasks {
-            match run_usage_refresh_task(&storage, task) {
-                Ok(()) => succeeded = succeeded.saturating_add(1),
-                Err(err) => {
-                    if first_error.is_none() {
-                        first_error = Some(err);
-                    }
-                }
+    let mut work = futures_util::stream::iter(tasks.into_iter().map(|task| async move {
+        let storage = open_storage()
+            .map(|storage| storage.shared_handle())
+            .ok_or_else(|| "usage refresh storage unavailable".to_string())?;
+        run_usage_refresh_task(&storage, task).await
+    }))
+    .buffer_unordered(usage_refresh_worker_count().min(total));
+    let mut succeeded = 0usize;
+    let mut first_error = None;
+    while let Some(result) = work.next().await {
+        match result {
+            Ok(()) => succeeded += 1,
+            Err(error) => {
+                first_error.get_or_insert(error);
             }
         }
-        if succeeded == 0 {
-            return Err(format_all_usage_refresh_failed(total, first_error));
-        }
-        return Ok(total);
     }
-
-    let (sender, receiver) = unbounded::<UsageRefreshBatchTask>();
-    for task in tasks {
-        sender
-            .send(task)
-            .map_err(|_| "enqueue usage refresh task failed".to_string())?;
-    }
-    drop(sender);
-
-    let succeeded = AtomicUsize::new(0);
-    let first_error = Mutex::new(None::<String>);
-    thread::scope(|scope| -> Result<(), String> {
-        let mut handles = Vec::with_capacity(worker_count);
-        for worker_index in 0..worker_count {
-            let receiver = receiver.clone();
-            let succeeded = &succeeded;
-            let first_error = &first_error;
-            handles.push(scope.spawn(move || {
-                let storage = open_storage().ok_or_else(|| {
-                    format!("usage refresh worker {worker_index} storage unavailable")
-                })?;
-                while let Ok(task) = receiver.recv() {
-                    match run_usage_refresh_task(&storage, task) {
-                        Ok(()) => {
-                            succeeded.fetch_add(1, Ordering::Relaxed);
-                        }
-                        Err(err) => {
-                            if let Ok(mut guard) = first_error.lock() {
-                                if guard.is_none() {
-                                    *guard = Some(err);
-                                }
-                            }
-                        }
-                    }
-                }
-                Ok::<(), String>(())
-            }));
-        }
-
-        for handle in handles {
-            match handle.join() {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => return Err(err),
-                Err(_) => return Err("usage refresh worker panicked".to_string()),
-            }
-        }
-        Ok(())
-    })?;
-
-    if succeeded.load(Ordering::Relaxed) == 0 {
-        let first_error = first_error.lock().ok().and_then(|guard| guard.clone());
+    if succeeded == 0 {
         return Err(format_all_usage_refresh_failed(total, first_error));
     }
     Ok(total)
@@ -452,9 +415,13 @@ fn format_all_usage_refresh_failed(total: usize, first_error: Option<String>) ->
 ///
 /// # 返回
 /// 无
-fn run_usage_refresh_task(storage: &Storage, task: UsageRefreshBatchTask) -> Result<(), String> {
+async fn run_usage_refresh_task(
+    storage: &Storage,
+    task: UsageRefreshBatchTask,
+) -> Result<(), String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let started_at = Instant::now();
-    match refresh_usage_for_token(storage, &task.token, task.workspace_id.as_deref(), None) {
+    match refresh_usage_for_token(storage, &task.token, task.workspace_id.as_deref(), None).await {
         Ok(_) => {
             record_usage_refresh_metrics(true, started_at);
             Ok(())

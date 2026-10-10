@@ -78,8 +78,8 @@ export const EN_PLATFORM_MODE_MESSAGES: MessageCatalog = {
   账号直连: "Direct account",
   "OpenAI 账号": "OpenAI account",
   选择账号: "Select account",
-  "直连 OpenAI 官方后端，不经过 CodexManager 网关；不会产生 CodexManager 请求日志，仪表盘用量统计不可用。":
-    "Connect directly to the official OpenAI backend without going through the CodexManager gateway. CodexManager request logs and dashboard usage analytics will not be available.",
+  "直连 OpenAI 官方后端，不经过 CodexManager 网关；本机 Codex 的直连请求不会写入网关日志，但仪表盘仍会展示已记录的其他网关流量。":
+    "Connect directly to the official OpenAI backend without using the CodexManager gateway. Direct requests from Codex on this machine are not written to gateway logs, but the dashboard still shows other recorded gateway traffic.",
   "没有可用于账号直连的 active OpenAI 账号。":
     "No active OpenAI account is available for direct account mode.",
   "去添加 OpenAI 账号": "Add OpenAI account",
@@ -167,4 +167,25 @@ export const EN_PLATFORM_MODE_MESSAGES: MessageCatalog = {
     "Requested reload for {count} Codex background process(es)",
   "未发现需要重载的 Codex 后台进程":
     "No Codex background process needed reloading",
+  "选择 Codex 直接连接 OpenAI、直连聚合 API，或通过 CodexManager 进行转发与管理。":
+    "Choose direct OpenAI, a direct aggregated API connection, or CodexManager routing and management.",
+  "直连聚合 API": "Connect directly to an aggregated API",
+  "当前聚合 API": "Current aggregated API",
+  "已切换为直连聚合 API": "Now connecting directly to the aggregated API",
+  "Codex 直接连接所选聚合 API；CodexManager 只负责写入和备份配置，不参与请求转发或日志统计。":
+    "Codex connects directly to the selected aggregated API. CodexManager only writes and backs up the configuration and does not route or log requests.",
+  "Codex 直接请求所选聚合 API，不经过 CodexManager 网关；切换时会自动写入对应的 Responses base_url 与认证配置。":
+    "Codex sends requests directly to the selected aggregated API without using the CodexManager gateway. Switching writes the matching Responses base_url and authentication settings.",
+  "没有可直连的聚合 API；仅支持 active 的 Codex / Compatible Responses API-key 条目。":
+    "No aggregated API can be connected directly. Only active Codex or Compatible Responses API-key entries are supported.",
+  "去配置聚合 API": "Configure aggregated APIs",
+  "选择聚合 API": "Select an aggregated API",
+  "请选择聚合 API": "Select an aggregated API",
+  "所选聚合 API": "Selected aggregated API",
+  "由聚合 API 提供": "Provided by the aggregated API",
+  "该条目的模型覆盖会作为直连默认模型；网关模式中用于上游重写。":
+    "This entry's model override becomes the direct-mode default model and rewrites the upstream model in gateway mode.",
+  "直连 base_url：{baseUrl}": "Direct base_url: {baseUrl}",
+  "重新应用直连聚合 API": "Reapply direct aggregated API",
+  "切换为直连聚合 API": "Switch to direct aggregated API",
 };

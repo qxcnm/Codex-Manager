@@ -2,9 +2,12 @@ use super::{
     account_matches_plan_filter_with_snapshot, extract_plan_type_from_credits_json,
     extract_plan_type_from_id_token, is_free_or_single_window_account_with_snapshot,
     is_free_plan_from_credits_json, is_free_plan_type, is_single_window_long_usage_snapshot,
-    normalize_plan_type, resolve_account_plan,
+    normalize_plan_type, resolve_account_plan, resolve_effective_account_plan,
+    resolve_effective_account_plan_at,
 };
-use codexmanager_core::storage::{now_ts, Account, Storage, Token, UsageSnapshotRecord};
+use codexmanager_core::storage::{
+    now_ts, Account, AccountSubscription, AccountTokenPlan, Storage, Token, UsageSnapshotRecord,
+};
 
 /// 函数 `encode_base64url`
 ///
@@ -315,6 +318,101 @@ fn resolve_account_plan_prefers_token_claims_and_falls_back_to_usage() {
     let token_plan = super::token_plan_from_token(&token);
     let resolved = resolve_account_plan(Some(&token_plan), Some(&usage)).expect("resolve plan");
     assert_eq!(resolved.normalized, "plus");
+
+    let effective_from_token =
+        resolve_effective_account_plan(Some(&token_plan), Some(&usage), None)
+            .expect("resolve effective plan without subscription record");
+    assert_eq!(effective_from_token.normalized, "plus");
+
+    let effective_from_usage = resolve_effective_account_plan(None, Some(&usage), None)
+        .expect("resolve effective usage plan without subscription record");
+    assert_eq!(effective_from_usage.normalized, "free");
+}
+
+#[test]
+fn resolve_effective_account_plan_treats_inactive_subscription_as_free() {
+    let now = now_ts();
+    let token = AccountTokenPlan {
+        account_id: "acc-downgraded".to_string(),
+        id_token: String::new(),
+        access_token: String::new(),
+    };
+    let snapshot = UsageSnapshotRecord {
+        account_id: token.account_id.clone(),
+        used_percent: Some(10.0),
+        window_minutes: Some(300),
+        resets_at: None,
+        secondary_used_percent: Some(20.0),
+        secondary_window_minutes: Some(10_080),
+        secondary_resets_at: None,
+        credits_json: Some(r#"{"planType":"plus"}"#.to_string()),
+        captured_at: now,
+    };
+    let subscription = AccountSubscription {
+        account_id: token.account_id.clone(),
+        has_subscription: false,
+        account_plan_type: Some("pro".to_string()),
+        plan_type: Some("plus".to_string()),
+        expires_at: Some(now + 3_600),
+        renews_at: None,
+        updated_at: now,
+    };
+
+    let resolved =
+        resolve_effective_account_plan(Some(&token), Some(&snapshot), Some(&subscription))
+            .expect("resolve inactive subscription plan");
+
+    assert_eq!(resolved.normalized, "free");
+    assert_eq!(resolved.raw, None);
+}
+
+#[test]
+fn resolve_effective_account_plan_treats_expired_subscription_as_free() {
+    let now = now_ts();
+    let subscription = AccountSubscription {
+        account_id: "acc-expired".to_string(),
+        has_subscription: true,
+        account_plan_type: Some("pro".to_string()),
+        plan_type: Some("plus".to_string()),
+        expires_at: Some(now),
+        renews_at: None,
+        updated_at: now,
+    };
+
+    let resolved = resolve_effective_account_plan_at(None, None, Some(&subscription), now)
+        .expect("resolve subscription expiring at the current instant");
+
+    assert_eq!(resolved.normalized, "free");
+    assert_eq!(resolved.raw, None);
+}
+
+#[test]
+fn resolve_effective_account_plan_keeps_active_unexpired_subscription_plan() {
+    let now = now_ts();
+    let subscription = AccountSubscription {
+        account_id: "acc-active".to_string(),
+        has_subscription: true,
+        account_plan_type: Some("pro".to_string()),
+        plan_type: Some("plus".to_string()),
+        expires_at: Some(now + 3_600),
+        renews_at: None,
+        updated_at: now,
+    };
+
+    let resolved = resolve_effective_account_plan_at(None, None, Some(&subscription), now)
+        .expect("resolve active subscription plan");
+
+    assert_eq!(resolved.normalized, "pro");
+
+    let subscription_without_expiry = AccountSubscription {
+        expires_at: None,
+        ..subscription
+    };
+    let resolved =
+        resolve_effective_account_plan_at(None, None, Some(&subscription_without_expiry), now)
+            .expect("resolve active subscription plan without expiry");
+
+    assert_eq!(resolved.normalized, "pro");
 }
 
 #[test]

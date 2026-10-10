@@ -142,6 +142,54 @@ test("managed model adapter carries non-prompt Codex runtime metadata", () => {
   assert.equal(info.modelMessages, null);
 });
 
+test("managed model adapter labels GPT-6 Sol and Luna Fast tiers", () => {
+  for (const slug of ["gpt-6-sol", "gpt-6-luna"]) {
+    const info = managedModelV2ToModelInfo(
+      model({
+        id: `builtin:${slug}`,
+        slug,
+        displayName: slug.toUpperCase(),
+        capabilities: {
+          service_tiers: ["priority"],
+          output_modalities: ["text"],
+          supports_text_generation: true,
+        },
+      }),
+    );
+
+    assert.deepEqual(info.serviceTiers, [
+      {
+        id: "priority",
+        name: "Fast",
+        description: "1.5x speed, increased usage",
+      },
+    ]);
+  }
+});
+
+test("managed model adapter preserves the Astra 2x Fast tier description", () => {
+  const info = managedModelV2ToModelInfo(
+    model({
+      id: "builtin:gpt-6-astra",
+      slug: "gpt-6-astra",
+      displayName: "GPT-6-Astra",
+      capabilities: {
+        service_tiers: ["priority"],
+        output_modalities: ["text"],
+        supports_text_generation: true,
+      },
+    }),
+  );
+
+  assert.deepEqual(info.serviceTiers, [
+    {
+      id: "priority",
+      name: "Fast",
+      description: "2x speed, increased usage",
+    },
+  ]);
+});
+
 test("managed model adapter accepts camelCase capability names and legacy defaults", () => {
   const imageInfo = managedModelV2ToModelInfo(
     model({
@@ -161,6 +209,33 @@ test("managed model adapter accepts camelCase capability names and legacy defaul
   ]);
   assert.equal(imageInfo.supportsTextGeneration, false);
   assert.equal(legacyInfo.supportsTextGeneration, true);
+});
+
+test("managed model adapter preserves GPT Image 2.5 capability metadata", () => {
+  const imageInfo = managedModelV2ToModelInfo(
+    model({
+      id: "builtin:gpt-image-2.5-sunburst",
+      slug: "gpt-image-2.5-sunburst",
+      displayName: "GPT Image 2.5 Sunburst",
+      capabilities: {
+        input_modalities: ["text", "image"],
+        output_modalities: ["image"],
+        supported_endpoints: ["/v1/images/generations", "/v1/images/edits"],
+        snapshot: "gpt-image-2.5-sunburst-2026-09-08",
+        supports_text_generation: false,
+        supports_image_generation: true,
+        supports_image_editing: true,
+      },
+    }),
+  );
+
+  assert.deepEqual(imageInfo.inputModalities, ["text", "image"]);
+  assert.deepEqual(imageInfo.outputModalities, ["image"]);
+  assert.deepEqual(imageInfo.supportedEndpoints, [
+    "/v1/images/generations",
+    "/v1/images/edits",
+  ]);
+  assert.equal(imageInfo.supportsTextGeneration, false);
 });
 
 test("managed model adapter does not invent Fast speed copy for custom models", () => {

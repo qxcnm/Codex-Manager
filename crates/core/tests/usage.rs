@@ -1,8 +1,8 @@
 use codexmanager_core::usage::{
     accounts_check_endpoint, has_usable_luna_reserve, has_usable_luna_reserve_at,
-    is_luna_reserve_model, merge_missing_extra_rate_limits, parse_reset_credits_snapshot,
-    parse_usage_snapshot, reset_credits_consume_endpoint, reset_credits_endpoint, usage_endpoint,
-    usage_payload_declares_extra_rate_limits,
+    is_luna_catalog_model, is_luna_reserve_model, merge_missing_extra_rate_limits,
+    parse_reset_credits_snapshot, parse_usage_snapshot, reset_credits_consume_endpoint,
+    reset_credits_endpoint, usage_endpoint, usage_payload_declares_extra_rate_limits,
 };
 use serde_json::{json, Value};
 
@@ -159,6 +159,9 @@ fn luna_reserve_survives_camel_case_usage_payload_and_exhausted_standard_window(
     assert!(is_luna_reserve_model(Some("gpt-reserve")));
     assert!(is_luna_reserve_model(Some(" GPT-RESERVE ")));
     assert!(!is_luna_reserve_model(Some("gpt-5.6-luna")));
+    assert!(is_luna_catalog_model(Some("gpt-6-luna")));
+    assert!(is_luna_catalog_model(Some(" GPT-5.6-LUNA ")));
+    assert!(!is_luna_catalog_model(Some("gpt-reserve")));
     assert!(!is_luna_reserve_model(Some("custom-luna-router")));
     assert!(!is_luna_reserve_model(Some("gpt-reserve-preview")));
     assert!(!is_luna_reserve_model(Some("gpt-5.6")));

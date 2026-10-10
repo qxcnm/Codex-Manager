@@ -87,29 +87,53 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
 <table>
   <tr>
     <td align="center" valign="middle" width="180">
-      <a href="https://vmcardio.com/zh/register?code=OPK6X2DSLW">
-        <img src="assets/images/sponsors/vmcard.jpg" alt="VMCard" width="120" />
+      <a href="https://sidrune.ai/register?source=github&campaign=codexmanger&promo=codexmanger">
+        <img src="assets/images/sponsors/sidrune.png" alt="Sidrune AI" width="120" />
       </a>
     </td>
     <td valign="top">
-      <strong><a href="https://vmcardio.com/zh/register?code=OPK6X2DSLW">VMCard 企业级虚拟卡发卡平台</a></strong>，面向 AI 账号平台、AI API 服务商及规模化订阅团队，提供专属美国 Visa 卡段、API 批量发卡及企业级用卡管理。<br />
-      全网最低结算汇率，满足企业长期、规模化支付需求。商务合作：<a href="https://t.me/Vmcardio_yuki">@Vmcardio_yuki</a>
+      <strong><a href="https://sidrune.ai/register?source=github&campaign=codexmanger&promo=codexmanger">Sidrune AI｜一个入口，接入并管理全球主流AI模型</a></strong><br />
+      Sidrune AI 面向个人开发者、技术团队与企业，通过统一 API 接入并管理全球主流 AI 模型；通过多线路动态调度提升可用性，模型表现、响应时间与费用透明可查。根据不同模型与线路，API 调用成本可较官方或基准价格降低 40%—98%。<br />
+      立即<a href="https://sidrune.ai/register?source=github&campaign=codexmanger&promo=codexmanger">访问并注册</a>，即可获得 $3.88 试用额度，可直接使用。
     </td>
   </tr>
   <tr>
     <td align="center" valign="middle" width="180">
-      <a href="https://88api.ai/sign-up?aff=OceE">
-        <img src="assets/images/sponsors/88api.png" alt="88API" width="120" />
+      <a href="https://onesay.io">
+        <img src="assets/images/sponsors/onesay.jpg" alt="OneSay Desktop" width="120" />
       </a>
     </td>
     <td valign="top">
-      <strong><a href="https://88api.ai/sign-up?aff=OceE">88API 全模型聚合平台</a></strong><br />
-      🧠 聚合 GPT、Claude、Gemini、Grok、DeepSeek、Kimi、GLM 等语言与编程模型；<br />
-      🎨 图片模型：GPT-Image、Gemini、Grok 等；<br />
-      🎬 视频模型：Seedance、Veo、MiniMax Hailuo H3、Kling、Grok 等；<br />
-      🎙️ 语音能力：Whisper、TTS 等。从文案、出图、改图，到视频生成与配音。<br />
-      🎁 新用户注册送体验额度，可以检测模型能力。站内有人工客服值守！<br />
-      👉 海外企业资质运营，稳定不跑路，提供正规发票，充值比例 1:1。
+      <strong><a href="https://onesay.io">Typeless 最佳平替来了！OneSay Pro 免费用 3 个月！</a></strong><br />
+      还在为打字慢、效率低而烦恼？试试 OneSay Desktop！一款让你开口就能高效工作的 AI 语音助手，集智能听写、AI 翻译、文字改写、智能问答于一体。写邮件、回消息、记录灵感，动动嘴就能搞定！<br />
+      <strong>限时福利：新用户免费体验 Pro 模式 3 个月！</strong>邀请好友注册，还能继续延长会员时长，邀请越多，免费用得越久！<br />
+      体验 Typeless 级别的语音输入效率，从 OneSay 开始！立即注册体验：<a href="https://onesay.io">https://onesay.io</a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="middle" width="180">
+      <a href="https://omniakey.com">
+        <img src="assets/images/sponsors/OmniaKey.png" alt="OmniaKey" width="120" />
+      </a>
+    </td>
+    <td valign="top">
+      <strong>嗨嗨嗨！很高兴被你看见 👋</strong><br />
+      我们是 <strong><a href="https://omniakey.com">OmniaKey</a></strong> 团队，专为开发者打造的全模态 AI API 中转平台，提供文本、图片、视频与音频模型接入，一套 API Key 覆盖多种 AI 场景。<br />
+      <strong>📝 文本：</strong>GPT、Claude、Gemini、Grok、GLM、Qwen 等主流大模型全线覆盖，对话、代码、推理一站满足。<br />
+      <strong>🎨 图片：</strong>GPT-image-2.5、Nanobanna 2.1、Seedream 5.0 Pro，文生图、图生图、改图设计开箱即用。<br />
+      <strong>🎬 视频：</strong>Seedance 2.5、Wan3、Kling、MiniMaxH3，文生视频与图生视频模型，一键接入即可出片。<br />
+      <strong>🔊 音频：</strong>Suno AI 音乐生成，直接 API 调用，轻松落地音频创作场景。<br />
+      官网：<a href="https://omniakey.com">omniakey.com</a> · 中文地址：<a href="https://omniakey.com/zh">omniakey.com/zh</a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="middle" width="180">
+      <a href="https://daitouai.com/">
+        <img src="assets/images/sponsors/daitouai.svg" alt="呆头 AI" width="120" />
+      </a>
+    </td>
+    <td valign="top">
+      <strong><a href="https://daitouai.com/">呆头 AI</a></strong> 专注于国内主流大模型 API 服务，提供 GLM、Kimi、DeepSeek 等模型的便捷接入，适用于对话问答、代码生成、内容创作和自动化开发等常见场景。平台主打比官方更实惠的价格，支持个人开发者快速试用，也适合独立项目与团队按需调用，帮助降低国内大模型的使用成本。欢迎通过<a href="https://daitouai.com/">官网</a>了解可用模型、接入方式与最新优惠。
     </td>
   </tr>
   <tr>
@@ -141,7 +165,7 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
     <td valign="top">
       <strong><a href="https://www.aixiamo.com/?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=brand_home_v3">AIXiamo 官网｜国内 ChatGPT Plus / Pro 本人账号正规充值</a></strong><br />
       <strong>Codex 额度不够，Plus 还是 Pro？</strong> 日常使用和普通 Codex 选 <a href="https://www.aixiamo.com/chatgpt-plus-domestic-recharge?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=plus_owner_v3">Plus</a>；经常触顶或高频长任务，再比较 <a href="https://www.aixiamo.com/chatgpt-pro?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=pro_owner_v3">Pro 5x / 20x</a>。<br />
-      <strong>赞助方教程：</strong><a rel="sponsored nofollow" href="https://github.com/momochoog/gpt-daichong">2026 ChatGPT Plus / Pro 国内充值与套餐选择完整指南</a><br />
+      <strong>赞助方教程：</strong><a rel="sponsored nofollow" href="https://github.com/momochoog/chatgpt-plus-daichong">2026 ChatGPT Plus / Pro 国内充值与套餐选择完整指南</a><br />
       支持支付宝、无需海外银行卡；不索取密码、验证码或恢复码，订单可查、中文售后，充值不成功经核验后全额退款。持续运营三年多，线上线下累计服务数万名用户；另有 Claude Pro / Max、Gemini（Google AI Pro）、Grok / SuperGrok 等主流 AI 会员。<br />
       欢迎企业采购对接；<a href="https://www.aixiamo.com/articles/aixiamo-invoice-application-notice-2026?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=invoice_notice_v3">已完成订单支持申请开具发票，请先联系售后确认</a>。
     </td>
@@ -195,7 +219,7 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
 | 配置端口、代理、数据库、Web 密码、环境变量 | [环境变量与运行配置](docs/zh-CN/report/环境变量与运行配置说明.md) |
 | 排查账号不命中、导入失败、挑战拦截、请求异常 | [FAQ 与账号命中规则](docs/zh-CN/report/FAQ与账号命中规则.md) |
 | 排查后台任务账号跳过、禁用与停用原因 | [后台任务账号跳过说明](docs/zh-CN/report/后台任务账号跳过说明.md) |
-| 管理模型、价格、路由、instructions policy 与本地缓存导出 | [模型目录 V2 管理与计费说明](docs/zh-CN/report/模型目录V2管理与计费说明.md) |
+| 管理模型、价格、路由、instructions policy 与 Codex 模型目录应用 | [模型目录 V2 管理与计费说明](docs/zh-CN/report/模型目录V2管理与计费说明.md) |
 | 插件中心最小接入、快速对接 | [插件中心最小接入说明](docs/zh-CN/report/插件中心最小接入说明.md) |
 | 对接插件中心、查看接口清单、市场模式与 Rhai 接口 | [插件中心对接与接口清单](docs/zh-CN/report/插件中心对接与接口清单.md) |
 | 系统全部可对接内部接口 | [系统内部接口总表](docs/zh-CN/report/系统内部接口总表.md) |
@@ -205,9 +229,12 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
 - 账号池管理：分组、标签、排序、备注、封禁识别与封禁筛选
 - 批量导入 / 导出：支持多文件导入、桌面端文件夹递归导入 JSON、按账号导出单文件
 - 用量展示：支持标准 5 小时 + 7 日窗口、仅 7 日单窗口账号，以及 Code Review / Spark 等官方附加额度窗口；刷新后会统一展示各额度的剩余百分比与重置时间
+- [额度重置自动唤醒](docs/zh-CN/额度重置自动唤醒.md)：默认在已耗尽的 5 小时额度到达重置时间后发送简短预热消息，支持按账号或批量开启、关闭，减少等待下一轮额度刷新的时间。
 - 授权登录：支持 `chatgpt.com` 浏览器授权与 Device Code 登录；浏览器授权仍可手动粘贴回调地址完成解析
 - 平台 Key：随机生成或自定义固定 Key、禁用、删除、模型绑定、推理等级、服务等级（跟随请求 / Standard / Fast / Ultrafast / Flex）；可绑定自定义账号分组，并与账号计划筛选取交集后仅在授权池内轮转
-- 模型管理：模型目录 V2 是唯一运行时真相源；支持 builtin/custom、整数三价与长上下文阶梯价、账号池/聚合 API route、instructions policy、本地 JSON preview/commit，以及桌面/Web 主动导出 Codex 缓存
+- 模型管理：模型目录 V2 是唯一运行时真相源；支持 builtin/custom、整数三价与长上下文阶梯价、账号池/聚合 API route、instructions policy、本地 JSON preview/commit，以及勾选模型后应用到 Codex 的 `model_catalog_json`
+- 当前 builtin 目录共 12 条记录：`gpt-6.1-sol`、`gpt-6-astra`、`gpt-6-sol`、`gpt-6-luna`、GPT-5.6 三款模型、`gpt-5.5`、`gpt-image-2` 和两个 Image 2.5 变体共 11 款模型默认可见；只有 `codex-auto-review` 默认隐藏
+- `gpt-5.4` 与 `gpt-5.4-mini` 已于 2026-08-31 从 ChatGPT 登录的 Codex 退役，`gpt-5.2` 也已在该登录方式下 deprecated；通用 API 模型不受此清理影响。revision 9 会清理未定制的对应 builtin；带有用户编辑、价格阶梯、路由或权限关联的数据会转为 custom 保留，需要 API Key 继续使用时也可显式添加同名 custom 模型
 - 聚合 API：管理第三方最小转发上游，支持创建、编辑、余额和基于已配置 V2 route 的连通性测试；不会自动发现供应商模型，管理员可主动拉取并选择性关联到模型目录 V2，不维护旧供应商模型池
 - 插件中心：路由为 `/plugins/`，支持内置精选、企业私有、自定义源三种市场模式，并提供插件清单、任务、日志与 Rhai 对接接口
 - Skills 与插件：`/skills/` 按“Skills 安装 / Codex 插件安装”分栏。Skills 安装提供内置及自定义 GitHub 技能仓库、仓库刷新与单 Skill 安装、skills.sh 搜索安装、ZIP / 目录导入和已安装管理；Codex 插件安装保留原生 Marketplace 的完整插件安装流程，`.system` 内置 Skill 始终只读
@@ -216,16 +243,27 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
 - 系统内部接口总表：列出当前桌面端与服务端所有可对接命令、RPC 方法、以及插件内建函数
 - 本地服务：自动拉起、可自定义端口与监听地址
 - 本地网关：为 Codex CLI、Gemini CLI、Claude Code 和第三方工具提供统一 OpenAI 兼容入口；Gemini 请求可转发到 `/v1/responses`，并兼容 SSE、tools、MCP、skill、请求总超时与流式空闲超时等调用链路
-- 图片生成：默认按官方 Codex 行为为 `/v1/responses` 自动注入 `image_generation` tool，并支持显式 tool 透传、`/v1/images/generations` 与 `/v1/images/edits` 兼容入口，默认图片工具模型为 `gpt-image-2`
+- 图片生成：默认按官方 Codex 行为为 `/v1/responses` 自动注入 `image_generation` tool，并支持显式 tool 透传、`/v1/images/generations` 与 `/v1/images/edits` 兼容入口；Images API 兼容入口默认主模型为 `gpt-6-luna`，默认图片工具模型仍为 `gpt-image-2`，并可显式选择两个 Image 2.5 变体
 
 ## 截图
-![仪表盘](assets/images/dashboard.png)
-![账号管理](assets/images/accounts.png)
-![平台 Key](assets/images/platform-key.png)
-![聚合 API](assets/images/aggregate-api.png)
+
+![仪表盘](assets/images/dashboard%20.png)
+
+![OpenAI 账号池（列表视图）](assets/images/accounts.png)
+
+![OpenAI 账号池（卡片视图）](assets/images/accounts2.png)
+
+![聚合 API](assets/images/aggregate-api%20.png)
+
+![平台密钥](assets/images/platform-key%20.png)
+
+![模型与路由](assets/images/models.png)
+
+![请求日志](assets/images/log.png)
+
+![系统设置](assets/images/setting.png)
+
 ![插件中心](assets/images/plug.png)
-![日志视图](assets/images/log.png)
-![设置页](assets/images/themes.png)
 
 ## 快速开始
 1. 启动桌面端，点击“启动服务”。
@@ -242,17 +280,20 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
 - 设置页“桌面诊断”可启用 Debug 模式、关闭普通桌面文件日志并打开日志目录。普通运行日志限制为 512 KB 并自动覆盖；请求日志与 Token / 费用统计不受这个开关影响。
 - 如果界面无法启动，可使用 `CodexManager.exe --debug`（macOS / Linux 为 `CodexManager --debug`）临时启用详细日志。启动失败会弹出具体原因，并将 `startup-error.log` 写入弹窗所示的日志目录。
 - 如需调整数据库、代理、监听地址等运行配置，可继续查看 [环境变量与运行配置](docs/zh-CN/report/环境变量与运行配置说明.md)。
+- Service 可选 SeaORM MySQL/PostgreSQL 后端，需编译对应驱动；旧 SQLite 可只读导出并事务导入空目标库，详见 [数据库切换与离线导入](docs/zh-CN/report/环境变量与运行配置说明.md#service-数据库切换与离线导入)。本地隔离数据库验收不代表生产验收，当前范围见 [迁移实证记录](docs/zh-CN/report/Axum-Tokio-Tower-SeaORM迁移进度与会话交接.md)。
 - Docker 镜像默认使用 `TZ=Asia/Shanghai`；compose 示例会优先沿用部署环境里的 `TZ`，没有设置时回退到 `Asia/Shanghai`，其他地区部署时请改成对应 IANA 时区。
 
 ## 页面展示
 ### 桌面端
 - 账号管理：集中导入、导出、刷新账号与用量，支持低配额 / 封禁筛选与重置时间展示
 - 平台 Key：按模型、推理等级、服务等级绑定平台 Key，并查看调用日志
+- Codex 接入方式：支持 OpenAI 账号直连、可安全映射到 Responses 的聚合 API 直连，以及通过 CodexManager 本地网关接入；直连聚合 API 不经过本地网关，因此不会写入网关请求日志
 - 模型管理：桌面端和 Web 端都不会写入或下载 `~/.codex/models_cache.json`；账号直连跟随 Codex 官方目录，本地网关使用 CodexManager 管理目录下独立生成的 catalog
 - 插件中心：`/plugins/` 路由，内置精选 / 企业私有 / 自定义源市场切换，插件安装、启停、任务、日志、Rhai 对接
 - Skills 与插件：`/skills/` 路由以独立 Tab 管理 Skills 安装和 Codex 插件安装；Skills 可从内置/自定义 GitHub 仓库或 skills.sh 搜索后单独安装，也支持 ZIP、目录导入和安全卸载；Codex 原生 Marketplace 继续负责完整插件安装，系统 Skill 只读
 - 项目启动：桌面端收藏本机目录；Windows / macOS 直接在 ChatGPT Codex App 中打开对应工作区，“会话”通过本机 CLI 继续项目；Web / Docker 不访问设备目录
 - 设置页：统一管理端口、监听地址、代理、请求超时、SSE 保活、主题、自动更新、后台行为
+- 基础设置中的“移除 requires_openai_auth”默认开启，保持托管网关的图片/actor 扩展认证行为。关闭后仅在切换到网关、重复应用或启动同步时保留 `cm` provider 已有的值，不会恢复此前删除的字段；保留 `true` 可能禁用 Codex 图片扩展。此设置不影响直连聚合 API，也不改写其他 provider。
 
 ### Service 版
 - `codexmanager-service`：提供本地 OpenAI 兼容网关

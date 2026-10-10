@@ -11,5 +11,5 @@ backup = []
 [dependencies]
 libsqlite3-sys = { version = "0.30.1", features = ["bundled"] }
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio-rustls"] }
-tokio = { version = "1", features = ["rt-multi-thread"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 url = "2"

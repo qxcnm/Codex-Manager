@@ -507,6 +507,20 @@ fn gateway_claude_messages_stay_on_chatgpt_codex_base() {
     storage.init().expect("init db");
     let now = now_ts();
     seed_model_catalog_models(&storage, &["gpt-5.4-mini"]);
+    // The shared gateway fixture clones the Luna metadata for custom models. This
+    // model is intentionally exercised as a standard-only upstream, so use the
+    // explicit filter policy instead of inheriting Luna's accelerated behavior.
+    let mut model = storage
+        .get_managed_model_v2("gpt-5.4-mini")
+        .expect("read gpt-5.4-mini model")
+        .expect("gpt-5.4-mini model exists");
+    model.fast_policy = codexmanager_core::storage::ModelFastPolicyV2::Filter;
+    storage
+        .upsert_managed_model_v2(&ManagedModelV2Upsert {
+            previous_slug: None,
+            model,
+        })
+        .expect("persist gpt-5.4-mini standard-only policy");
 
     storage
         .insert_account(&Account {
@@ -586,7 +600,7 @@ fn gateway_claude_messages_stay_on_chatgpt_codex_base() {
         String::from_utf8(decode_upstream_request_body(&captured)).expect("upstream body utf8");
     assert!(
         !upstream_body.contains("\"service_tier\""),
-        "gpt-5.4-mini does not advertise an accelerated tier: {upstream_body}"
+        "gpt-5.4-mini standard-only policy must not forward an accelerated tier: {upstream_body}"
     );
 }
 

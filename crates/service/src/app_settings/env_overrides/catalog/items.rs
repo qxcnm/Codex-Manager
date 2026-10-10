@@ -90,7 +90,7 @@ pub(crate) const ENV_OVERRIDE_CATALOG: &[EnvOverrideCatalogItem] = &[
         "Codex 图片主模型",
         ENV_OVERRIDE_SCOPE_SERVICE,
         ENV_OVERRIDE_APPLY_MODE_RUNTIME,
-        "gpt-5.4-mini",
+        "gpt-6-luna",
     ),
     EnvOverrideCatalogItem::new(
         "CODEXMANAGER_CODEX_IMAGE_TOOL_MODEL",
@@ -128,6 +128,13 @@ pub(crate) const ENV_OVERRIDE_CATALOG: &[EnvOverrideCatalogItem] = &[
         "/v1/props",
     ),
     EnvOverrideCatalogItem::new(
+        "CODEXMANAGER_GATEWAY_ASYNC_STREAM_WORKERS",
+        "异步流式上游 worker 并发上限",
+        ENV_OVERRIDE_SCOPE_SERVICE,
+        ENV_OVERRIDE_APPLY_MODE_RESTART,
+        "32",
+    ),
+    EnvOverrideCatalogItem::new(
         "CODEXMANAGER_GATEWAY_KEEPALIVE_FAILURE_BACKOFF_MAX_SECS",
         "保活失败退避上限（秒）",
         ENV_OVERRIDE_SCOPE_SERVICE,
@@ -154,6 +161,13 @@ pub(crate) const ENV_OVERRIDE_CATALOG: &[EnvOverrideCatalogItem] = &[
         ENV_OVERRIDE_SCOPE_SERVICE,
         ENV_OVERRIDE_APPLY_MODE_RUNTIME,
         "0",
+    ),
+    EnvOverrideCatalogItem::new(
+        "CODEXMANAGER_HTTP_TIMEOUT_MS",
+        "HTTP 请求超时（毫秒，0 为关闭）",
+        ENV_OVERRIDE_SCOPE_SERVICE,
+        ENV_OVERRIDE_APPLY_MODE_RUNTIME,
+        "120000",
     ),
     EnvOverrideCatalogItem::new(
         "CODEXMANAGER_HTTP_QUEUE_FACTOR",
@@ -196,6 +210,13 @@ pub(crate) const ENV_OVERRIDE_CATALOG: &[EnvOverrideCatalogItem] = &[
         ENV_OVERRIDE_SCOPE_SERVICE,
         ENV_OVERRIDE_APPLY_MODE_RUNTIME,
         "localhost:1455",
+    ),
+    EnvOverrideCatalogItem::new(
+        "CODEXMANAGER_MAX_TEXT_INPUT_CHARS",
+        "本地文本输入上限（字符）",
+        ENV_OVERRIDE_SCOPE_SERVICE,
+        ENV_OVERRIDE_APPLY_MODE_RUNTIME,
+        "1048576",
     ),
     EnvOverrideCatalogItem::new(
         "CODEXMANAGER_NO_SERVICE",

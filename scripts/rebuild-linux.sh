@@ -81,6 +81,9 @@ if [[ "$NO_BUNDLE" == "true" ]]; then
   run_cmd "cargo tauri build --no-bundle" cargo tauri build --no-bundle
 else
   run_cmd "cargo tauri build --bundles $BUNDLES" cargo tauri build --bundles "$BUNDLES"
+  if [[ "$BUNDLES" == *appimage* ]]; then
+    run_cmd "verify AppImage icon metadata" bash "$SCRIPT_DIR/release/ensure-appimage-diricon.sh" "${CARGO_TARGET_DIR:-$TAURI_TARGET}"/release/bundle/appimage/*.AppImage
+  fi
 fi
 popd >/dev/null
 

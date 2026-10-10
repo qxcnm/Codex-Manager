@@ -25,6 +25,7 @@ export const EN_AGGREGATE_API_MESSAGES: MessageCatalog = {
   取消全选: "Clear selection",
   "没有匹配的模型": "No matching models",
   已有模型: "Existing model",
+  选择已有模型: "Select existing models",
   已关联: "Already linked",
   "关联所选模型 ({count})": "Associate selected models ({count})",
   "拉取并关联模型": "Fetch and associate models",
@@ -54,6 +55,7 @@ export const EN_AGGREGATE_API_MESSAGES: MessageCatalog = {
   复制密钥: "Copy key",
   "暂无聚合 API，点击右上角新建":
     "No aggregate APIs yet. Create one from the top-right corner.",
+  "没有匹配当前筛选的聚合 API": "No aggregate APIs match the current filters.",
   "测试 route": "Test route",
   "删除连接时会同时删除引用它的模型路由。":
     "Deleting a connection also deletes model routes that reference it.",

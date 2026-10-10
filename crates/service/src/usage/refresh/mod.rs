@@ -5,12 +5,14 @@ use codexmanager_core::storage::{
 use codexmanager_core::usage::has_usable_luna_reserve;
 #[cfg(test)]
 use codexmanager_core::usage::parse_usage_snapshot;
-use crossbeam_channel::{bounded, unbounded, Receiver, Sender, TrySendError};
+#[cfg(test)]
+use crossbeam_channel::{bounded, Receiver};
+use crossbeam_channel::{Sender, TrySendError};
+use futures_util::{FutureExt, StreamExt};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::account_status::mark_account_unavailable_for_auth_error;
@@ -20,10 +22,7 @@ use crate::usage_account_meta::{
     resolve_workspace_id_for_account,
 };
 use crate::usage_http::{
-    fetch_account_subscription, fetch_account_subscription_with_explicit_proxy,
-    fetch_usage_snapshot, fetch_usage_snapshot_with_auth_context,
-    fetch_usage_snapshot_with_auth_context_and_explicit_proxy,
-    fetch_usage_snapshot_with_explicit_proxy, log_account_data_route,
+    fetch_account_subscription_async, fetch_usage_snapshot_async, log_account_data_route,
 };
 use crate::usage_keepalive::{is_keepalive_error_ignorable, run_gateway_keepalive_once};
 use crate::usage_scheduler::{
@@ -34,18 +33,24 @@ use crate::usage_scheduler::{
     MIN_USAGE_POLL_INTERVAL_SECS,
 };
 use crate::usage_snapshot_store::store_usage_snapshot;
-use crate::usage_token_refresh::{refresh_and_persist_access_token, token_refresh_ahead_secs};
+use crate::usage_token_refresh::{
+    refresh_and_persist_access_token_async, token_refresh_ahead_secs,
+};
 
+mod background;
 mod batch;
+pub(crate) use background::drain_usage_background_tasks;
 mod errors;
 mod queue;
+mod reset_warmup;
 mod runner;
 mod settings;
 
-static USAGE_POLLING_STARTED: OnceLock<()> = OnceLock::new();
-static GATEWAY_KEEPALIVE_STARTED: OnceLock<()> = OnceLock::new();
-static TOKEN_REFRESH_POLLING_STARTED: OnceLock<()> = OnceLock::new();
-static WARMUP_CRON_STARTED: OnceLock<()> = OnceLock::new();
+static USAGE_POLLING_STARTED: AtomicBool = AtomicBool::new(false);
+static GATEWAY_KEEPALIVE_STARTED: AtomicBool = AtomicBool::new(false);
+static TOKEN_REFRESH_POLLING_STARTED: AtomicBool = AtomicBool::new(false);
+static WARMUP_CRON_STARTED: AtomicBool = AtomicBool::new(false);
+static RESET_WARMUP_STARTED: AtomicBool = AtomicBool::new(false);
 static WARMUP_CRON_SIGNAL: OnceLock<(Mutex<u64>, Condvar)> = OnceLock::new();
 static BACKGROUND_TASKS_CONFIG_LOADED: OnceLock<()> = OnceLock::new();
 static USAGE_POLL_CURSOR: AtomicUsize = AtomicUsize::new(0);
@@ -175,17 +180,23 @@ static USAGE_REFRESH_COMPLETED_HANDLER: OnceLock<Mutex<Option<UsageRefreshComple
 static USAGE_REFRESH_COMPLETED_SUBSCRIBERS: OnceLock<
     Mutex<Vec<Sender<UsageRefreshCompletedEvent>>>,
 > = OnceLock::new();
+static USAGE_REFRESH_COMPLETED_ASYNC: OnceLock<
+    tokio::sync::broadcast::Sender<UsageRefreshCompletedEvent>,
+> = OnceLock::new();
 
 use self::batch::refresh_usage_and_aggregate_balances_for_polling_cycle;
-pub(crate) use self::batch::refresh_usage_for_all_accounts_result;
 #[cfg(test)]
 use self::batch::{next_usage_poll_cursor, usage_poll_batch_indices};
+pub(crate) use self::batch::{
+    refresh_usage_for_all_accounts_result, refresh_usage_for_all_accounts_result_async,
+};
 use self::errors::{
     mark_usage_unreachable_if_needed, record_usage_refresh_failure, should_retry_with_refresh,
 };
 #[cfg(test)]
-use self::queue::clear_pending_usage_refresh_tasks_for_tests;
 pub(crate) use self::queue::enqueue_usage_refresh_with_worker;
+#[cfg(test)]
+use self::queue::reset_usage_refresh_executor_for_tests;
 use self::runner::{
     gateway_keepalive_loop, token_refresh_polling_loop, usage_polling_loop, warmup_cron_loop,
 };
@@ -205,6 +216,7 @@ where
     *guard = Some(Arc::new(handler));
 }
 
+#[cfg(test)]
 pub(crate) fn subscribe_usage_refresh_completed() -> Receiver<UsageRefreshCompletedEvent> {
     let (sender, receiver) = bounded(32);
     let subscribers = USAGE_REFRESH_COMPLETED_SUBSCRIBERS.get_or_init(|| Mutex::new(Vec::new()));
@@ -212,6 +224,20 @@ pub(crate) fn subscribe_usage_refresh_completed() -> Receiver<UsageRefreshComple
         crate::lock_utils::lock_recover(subscribers, "usage_refresh_completed_subscribers");
     guard.push(sender);
     receiver
+}
+
+pub(crate) fn subscribe_usage_refresh_completed_async(
+) -> tokio::sync::broadcast::Receiver<UsageRefreshCompletedEvent> {
+    USAGE_REFRESH_COMPLETED_ASYNC
+        .get_or_init(|| tokio::sync::broadcast::channel(32).0)
+        .subscribe()
+}
+
+#[cfg(test)]
+pub(crate) fn usage_refresh_async_subscriber_count() -> usize {
+    USAGE_REFRESH_COMPLETED_ASYNC
+        .get()
+        .map_or(0, tokio::sync::broadcast::Sender::receiver_count)
 }
 
 pub(crate) fn notify_usage_refresh_completed(source: &'static str, processed: usize, total: usize) {
@@ -238,6 +264,9 @@ pub(crate) fn notify_usage_refresh_completed(source: &'static str, processed: us
             Err(TrySendError::Disconnected(_)) => false,
         });
     }
+    if let Some(sender) = USAGE_REFRESH_COMPLETED_ASYNC.get() {
+        let _ = sender.send(event);
+    }
 }
 
 /// 函数 `ensure_usage_polling`
@@ -253,9 +282,7 @@ pub(crate) fn notify_usage_refresh_completed(source: &'static str, processed: us
 /// 无
 pub(crate) fn ensure_usage_polling() {
     ensure_background_tasks_config_loaded();
-    USAGE_POLLING_STARTED.get_or_init(|| {
-        spawn_background_loop("usage-polling", usage_polling_loop);
-    });
+    start_background_loop("usage-polling", &USAGE_POLLING_STARTED, usage_polling_loop);
 }
 
 /// 函数 `ensure_gateway_keepalive`
@@ -271,9 +298,11 @@ pub(crate) fn ensure_usage_polling() {
 /// 无
 pub(crate) fn ensure_gateway_keepalive() {
     ensure_background_tasks_config_loaded();
-    GATEWAY_KEEPALIVE_STARTED.get_or_init(|| {
-        spawn_background_loop("gateway-keepalive", gateway_keepalive_loop);
-    });
+    start_background_loop(
+        "gateway-keepalive",
+        &GATEWAY_KEEPALIVE_STARTED,
+        gateway_keepalive_loop,
+    );
 }
 
 /// 函数 `ensure_token_refresh_polling`
@@ -289,16 +318,28 @@ pub(crate) fn ensure_gateway_keepalive() {
 /// 无
 pub(crate) fn ensure_token_refresh_polling() {
     ensure_background_tasks_config_loaded();
-    TOKEN_REFRESH_POLLING_STARTED.get_or_init(|| {
-        spawn_background_loop("token-refresh-polling", token_refresh_polling_loop);
-    });
+    start_background_loop(
+        "token-refresh-polling",
+        &TOKEN_REFRESH_POLLING_STARTED,
+        token_refresh_polling_loop,
+    );
 }
 
 pub(crate) fn ensure_warmup_cron() {
     ensure_background_tasks_config_loaded();
-    WARMUP_CRON_STARTED.get_or_init(|| {
-        spawn_background_loop("account-warmup-cron", warmup_cron_loop);
-    });
+    start_background_loop(
+        "account-warmup-cron",
+        &WARMUP_CRON_STARTED,
+        warmup_cron_loop,
+    );
+}
+
+pub(crate) fn ensure_reset_warmup() {
+    start_background_loop(
+        "account-reset-warmup",
+        &RESET_WARMUP_STARTED,
+        reset_warmup::reset_warmup_loop,
+    );
 }
 
 /// 函数 `spawn_background_loop`
@@ -313,21 +354,52 @@ pub(crate) fn ensure_warmup_cron() {
 ///
 /// # 返回
 /// 无
-fn spawn_background_loop(name: &str, worker: fn()) {
-    let thread_name = name.to_string();
-    let _ = thread::Builder::new()
-        .name(thread_name.clone())
-        .spawn(move || loop {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(worker));
-            if result.is_ok() {
+fn start_background_loop<F, Fut>(name: &'static str, started: &'static AtomicBool, worker: F)
+where
+    F: Fn() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    use std::sync::atomic::Ordering;
+    if started
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    struct StartedGuard(&'static AtomicBool);
+    impl Drop for StartedGuard {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::Release);
+        }
+    }
+    let started_guard = StartedGuard(started);
+    if let Err(error) = background::spawn(async move {
+        let _started = started_guard;
+        loop {
+            if std::panic::AssertUnwindSafe(worker())
+                .catch_unwind()
+                .await
+                .is_ok()
+            {
                 break;
             }
-            log::error!(
-                "background task panicked and will restart: task={}",
-                thread_name
-            );
-            thread::sleep(Duration::from_secs(1));
-        });
+            log::error!("background task panicked and will restart: task={name}");
+            if crate::shutdown_requested() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }) {
+        log::error!("background task unavailable: task={name} error={error}");
+    }
+}
+
+fn run_usage_future<F, T>(future: F) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>> + Send,
+    T: Send,
+{
+    crate::aggregate_api::run_aggregate_future(future)
 }
 
 /// 函数 `enqueue_usage_refresh_for_account`
@@ -342,8 +414,8 @@ fn spawn_background_loop(name: &str, worker: fn()) {
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn enqueue_usage_refresh_for_account(account_id: &str) -> bool {
-    enqueue_usage_refresh_with_worker(account_id, |id| {
-        if let Err(err) = refresh_usage_for_account(&id) {
+    queue::enqueue_usage_refresh_async(account_id, |id| async move {
+        if let Err(err) = refresh_usage_for_account_async(&id).await {
             let status = classify_usage_status_from_error(&err);
             log::warn!(
                 "async usage refresh failed: account_id={} status={} err={}",
@@ -408,8 +480,11 @@ fn reset_usage_poll_cursor_for_tests() {
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(crate) fn refresh_tokens_before_expiry_for_all_accounts() -> Result<(), String> {
-    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+pub(crate) async fn refresh_tokens_before_expiry_for_all_accounts() -> Result<(), String> {
+    let storage = open_storage()
+        .map(|storage| storage.shared_handle())
+        .ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let now = now_ts();
     let due_cutoff = token_refresh_due_cutoff(
         now,
@@ -461,7 +536,7 @@ pub(crate) fn refresh_tokens_before_expiry_for_all_accounts() -> Result<(), Stri
         });
     }
 
-    refreshed = refreshed.saturating_add(run_token_refresh_tasks(due_tokens)?);
+    refreshed = refreshed.saturating_add(run_token_refresh_tasks(due_tokens).await?);
     let _ = (refreshed, skipped);
     Ok(())
 }
@@ -470,6 +545,7 @@ fn load_token_refresh_issuers_for_tokens(
     storage: &Storage,
     tokens: &[Token],
 ) -> Result<Vec<AccountTokenRefreshIssuer>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let account_ids = tokens
         .iter()
         .map(|token| token.account_id.clone())
@@ -490,7 +566,7 @@ fn load_token_refresh_issuers_for_tokens(
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(crate) fn refresh_usage_for_account_result(
+pub(crate) async fn refresh_usage_for_account_result_async(
     account_id: &str,
 ) -> Result<UsageRefreshRunResult, String> {
     // 刷新单个账号用量
@@ -498,7 +574,10 @@ pub(crate) fn refresh_usage_for_account_result(
     if account_id.is_empty() {
         return Err("account_id is required".to_string());
     }
-    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = open_storage()
+        .map(|storage| storage.shared_handle())
+        .ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let token = match storage
         .find_token_by_account_id(account_id)
         .map_err(|e| e.to_string())?
@@ -519,7 +598,7 @@ pub(crate) fn refresh_usage_for_account_result(
     let workspace_id = resolve_workspace_id_for_account(&storage, account_id);
 
     let started_at = Instant::now();
-    match refresh_usage_for_token(&storage, &token, workspace_id.as_deref(), None) {
+    match refresh_usage_for_token(&storage, &token, workspace_id.as_deref(), None).await {
         Ok(_) => {}
         Err(err) => {
             record_usage_refresh_metrics(false, started_at);
@@ -539,8 +618,18 @@ pub(crate) fn refresh_usage_for_account_result(
     })
 }
 
+pub(crate) fn refresh_usage_for_account_result(
+    account_id: &str,
+) -> Result<UsageRefreshRunResult, String> {
+    run_usage_future(refresh_usage_for_account_result_async(account_id))
+}
+
 pub(crate) fn refresh_usage_for_account(account_id: &str) -> Result<(), String> {
-    let result = refresh_usage_for_account_result(account_id)?;
+    run_usage_future(refresh_usage_for_account_async(account_id))
+}
+
+pub(crate) async fn refresh_usage_for_account_async(account_id: &str) -> Result<(), String> {
+    let result = refresh_usage_for_account_result_async(account_id).await?;
     if result.ok || result.total == 0 {
         return Ok(());
     }
@@ -582,12 +671,13 @@ fn record_usage_refresh_metrics(success: bool, started_at: Instant) {
 ///
 /// # 返回
 /// 返回函数执行结果
-fn refresh_usage_for_token(
+async fn refresh_usage_for_token(
     storage: &Storage,
     token: &Token,
     workspace_id: Option<&str>,
     account_cache: Option<&mut HashMap<String, Account>>,
 ) -> Result<UsageRefreshResult, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     // 读取用量接口所需的基础配置
     let issuer =
         std::env::var("CODEXMANAGER_ISSUER").unwrap_or_else(|_| DEFAULT_ISSUER.to_string());
@@ -640,15 +730,17 @@ fn refresh_usage_for_token(
         clean_header_value(derived_chatgpt_id.or_else(|| resolved_workspace_id.clone()));
 
     if agent_identity.is_some() {
-        let registration_client = crate::gateway::upstream_client_for_account(&current.account_id)
-            .map_err(|err| format!("build agent task registration client failed: {err}"))?;
+        let registration_client =
+            crate::gateway::async_upstream_client_for_account(&current.account_id)
+                .map_err(|err| format!("build agent task registration client failed: {err}"))?;
         let authorization =
-            crate::agent_identity::resolve_or_bootstrap_account_agent_identity_authorization(
+            crate::agent_identity::resolve_or_bootstrap_account_agent_identity_authorization_async(
                 storage,
                 &registration_client,
                 &account,
                 &current,
-            )?
+            )
+            .await?
             .ok_or_else(|| "agent identity disappeared before usage refresh".to_string())?;
         let failed_task_id = authorization.task_id.clone();
         let authorization_scope_id = authorization
@@ -663,17 +755,19 @@ fn refresh_usage_for_token(
             authorization_scope_id,
             None,
             authorization.is_fedramp,
-        );
+        )
+        .await;
         let outcome = match first {
             Err(err) if crate::agent_identity::is_agent_identity_task_invalid_error(&err) => {
                 let recovered =
-                    crate::agent_identity::recover_account_agent_identity_authorization(
+                    crate::agent_identity::recover_account_agent_identity_authorization_async(
                         storage,
                         &registration_client,
                         &account,
                         &current,
                         &failed_task_id,
-                    )?
+                    )
+                    .await?
                     .ok_or_else(|| {
                         "agent identity disappeared during usage task recovery".to_string()
                     })?;
@@ -689,6 +783,7 @@ fn refresh_usage_for_token(
                     None,
                     recovered.is_fedramp,
                 )
+                .await
             }
             other => other,
         };
@@ -711,7 +806,9 @@ fn refresh_usage_for_token(
         resolved_workspace_id.as_deref(),
         resolved_subscription_account_id.as_deref(),
         false,
-    ) {
+    )
+    .await
+    {
         Ok(status) => Ok(UsageRefreshResult { _status: status }),
         Err(err) if should_retry_usage_refresh_with_token(&current, &err) => {
             if current.refresh_token.trim().is_empty() {
@@ -724,13 +821,15 @@ fn refresh_usage_for_token(
             }
             // 中文注释：token 刷新与持久化独立封装，避免轮询流程继续膨胀；
             // 不下沉会让后续 async 迁移时刷新链路与业务编排强耦合，回归范围扩大。
-            if let Err(refresh_err) = refresh_and_persist_access_token(
+            if let Err(refresh_err) = refresh_and_persist_access_token_async(
                 storage,
                 &mut current,
                 &issuer,
                 &client_id,
                 token_refresh_ahead_secs(),
-            ) {
+            )
+            .await
+            {
                 mark_usage_unreachable_if_needed(storage, &current.account_id, &refresh_err);
                 return Err(refresh_err);
             }
@@ -754,7 +853,9 @@ fn refresh_usage_for_token(
                 refreshed_workspace_id.as_deref(),
                 refreshed_subscription_account_id.as_deref(),
                 false,
-            ) {
+            )
+            .await
+            {
                 Ok(status) => Ok(UsageRefreshResult { _status: status }),
                 Err(err) => {
                     mark_usage_unreachable_if_needed(storage, &current.account_id, &err);
@@ -769,7 +870,7 @@ fn refresh_usage_for_token(
     }
 }
 
-fn refresh_account_snapshot(
+async fn refresh_account_snapshot(
     storage: &Storage,
     account_id: &str,
     base_url: &str,
@@ -778,7 +879,15 @@ fn refresh_account_snapshot(
     subscription_account_id: Option<&str>,
     is_fedramp: bool,
 ) -> Result<UsageAvailabilityStatus, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let proxy_mode = crate::account_proxy::resolve_account_proxy_mode(account_id);
+    let explicit_proxy = match &proxy_mode {
+        crate::account_proxy::AccountProxyMode::Disabled => None,
+        crate::account_proxy::AccountProxyMode::Explicit { proxy_url, .. } => {
+            Some(proxy_url.as_str())
+        }
+        crate::account_proxy::AccountProxyMode::Invalid { error, .. } => return Err(error.clone()),
+    };
     if let Some(subscription_account_id) = subscription_account_id {
         log_account_data_route(
             "subscription",
@@ -787,23 +896,14 @@ fn refresh_account_snapshot(
             "accounts_check",
             false,
         );
-        let subscription = match &proxy_mode {
-            crate::account_proxy::AccountProxyMode::Disabled => {
-                fetch_account_subscription(base_url, bearer, subscription_account_id, workspace_id)?
-            }
-            crate::account_proxy::AccountProxyMode::Explicit { proxy_url, .. } => {
-                fetch_account_subscription_with_explicit_proxy(
-                    base_url,
-                    bearer,
-                    subscription_account_id,
-                    workspace_id,
-                    proxy_url,
-                )?
-            }
-            crate::account_proxy::AccountProxyMode::Invalid { error, .. } => {
-                return Err(error.clone());
-            }
-        };
+        let subscription = fetch_account_subscription_async(
+            base_url,
+            bearer,
+            subscription_account_id,
+            workspace_id,
+            explicit_proxy,
+        )
+        .await?;
         storage
             .upsert_account_subscription(
                 account_id,
@@ -815,36 +915,16 @@ fn refresh_account_snapshot(
             )
             .map_err(|err| format!("store account subscription failed: {err}"))?;
     }
-
-    // The usage endpoint expects the ChatGPT account UUID in
-    // `ChatGPT-Account-ID`.  `workspace_id` is still used for the
-    // subscription lookup above, but it must not replace the account UUID
-    // when a token-derived account identity is available.
     let usage_account_id = resolve_usage_account_id(subscription_account_id, workspace_id);
     log_account_data_route("usage", account_id, &proxy_mode, "usage", true);
-    let value = match &proxy_mode {
-        crate::account_proxy::AccountProxyMode::Disabled if is_fedramp => {
-            fetch_usage_snapshot_with_auth_context(base_url, bearer, usage_account_id, is_fedramp)?
-        }
-        crate::account_proxy::AccountProxyMode::Disabled => {
-            fetch_usage_snapshot(base_url, bearer, usage_account_id)?
-        }
-        crate::account_proxy::AccountProxyMode::Explicit { proxy_url, .. } if is_fedramp => {
-            fetch_usage_snapshot_with_auth_context_and_explicit_proxy(
-                base_url,
-                bearer,
-                usage_account_id,
-                is_fedramp,
-                proxy_url,
-            )?
-        }
-        crate::account_proxy::AccountProxyMode::Explicit { proxy_url, .. } => {
-            fetch_usage_snapshot_with_explicit_proxy(base_url, bearer, usage_account_id, proxy_url)?
-        }
-        crate::account_proxy::AccountProxyMode::Invalid { error, .. } => {
-            return Err(error.clone());
-        }
-    };
+    let value = fetch_usage_snapshot_async(
+        base_url,
+        bearer,
+        usage_account_id,
+        is_fedramp,
+        explicit_proxy,
+    )
+    .await?;
     let stored = store_usage_snapshot(storage, account_id, value)?;
     Ok(classify_usage_status_from_snapshot_record(&stored))
 }
@@ -1043,64 +1123,28 @@ struct TokenRefreshTask {
 ///
 /// # 返回
 /// 返回函数执行结果
-fn run_token_refresh_tasks(tasks: Vec<TokenRefreshTask>) -> Result<usize, String> {
+async fn run_token_refresh_tasks(tasks: Vec<TokenRefreshTask>) -> Result<usize, String> {
     let total = tasks.len();
     if total == 0 {
         return Ok(0);
     }
-
-    let worker_count = token_refresh_worker_count(total);
-    if worker_count <= 1 {
-        let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-        let mut refreshed = 0usize;
-        for task in tasks {
-            let mut token = task.token;
-            if run_token_refresh_task(&storage, &mut token, &task.issuer, &task.client_id) {
-                refreshed = refreshed.saturating_add(1);
-            }
+    let mut work = futures_util::stream::iter(tasks.into_iter().map(|task| async move {
+        let storage = open_storage()
+            .map(|storage| storage.shared_handle())
+            .ok_or_else(|| "token refresh storage unavailable".to_string())?;
+        let mut token = task.token;
+        Ok::<bool, String>(
+            run_token_refresh_task_async(&storage, &mut token, &task.issuer, &task.client_id).await,
+        )
+    }))
+    .buffer_unordered(token_refresh_worker_count(total));
+    let mut refreshed = 0;
+    while let Some(result) = work.next().await {
+        if result? {
+            refreshed += 1;
         }
-        return Ok(refreshed);
     }
-
-    let (sender, receiver) = unbounded::<TokenRefreshTask>();
-    for task in tasks {
-        sender
-            .send(task)
-            .map_err(|_| "enqueue token refresh task failed".to_string())?;
-    }
-    drop(sender);
-
-    let refreshed = std::sync::atomic::AtomicUsize::new(0);
-    thread::scope(|scope| -> Result<(), String> {
-        let mut handles = Vec::with_capacity(worker_count);
-        for worker_index in 0..worker_count {
-            let receiver = receiver.clone();
-            let refreshed = &refreshed;
-            handles.push(scope.spawn(move || {
-                let storage = open_storage().ok_or_else(|| {
-                    format!("token refresh worker {worker_index} storage unavailable")
-                })?;
-                while let Ok(task) = receiver.recv() {
-                    let mut token = task.token;
-                    if run_token_refresh_task(&storage, &mut token, &task.issuer, &task.client_id) {
-                        refreshed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                }
-                Ok::<(), String>(())
-            }));
-        }
-
-        for handle in handles {
-            match handle.join() {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => return Err(err),
-                Err(_) => return Err("token refresh worker panicked".to_string()),
-            }
-        }
-        Ok(())
-    })?;
-
-    Ok(refreshed.load(std::sync::atomic::Ordering::Relaxed))
+    Ok(refreshed)
 }
 
 /// 函数 `run_token_refresh_task`
@@ -1117,12 +1161,13 @@ fn run_token_refresh_tasks(tasks: Vec<TokenRefreshTask>) -> Result<usize, String
 ///
 /// # 返回
 /// 返回函数执行结果
-fn run_token_refresh_task(
+async fn run_token_refresh_task_async(
     storage: &Storage,
     token: &mut Token,
     issuer: &str,
     client_id: &str,
 ) -> bool {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     if token.refresh_token.trim().is_empty() {
         log::debug!(
             "skip token refresh polling for account without refresh token: account_id={}",
@@ -1130,13 +1175,15 @@ fn run_token_refresh_task(
         );
         return false;
     }
-    match refresh_and_persist_access_token(
+    match refresh_and_persist_access_token_async(
         storage,
         token,
         issuer,
         client_id,
         token_refresh_ahead_secs(),
-    ) {
+    )
+    .await
+    {
         Ok(_) => true,
         Err(err) => {
             let _ = mark_account_unavailable_for_auth_error(storage, &token.account_id, &err);
@@ -1148,6 +1195,19 @@ fn run_token_refresh_task(
             false
         }
     }
+}
+
+#[cfg(test)]
+fn run_token_refresh_task(
+    storage: &Storage,
+    token: &mut Token,
+    issuer: &str,
+    client_id: &str,
+) -> bool {
+    crate::runtime::service_runtime::run_sync(run_token_refresh_task_async(
+        storage, token, issuer, client_id,
+    ))
+    .expect("test token refresh compatibility capacity")
 }
 
 fn resolve_token_refresh_issuer(account_issuer: Option<&str>, default_issuer: &str) -> String {

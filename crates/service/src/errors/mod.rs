@@ -8,6 +8,7 @@ pub(crate) const TRACE_ID_HEADER_NAME: &str = "X-CodexManager-Trace-Id";
 pub(crate) enum ErrorCode {
     UnknownMethod,
     UnknownError,
+    PermissionDenied,
     InvalidSettingsPayload,
     InvalidRequestPayload,
     InputTooLarge,
@@ -31,6 +32,7 @@ impl ErrorCode {
         match self {
             Self::UnknownMethod => "unknown_method",
             Self::UnknownError => "unknown_error",
+            Self::PermissionDenied => "permission_denied",
             Self::InvalidSettingsPayload => "invalid_settings_payload",
             Self::InvalidRequestPayload => "invalid_request_payload",
             Self::InputTooLarge => "input_too_large",
@@ -92,6 +94,9 @@ pub(crate) fn classify_message(message: &str) -> ErrorCode {
 
     if eq("unknown_method") {
         return ErrorCode::UnknownMethod;
+    }
+    if eq("permission_denied") || starts_with("permission_denied:") {
+        return ErrorCode::PermissionDenied;
     }
     if starts_with("invalid app settings payload:") {
         return ErrorCode::InvalidSettingsPayload;

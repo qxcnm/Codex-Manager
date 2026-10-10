@@ -81,7 +81,13 @@ fn send_shutdown_request(addr: &str) -> std::io::Result<()> {
     let mut stream = TcpStream::connect(addr)?;
     let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
     let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
-    let request = format!("GET /__shutdown HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+    let token = axum::http::HeaderValue::from_str(crate::rpc_auth_token()).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid RPC token header")
+    })?;
+    let token = token.to_str().map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid RPC token header")
+    })?;
+    let request = format!("GET /__shutdown HTTP/1.1\r\nHost: {addr}\r\nX-CodexManager-Rpc-Token: {token}\r\nConnection: close\r\n\r\n");
     stream.write_all(request.as_bytes())?;
     Ok(())
 }

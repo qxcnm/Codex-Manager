@@ -1,4 +1,6 @@
 use super::*;
+#[path = "account_reset_warmup_rpc_tests.rs"]
+mod account_reset_warmup_rpc_tests;
 use codexmanager_core::rpc::types::{
     JsonRpcMessage, JsonRpcResponse, ModelGroupModelUpsertParams, ModelGroupModelsSetParams,
     ModelGroupUsersSetParams,
@@ -120,6 +122,7 @@ fn member_actor_cannot_call_admin_only_rpc() {
         "accountManager/users/list",
         "codexProfile/repairHistory",
         "codexProfile/pruneHistoryBackups",
+        "codexProfile/applyModels",
         "codexSkills/list",
         "codexSkills/installZip",
         "codexSkills/importDirectory",
@@ -226,7 +229,7 @@ fn admin_actor_can_update_managed_model_state_v2() {
         rpc_request(
             "apikey/managedModelUpdateStateV2",
             serde_json::json!({
-                "slug": "gpt-5.4",
+                "slug": "gpt-6-sol",
                 "enabled": false,
                 "visibility": "hide",
             }),
@@ -235,7 +238,7 @@ fn admin_actor_can_update_managed_model_state_v2() {
     ));
     assert_eq!(
         resp.result.get("slug").and_then(|value| value.as_str()),
-        Some("gpt-5.4")
+        Some("gpt-6-sol")
     );
     assert_eq!(
         resp.result.get("enabled").and_then(|value| value.as_bool()),
@@ -256,7 +259,7 @@ fn admin_actor_can_update_managed_model_state_v2() {
 
     let stored = storage_helpers::open_storage()
         .expect("open storage")
-        .get_managed_model_v2("gpt-5.4")
+        .get_managed_model_v2("gpt-6-sol")
         .expect("read managed model")
         .expect("managed model");
     assert!(!stored.enabled);
@@ -274,7 +277,7 @@ fn admin_actor_can_batch_update_managed_model_state_v2() {
         rpc_request(
             "apikey/managedModelBatchUpdateStateV2",
             serde_json::json!({
-                "slugs": ["gpt-5.4", "gpt-5.4-mini"],
+                "slugs": ["gpt-6-sol", "gpt-6-luna"],
                 "enabled": false,
                 "visibility": "hide",
             }),
@@ -290,7 +293,7 @@ fn admin_actor_can_batch_update_managed_model_state_v2() {
     }));
 
     let storage = storage_helpers::open_storage().expect("open storage");
-    for slug in ["gpt-5.4", "gpt-5.4-mini"] {
+    for slug in ["gpt-6-sol", "gpt-6-luna"] {
         let stored = storage
             .get_managed_model_v2(slug)
             .expect("read managed model")
@@ -1533,14 +1536,14 @@ fn set_model_group_models_validates_requested_catalog_slugs_only() {
         group_id: group_id.clone(),
         models: vec![
             ModelGroupModelUpsertParams {
-                platform_model_slug: "gpt-5.4-mini".to_string(),
+                platform_model_slug: "gpt-6-luna".to_string(),
                 enabled: Some(true),
                 rate_multiplier_millis: Some(1200),
                 billing_model_slug: None,
                 note: Some("primary".to_string()),
             },
             ModelGroupModelUpsertParams {
-                platform_model_slug: "gpt-5.4-mini".to_string(),
+                platform_model_slug: "gpt-6-luna".to_string(),
                 enabled: Some(false),
                 rate_multiplier_millis: Some(900),
                 billing_model_slug: None,
@@ -1553,7 +1556,7 @@ fn set_model_group_models_validates_requested_catalog_slugs_only() {
     let saved = result
         .models
         .iter()
-        .filter(|item| item.group_id == group_id && item.platform_model_slug == "gpt-5.4-mini")
+        .filter(|item| item.group_id == group_id && item.platform_model_slug == "gpt-6-luna")
         .collect::<Vec<_>>();
     assert_eq!(saved.len(), 1);
     assert!(saved[0].enabled);
@@ -1591,7 +1594,7 @@ fn set_model_group_models_treats_default_group_as_all_enabled_models() {
     let result = set_model_group_models(ModelGroupModelsSetParams {
         group_id: group_id.clone(),
         models: vec![ModelGroupModelUpsertParams {
-            platform_model_slug: "gpt-5.4-mini".to_string(),
+            platform_model_slug: "gpt-6-luna".to_string(),
             enabled: Some(true),
             rate_multiplier_millis: Some(1200),
             billing_model_slug: None,
@@ -1667,7 +1670,7 @@ fn wallet_charge_uses_v2_integer_snapshot_and_group_multiplier() {
     set_web_auth_mode("accounts").expect("enable accounts mode");
     set_distribution_enabled(true).expect("enable distribution");
     let user = create_test_member("member-model-group-billing", Some(1_000_000));
-    let key_id = create_owned_test_api_key(&user.id, "member model group key", "gpt-5.4-mini");
+    let key_id = create_owned_test_api_key(&user.id, "member model group key", "gpt-6-luna");
     let storage = storage_helpers::open_storage().expect("open storage");
     let group_id = storage
         .default_model_group_id()
@@ -1688,7 +1691,7 @@ fn wallet_charge_uses_v2_integer_snapshot_and_group_multiplier() {
             key_id: Some(key_id.clone()),
             request_path: "/v1/responses".to_string(),
             method: "POST".to_string(),
-            model: Some("gpt-5.4-mini".to_string()),
+            model: Some("gpt-6-luna".to_string()),
             status_code: Some(200),
             created_at: now,
             ..RequestLog::default()
@@ -1699,7 +1702,7 @@ fn wallet_charge_uses_v2_integer_snapshot_and_group_multiplier() {
         &storage,
         Some(&key_id),
         request_log_id,
-        "gpt-5.4-mini",
+        "gpt-6-luna",
         None,
         "actual",
         1_000,
@@ -1712,18 +1715,18 @@ fn wallet_charge_uses_v2_integer_snapshot_and_group_multiplier() {
     .expect("charge wallet from V2 snapshot");
 
     assert_eq!(snapshot.rate_multiplier_millis, 1_500);
-    assert_eq!(snapshot.base_cost_microusd, 5_250);
-    assert_eq!(snapshot.charged_cost_microusd, 7_875);
+    assert_eq!(snapshot.base_cost_microusd, 600);
+    assert_eq!(snapshot.charged_cost_microusd, 900);
     let wallet = storage
         .find_wallet_by_owner("user", &user.id)
         .expect("read wallet")
         .expect("wallet");
-    assert_eq!(wallet.balance_credit_micros, 992_125);
+    assert_eq!(wallet.balance_credit_micros, 999_100);
     let repeated = auth::app_manager::record_request_charge_v2(
         &storage,
         Some(&key_id),
         request_log_id,
-        "gpt-5.4-mini",
+        "gpt-6-luna",
         None,
         "estimated",
         99_999,
@@ -1739,7 +1742,7 @@ fn wallet_charge_uses_v2_integer_snapshot_and_group_multiplier() {
         .find_wallet_by_owner("user", &user.id)
         .expect("read wallet")
         .expect("wallet");
-    assert_eq!(wallet.balance_credit_micros, 992_125);
+    assert_eq!(wallet.balance_credit_micros, 999_100);
 
     let _ = std::fs::remove_file(db_path);
 }
@@ -1796,13 +1799,13 @@ fn reserve_alias_uses_luna_access_and_pricing_but_stays_visible_in_snapshot() {
 
     assert_eq!(snapshot.model_slug, "gpt-reserve");
     assert_eq!(snapshot.model_id.as_deref(), Some(luna_model_id.as_str()));
-    assert_eq!(snapshot.base_cost_microusd, 1_400);
-    assert_eq!(snapshot.charged_cost_microusd, 1_400);
+    assert_eq!(snapshot.base_cost_microusd, 600);
+    assert_eq!(snapshot.charged_cost_microusd, 600);
     let wallet = storage
         .find_wallet_by_owner("user", &user.id)
         .expect("read wallet")
         .expect("wallet");
-    assert_eq!(wallet.balance_credit_micros, 998_600);
+    assert_eq!(wallet.balance_credit_micros, 999_400);
 
     let _ = std::fs::remove_file(db_path);
 }

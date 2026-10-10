@@ -244,7 +244,7 @@ fn gateway_images_generation_wraps_codex_sse_as_openai_images_json() {
     );
     let upstream_body: serde_json::Value =
         serde_json::from_slice(&decode_upstream_request_body(&captured)).expect("upstream json");
-    assert_eq!(upstream_body["model"], "gpt-5.4-mini");
+    assert_eq!(upstream_body["model"], "gpt-6-luna");
     assert_eq!(upstream_body["tools"][0]["type"], "image_generation");
     assert_eq!(upstream_body["tools"][0]["model"], "gpt-image-2");
     assert_eq!(upstream_body["tool_choice"]["type"], "image_generation");

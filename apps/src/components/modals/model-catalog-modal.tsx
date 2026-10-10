@@ -5,6 +5,7 @@ import { Plus, Trash2 } from "lucide-react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogClose,
@@ -109,6 +110,25 @@ const DEFAULT_CAPABILITIES = {
   experimentalSupportedTools: [],
 };
 
+const REASONING_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh", "max", "ultra"];
+
+function reasoningEffortsFromCapabilities(capabilities: Record<string, unknown>): string[] {
+  const value = Object.hasOwn(capabilities, "reasoning_efforts")
+    ? capabilities.reasoning_efforts
+    : capabilities.reasoningEfforts;
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((effort): effort is string =>
+    typeof effort === "string" && effort.trim().length > 0,
+  ).map((effort) => effort.trim()))];
+}
+
+function orderReasoningEfforts(efforts: string[]): string[] {
+  return [
+    ...REASONING_EFFORT_OPTIONS.filter((effort) => efforts.includes(effort)),
+    ...efforts.filter((effort) => !REASONING_EFFORT_OPTIONS.includes(effort)),
+  ];
+}
+
 function aggregateApiDisplayName(
   api: AggregateApi | undefined,
   t: (message: string) => string,
@@ -144,6 +164,7 @@ function routeDraft(route: ModelRouteV2, index: number): RouteDraft {
 
 function buildDraft(model: ManagedModelV2 | null | undefined, nextSortOrder: number): ModelDraft {
   const longTier = model?.priceTiers.find((tier) => tier.minInputTokens > 0);
+  const capabilities = model?.capabilities || DEFAULT_CAPABILITIES;
   return {
     slug: model?.slug || "",
     displayName: model?.displayName || "",
@@ -161,7 +182,7 @@ function buildDraft(model: ManagedModelV2 | null | undefined, nextSortOrder: num
       model?.maxContextWindow == null ? "" : String(model.maxContextWindow),
     defaultReasoningEffort: model?.defaultReasoningEffort || "",
     fastPolicy: model?.fastPolicy || "passthrough",
-    capabilitiesJson: JSON.stringify(model?.capabilities || DEFAULT_CAPABILITIES, null, 2),
+    capabilitiesJson: JSON.stringify(capabilities, null, 2),
     inputPrice: microusdToUsdPerMillion(model?.price.inputMicrousdPer1m ?? null),
     cachedInputPrice: microusdToUsdPerMillion(
       model?.price.cachedInputMicrousdPer1m ?? null,
@@ -331,6 +352,31 @@ export function ModelCatalogModal({
     buildDraft(model, nextSortOrder),
   );
   const [error, setError] = useState<string | null>(null);
+  const [seenReasoningEfforts, setSeenReasoningEfforts] = useState<string[]>(() =>
+    reasoningEffortsFromCapabilities(model?.capabilities || DEFAULT_CAPABILITIES),
+  );
+  const capabilities = useMemo(() => {
+    try {
+      return parseCapabilities(draft.capabilitiesJson);
+    } catch {
+      return null;
+    }
+  }, [draft.capabilitiesJson]);
+  const reasoningEfforts = capabilities
+    ? reasoningEffortsFromCapabilities(capabilities)
+    : [];
+  const reasoningEffortOptions = [
+    ...new Set([
+      ...REASONING_EFFORT_OPTIONS,
+      ...seenReasoningEfforts,
+      ...reasoningEfforts,
+      ...(draft.defaultReasoningEffort ? [draft.defaultReasoningEffort] : []),
+    ]),
+  ];
+  const unsupportedDefaultEffort = draft.defaultReasoningEffort &&
+    !reasoningEfforts.includes(draft.defaultReasoningEffort)
+    ? draft.defaultReasoningEffort
+    : null;
 
   const title = useMemo(
     () => (model ? t("编辑模型") : t("新增自定义模型")),
@@ -339,6 +385,73 @@ export function ModelCatalogModal({
 
   const updateDraft = <K extends keyof ModelDraft>(key: K, value: ModelDraft[K]) => {
     setDraft((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateCapabilitiesJson = (value: string) => {
+    try {
+      const efforts = reasoningEffortsFromCapabilities(parseCapabilities(value));
+      setSeenReasoningEfforts((current) => [...new Set([...current, ...efforts])]);
+    } catch {
+      // The raw JSON stays editable until it becomes a valid object again.
+    }
+    setDraft((current) => {
+      try {
+        const efforts = reasoningEffortsFromCapabilities(parseCapabilities(value));
+        let previousEfforts: string[] | null = null;
+        try {
+          previousEfforts = reasoningEffortsFromCapabilities(
+            parseCapabilities(current.capabilitiesJson),
+          );
+        } catch {
+          // Keep the current default while the JSON editor is being corrected.
+        }
+        const effortsChanged = previousEfforts !== null &&
+          JSON.stringify(previousEfforts) !== JSON.stringify(efforts);
+        return {
+          ...current,
+          capabilitiesJson: value,
+          defaultReasoningEffort: effortsChanged &&
+            current.defaultReasoningEffort &&
+            !efforts.includes(current.defaultReasoningEffort)
+            ? ""
+            : current.defaultReasoningEffort,
+        };
+      } catch {
+        return { ...current, capabilitiesJson: value };
+      }
+    });
+  };
+
+  const updateReasoningEffort = (effort: string, checked: boolean) => {
+    setSeenReasoningEfforts((current) =>
+      current.includes(effort) ? current : [...current, effort],
+    );
+    setDraft((current) => {
+      let currentCapabilities: Record<string, unknown>;
+      try {
+        currentCapabilities = parseCapabilities(current.capabilitiesJson);
+      } catch {
+        return current;
+      }
+      const previous = reasoningEffortsFromCapabilities(currentCapabilities);
+      const next = orderReasoningEfforts(checked
+        ? [...new Set([...previous, effort])]
+        : previous.filter((value) => value !== effort));
+      const key = Object.hasOwn(currentCapabilities, "reasoning_efforts")
+        ? "reasoning_efforts"
+        : "reasoningEfforts";
+      const updatedCapabilities = { ...currentCapabilities };
+      delete updatedCapabilities.reasoning_efforts;
+      delete updatedCapabilities.reasoningEfforts;
+      updatedCapabilities[key] = next;
+      return {
+        ...current,
+        capabilitiesJson: JSON.stringify(updatedCapabilities, null, 2),
+        defaultReasoningEffort: next.includes(current.defaultReasoningEffort)
+          ? current.defaultReasoningEffort
+          : "",
+      };
+    });
   };
 
   const updateRoute = <K extends keyof RouteDraft>(
@@ -380,6 +493,12 @@ export function ModelCatalogModal({
       setError(null);
       const slug = draft.slug.trim();
       if (!slug) throw new Error("模型 slug 不能为空");
+      const modelCapabilities = parseCapabilities(draft.capabilitiesJson);
+      const supportedEfforts = reasoningEffortsFromCapabilities(modelCapabilities);
+      const defaultEffort = draft.defaultReasoningEffort.trim();
+      if (defaultEffort && !supportedEfforts.includes(defaultEffort)) {
+        throw new Error(t("默认推理强度必须属于支持的档位"));
+      }
       const price = buildPrice(draft, model);
       if (
         price.price.priceStatus === "missing" &&
@@ -432,9 +551,9 @@ export function ModelCatalogModal({
           draft.maxContextWindow,
           "最大上下文窗口",
         ),
-        defaultReasoningEffort: draft.defaultReasoningEffort.trim() || null,
+        defaultReasoningEffort: defaultEffort || null,
         fastPolicy: draft.fastPolicy,
-        capabilities: parseCapabilities(draft.capabilitiesJson),
+        capabilities: modelCapabilities,
         instructionsMode: draft.instructionsMode,
         instructionsText: draft.instructionsText.trim() || null,
         builtinRevision: model?.builtinRevision || null,
@@ -544,7 +663,7 @@ export function ModelCatalogModal({
                 </div>
               </div>
 
-              <div className="grid gap-4 md:grid-cols-4">
+              <div className="grid gap-4 md:grid-cols-3">
                 <div className="space-y-2">
                   <Label htmlFor="model-sort-order">{t("排序")}</Label>
                   <Input
@@ -576,15 +695,71 @@ export function ModelCatalogModal({
                     }
                   />
                 </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(180px,240px)]">
+                <div className="space-y-2">
+                  <Label>{t("支持的推理强度")}</Label>
+                  <div className="flex min-h-8 flex-wrap items-center gap-x-4 gap-y-2">
+                    {reasoningEffortOptions.map((effort, index) => (
+                      <div key={effort} className="inline-flex items-center gap-1.5 text-sm">
+                        <Checkbox
+                          id={`model-reasoning-${index}`}
+                          checked={reasoningEfforts.includes(effort)}
+                          disabled={!capabilities}
+                          onCheckedChange={(checked) =>
+                            updateReasoningEffort(effort, checked === true)
+                          }
+                          aria-label={effort}
+                        />
+                        <Label
+                          htmlFor={`model-reasoning-${index}`}
+                          className="cursor-pointer font-normal"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            if (capabilities) {
+                              updateReasoningEffort(effort, !reasoningEfforts.includes(effort));
+                            }
+                          }}
+                        >
+                          {effort}
+                        </Label>
+                      </div>
+                    ))}
+                  </div>
+                </div>
                 <div className="space-y-2">
                   <Label htmlFor="model-reasoning-effort">{t("默认推理强度")}</Label>
-                  <Input
-                    id="model-reasoning-effort"
-                    value={draft.defaultReasoningEffort}
-                    onChange={(event) =>
-                      updateDraft("defaultReasoningEffort", event.target.value)
+                  <Select
+                    value={draft.defaultReasoningEffort || "__none__"}
+                    disabled={!capabilities || (reasoningEfforts.length === 0 && !draft.defaultReasoningEffort)}
+                    onValueChange={(value) =>
+                      updateDraft("defaultReasoningEffort", value === "__none__" ? "" : value || "")
                     }
-                  />
+                  >
+                    <SelectTrigger id="model-reasoning-effort" aria-label={t("默认推理强度")} className="w-full">
+                      <SelectValue>
+                        {(value) => value === "__none__"
+                          ? t("不指定")
+                          : value === unsupportedDefaultEffort
+                            ? `${value} (${t("未在支持档位中")})`
+                            : value}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="__none__">{t("不指定")}</SelectItem>
+                        {unsupportedDefaultEffort ? (
+                          <SelectItem value={unsupportedDefaultEffort} disabled>
+                            {unsupportedDefaultEffort} ({t("未在支持档位中")})
+                          </SelectItem>
+                        ) : null}
+                        {reasoningEfforts.map((effort) => (
+                          <SelectItem key={effort} value={effort}>{effort}</SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
 
@@ -691,7 +866,7 @@ export function ModelCatalogModal({
                   className="font-mono text-xs"
                   value={draft.capabilitiesJson}
                   onChange={(event) =>
-                    updateDraft("capabilitiesJson", event.target.value)
+                    updateCapabilitiesJson(event.target.value)
                   }
                 />
               </div>

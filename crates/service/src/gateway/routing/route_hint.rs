@@ -330,7 +330,11 @@ pub(crate) fn set_route_strategy(strategy: &str) -> Result<&'static str, String>
 /// 返回函数执行结果
 pub(crate) fn get_manual_preferred_account() -> Option<String> {
     crate::storage_helpers::open_storage()
-        .and_then(|storage| storage.preferred_account_id().ok())
+        .and_then(|storage| {
+            crate::account::remote_storage::AccountStorage::new(&storage)
+                .preferred_account_id()
+                .ok()
+        })
         .flatten()
 }
 
@@ -350,8 +354,9 @@ pub(crate) fn set_manual_preferred_account(account_id: &str) -> Result<(), Strin
     if id.is_empty() {
         return Err("accountId is required".to_string());
     }
-    let mut storage = crate::storage_helpers::open_storage()
+    let storage = crate::storage_helpers::open_storage()
         .ok_or_else(|| "storage not initialized".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     storage
         .set_preferred_account(Some(id))
         .map_err(|err| err.to_string())?;
@@ -370,7 +375,8 @@ pub(crate) fn set_manual_preferred_account(account_id: &str) -> Result<(), Strin
 /// # 返回
 /// 无
 pub(crate) fn clear_manual_preferred_account() {
-    if let Some(mut storage) = crate::storage_helpers::open_storage() {
+    if let Some(storage) = crate::storage_helpers::open_storage() {
+        let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
         let _ = storage.set_preferred_account(None);
     }
 }

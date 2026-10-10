@@ -103,7 +103,7 @@ fn list_aggregate_apis_reads_model_assignments_from_v2_routes_only() {
     api.user_agent = Some("Aggregate-Listed/1.0".to_string());
     storage.insert_aggregate_api(&api).expect("insert api");
     let mut model = storage
-        .get_managed_model_v2("gpt-5.4")
+        .get_managed_model_v2("gpt-6-sol")
         .expect("read V2 model")
         .expect("seeded model");
     model.routes.extend([
@@ -136,7 +136,7 @@ fn list_aggregate_apis_reads_model_assignments_from_v2_routes_only() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].id, "agg-listed");
     assert_eq!(items[0].user_agent.as_deref(), Some("Aggregate-Listed/1.0"));
-    assert_eq!(items[0].model_slugs, vec!["gpt-5.4".to_string()]);
+    assert_eq!(items[0].model_slugs, vec!["gpt-6-sol".to_string()]);
 }
 
 #[test]
@@ -398,8 +398,8 @@ fn custom_balance_config_rejects_absolute_request_path() {
     assert!(result.is_err());
 }
 
-#[test]
-fn claude_probe_uses_configured_model_without_model_discovery() {
+#[tokio::test]
+async fn claude_probe_uses_configured_model_without_model_discovery() {
     let server = Server::http("127.0.0.1:0").expect("start mock server");
     let base_url = format!("http://{}", server.server_addr());
     let (tx, rx) = mpsc::channel();
@@ -429,13 +429,14 @@ fn claude_probe_uses_configured_model_without_model_discovery() {
     let mut api = aggregate_api_with_action(None);
     api.url = base_url;
     api.model_override = Some("qwen3.5-plus".to_string());
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
         .expect("build client");
 
-    let status =
-        probe_claude_endpoint(&client, &api, "secret", "qwen3.5-plus").expect("probe succeeds");
+    let status = probe_claude_endpoint(&client, &api, "secret", "qwen3.5-plus")
+        .await
+        .expect("probe succeeds");
 
     assert_eq!(status, 200);
     let captured = rx
@@ -448,8 +449,8 @@ fn claude_probe_uses_configured_model_without_model_discovery() {
     assert_eq!(body["model"], "qwen3.5-plus");
 }
 
-#[test]
-fn codex_probe_uses_configured_model_without_model_discovery() {
+#[tokio::test]
+async fn codex_probe_uses_configured_model_without_model_discovery() {
     let server = Server::http("127.0.0.1:0").expect("start mock server");
     let base_url = format!("http://{}", server.server_addr());
     let (tx, rx) = mpsc::channel();
@@ -477,13 +478,14 @@ fn codex_probe_uses_configured_model_without_model_discovery() {
     let mut api = aggregate_api_with_action(Some("/chat/completions"));
     api.url = base_url;
     api.model_override = Some("qwen3.5-plus".to_string());
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
         .expect("build client");
 
-    let status =
-        probe_codex_endpoint(&client, &api, "secret", "qwen3.5-plus").expect("probe succeeds");
+    let status = probe_codex_endpoint(&client, &api, "secret", "qwen3.5-plus")
+        .await
+        .expect("probe succeeds");
 
     assert_eq!(status, 200);
     let captured = rx
@@ -496,8 +498,8 @@ fn codex_probe_uses_configured_model_without_model_discovery() {
     assert_eq!(body["model"], "qwen3.5-plus");
 }
 
-#[test]
-fn codex_responses_probe_uses_valid_input_text_content() {
+#[tokio::test]
+async fn codex_responses_probe_uses_valid_input_text_content() {
     let _lock = crate::test_env_guard();
     let dir = new_test_dir("aggregate-api-codex-probe-headers");
     let db_path = dir.join("codexmanager.db");
@@ -537,13 +539,14 @@ fn codex_responses_probe_uses_valid_input_text_content() {
     let mut api = aggregate_api_with_action(None);
     api.provider_type = "codex".to_string();
     api.url = base_url;
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
         .expect("build client");
 
-    let status =
-        probe_codex_endpoint(&client, &api, "secret", "gpt-5.6-sol").expect("probe succeeds");
+    let status = probe_codex_endpoint(&client, &api, "secret", "gpt-5.6-sol")
+        .await
+        .expect("probe succeeds");
 
     assert_eq!(status, 200);
     let captured = rx
@@ -566,8 +569,8 @@ fn codex_responses_probe_uses_valid_input_text_content() {
     assert!(captured_header(&captured.2, "x-codex-window-id").is_some());
 }
 
-#[test]
-fn codex_probe_prefers_aggregate_api_user_agent_over_global_setting() {
+#[tokio::test]
+async fn codex_probe_prefers_aggregate_api_user_agent_over_global_setting() {
     let _lock = crate::test_env_guard();
     let dir = new_test_dir("aggregate-api-custom-probe-user-agent");
     let db_path = dir.join("codexmanager.db");
@@ -612,12 +615,14 @@ fn codex_probe_prefers_aggregate_api_user_agent_over_global_setting() {
     api.auth_params_json =
         Some(r#"{"location":"query","name":"api_key","headerValueFormat":"raw"}"#.to_string());
     api.user_agent = Some("Aggregate-Override/2.0".to_string());
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
         .expect("build client");
 
-    probe_codex_endpoint(&client, &api, "secret", "gpt-5.6-sol").expect("probe succeeds");
+    probe_codex_endpoint(&client, &api, "secret", "gpt-5.6-sol")
+        .await
+        .expect("probe succeeds");
 
     let (request_url, headers) = rx
         .recv_timeout(Duration::from_secs(2))
@@ -693,8 +698,8 @@ fn fetch_models_keeps_aggregate_user_agent_after_query_auth_url_rebuild() {
     crate::gateway::set_gateway_user_agent(None).expect("clear global gateway user agent");
 }
 
-#[test]
-fn balance_request_uses_aggregate_user_agent() {
+#[tokio::test]
+async fn balance_request_uses_aggregate_user_agent() {
     let server = Server::http("127.0.0.1:0").expect("start balance server");
     let base_url = format!("http://{}", server.server_addr());
     let (tx, rx) = mpsc::channel();
@@ -719,7 +724,7 @@ fn balance_request_uses_aggregate_user_agent() {
     let mut api = aggregate_api_with_action(None);
     api.url = base_url.clone();
     api.user_agent = Some("Aggregate-Balance/3.0".to_string());
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
         .expect("build client");
@@ -730,6 +735,7 @@ fn balance_request_uses_aggregate_user_agent() {
         base_url.as_str(),
         "/user/balance",
     )
+    .await
     .expect("query balance");
     assert_eq!(snapshot.remaining, Some(12.5));
     assert_eq!(
@@ -741,8 +747,8 @@ fn balance_request_uses_aggregate_user_agent() {
     join.join().expect("join balance server");
 }
 
-#[test]
-fn codex_probe_failure_includes_upstream_error_detail() {
+#[tokio::test]
+async fn codex_probe_failure_includes_upstream_error_detail() {
     let server = Server::http("127.0.0.1:0").expect("start mock server");
     let base_url = format!("http://{}", server.server_addr());
     let join = thread::spawn(move || {
@@ -761,12 +767,13 @@ fn codex_probe_failure_includes_upstream_error_detail() {
     let mut api = aggregate_api_with_action(None);
     api.provider_type = "codex".to_string();
     api.url = base_url;
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
         .expect("build client");
 
     let error = probe_codex_endpoint(&client, &api, "secret", "gpt-5.6-sol")
+        .await
         .expect_err("probe should fail");
 
     join.join().expect("join mock server");
@@ -774,8 +781,8 @@ fn codex_probe_failure_includes_upstream_error_detail() {
     assert!(error.contains("invalid input content type"));
 }
 
-#[test]
-fn minimax_codex_probe_uses_responses_string_input() {
+#[tokio::test]
+async fn minimax_codex_probe_uses_responses_string_input() {
     let server = Server::http("127.0.0.1:0").expect("start mock server");
     let base_url = format!("http://{}", server.server_addr());
     let (tx, rx) = mpsc::channel();
@@ -807,13 +814,14 @@ fn minimax_codex_probe_uses_responses_string_input() {
     api.supplier_name = Some("MiniMax".to_string());
     api.url = format!("{base_url}/v1");
     api.model_override = Some("MiniMax-M3".to_string());
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
         .expect("build client");
 
-    let status =
-        probe_codex_endpoint(&client, &api, "secret", "MiniMax-M3").expect("probe succeeds");
+    let status = probe_codex_endpoint(&client, &api, "secret", "MiniMax-M3")
+        .await
+        .expect("probe succeeds");
 
     assert_eq!(status, 200);
     let captured = rx

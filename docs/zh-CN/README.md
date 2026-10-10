@@ -10,7 +10,7 @@
 - 根目录 `CHANGELOG.md`：版本历史与未发版更新的唯一事实源。
 - `report/*`：运行、排障、兼容性、FAQ 类手册。
 - `release/*`：构建、发版、产物和发布流程说明。
-- `docs/plan/*` / `docs/decision/*`：长期治理、实施计划与决策记录。
+- `docs/superpowers/plans/` / `docs/superpowers/specs/`：长期治理、实施计划与设计决策记录。
 
 ## 赞助商
 
@@ -66,11 +66,13 @@
 
 ## 目录分工
 
-### `docs/plan/`
-用于保存实施计划、治理清单、阶段性 TODO。
+### `docs/superpowers/plans/`
+用于保存仍在维护的实施计划与阶段性任务说明。已结束的计划不再恢复到旧的
+`docs/plan/` 路径。
 
-### `docs/decision/`
-用于保存决策记录和 ADR。
+### `docs/superpowers/specs/`
+用于保存对应的设计说明与决策材料。旧的 `docs/decision/` 目录已清理，历史材料
+以现有报告或规格文件为准。
 
 ### `release/`
 用于保存发布说明、回滚方案、发版验收记录，以及构建发布手册。
@@ -81,6 +83,8 @@
 ## 推荐入口
 
 ### 运行与使用
+
+托管网关的“移除 requires_openai_auth”设置默认开启，以保留当前图片/actor 扩展行为。关闭后，在网关切换、重复应用与启动同步时仅保留 `cm` provider 已有值，不恢复已删除字段；保留 `true` 可能禁用 Codex 图片扩展。直连聚合 API 和其他 provider 不受此开关影响。
 | 文档 | 作用 |
 | --- | --- |
 | [运行与部署指南.md](report/运行与部署指南.md) | 首次启动、Service 版、Docker、macOS 首启 |

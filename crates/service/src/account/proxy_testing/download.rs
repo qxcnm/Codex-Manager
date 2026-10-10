@@ -1,10 +1,8 @@
 use std::future::Future;
 use std::pin::pin;
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
-use tokio::runtime::{Builder, Runtime};
 
 use super::errors::{
     map_proxy_test_reqwest_error, proxy_test_result_error_code, proxy_test_result_status,
@@ -13,8 +11,6 @@ use super::errors::{
 use super::presets::ResolvedDownloadTestTarget;
 
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(100);
-
-static PROXY_DOWNLOAD_TEST_RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 pub(crate) struct ProxyDownloadTestOutcome {
@@ -36,6 +32,7 @@ pub(crate) struct ProxyDownloadTestOutcome {
     pub error: Option<String>,
 }
 
+#[cfg(test)]
 pub(crate) fn run_proxy_download_test(
     proxy_url: &str,
     target: &ResolvedDownloadTestTarget,
@@ -43,7 +40,7 @@ pub(crate) fn run_proxy_download_test(
     run_proxy_download_test_with_cancel(proxy_url, target, || false, |_| {})
 }
 
-pub(crate) fn run_proxy_download_test_with_cancel<F, P>(
+pub(crate) async fn run_proxy_download_test_with_cancel_async<F, P>(
     proxy_url: &str,
     target: &ResolvedDownloadTestTarget,
     should_cancel: F,
@@ -53,7 +50,7 @@ where
     F: Fn() -> bool,
     P: Fn(u64),
 {
-    run_proxy_test_future(async move {
+    async move {
         let started_at = Instant::now();
         if should_cancel() {
             return cancelled_outcome(target, None, 0, None, started_at);
@@ -182,25 +179,8 @@ where
             error_code: None,
             error: None,
         }
-    })
-}
-
-fn proxy_test_runtime() -> &'static Runtime {
-    PROXY_DOWNLOAD_TEST_RUNTIME.get_or_init(|| {
-        Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .thread_name("proxy-download-test")
-            .build()
-            .unwrap_or_else(|err| panic!("build proxy download test runtime failed: {err}"))
-    })
-}
-
-fn run_proxy_test_future<F>(future: F) -> F::Output
-where
-    F: Future,
-{
-    proxy_test_runtime().block_on(future)
+    }
+    .await
 }
 
 enum PollWithCancel<T> {
@@ -508,4 +488,16 @@ mod tests {
         }
         String::from_utf8_lossy(request.as_slice()).to_string()
     }
+}
+
+#[cfg(test)]
+pub(crate) fn run_proxy_download_test_with_cancel<F: Fn() -> bool, P: Fn(u64)>(
+    proxy_url: &str,
+    target: &ResolvedDownloadTestTarget,
+    should_cancel: F,
+    on_progress: P,
+) -> ProxyDownloadTestOutcome {
+    crate::account::background::runtime().unwrap().block_on(
+        run_proxy_download_test_with_cancel_async(proxy_url, target, should_cancel, on_progress),
+    )
 }

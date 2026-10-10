@@ -13,7 +13,7 @@ test("sidebar collapse avoids transitions that continuously reflow the active pa
 
   assert.match(
     source,
-    /isSidebarOpen \? "w-\[220px\] xl:w-\[280px\]" : "w-\[60px\] xl:w-\[72px\]"/,
+    /isSidebarOpen \? "w-\[220px\] xl:w-\[248px\]" : "w-\[60px\] xl:w-\[72px\]"/,
   );
   assert.match(
     source,
@@ -41,13 +41,14 @@ test("main content exposes a stable layout target for sidebar regression checks"
   assert.doesNotMatch(source, /data-command-center=\{currentShellPath ===/);
 });
 
-test("compact sidebar renders every dynamically allowed route without a fixed menu list", async () => {
+test("sidebar groups every dynamically allowed route without a fixed menu list", async () => {
   const source = await fs.readFile(
     path.join(appsRoot, "src", "components", "layout", "sidebar.tsx"),
     "utf8",
   );
 
-  assert.match(source, /getAllowedTopLevelRoutes\(routeAccess\)\.flatMap/);
+  assert.match(source, /getAllowedTopLevelRouteSections\(routeAccess\)/);
+  assert.match(source, /section\.routes\.flatMap/);
   assert.doesNotMatch(source, /COMMAND_CENTER_PATHS/);
   assert.doesNotMatch(source, /commandCenterItems/);
   assert.doesNotMatch(source, /currentShellPath === "\/"\s*\?/);
@@ -157,10 +158,9 @@ test("wide but short windows keep the complete sidebar discoverable", async () =
     "utf8",
   );
 
-  assert.match(source, /\[@media\(max-height:800px\)\]:min-h-11/);
-  assert.match(source, /\[@media\(max-height:800px\)\]:min-h-9/);
-  assert.match(source, /\[@media\(max-height:800px\)\]:h-\[68px\]/);
-  assert.match(source, /\[@media\(max-height:800px\)\]:py-2\.5/);
+  assert.match(source, /min-h-8[\s\S]*xl:min-h-9/);
+  assert.match(source, /min-h-0 flex-1 overflow-y-auto overscroll-contain py-2/);
+  assert.match(source, /flex h-\[50px\] shrink-0 items-center/);
 });
 
 test("page fallback stays aligned with both sidebar widths", async () => {
@@ -177,6 +177,6 @@ test("page fallback stays aligned with both sidebar widths", async () => {
 
   assert.match(
     source,
-    /isSidebarOpen \? "left-\[220px\] xl:left-\[280px\]" : "left-\[60px\] xl:left-\[72px\]"/,
+    /isSidebarOpen \? "left-\[220px\] xl:left-\[248px\]" : "left-\[60px\] xl:left-\[72px\]"/,
   );
 });

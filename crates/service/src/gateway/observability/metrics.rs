@@ -273,6 +273,7 @@ pub(crate) fn record_db_error(err: &str) {
 ///
 /// # 返回
 /// 无
+#[cfg(test)]
 pub(crate) fn record_http_queue_capacity(normal_capacity: usize, stream_capacity: usize) {
     HTTP_QUEUE_CAPACITY.store(normal_capacity, Ordering::Relaxed);
     HTTP_STREAM_QUEUE_CAPACITY.store(stream_capacity, Ordering::Relaxed);
@@ -289,6 +290,7 @@ pub(crate) fn record_http_queue_capacity(normal_capacity: usize, stream_capacity
 ///
 /// # 返回
 /// 无
+#[cfg(test)]
 pub(crate) fn record_http_queue_enqueue(is_stream_queue: bool) {
     if is_stream_queue {
         HTTP_STREAM_QUEUE_DEPTH.fetch_add(1, Ordering::Relaxed);
@@ -308,6 +310,7 @@ pub(crate) fn record_http_queue_enqueue(is_stream_queue: bool) {
 ///
 /// # 返回
 /// 无
+#[cfg(test)]
 pub(crate) fn record_http_queue_dequeue(is_stream_queue: bool) {
     if is_stream_queue {
         atomic_dec_saturating(&HTTP_STREAM_QUEUE_DEPTH);
@@ -327,6 +330,7 @@ pub(crate) fn record_http_queue_dequeue(is_stream_queue: bool) {
 ///
 /// # 返回
 /// 无
+#[cfg(test)]
 pub(crate) fn record_http_queue_enqueue_failure() {
     HTTP_QUEUE_ENQUEUE_FAILURES.fetch_add(1, Ordering::Relaxed);
 }
@@ -724,6 +728,7 @@ pub(crate) fn acquire_account_inflight(account_id: &str) -> AccountInFlightGuard
 ///
 /// # 返回
 /// 无
+#[cfg(test)]
 fn atomic_dec_saturating(value: &AtomicUsize) {
     let mut current = value.load(Ordering::Relaxed);
     loop {

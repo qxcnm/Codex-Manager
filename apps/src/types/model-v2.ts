@@ -97,6 +97,32 @@ export interface ManagedModelListV2Result {
   stats: ModelCatalogV2Stats;
 }
 
+export interface ModelPriceSourceSyncSummaryV2 {
+  name: string;
+  url: string;
+  status: "ok" | "error";
+  providers: number;
+  modelsSeen: number;
+  pricedModels: number;
+  skippedNonUsd: number;
+  skippedMissingTextPrice: number;
+  skippedSubscription: number;
+  skippedTiers: number;
+  error?: string;
+}
+
+export interface ManagedModelPriceSyncV2Result {
+  sources: ModelPriceSourceSyncSummaryV2[];
+  catalogPrices: number;
+  scannedModels: number;
+  updated: number;
+  unchanged: number;
+  preservedCustom: number;
+  unmatched: number;
+  ambiguous: number;
+  updatedSlugs: string[];
+}
+
 export interface ManagedModelV2Upsert {
   previousSlug?: string | null;
   model: ManagedModelV2;

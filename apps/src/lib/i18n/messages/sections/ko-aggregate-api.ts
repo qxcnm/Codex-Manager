@@ -25,6 +25,7 @@ export const KO_AGGREGATE_API_MESSAGES: MessageCatalog = {
   取消全选: "전체 선택 해제",
   "没有匹配的模型": "일치하는 모델이 없습니다",
   已有模型: "기존 모델",
+  选择已有模型: "기존 모델 선택",
   已关联: "이미 연결됨",
   "关联所选模型 ({count})": "선택한 모델 연결 ({count})",
   "拉取并关联模型": "모델 가져와 연결",
@@ -54,6 +55,7 @@ export const KO_AGGREGATE_API_MESSAGES: MessageCatalog = {
   复制密钥: "키 복사",
   "暂无聚合 API，点击右上角新建":
     "Aggregate API가 없습니다. 오른쪽 위에서 새로 만드세요.",
+  "没有匹配当前筛选的聚合 API": "현재 필터와 일치하는 Aggregate API가 없습니다.",
   "测试 route": "route 테스트",
   "删除连接时会同时删除引用它的模型路由。":
     "연결을 삭제하면 이를 참조하는 모델 라우트도 함께 삭제됩니다.",

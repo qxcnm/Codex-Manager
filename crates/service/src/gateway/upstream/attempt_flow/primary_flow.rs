@@ -50,15 +50,17 @@ fn resolve_chatgpt_primary_bearer(token: &Token) -> Option<String> {
     }
 }
 
-fn resolve_chatgpt_primary_authorization(
+async fn resolve_chatgpt_primary_authorization(
     storage: &Storage,
-    client: &reqwest::blocking::Client,
+    client: &reqwest::Client,
     account: &Account,
     token: &Token,
 ) -> Result<(PrimaryAuthorization, &'static str), String> {
-    match crate::agent_identity::resolve_or_bootstrap_account_agent_identity_authorization(
+    match crate::agent_identity::resolve_or_bootstrap_account_agent_identity_authorization_async(
         storage, client, account, token,
-    ) {
+    )
+    .await
+    {
         Ok(Some(resolved)) => {
             return Ok((
                 PrimaryAuthorization {
@@ -111,8 +113,8 @@ fn resolve_chatgpt_primary_authorization(
 /// # 返回
 /// 返回函数执行结果
 #[allow(clippy::too_many_arguments)]
-pub(in crate::gateway::upstream) fn run_primary_upstream_flow<F>(
-    client: &reqwest::blocking::Client,
+pub(in crate::gateway::upstream) async fn run_primary_upstream_flow<F>(
+    client: &reqwest::Client,
     storage: &Storage,
     method: &reqwest::Method,
     request_ctx: UpstreamRequestContext<'_>,
@@ -136,7 +138,7 @@ where
     F: FnMut(Option<&str>, u16, Option<&str>),
 {
     let (authorization, token_source) =
-        match resolve_chatgpt_primary_authorization(storage, client, account, token) {
+        match resolve_chatgpt_primary_authorization(storage, client, account, token).await {
             Ok(resolved) => resolved,
             Err(err) => {
                 log_gateway_result(Some(primary_url), 401, Some(err.as_str()));
@@ -170,7 +172,9 @@ where
         strip_session_affinity,
         has_more_candidates,
         &mut log_gateway_result,
-    ) {
+    )
+    .await
+    {
         PrimaryAttemptResult::Upstream(resp) => resp,
         PrimaryAttemptResult::Failover => return PrimaryFlowDecision::Failover,
         PrimaryAttemptResult::Terminal {
@@ -203,8 +207,11 @@ where
         status,
         upstream.headers().get(CONTENT_TYPE),
         has_more_candidates,
+        request_ctx.capture,
         &mut log_gateway_result,
-    ) {
+    )
+    .await
+    {
         FallbackBranchResult::NotTriggered => PrimaryFlowDecision::Continue {
             upstream,
             authorization,

@@ -1,5 +1,5 @@
+use crate::http::gateway_response::{Header, Response};
 use serde_json::json;
-use tiny_http::{Header, Response};
 
 /// 函数 `with_trace_id_header`
 ///

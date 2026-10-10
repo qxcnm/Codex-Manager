@@ -1,0 +1,2 @@
+aiohttp==3.14.3
+psutil==7.2.2

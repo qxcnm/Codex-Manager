@@ -81,7 +81,7 @@ const server = http.createServer((req, res) => {
       id: "chatcmpl_quota_mock",
       object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
-      model: "gpt-5.4",
+      model: "gpt-6-luna",
       choices: [{
         index: 0,
         message: { role: "assistant", content: "quota mock ok" },
@@ -170,7 +170,7 @@ FIRST_STATUS="$(curl -sS -o "$FIRST_BODY_FILE" -w "%{http_code}" --max-time 10 \
   -X POST "${GATEWAY_URL}/v1/chat/completions" \
   -H "Authorization: Bearer ${PLATFORM_KEY}" \
   -H "Content-Type: application/json" \
-  -d '{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}]}')"
+  -d '{"model":"gpt-6-luna","messages":[{"role":"user","content":"hello"}]}')"
 
 if [[ "$FIRST_STATUS" != "200" ]]; then
   echo "first request expected 200, got $FIRST_STATUS" >&2
@@ -199,7 +199,7 @@ SECOND_STATUS="$(curl -sS -o "$SECOND_BODY_FILE" -w "%{http_code}" --max-time 10
   -X POST "${GATEWAY_URL}/v1/chat/completions" \
   -H "Authorization: Bearer ${PLATFORM_KEY}" \
   -H "Content-Type: application/json" \
-  -d '{"model":"gpt-5.4","messages":[{"role":"user","content":"hello again"}]}')"
+  -d '{"model":"gpt-6-luna","messages":[{"role":"user","content":"hello again"}]}')"
 
 SECOND_BODY="$(cat "$SECOND_BODY_FILE")"
 HITS_AFTER_SECOND="$(cat "$MOCK_HITS_FILE")"

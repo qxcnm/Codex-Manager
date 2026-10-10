@@ -231,38 +231,38 @@ fn http_block_policy_rejects_client_accelerated_tiers_and_filters_unsupported_ti
     let storage = Storage::open_in_memory().expect("open storage");
     storage.init().expect("init storage");
     let mut model = storage
-        .get_managed_model_v2("gpt-5.4-mini")
+        .get_managed_model_v2("gpt-6-luna")
         .expect("read managed model")
         .expect("managed model");
     model.fast_policy = codexmanager_core::storage::ModelFastPolicyV2::Block;
     storage
         .upsert_managed_model_v2(&ManagedModelV2Upsert {
-            previous_slug: Some("gpt-5.4-mini".to_string()),
+            previous_slug: Some("gpt-6-luna".to_string()),
             model,
         })
         .expect("update block policy");
 
     for tier in ["fast", "priority", "ultrafast"] {
         let body = serde_json::to_vec(&serde_json::json!({
-            "model": "gpt-5.4-mini",
+            "model": "gpt-6-luna",
             "input": "hello",
             "service_tier": tier
         }))
         .expect("serialize request");
-        let err = apply_model_fast_policy(&storage, Some("gpt-5.4-mini"), body, Some(tier))
+        let err = apply_model_fast_policy(&storage, Some("gpt-6-luna"), body, Some(tier))
             .expect_err("accelerated request tier must be blocked");
         assert_eq!(err.status_code, 400, "unexpected status for tier {tier}");
     }
 
     for tier in ["auto", "default"] {
         let body = serde_json::to_vec(&serde_json::json!({
-            "model": "gpt-5.4-mini",
+            "model": "gpt-6-luna",
             "input": "hello",
             "service_tier": tier
         }))
         .expect("serialize request");
         let (body, applied) =
-            match apply_model_fast_policy(&storage, Some("gpt-5.4-mini"), body, Some(tier)) {
+            match apply_model_fast_policy(&storage, Some("gpt-6-luna"), body, Some(tier)) {
                 Ok(result) => result,
                 Err(err) => panic!("non-accelerated tier {tier} was rejected: {}", err.message),
             };
@@ -275,14 +275,13 @@ fn http_block_policy_rejects_client_accelerated_tiers_and_filters_unsupported_ti
     }
 
     let body = serde_json::to_vec(&serde_json::json!({
-        "model": "gpt-5.4-mini",
+        "model": "gpt-6-luna",
         "input": "hello",
         "service_tier": "flex"
     }))
     .expect("serialize request");
-    let (body, applied) =
-        apply_model_fast_policy(&storage, Some("gpt-5.4-mini"), body, Some("flex"))
-            .unwrap_or_else(|err| panic!("Flex tier was rejected: {}", err.message));
+    let (body, applied) = apply_model_fast_policy(&storage, Some("gpt-6-luna"), body, Some("flex"))
+        .unwrap_or_else(|err| panic!("Flex tier was rejected: {}", err.message));
     let payload: Value = serde_json::from_slice(&body).expect("parse request");
     assert!(applied, "unadvertised Flex tier must be omitted");
     assert!(payload.get("service_tier").is_none());
@@ -1738,7 +1737,7 @@ fn anthropic_model_must_exist_in_v2_catalog() {
     let storage = Storage::open_in_memory().expect("open storage");
     storage.init().expect("init storage");
     let mut model = storage
-        .get_managed_model_v2("gpt-5.4-mini")
+        .get_managed_model_v2("gpt-6-luna")
         .expect("read template model")
         .expect("template model");
     model.id.clear();
@@ -1768,4 +1767,123 @@ fn anthropic_model_must_exist_in_v2_catalog() {
     )
     .expect_err("missing model should fail");
     assert!(err.message.contains("claude model not found in model list"));
+}
+
+#[test]
+fn openai_chat_tool_message_array_content_flattens_to_string_output() {
+    let body = serde_json::json!({
+        "model": "gpt-6.1-sol",
+        "messages": [
+            { "role": "user", "content": "weather?" },
+            {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_test_array",
+                    "type": "function",
+                    "function": { "name": "get_weather", "arguments": "{\"city\":\"beijing\"}" }
+                }]
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_test_array",
+                "content": [
+                    { "type": "text", "text": "sunny" },
+                    { "type": "text", "text": "18C" }
+                ]
+            }
+        ]
+    });
+    let adapted = adapt_openai_chat_completions_body_to_responses(
+        serde_json::to_vec(&body).expect("serialize chat body"),
+    )
+    .expect("adapt chat body");
+    let payload: Value = serde_json::from_slice(&adapted).expect("json body");
+
+    let input = payload
+        .get("input")
+        .and_then(Value::as_array)
+        .expect("input array");
+    let tool_output = input
+        .iter()
+        .find(|item| item.get("type").and_then(Value::as_str) == Some("function_call_output"))
+        .expect("function_call_output item");
+    // 数组形式的 tool content 必须拍平为字符串，否则上游会拒绝 output[0].type='text'。
+    assert_eq!(
+        tool_output.get("output"),
+        Some(&Value::String("sunny\n18C".to_string()))
+    );
+}
+
+#[test]
+fn openai_chat_tool_message_string_content_keeps_string_output() {
+    let body = serde_json::json!({
+        "model": "gpt-6.1-sol",
+        "messages": [
+            { "role": "user", "content": "weather?" },
+            {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_test_string",
+                    "type": "function",
+                    "function": { "name": "get_weather", "arguments": "{}" }
+                }]
+            },
+            { "role": "tool", "tool_call_id": "call_test_string", "content": "sunny" }
+        ]
+    });
+    let adapted = adapt_openai_chat_completions_body_to_responses(
+        serde_json::to_vec(&body).expect("serialize chat body"),
+    )
+    .expect("adapt chat body");
+    let payload: Value = serde_json::from_slice(&adapted).expect("json body");
+
+    let input = payload
+        .get("input")
+        .and_then(Value::as_array)
+        .expect("input array");
+    let tool_output = input
+        .iter()
+        .find(|item| item.get("type").and_then(Value::as_str) == Some("function_call_output"))
+        .expect("function_call_output item");
+    assert_eq!(
+        tool_output.get("output"),
+        Some(&Value::String("sunny".to_string()))
+    );
+}
+
+#[test]
+fn openai_chat_tool_message_mixed_content_uses_image_placeholder() {
+    let body = serde_json::json!({
+        "model": "gpt-6.1-sol",
+        "messages": [
+            {
+                "role": "tool",
+                "tool_call_id": "call_test_mixed",
+                "content": [
+                    { "type": "image_url", "image_url": { "url": "https://example.com/a.png" } },
+                    { "type": "text", "text": "screenshot attached" }
+                ]
+            }
+        ]
+    });
+    let adapted = adapt_openai_chat_completions_body_to_responses(
+        serde_json::to_vec(&body).expect("serialize chat body"),
+    )
+    .expect("adapt chat body");
+    let payload: Value = serde_json::from_slice(&adapted).expect("json body");
+
+    let input = payload
+        .get("input")
+        .and_then(Value::as_array)
+        .expect("input array");
+    let tool_output = input
+        .iter()
+        .find(|item| item.get("type").and_then(Value::as_str) == Some("function_call_output"))
+        .expect("function_call_output item");
+    assert_eq!(
+        tool_output.get("output"),
+        Some(&Value::String("[image]\nscreenshot attached".to_string()))
+    );
 }

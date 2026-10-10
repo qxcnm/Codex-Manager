@@ -36,9 +36,7 @@ fn normalize_custom_key(custom_key: Option<String>) -> Result<Option<String>, St
 
 fn platform_key_exists(storage: &Storage, key: &str) -> Result<bool, String> {
     let key_hash = hash_platform_key(key);
-    Ok(storage
-        .api_key_hash_exists(&key_hash)
-        .map_err(|err| format!("check api key uniqueness failed: {err}"))?)
+    Ok(super::remote::find_by_hash(storage, &key_hash)?.is_some())
 }
 
 fn ensure_platform_key_not_exists(storage: &Storage, key: &str) -> Result<(), String> {
@@ -146,6 +144,15 @@ pub(crate) fn create_api_key(
         created_at: now_ts(),
         last_used_at: None,
     };
+    if crate::storage_helpers::seaorm_enabled() {
+        super::remote::create(
+            record,
+            account_group_filter,
+            quota_limit_tokens,
+            key.clone(),
+        )?;
+        return Ok(ApiKeyCreateResult { id: key_id, key });
+    }
     storage.insert_api_key(&record).map_err(|e| e.to_string())?;
     if let Err(err) =
         storage.update_api_key_account_group_filter(&key_id, account_group_filter.as_deref())

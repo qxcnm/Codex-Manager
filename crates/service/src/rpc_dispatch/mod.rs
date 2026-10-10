@@ -1,3 +1,18 @@
+mod auth_async;
+mod network_async;
+pub(crate) mod storage_async;
+#[cfg(test)]
+mod storage_mutation_tests;
+mod storage_reads;
+pub(crate) use network_async::{is_async_method, try_handle_network_request_async};
+mod account_async;
+mod account_auth_async;
+mod aggregate_async;
+mod codex_profile_async;
+mod codex_skills_async;
+mod plugin_async;
+mod reset_credits_async;
+mod usage_async;
 use codexmanager_core::rpc::types::{
     InitializeResult, JsonRpcError, JsonRpcErrorObject, JsonRpcMessage, JsonRpcRequest,
     JsonRpcResponse,
@@ -11,6 +26,7 @@ use crate::RpcActor;
 
 mod account;
 mod account_manager;
+mod account_manager_storage;
 mod aggregate_api;
 mod apikey;
 mod app_settings;
@@ -23,6 +39,7 @@ mod quota;
 mod requestlog;
 mod service_config;
 mod startup;
+mod storage_space;
 mod system;
 mod usage;
 
@@ -90,6 +107,21 @@ pub(super) fn str_param<'a>(req: &'a JsonRpcRequest, key: &str) -> Option<&'a st
 /// 返回函数执行结果
 pub(super) fn string_param(req: &JsonRpcRequest, key: &str) -> Option<String> {
     str_param(req, key).map(|v| v.to_string())
+}
+
+pub(super) fn string_array_param(req: &JsonRpcRequest, key: &str) -> Vec<String> {
+    req.params
+        .as_ref()
+        .and_then(|value| value.get(key))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// 函数 `i64_param`
@@ -202,10 +234,10 @@ const MEMBER_METHOD_ALLOWLIST: &[&str] = &[
     "account/read",
     "account/update",
     "account/updateSorts",
+    "account/resetWarmup/update",
     "account/usage/aggregate",
     "account/usage/list",
     "account/usage/read",
-    "account/usage/resetCredits",
     "account/usage/refresh",
     "account/warmup",
     "accountManager/password/change",
@@ -224,6 +256,7 @@ const MEMBER_METHOD_ALLOWLIST: &[&str] = &[
     "apikey/usageStats",
     "appSettings/get",
     "dashboard/memberSummary",
+    "requestlog/detail",
     "requestlog/list",
     "requestlog/list_with_summary",
     "requestlog/summary",
@@ -232,13 +265,27 @@ const MEMBER_METHOD_ALLOWLIST: &[&str] = &[
 ];
 
 fn member_method_allowed(method: &str) -> bool {
-    if crate::current_web_auth_mode() == "password" {
-        return true;
-    }
-    MEMBER_METHOD_ALLOWLIST.contains(&method)
+    // Native storage RPCs already in the allowlist need no synchronous settings
+    // lookup. Retain the password-mode compatibility policy for other methods.
+    MEMBER_METHOD_ALLOWLIST.contains(&method) || crate::current_web_auth_mode() == "password"
+}
+
+fn admin_only_method(method: &str) -> bool {
+    matches!(
+        method,
+        "codexProfile/applyModels"
+            | "account/usage/resetCredits"
+            | "account/usage/resetCredit/consume"
+            | "apikey/managedModelPriceSyncV2"
+            | "storage/spaceUsage"
+            | "storage/reclaim"
+    )
 }
 
 fn ensure_method_allowed(actor: &RpcActor, method: &str) -> Result<(), String> {
+    if admin_only_method(method) && !actor.is_admin() {
+        return Err(permission_denied(method));
+    }
     if actor.is_admin() || member_method_allowed(method) {
         return Ok(());
     }
@@ -265,12 +312,14 @@ pub(crate) fn handle_request_with_actor(req: JsonRpcRequest, actor: RpcActor) ->
     if req.method == "initialize" {
         let _ = storage_helpers::initialize_storage();
         if let Some(storage) = storage_helpers::open_storage() {
-            let _ = storage.insert_event(&Event {
-                account_id: None,
-                event_type: "initialize".to_string(),
-                message: "service initialized".to_string(),
-                created_at: now_ts(),
-            });
+            let _ = crate::account::remote_storage::AccountStorage::new(&storage).insert_event(
+                &Event {
+                    account_id: None,
+                    event_type: "initialize".to_string(),
+                    message: "service initialized".to_string(),
+                    created_at: now_ts(),
+                },
+            );
         }
         let result = InitializeResult {
             version: codexmanager_core::core_version().to_string(),
@@ -335,6 +384,9 @@ pub(crate) fn handle_request_with_actor(req: JsonRpcRequest, actor: RpcActor) ->
         return JsonRpcMessage::Response(resp);
     }
     if let Some(resp) = requestlog::try_handle(&req, &actor) {
+        return JsonRpcMessage::Response(resp);
+    }
+    if let Some(resp) = storage_space::try_handle(&req) {
         return JsonRpcMessage::Response(resp);
     }
 

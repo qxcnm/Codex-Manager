@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
-use std::sync::mpsc;
 use std::time::Duration;
+use tokio::sync::mpsc;
 
 use super::*;
 use crate::gateway::upstream::{GatewayByteStream, GatewayByteStreamItem, GatewayStreamResponse};
@@ -42,9 +42,9 @@ fn json_stream_response_with_status(
 fn stream_response_from_items(items: Vec<GatewayByteStreamItem>) -> GatewayUpstreamResponse {
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
-    let (tx, rx) = mpsc::sync_channel(items.len().max(1));
+    let (tx, rx) = mpsc::channel(items.len().max(1));
     for item in items {
-        tx.send(item).expect("queue upstream item");
+        tx.blocking_send(item).expect("queue upstream item");
     }
     drop(tx);
     GatewayUpstreamResponse::Stream(GatewayStreamResponse::new(
@@ -241,7 +241,13 @@ fn preflight_replays_normal_prefix_without_loss() {
         "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n",
         "data: [DONE]\n\n"
     );
-    let outcome = preflight_stream_response(stream_response(body), "/v1/responses", true, true);
+    let outcome = crate::gateway::run_upstream_io(preflight_stream_response(
+        stream_response(body),
+        "/v1/responses",
+        true,
+        true,
+    ))
+    .expect("gateway async test runtime");
     let StreamPreflightOutcome::Ready(response) = outcome else {
         panic!("normal output must be delivered");
     };
@@ -252,8 +258,13 @@ fn preflight_replays_normal_prefix_without_loss() {
 #[test]
 fn preflight_leaves_successful_json_response_untouched() {
     let body = r#"{"id":"resp_json","status":"completed","output":[]}"#;
-    let outcome =
-        preflight_stream_response(json_stream_response(body), "/v1/responses", true, true);
+    let outcome = crate::gateway::run_upstream_io(preflight_stream_response(
+        json_stream_response(body),
+        "/v1/responses",
+        true,
+        true,
+    ))
+    .expect("gateway async test runtime");
     let StreamPreflightOutcome::Ready(response) = outcome else {
         panic!("successful JSON must bypass SSE preflight");
     };
@@ -264,12 +275,13 @@ fn preflight_leaves_successful_json_response_untouched() {
 #[test]
 fn preflight_fails_over_on_json_usage_limit_error_response() {
     let body = r#"{"error":{"message":"The usage limit has been reached.","type":"usage_limit_reached","code":"usage_limit_reached"}}"#;
-    let outcome = preflight_stream_response(
+    let outcome = crate::gateway::run_upstream_io(preflight_stream_response(
         json_stream_response_with_status(reqwest::StatusCode::TOO_MANY_REQUESTS, body),
         "/v1/responses",
         false,
         true,
-    );
+    ))
+    .expect("gateway async test runtime");
     assert!(matches!(
         outcome,
         StreamPreflightOutcome::Failover(message) if message.contains("usage limit")
@@ -280,12 +292,13 @@ fn preflight_fails_over_on_json_usage_limit_error_response() {
 #[test]
 fn preflight_fails_over_on_any_non_2xx_when_more_candidates_exist() {
     let body = r#"{"error":{"message":"upstream temporarily unavailable"}}"#;
-    let outcome = preflight_stream_response(
+    let outcome = crate::gateway::run_upstream_io(preflight_stream_response(
         json_stream_response_with_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR, body),
         "/v1/responses",
         false,
         true,
-    );
+    ))
+    .expect("gateway async test runtime");
     assert!(matches!(
         outcome,
         StreamPreflightOutcome::StatusFailover {
@@ -298,12 +311,13 @@ fn preflight_fails_over_on_any_non_2xx_when_more_candidates_exist() {
 #[test]
 fn preflight_delivers_2xx_success_status_when_more_candidates_exist() {
     let body = r#"{"id":"created_elsewhere"}"#;
-    let outcome = preflight_stream_response(
+    let outcome = crate::gateway::run_upstream_io(preflight_stream_response(
         json_stream_response_with_status(reqwest::StatusCode::CREATED, body),
         "/v1/responses",
         false,
         true,
-    );
+    ))
+    .expect("gateway async test runtime");
     let StreamPreflightOutcome::Ready(response) = outcome else {
         panic!("2xx response must be delivered");
     };
@@ -316,12 +330,13 @@ fn preflight_delivers_2xx_success_status_when_more_candidates_exist() {
 fn preflight_delivers_json_usage_limit_error_when_no_more_candidates() {
     let body =
         r#"{"error":{"message":"The usage limit has been reached.","type":"usage_limit_reached"}}"#;
-    let outcome = preflight_stream_response(
+    let outcome = crate::gateway::run_upstream_io(preflight_stream_response(
         json_stream_response_with_status(reqwest::StatusCode::TOO_MANY_REQUESTS, body),
         "/v1/responses",
         false,
         false,
-    );
+    ))
+    .expect("gateway async test runtime");
     let StreamPreflightOutcome::Ready(response) = outcome else {
         panic!("last candidate error must be delivered");
     };
@@ -337,7 +352,7 @@ fn preflight_suppresses_actionable_usage_limit() {
         "data: [DONE]\n\n"
     );
     assert!(matches!(
-        preflight_stream_response(stream_response(body), "/v1/responses", true, true),
+        crate::gateway::run_upstream_io(preflight_stream_response(stream_response(body), "/v1/responses", true, true)).expect("gateway async test runtime"),
         StreamPreflightOutcome::RetryUsageNotice(message) if message.contains("usage limit")
     ));
 }
@@ -351,8 +366,8 @@ fn preflight_retry_cancels_the_discarded_upstream_producer() {
         )
         .as_bytes(),
     );
-    let (tx, rx) = mpsc::sync_channel(2);
-    tx.send(GatewayByteStreamItem::Chunk(body))
+    let (tx, rx) = mpsc::channel(2);
+    tx.blocking_send(GatewayByteStreamItem::Chunk(body))
         .expect("queue quota notice");
     let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel();
     let mut headers = HeaderMap::new();
@@ -364,7 +379,13 @@ fn preflight_retry_cancels_the_discarded_upstream_producer() {
     ));
 
     assert!(matches!(
-        preflight_stream_response(response, "/v1/responses", true, true),
+        crate::gateway::run_upstream_io(preflight_stream_response(
+            response,
+            "/v1/responses",
+            true,
+            true
+        ))
+        .expect("gateway async test runtime"),
         StreamPreflightOutcome::RetryUsageNotice(_)
     ));
     assert_eq!(cancel_rx.try_recv(), Ok(()));
@@ -382,12 +403,12 @@ fn preflight_waits_beyond_legacy_two_second_window_for_quota_notice() {
         )
         .as_bytes(),
     );
-    let (tx, rx) = mpsc::sync_channel(2);
-    tx.send(GatewayByteStreamItem::Chunk(metadata))
+    let (tx, rx) = mpsc::channel(2);
+    tx.blocking_send(GatewayByteStreamItem::Chunk(metadata))
         .expect("queue response metadata");
     let producer = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(2_100));
-        tx.send(GatewayByteStreamItem::Chunk(quota_notice))
+        tx.blocking_send(GatewayByteStreamItem::Chunk(quota_notice))
             .expect("queue delayed quota notice");
     });
     let mut headers = HeaderMap::new();
@@ -399,13 +420,13 @@ fn preflight_waits_beyond_legacy_two_second_window_for_quota_notice() {
     ));
 
     assert!(matches!(
-        preflight_stream_response_with_idle_timeout(
+        crate::gateway::run_upstream_io(preflight_stream_response_with_idle_timeout(
             response,
             "/v1/responses",
             true,
             true,
             Some(Duration::from_secs(5)),
-        ),
+        )).expect("gateway async test runtime"),
         StreamPreflightOutcome::RetryUsageNotice(message) if message.contains("usage limit")
     ));
     producer.join().expect("join delayed quota producer");
@@ -416,8 +437,8 @@ fn preflight_idle_before_deliverable_content_fails_over_and_cancels_upstream() {
     let metadata = Bytes::from_static(
         b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_idle\"}}\n\n",
     );
-    let (tx, rx) = mpsc::sync_channel(1);
-    tx.send(GatewayByteStreamItem::Chunk(metadata))
+    let (tx, rx) = mpsc::channel(1);
+    tx.blocking_send(GatewayByteStreamItem::Chunk(metadata))
         .expect("queue response metadata");
     let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel();
     let mut headers = HeaderMap::new();
@@ -429,13 +450,13 @@ fn preflight_idle_before_deliverable_content_fails_over_and_cancels_upstream() {
     ));
 
     assert!(matches!(
-        preflight_stream_response_with_idle_timeout(
+        crate::gateway::run_upstream_io(preflight_stream_response_with_idle_timeout(
             response,
             "/v1/responses",
             true,
             true,
             Some(Duration::from_millis(25)),
-        ),
+        )).expect("gateway async test runtime"),
         StreamPreflightOutcome::TransportFailover(message) if message.contains("idle timeout")
     ));
     assert_eq!(cancel_rx.try_recv(), Ok(()));
@@ -451,14 +472,14 @@ fn preflight_wall_clock_cap_commits_slow_stream_without_losing_prefix() {
         b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\ndata: [DONE]\n\n",
     );
     let expected = [metadata.as_ref(), output.as_ref()].concat();
-    let (tx, rx) = mpsc::sync_channel(2);
-    tx.send(GatewayByteStreamItem::Chunk(metadata))
+    let (tx, rx) = mpsc::channel(2);
+    tx.blocking_send(GatewayByteStreamItem::Chunk(metadata))
         .expect("queue response metadata");
     let producer = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(100));
-        tx.send(GatewayByteStreamItem::Chunk(output))
+        tx.blocking_send(GatewayByteStreamItem::Chunk(output))
             .expect("queue delayed output");
-        tx.send(GatewayByteStreamItem::Eof)
+        tx.blocking_send(GatewayByteStreamItem::Eof)
             .expect("queue delayed output EOF");
     });
     let mut headers = HeaderMap::new();
@@ -471,14 +492,15 @@ fn preflight_wall_clock_cap_commits_slow_stream_without_losing_prefix() {
     ));
 
     let started_at = std::time::Instant::now();
-    let outcome = preflight_stream_response_with_timeouts(
+    let outcome = crate::gateway::run_upstream_io(preflight_stream_response_with_timeouts(
         response,
         "/v1/responses",
         true,
         true,
         Some(Duration::from_secs(1)),
         Some(Duration::from_millis(25)),
-    );
+    ))
+    .expect("gateway async test runtime");
     assert!(started_at.elapsed() < Duration::from_millis(500));
     let StreamPreflightOutcome::Ready(response) = outcome else {
         panic!("wall-clock cap must commit a normal slow stream");
@@ -503,7 +525,13 @@ fn preflight_prefix_limit_commits_large_metadata_without_losing_bytes() {
         GatewayByteStreamItem::Eof,
     ]);
 
-    let outcome = preflight_stream_response(response, "/v1/responses", true, true);
+    let outcome = crate::gateway::run_upstream_io(preflight_stream_response(
+        response,
+        "/v1/responses",
+        true,
+        true,
+    ))
+    .expect("gateway async test runtime");
     let StreamPreflightOutcome::Ready(response) = outcome else {
         panic!("classification prefix limit must commit the original stream");
     };
@@ -525,7 +553,7 @@ fn preflight_fails_over_on_read_error_before_deliverable_content() {
     ]);
 
     assert!(matches!(
-        preflight_stream_response(response, "/v1/responses", true, true),
+        crate::gateway::run_upstream_io(preflight_stream_response(response, "/v1/responses", true, true)).expect("gateway async test runtime"),
         StreamPreflightOutcome::TransportFailover(message)
             if message.contains("connection reset")
     ));
@@ -539,7 +567,7 @@ fn preflight_fails_over_when_producer_disconnects_after_metadata() {
     let response = stream_response_from_items(vec![GatewayByteStreamItem::Chunk(metadata)]);
 
     assert!(matches!(
-        preflight_stream_response(response, "/v1/responses", true, true),
+        crate::gateway::run_upstream_io(preflight_stream_response(response, "/v1/responses", true, true)).expect("gateway async test runtime"),
         StreamPreflightOutcome::TransportFailover(message)
             if message.contains("disconnected")
     ));

@@ -67,6 +67,7 @@ const RESPONSES_WS_TOOL_CALL_REGISTRY_TTL: Duration = Duration::from_secs(30 * 6
 const RESPONSES_WS_MAX_TOOL_CALL_REGISTRIES: usize = 128;
 const RESPONSES_WS_MAX_TOOL_CALL_REGISTRY_BYTES: usize = 32 * 1024 * 1024;
 const RESPONSES_WS_MAX_TOOL_CALL_ENTRY_BYTES: usize = 8 * 1024 * 1024;
+static RESPONSES_WS_AUTH_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(8);
 
 #[derive(Clone)]
 struct WsRequestContext {
@@ -84,6 +85,9 @@ struct WsRequestContext {
 #[derive(Clone)]
 struct PreparedClientFrame {
     text: String,
+    /// Client frame exactly as received (request log capture; one copy,
+    /// counted in the payload queue budget).
+    raw_body: bytes::Bytes,
     input: Value,
     client_model: Option<String>,
     model: Option<String>,
@@ -231,6 +235,7 @@ struct WebsocketTarget {
 
 struct PendingWsRequestLog {
     trace_id: String,
+    completed_response_id: Option<String>,
     route_strategy: Option<String>,
     route_source: Option<String>,
     client_model: Option<String>,
@@ -329,9 +334,25 @@ pub(super) fn is_websocket_upgrade_request(headers: &HeaderMap) -> bool {
 pub(super) async fn upgrade_responses_websocket(request: HttpRequest<Body>) -> Response<Body> {
     let (mut parts, _) = request.into_parts();
 
-    let context = match authorize_websocket_request(&parts.headers) {
-        Ok(context) => context,
-        Err(response) => return response,
+    let permit = match RESPONSES_WS_AUTH_WORKERS.try_acquire() {
+        Ok(permit) => permit,
+        Err(_) => return text_error_response(StatusCode::SERVICE_UNAVAILABLE, "service busy"),
+    };
+    let headers = parts.headers.clone();
+    let context = match tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        authorize_websocket_request(&headers)
+    })
+    .await
+    {
+        Ok(Ok(context)) => context,
+        Ok(Err(response)) => return response,
+        Err(_) => {
+            return text_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "websocket authorization failed",
+            )
+        }
     };
 
     let ws = match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
@@ -492,7 +513,7 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
     };
 
     if let Err(err) = validate_ws_api_key_for_new_request(&context).await {
-        record_rejected_ws_request(&context, &err);
+        record_rejected_ws_request(&context, &err, None);
         send_ws_error_and_close(&mut socket, err, context.prefer_raw_errors).await;
         return;
     }
@@ -501,7 +522,7 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
         match rewrite_client_frame_with_model_fast_policy(first_text.as_str(), &context).await {
             Ok(prepared) => prepared,
             Err(err) => {
-                record_rejected_ws_request(&context, &err);
+                record_rejected_ws_request(&context, &err, Some(first_text.as_str()));
                 send_ws_error_and_close(&mut socket, err, context.prefer_raw_errors).await;
                 return;
             }
@@ -562,11 +583,15 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
     };
 
     let mut completed_responses = CompletedWsResponseCache::default();
+    let first_frame = capture_native_ws_upstream_attempt(
+        &context,
+        &first_pending.log,
+        &upstream,
+        first_pending.prepared.text.as_str(),
+    );
     if let Err(err) = upstream
         .stream
-        .send(UpstreamMessage::Text(
-            first_pending.prepared.text.clone().into(),
-        ))
+        .send(UpstreamMessage::Text(first_frame))
         .await
     {
         let previous_account_id = upstream.account_id.clone();
@@ -712,7 +737,7 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
                                     continue;
                                 }
                                 if let Err(err) = validate_ws_api_key_for_new_request(&context).await {
-                                    record_rejected_ws_request(&context, &err);
+                                    record_rejected_ws_request(&context, &err, None);
                                     send_ws_error_and_close(
                                         &mut socket,
                                         err,
@@ -725,7 +750,7 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
                                 let prepared = match apply_model_fast_policy(prepared).await {
                                     Ok(prepared) => prepared,
                                     Err(err) => {
-                                        record_rejected_ws_request(&context, &err);
+                                        record_rejected_ws_request(&context, &err, Some(text.as_str()));
                                         send_ws_error_and_close(
                                             &mut socket,
                                             err,
@@ -859,9 +884,16 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
                                             break;
                                         }
                                     }
-                                } else if let Err(send_err) = upstream.stream.send(
-                                    UpstreamMessage::Text(current_pending.prepared.text.clone().into()),
-                                ).await {
+                                } else {
+                                    let current_frame = capture_native_ws_upstream_attempt(
+                                        &context,
+                                        &current_pending.log,
+                                        &upstream,
+                                        current_pending.prepared.text.as_str(),
+                                    );
+                                    if let Err(send_err) = upstream.stream.send(
+                                        UpstreamMessage::Text(current_frame),
+                                    ).await {
                                     let previous_account_id = upstream.account_id.clone();
                                     log::warn!(
                                         "event=responses_ws_upstream_stale_send account_id={} err={send_err}",
@@ -905,6 +937,7 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
                                         }
                                     }
                                 }
+                                }
                                 pending_request = Some(current_pending);
                             }
                             Err(err) => {
@@ -932,6 +965,7 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
                         .await;
                     }
                     Ok(Message::Close(_)) => {
+                        acknowledge_client_close(&mut socket).await;
                         let _ = upstream.stream.close(None).await;
                         break;
                     }
@@ -1183,6 +1217,10 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
 
                             if let Some(mut pending) = pending_request.take() {
                                 if terminal.status_code == 200 {
+                                    pending.log.completed_response_id = serde_json::from_str::<Value>(&text)
+                                        .ok()
+                                        .and_then(|event| event.get("response")?.get("id")?.as_str().map(str::to_string))
+                                        .filter(|id| id.starts_with("resp_") && id != "resp_proxy");
                                     cache_completed_ws_response(
                                         &mut completed_responses,
                                         &pending.prepared,
@@ -1589,7 +1627,10 @@ async fn receive_initial_request(socket: &mut WebSocket) -> Result<Option<String
                 let _ = socket.send(Message::Pong(payload)).await;
             }
             Ok(Message::Pong(_)) => {}
-            Ok(Message::Close(_)) => return Ok(None),
+            Ok(Message::Close(_)) => {
+                acknowledge_client_close(socket).await;
+                return Ok(None);
+            }
             Ok(Message::Binary(_)) => {
                 return Err(WsSessionError::bad_request_bilingual(
                     "首个 WebSocket 帧必须是 response.create 文本帧",
@@ -1605,6 +1646,13 @@ async fn receive_initial_request(socket: &mut WebSocket) -> Result<Option<String
             }
         }
     }
+}
+
+async fn acknowledge_client_close(socket: &mut WebSocket) {
+    // Tungstenite queues the peer's Close reply while receiving it. Dropping
+    // the socket before flushing that reply turns a normal close into 1006.
+    // Bound the flush so a peer that stops reading cannot pin the session.
+    let _ = tokio::time::timeout(Duration::from_secs(3), socket.flush()).await;
 }
 
 fn responses_ws_heartbeat_interval() -> tokio::time::Interval {
@@ -1660,7 +1708,7 @@ fn apply_model_fast_policy_with_storage(
     else {
         return Ok(prepared);
     };
-    let model = storage
+    let model = crate::account::remote_storage::AccountStorage::new(&storage)
         .get_enabled_model_v2(crate::models_v2::policy_catalog_slug(model_slug))
         .map_err(|err| {
             WsSessionError::new(
@@ -1722,6 +1770,7 @@ fn rewrite_client_frame(
     text: &str,
     context: &WsRequestContext,
 ) -> Result<PreparedClientFrame, WsSessionError> {
+    let raw_body = bytes::Bytes::copy_from_slice(text.as_bytes());
     let mut payload = serde_json::from_str::<Value>(text).map_err(|err| {
         WsSessionError::bad_request_bilingual(
             "WebSocket JSON 载荷无效",
@@ -1881,6 +1930,7 @@ fn rewrite_client_frame(
 
     Ok(PreparedClientFrame {
         text,
+        raw_body,
         input: request.input,
         client_model: client_model_for_log,
         model: Some(request.model),
@@ -2380,11 +2430,13 @@ async fn reconnect_upstream_for_pending_request(
             pending.prepared.text.as_str(),
             pending.retried_missing_tool_call_context,
         );
-        match replacement
-            .stream
-            .send(UpstreamMessage::Text(pending.prepared.text.clone().into()))
-            .await
-        {
+        let frame = capture_native_ws_upstream_attempt(
+            context,
+            &pending.log,
+            &replacement,
+            pending.prepared.text.as_str(),
+        );
+        match replacement.stream.send(UpstreamMessage::Text(frame)).await {
             Ok(()) => {
                 if attempt > 1 {
                     log::info!(
@@ -2480,7 +2532,7 @@ async fn wait_for_client_request_and_reconnect_upstream(
     let prepared = match rewrite_client_frame_with_model_fast_policy(text.as_str(), context).await {
         Ok(prepared) => prepared,
         Err(err) => {
-            record_rejected_ws_request(context, &err);
+            record_rejected_ws_request(context, &err, Some(text.as_str()));
             return Err(err);
         }
     };
@@ -2635,13 +2687,14 @@ async fn resolve_upstream_authorization_for_websocket(
     account: codexmanager_core::storage::Account,
     token: codexmanager_core::storage::Token,
 ) -> Result<(WsUpstreamAuthorization, codexmanager_core::storage::Token), String> {
-    let join_result = tokio::task::spawn_blocking(move || -> Result<_, String> {
+    async {
         let storage = open_storage()
+            .map(|pooled| pooled.shared_handle())
             .ok_or_else(|| crate::gateway::bilingual_error("存储不可用", "storage unavailable"))?;
-        let client = crate::gateway::upstream_client_for_account(account.id.as_str())?;
-        match crate::agent_identity::resolve_or_bootstrap_account_agent_identity_authorization(
+        let client = crate::gateway::async_upstream_client_for_account(account.id.as_str())?;
+        match crate::agent_identity::resolve_or_bootstrap_account_agent_identity_authorization_async(
             &storage, &client, &account, &token,
-        ) {
+        ).await {
             Ok(Some(resolved)) => {
                 return Ok((
                     WsUpstreamAuthorization {
@@ -2668,7 +2721,7 @@ async fn resolve_upstream_authorization_for_websocket(
         }
         let mut token = token;
         let bearer =
-            crate::gateway::gateway_resolve_openai_bearer_token(&storage, &account, &mut token)?;
+            crate::gateway::gateway_resolve_openai_bearer_token_async(&storage, &account, &mut token).await?;
         Ok((
             WsUpstreamAuthorization {
                 value: bearer,
@@ -2679,16 +2732,7 @@ async fn resolve_upstream_authorization_for_websocket(
             },
             token,
         ))
-    })
-    .await;
-
-    match join_result {
-        Ok(result) => result,
-        Err(err) => Err(crate::gateway::bilingual_error(
-            "上游鉴权任务合并失败",
-            format!("upstream authorization task join failed: {err}"),
-        )),
-    }
+    }.await
 }
 
 async fn recover_agent_identity_authorization_for_websocket(
@@ -2696,17 +2740,19 @@ async fn recover_agent_identity_authorization_for_websocket(
     token: codexmanager_core::storage::Token,
     failed_task_id: String,
 ) -> Result<Option<WsUpstreamAuthorization>, String> {
-    tokio::task::spawn_blocking(move || {
+    async {
         let storage = open_storage()
+            .map(|pooled| pooled.shared_handle())
             .ok_or_else(|| crate::gateway::bilingual_error("存储不可用", "storage unavailable"))?;
-        let client = crate::gateway::upstream_client_for_account(account.id.as_str())?;
-        crate::agent_identity::recover_account_agent_identity_authorization(
+        let client = crate::gateway::async_upstream_client_for_account(account.id.as_str())?;
+        crate::agent_identity::recover_account_agent_identity_authorization_async(
             &storage,
             &client,
             &account,
             &token,
             &failed_task_id,
         )
+        .await
         .map(|resolved| {
             resolved.map(|resolved| WsUpstreamAuthorization {
                 value: resolved.value,
@@ -2716,9 +2762,8 @@ async fn recover_agent_identity_authorization_for_websocket(
                 account_scope_id: resolved.account_scope_id,
             })
         })
-    })
+    }
     .await
-    .map_err(|err| format!("agent identity recovery task join failed: {err}"))?
 }
 
 async fn refresh_websocket_bearer(
@@ -2726,16 +2771,19 @@ async fn refresh_websocket_bearer(
     token: codexmanager_core::storage::Token,
     effective_upstream_base: String,
 ) -> Result<Option<String>, String> {
-    tokio::task::spawn_blocking(move || {
+    async {
         let storage = open_storage()
+            .map(|pooled| pooled.shared_handle())
             .ok_or_else(|| crate::gateway::bilingual_error("存储不可用", "storage unavailable"))?;
         let mut token = token;
-        match try_refresh_websocket_bearer(
+        match try_refresh_websocket_bearer_async(
             &storage,
             effective_upstream_base.as_str(),
             &account,
             &mut token,
-        ) {
+        )
+        .await
+        {
             Ok(bearer) => Ok(bearer),
             Err(err) => {
                 let _ = crate::account_status::mark_account_unavailable_for_refresh_token_error(
@@ -2746,12 +2794,11 @@ async fn refresh_websocket_bearer(
                 Err(err)
             }
         }
-    })
+    }
     .await
-    .map_err(|err| format!("websocket bearer refresh task join failed: {err}"))?
 }
 
-fn try_refresh_websocket_bearer(
+async fn try_refresh_websocket_bearer_async(
     storage: &codexmanager_core::storage::Storage,
     effective_upstream_base: &str,
     account: &codexmanager_core::storage::Account,
@@ -2771,24 +2818,48 @@ fn try_refresh_websocket_bearer(
         account.issuer.clone()
     };
     let client_id = crate::gateway::gateway_token_exchange_client_id();
-    crate::usage_token_refresh::refresh_and_persist_access_token(
+    crate::usage_token_refresh::refresh_and_persist_access_token_async(
         storage,
         token,
         issuer.as_str(),
         client_id.as_str(),
         crate::usage_token_refresh::token_refresh_ahead_secs(),
-    )?;
+    )
+    .await?;
 
     if token.api_key_access_token == previous_api_key_access_token {
+        let expected = token.clone();
         token.api_key_access_token = None;
-        storage.insert_token(token).map_err(|err| err.to_string())?;
+        let storage = crate::account::remote_storage::AccountStorage::new(storage);
+        if !storage
+            .compare_and_swap_token(&expected, token)
+            .map_err(|err| err.to_string())?
+        {
+            *token = storage
+                .find_token_by_account_id(&token.account_id)
+                .map_err(|err| err.to_string())?
+                .ok_or_else(|| "websocket token was removed during refresh".to_owned())?;
+        }
     }
 
-    let bearer = crate::gateway::gateway_resolve_openai_bearer_token(storage, account, token)?;
+    let bearer =
+        crate::gateway::gateway_resolve_openai_bearer_token_async(storage, account, token).await?;
     if bearer.trim().is_empty() {
         return Err("refreshed websocket bearer token is empty".to_string());
     }
     Ok(Some(bearer))
+}
+
+#[cfg(test)]
+fn try_refresh_websocket_bearer(
+    storage: &codexmanager_core::storage::Storage,
+    base: &str,
+    account: &codexmanager_core::storage::Account,
+    token: &mut codexmanager_core::storage::Token,
+) -> Result<Option<String>, String> {
+    crate::gateway::run_upstream_io(try_refresh_websocket_bearer_async(
+        storage, base, account, token,
+    ))?
 }
 
 fn build_upstream_websocket_url(upstream_base: &str) -> Result<String, WsSessionError> {
@@ -3300,6 +3371,31 @@ fn build_upstream_websocket_request(
     Ok(request)
 }
 
+/// Build the upstream frame once and capture it; the request log shares the
+/// frame buffer with the send (no extra copy).
+fn capture_native_ws_upstream_attempt(
+    context: &WsRequestContext,
+    pending: &PendingWsRequestLog,
+    upstream: &ConnectedUpstreamWebsocket,
+    text: &str,
+) -> tokio_tungstenite::tungstenite::Utf8Bytes {
+    let frame = tokio_tungstenite::tungstenite::Utf8Bytes::from(text.to_string());
+    let sent_body = bytes::Bytes::from(frame.clone());
+    crate::gateway::capture_outbound_payload(
+        crate::gateway::OutboundPayloadContext {
+            trace_id: pending.trace_id.as_str(),
+            key_id: context.api_key.id.as_str(),
+        },
+        "WS",
+        upstream.upstream_url.as_str(),
+        "websocket",
+        &[],
+        &sent_body,
+        None,
+    );
+    frame
+}
+
 fn begin_ws_request_log(
     context: &WsRequestContext,
     prepared: &PreparedClientFrame,
@@ -3307,6 +3403,16 @@ fn begin_ws_request_log(
     route_source: &'static str,
 ) -> PendingWsRequestLog {
     let trace_id = crate::gateway::next_trace_id();
+    // Capture the client frame so WebSocket requests also expose their body
+    // in the request log detail view.
+    crate::gateway::store_client_request_log_payload(
+        trace_id.as_str(),
+        &prepared.raw_body,
+        Some(crate::gateway::request_log_payload_conversation_key(
+            context.api_key.id.as_str(),
+            context.incoming_headers.session_id(),
+        )),
+    );
     let effective_protocol_type = crate::apikey_profile::resolve_gateway_protocol_type(
         context.api_key.protocol_type.as_str(),
         RESPONSES_ENDPOINT,
@@ -3333,6 +3439,7 @@ fn begin_ws_request_log(
     );
     PendingWsRequestLog {
         trace_id,
+        completed_response_id: None,
         route_strategy: Some(route_strategy.to_string()),
         route_source: Some(route_source.to_string()),
         client_model: prepared.client_model.clone(),
@@ -3352,8 +3459,22 @@ fn begin_ws_request_log(
     }
 }
 
-fn record_rejected_ws_request(context: &WsRequestContext, err: &WsSessionError) {
+fn record_rejected_ws_request(
+    context: &WsRequestContext,
+    err: &WsSessionError,
+    authenticated_text: Option<&str>,
+) {
     let trace_id = crate::gateway::next_trace_id();
+    if let Some(text) = authenticated_text {
+        crate::gateway::store_client_request_log_payload(
+            trace_id.as_str(),
+            &bytes::Bytes::copy_from_slice(text.as_bytes()),
+            Some(crate::gateway::request_log_payload_conversation_key(
+                context.api_key.id.as_str(),
+                context.incoming_headers.session_id(),
+            )),
+        );
+    }
     let effective_protocol_type = crate::apikey_profile::resolve_gateway_protocol_type(
         context.api_key.protocol_type.as_str(),
         RESPONSES_ENDPOINT,
@@ -3549,6 +3670,20 @@ fn finalize_ws_request_log(
         error.as_deref(),
         Some(pending.started_at.elapsed().as_millis()),
     );
+    if status_code == 200 {
+        if let Some(response_id) = pending.completed_response_id.as_deref() {
+            if let Err(err) = storage.record_request_log_response_id(
+                context.api_key.id.as_str(),
+                response_id,
+                pending.trace_id.as_str(),
+            ) {
+                log::warn!(
+                    "event=request_log_response_id_insert_failed trace_id={} err={err}",
+                    pending.trace_id
+                );
+            }
+        }
+    }
     crate::gateway::log_request_final(
         pending.trace_id.as_str(),
         status_code,
@@ -3774,9 +3909,11 @@ async fn try_retry_ws_request_after_terminal(
     }
     let retry_text = retry_text.unwrap_or_else(|| pending.prepared.text.clone());
     let retry_input = ws_request_input_from_text(retry_text.as_str())?;
+    let retry_frame =
+        capture_native_ws_upstream_attempt(context, &pending.log, upstream, retry_text.as_str());
     match upstream
         .stream
-        .send(UpstreamMessage::Text(retry_text.clone().into()))
+        .send(UpstreamMessage::Text(retry_frame))
         .await
     {
         Ok(()) => {
@@ -3992,30 +4129,36 @@ fn is_previous_response_not_found_terminal(terminal: &WsTerminalEvent) -> bool {
 fn parse_missing_ws_tool_call_error_message(message: &str) -> Option<(WsToolCallKind, String)> {
     let message = message.trim();
     let lower = message.to_ascii_lowercase();
-    let prefixes = [
-        (
-            "no tool call found for custom tool call output with call_id ",
-            WsToolCallKind::Custom,
-        ),
-        (
-            "no tool call found for function tool call output with call_id ",
-            WsToolCallKind::Function,
-        ),
-        (
-            "no tool call found for function call output with call_id ",
-            WsToolCallKind::Function,
-        ),
-    ];
-    let (prefix, kind) = prefixes
-        .into_iter()
-        .find(|(prefix, _)| lower.starts_with(prefix))?;
+    if !lower.starts_with("no tool call found") {
+        return None;
+    }
+    let kind = if lower.contains("custom tool call output") {
+        WsToolCallKind::Custom
+    } else if lower.contains("function tool call output") || lower.contains("function call output")
+    {
+        WsToolCallKind::Function
+    } else {
+        return None;
+    };
+
+    // Upstream has used both `call_id <id>` and `call_id: <id>` (and some
+    // versions append a request hint after the id). Read the identifier as a
+    // token instead of coupling recovery to one complete English sentence.
+    let call_id_marker = lower.find("call_id")?;
     let call_id = message
-        .get(prefix.len()..)?
-        .trim()
-        .trim_end_matches('.')
-        .trim()
-        .trim_matches(|character| matches!(character, '\'' | '"' | '`'));
-    if call_id.is_empty() || call_id.chars().any(char::is_whitespace) {
+        .get(call_id_marker + "call_id".len()..)?
+        .trim_start()
+        .trim_start_matches([':', '=', ' '])
+        .trim_start()
+        .trim_matches(['\'', '"', '`'])
+        .split(|character: char| {
+            character.is_whitespace()
+                || matches!(character, '.' | ',' | ';' | ':' | ')' | ']' | '}')
+        })
+        .next()
+        .unwrap_or_default()
+        .trim_matches(['\'', '"', '`']);
+    if call_id.is_empty() {
         return None;
     }
     Some((kind, call_id.to_string()))

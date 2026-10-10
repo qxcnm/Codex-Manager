@@ -41,8 +41,8 @@ pub(crate) fn should_skip_request_header(name: &HeaderName, value: &HeaderValue)
     {
         return true;
     }
-    // 中文注释：tiny_http 仅支持 ASCII 头值；像 x-codex-turn-metadata 这类可能携带中文路径的头，
-    // 只在值可安全转成 ASCII 时透传，非 ASCII 一律在入口层过滤，避免请求还没进业务层就断流。
+    // The routing/auth metadata parser consumes textual header values. Keep
+    // its input compatible with HTTP HeaderValue::to_str validation.
     value.to_str().is_err()
 }
 

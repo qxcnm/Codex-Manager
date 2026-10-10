@@ -5,6 +5,27 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[test]
+fn chatgpt_account_header_falls_back_when_stored_chatgpt_id_is_blank() {
+    let account = Account {
+        id: "header-fallback".to_string(),
+        label: "Header fallback".to_string(),
+        issuer: "https://auth.openai.com".to_string(),
+        chatgpt_account_id: Some(" \t".to_string()),
+        workspace_id: Some(" workspace-fallback ".to_string()),
+        group_name: None,
+        sort: 0,
+        status: "active".to_string(),
+        created_at: 0,
+        updated_at: 0,
+    };
+
+    assert_eq!(
+        super::resolve_chatgpt_account_header(&account, "https://chatgpt.com/backend-api/codex"),
+        Some("workspace-fallback")
+    );
+}
+
 fn spawn_silent_sse_upstream() -> (String, mpsc::Receiver<bool>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock OpenAI upstream");
     let addr = listener.local_addr().expect("mock OpenAI upstream addr");
@@ -63,8 +84,7 @@ fn spawn_silent_sse_upstream() -> (String, mpsc::Receiver<bool>, thread::JoinHan
     (format!("http://{addr}/v1/responses"), disconnect_rx, handle)
 }
 
-#[test]
-fn official_openai_stream_uses_cancellable_async_transport() {
+fn assert_official_openai_request_is_cancellable(is_stream: bool) {
     let (url, disconnected, handle) = spawn_silent_sse_upstream();
     let upstream_base = url
         .strip_suffix("/v1/responses")
@@ -91,25 +111,27 @@ fn official_openai_stream_uses_cancellable_async_transport() {
         api_key_access_token: Some("api-key-access-token".to_string()),
         last_refresh: now,
     };
-    let blocking_client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(1))
         .build()
-        .expect("build blocking OpenAI client");
+        .expect("build async OpenAI client");
 
-    let response = try_openai_fallback(
-        &blocking_client,
+    let response = crate::gateway::run_upstream_io(try_openai_fallback(
+        &client,
         &storage,
         &Method::GET,
         "/v1/responses",
         &super::super::IncomingHeaderSnapshot::default(),
         &Bytes::new(),
-        true,
+        is_stream,
         upstream_base,
         &account,
         &mut token,
         false,
         false,
-    )
+        None,
+    ))
+    .expect("gateway async test runtime")
     .expect("send official OpenAI request")
     .expect("official OpenAI response");
     assert!(matches!(response, GatewayUpstreamResponse::Stream(_)));
@@ -122,4 +144,14 @@ fn official_openai_stream_uses_cancellable_async_transport() {
         "dropping the official OpenAI stream must close a silent upstream"
     );
     handle.join().expect("join mock OpenAI upstream");
+}
+
+#[test]
+fn official_openai_stream_uses_cancellable_async_transport() {
+    assert_official_openai_request_is_cancellable(true);
+}
+
+#[test]
+fn official_openai_json_uses_cancellable_async_transport() {
+    assert_official_openai_request_is_cancellable(false);
 }

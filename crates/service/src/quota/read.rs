@@ -1,3 +1,5 @@
+#[path = "billing_seaorm.rs"]
+mod billing_seaorm;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use codexmanager_core::rpc::types::{
@@ -117,6 +119,7 @@ fn summarize_aggregate_balance_usd<'a>(
 fn load_aggregate_balance_usd_summary(
     storage: &Storage,
 ) -> Result<AggregateBalanceUsdSummary, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let balances = storage
         .list_aggregate_api_balance_jsons()
         .map_err(|err| format!("list aggregate API balance snapshots failed: {err}"))?;
@@ -226,12 +229,14 @@ fn billing_rule_result(rule: BillingRule) -> BillingRuleResult {
 
 pub(crate) fn read_quota_overview() -> Result<QuotaOverviewResult, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     read_quota_overview_with_storage(&storage)
 }
 
 fn read_quota_overview_with_storage(
     storage: &codexmanager_core::storage::Storage,
 ) -> Result<QuotaOverviewResult, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let api_key_stats = storage
         .api_key_quota_overview_stats()
         .map_err(|err| format!("summarize API key quota overview failed: {err}"))?;
@@ -296,11 +301,17 @@ fn read_quota_overview_with_storage(
 }
 
 pub(crate) fn read_billing_rules() -> Result<QuotaBillingRulesResult, String> {
+    if crate::storage_helpers::seaorm_enabled() {
+        return crate::storage_helpers::seaorm_block_on(billing_seaorm::list);
+    }
+
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     read_billing_rules_with_storage(&storage)
 }
 
 fn read_billing_rules_with_storage(storage: &Storage) -> Result<QuotaBillingRulesResult, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let items = storage
         .list_billing_rules()
         .map_err(|err| format!("list billing rules failed: {err}"))?
@@ -313,7 +324,12 @@ fn read_billing_rules_with_storage(storage: &Storage) -> Result<QuotaBillingRule
 pub(crate) fn upsert_billing_rule(
     input: BillingRuleUpsertInput,
 ) -> Result<QuotaBillingRulesResult, String> {
+    if crate::storage_helpers::seaorm_enabled() {
+        return crate::storage_helpers::seaorm_block_on(move |s| billing_seaorm::upsert(s, input));
+    }
+
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let name = input.name.trim();
     if name.is_empty() {
         return Err("计费规则名称不能为空".to_string());
@@ -372,7 +388,13 @@ pub(crate) fn upsert_billing_rule(
 }
 
 pub(crate) fn delete_billing_rule(id: &str) -> Result<QuotaBillingRulesResult, String> {
+    if crate::storage_helpers::seaorm_enabled() {
+        let id = id.to_owned();
+        return crate::storage_helpers::seaorm_block_on(move |s| billing_seaorm::delete(s, id));
+    }
+
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let id = id.trim();
     if id.is_empty() {
         return Err("计费规则 ID 不能为空".to_string());
@@ -388,6 +410,7 @@ pub(crate) fn read_quota_model_usage(
     end_ts: Option<i64>,
 ) -> Result<QuotaModelUsageResult, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     read_quota_model_usage_with_storage(&storage, start_ts, end_ts)
 }
 
@@ -396,6 +419,7 @@ fn read_quota_model_usage_with_storage(
     start_ts: Option<i64>,
     end_ts: Option<i64>,
 ) -> Result<QuotaModelUsageResult, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let price_rules = model_pricing::load_catalog_prices(storage)?;
     let usage = storage
         .summarize_request_token_stats_by_model(start_ts, end_ts)
@@ -517,12 +541,14 @@ const ACCOUNT_CAPACITY_TEMPLATE_SLOTS: &[&str] = &["free", "plus", "pro", "team"
 
 pub(crate) fn read_quota_capacity_config() -> Result<QuotaCapacityConfigResult, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     read_quota_capacity_config_with_storage(&storage)
 }
 
 fn read_quota_capacity_config_with_storage(
     storage: &Storage,
 ) -> Result<QuotaCapacityConfigResult, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     Ok(QuotaCapacityConfigResult {
         source_assignments: build_source_assignment_results(
             route_assignment_map(storage, None)
@@ -548,6 +574,7 @@ pub(crate) fn update_account_quota_capacity_template(
     secondary_window_tokens: Option<i64>,
 ) -> Result<QuotaCapacityConfigResult, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     storage
         .upsert_account_quota_capacity_template(
             plan_type,
@@ -564,6 +591,7 @@ pub(crate) fn update_account_quota_capacity_override(
     secondary_window_tokens: Option<i64>,
 ) -> Result<QuotaCapacityConfigResult, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     storage
         .upsert_account_quota_capacity_override(
             account_id,
@@ -576,6 +604,7 @@ pub(crate) fn update_account_quota_capacity_override(
 
 pub(crate) fn read_quota_model_pools() -> Result<QuotaModelPoolsResult, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let price_rules = model_pricing::load_catalog_prices(&storage)?;
     let api_models = api_available_model_slugs(&storage)?;
     let assignments = route_assignment_map(&storage, None)
@@ -624,6 +653,7 @@ pub(crate) fn read_quota_system_pool(
     reference_model: Option<String>,
 ) -> Result<QuotaSystemPoolResult, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let price_rules = model_pricing::load_catalog_prices(&storage)?;
     let api_models = api_available_model_slugs(&storage)?;
     let reference_model = reference_model
@@ -710,6 +740,7 @@ fn build_model_pool_accumulators(
     assignments: &HashMap<(String, String), Vec<String>>,
     capacity_config: &AccountCapacityConfig,
 ) -> Result<BTreeMap<String, PoolAccumulator>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     build_model_pool_accumulators_for_models(
         storage,
         price_rules,
@@ -727,6 +758,7 @@ fn build_model_pool_accumulators_from_storage(
     api_models: &[String],
     assignments: &HashMap<(String, String), Vec<String>>,
 ) -> Result<BTreeMap<String, PoolAccumulator>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let capacity_config = load_account_capacity_config(storage)?;
     build_model_pool_accumulators(
         storage,
@@ -745,6 +777,7 @@ fn build_model_pool_accumulators_for_models(
     target_models: Option<&HashSet<String>>,
     capacity_config: &AccountCapacityConfig,
 ) -> Result<BTreeMap<String, PoolAccumulator>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let mut pools = BTreeMap::<String, PoolAccumulator>::new();
     seed_model_pools(&mut pools, price_rules, api_models, target_models);
     add_aggregate_api_pools(
@@ -803,6 +836,7 @@ fn add_aggregate_api_pools(
     target_models: Option<&HashSet<String>>,
     pools: &mut BTreeMap<String, PoolAccumulator>,
 ) -> Result<(), String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let aggregate_apis = storage
         .list_aggregate_api_quota_source_summaries()
         .map_err(|err| format!("list aggregate APIs failed: {err}"))?;
@@ -889,6 +923,7 @@ fn add_account_pools(
     capacity_config: &AccountCapacityConfig,
     pools: &mut BTreeMap<String, PoolAccumulator>,
 ) -> Result<(), String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let context = load_account_pool_context(storage)?;
     let template_map = capacity_config.template_map();
 
@@ -1001,6 +1036,7 @@ fn add_account_pools(
 fn load_account_pool_context(
     storage: &codexmanager_core::storage::Storage,
 ) -> Result<AccountPoolContext, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let accounts = storage
         .list_available_account_quota_pool_sources()
         .map_err(|err| format!("list accounts failed: {err}"))?;
@@ -1112,6 +1148,7 @@ fn route_assignment_map(
     storage: &Storage,
     target_model: Option<&str>,
 ) -> rusqlite::Result<HashMap<(String, String), Vec<String>>> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let mut grouped = HashMap::<(String, String), BTreeSet<String>>::new();
     for model in storage.list_api_models_v2()? {
         if target_model.is_some_and(|target| !model.slug.eq_ignore_ascii_case(target)) {
@@ -1136,6 +1173,7 @@ fn route_assignment_map(
 }
 
 fn load_account_capacity_config(storage: &Storage) -> Result<AccountCapacityConfig, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     Ok(AccountCapacityConfig {
         templates: storage
             .list_account_quota_capacity_templates()
@@ -1165,6 +1203,7 @@ fn source_models(
 fn api_available_model_slugs(
     storage: &codexmanager_core::storage::Storage,
 ) -> Result<Vec<String>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     storage
         .list_api_models_v2()
         .map_err(|err| format!("list model catalog V2 failed: {err}"))
@@ -1191,6 +1230,7 @@ fn load_usage_plan_fallback_snapshots(
     tokens: &HashMap<String, AccountTokenPlan>,
     subscriptions: &HashMap<String, AccountSubscription>,
 ) -> Result<HashMap<String, UsageSnapshotRecord>, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let fallback_ids = account_ids
         .iter()
         .filter(|account_id| {
@@ -1294,10 +1334,12 @@ fn override_result(item: AccountQuotaCapacityOverride) -> AccountQuotaCapacityOv
 
 pub(crate) fn read_quota_source_list() -> Result<QuotaSourceListResult, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     read_quota_source_list_with_storage(&storage)
 }
 
 fn read_quota_source_list_with_storage(storage: &Storage) -> Result<QuotaSourceListResult, String> {
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let api_models = api_available_model_slugs(storage)?;
     let mut items = Vec::new();
 
@@ -1398,6 +1440,7 @@ pub(crate) fn refresh_quota_sources(
     input: QuotaRefreshSourcesInput,
 ) -> Result<QuotaRefreshSourcesResult, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let kinds = if input.kinds.is_empty() {
         HashSet::from(["aggregate_api".to_string(), "openai_account".to_string()])
     } else {

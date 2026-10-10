@@ -1,4 +1,4 @@
-use tiny_http::Request;
+use crate::http::gateway_request::GatewayRequest as Request;
 
 use super::super::super::request_log::RequestLogUsage;
 use super::super::GatewayUpstreamResponse;
@@ -26,7 +26,7 @@ pub(in super::super) fn respond_terminal(
     trace_id: Option<&str>,
 ) -> Result<(), String> {
     let response_message = super::super::super::error_message_for_client(
-        super::super::super::prefers_raw_errors_for_tiny_http_request(&request),
+        super::super::super::prefers_raw_errors_for_gateway_request(&request),
         message,
     );
     let response = super::super::super::error_response::terminal_text_response(
@@ -58,6 +58,9 @@ fn is_client_disconnect_error(message: &str) -> bool {
         || normalized.contains("os error 32")
         || normalized.contains("os error 54")
         || normalized.contains("os error 104")
+        || normalized.contains("os error 10053")
+        || normalized.contains("os error 10054")
+        || normalized.contains("os error 10058")
 }
 
 fn derive_final_error(
@@ -179,7 +182,7 @@ pub(super) fn finalize_terminal_candidate(
 /// # 返回
 /// 返回函数执行结果
 #[allow(clippy::too_many_arguments)]
-pub(super) fn finalize_upstream_response(
+pub(super) async fn finalize_upstream_response(
     request: Request,
     response: GatewayUpstreamResponse,
     inflight_guard: super::super::super::AccountInFlightGuard,
@@ -200,7 +203,52 @@ pub(super) fn finalize_upstream_response(
 ) -> Result<FinalizeUpstreamResponseOutcome, String> {
     let status_code = response.status().as_u16();
 
-    let bridge = super::super::super::respond_with_upstream(
+    #[cfg(test)]
+    if !request.is_native() {
+        let bridge = super::super::super::http_bridge::respond_with_upstream_async(
+            request,
+            response,
+            inflight_guard,
+            response_adapter,
+            None,
+            gemini_stream_output_mode,
+            path,
+            Some(tool_name_restore_map),
+            client_is_stream,
+            // Once delivery starts, the response is committed and the request cannot be retried.
+            // Retryable stream errors are therefore gated before this function is called.
+            false,
+            Some(trace_id),
+            model_for_log,
+            started_at,
+        )
+        .await?;
+        return finalize_bridge_result(
+            bridge,
+            status_code,
+            context,
+            account_id,
+            last_attempt_url,
+            last_attempt_error,
+            response_adapter,
+            client_is_stream,
+            path,
+            trace_id,
+            started_at,
+            model_for_log,
+            attempted_account_ids,
+            has_more_candidates,
+        );
+    }
+    let owned_context = context.to_owned();
+    let account_id_owned = account_id.to_owned();
+    let last_attempt_url_owned = last_attempt_url.map(str::to_owned);
+    let last_attempt_error_owned = last_attempt_error.map(str::to_owned);
+    let path_owned = path.to_owned();
+    let trace_id_owned = trace_id.to_owned();
+    let model_for_log_owned = model_for_log.map(str::to_owned);
+    let attempted_account_ids_owned = attempted_account_ids.map(<[String]>::to_vec);
+    super::super::super::defer_upstream_response(
         request,
         response,
         inflight_guard,
@@ -210,13 +258,53 @@ pub(super) fn finalize_upstream_response(
         path,
         Some(tool_name_restore_map),
         client_is_stream,
-        // Once the bridge starts, tiny_http owns the request and it cannot be retried.
-        // Retryable stream errors are therefore gated before this function is called.
-        false,
         Some(trace_id),
         model_for_log,
         started_at,
+        move |bridge| {
+            let Some(storage) = crate::storage_helpers::open_storage() else {
+                log::error!("event=gateway_response_finalization_storage_unavailable");
+                return;
+            };
+            let context = owned_context.as_borrowed(&storage);
+            let _ = finalize_bridge_result(
+                bridge,
+                status_code,
+                &context,
+                &account_id_owned,
+                last_attempt_url_owned.as_deref(),
+                last_attempt_error_owned.as_deref(),
+                response_adapter,
+                client_is_stream,
+                &path_owned,
+                &trace_id_owned,
+                started_at,
+                model_for_log_owned.as_deref(),
+                attempted_account_ids_owned.as_deref(),
+                has_more_candidates,
+            );
+        },
     )?;
+    Ok(FinalizeUpstreamResponseOutcome::Handled)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finalize_bridge_result(
+    bridge: crate::gateway::http_bridge::UpstreamResponseBridgeResult,
+    status_code: u16,
+    context: &GatewayUpstreamExecutionContext<'_>,
+    account_id: &str,
+    last_attempt_url: Option<&str>,
+    last_attempt_error: Option<&str>,
+    response_adapter: super::super::super::ResponseAdapter,
+    client_is_stream: bool,
+    path: &str,
+    trace_id: &str,
+    started_at: std::time::Instant,
+    model_for_log: Option<&str>,
+    attempted_account_ids: Option<&[String]>,
+    has_more_candidates: bool,
+) -> Result<FinalizeUpstreamResponseOutcome, String> {
     let bridge_output_text_len = bridge
         .usage
         .output_text
@@ -231,6 +319,7 @@ pub(super) fn finalize_upstream_response(
             path,
             is_stream: client_is_stream,
             stream_terminal_seen: bridge.stream_terminal_seen,
+            stream_terminal_delivered: bridge.stream_terminal_delivered,
             stream_terminal_error: bridge.stream_terminal_error.as_deref(),
             delivery_error: bridge.delivery_error.as_deref(),
             output_text_len: bridge_output_text_len,
@@ -288,6 +377,9 @@ pub(super) fn finalize_upstream_response(
     }
 
     let usage = bridge.usage;
+    let response_id = (bridge_ok && status_for_log < 400)
+        .then(|| usage.response_id.as_deref())
+        .flatten();
     context.log_final_result_with_model(
         Some(account_id),
         last_attempt_url,
@@ -307,6 +399,9 @@ pub(super) fn finalize_upstream_response(
         started_at.elapsed().as_millis(),
         attempted_account_ids,
     );
+    if let Some(response_id) = response_id {
+        context.record_completed_response_id(response_id);
+    }
     Ok(FinalizeUpstreamResponseOutcome::Handled)
 }
 

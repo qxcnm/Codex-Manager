@@ -21,7 +21,7 @@ pub async fn local_account_delete(
 ) -> Result<serde_json::Value, String> {
     let db_path = resolve_db_path_with_legacy_migration(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let mut storage = Storage::open(db_path).map_err(|e| e.to_string())?;
+        let storage = Storage::open(db_path).map_err(|e| e.to_string())?;
         storage
             .delete_account(&account_id)
             .map_err(|e| e.to_string())?;

@@ -27,7 +27,7 @@ impl CodexRuntimeReloadResult {
 
 pub(crate) fn reload_codex_app_servers(codex_home: &Path) -> CodexRuntimeReloadResult {
     let system = System::new_all();
-    let candidate_pids = system
+    let matched_pids = system
         .processes()
         .iter()
         .filter_map(|(pid, process)| {
@@ -38,6 +38,13 @@ pub(crate) fn reload_codex_app_servers(codex_home: &Path) -> CodexRuntimeReloadR
             same_path(&process_home, codex_home).then_some(*pid)
         })
         .collect::<HashSet<_>>();
+    let protected_ancestor_pids =
+        process_ancestor_pids(&system, sysinfo::Pid::from_u32(std::process::id()));
+    let candidate_pids = matched_pids
+        .difference(&protected_ancestor_pids)
+        .copied()
+        .collect::<HashSet<_>>();
+    let protected_process_count = matched_pids.len().saturating_sub(candidate_pids.len());
 
     let root_pids = candidate_pids
         .iter()
@@ -69,8 +76,12 @@ pub(crate) fn reload_codex_app_servers(codex_home: &Path) -> CodexRuntimeReloadR
         }
     }
 
-    let matched_process_count = candidate_pids.len();
-    let message = if matched_process_count == 0 {
+    let matched_process_count = matched_pids.len();
+    let message = if candidate_pids.is_empty() && protected_process_count > 0 {
+        format!(
+            "Skipped {protected_process_count} matching Codex app-server process(es) because they own the current CodexManager process; reopen Codex to load the updated configuration"
+        )
+    } else if matched_process_count == 0 {
         "No matching Codex app-server process was running; new clients will read the updated configuration"
             .to_string()
     } else if signaled_process_count == 0 {
@@ -89,6 +100,27 @@ pub(crate) fn reload_codex_app_servers(codex_home: &Path) -> CodexRuntimeReloadR
         warnings,
         message,
     }
+}
+
+fn process_ancestor_pids(system: &System, start: sysinfo::Pid) -> HashSet<sysinfo::Pid> {
+    collect_ancestor_pids(start, |pid| {
+        system.process(pid).and_then(|process| process.parent())
+    })
+}
+
+fn collect_ancestor_pids<F>(start: sysinfo::Pid, mut parent_for: F) -> HashSet<sysinfo::Pid>
+where
+    F: FnMut(sysinfo::Pid) -> Option<sysinfo::Pid>,
+{
+    let mut ancestors = HashSet::new();
+    let mut current = start;
+    while let Some(parent) = parent_for(current) {
+        if !ancestors.insert(parent) {
+            break;
+        }
+        current = parent;
+    }
+    ancestors
 }
 
 fn is_codex_app_server_command(command: &[String]) -> bool {
@@ -152,7 +184,7 @@ fn environment_value(environment: &[String], key: &str) -> Option<String> {
     })
 }
 
-fn same_path(left: &Path, right: &Path) -> bool {
+pub(crate) fn same_path(left: &Path, right: &Path) -> bool {
     normalize_path(left) == normalize_path(right)
 }
 
@@ -196,6 +228,15 @@ mod tests {
         ])));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn same_path_accepts_windows_case_and_separator_differences() {
+        assert!(same_path(
+            Path::new(r"C:\Users\Example\.codex\gateway-models.json"),
+            Path::new("c:/users/example/.CODEX/gateway-models.json")
+        ));
+    }
+
     #[test]
     fn app_server_detection_rejects_foreground_cli_and_shell_commands() {
         assert!(!is_codex_app_server_command(&strings(&[
@@ -212,6 +253,20 @@ mod tests {
             "/usr/bin/codexmanager-service",
             "app-server",
         ])));
+    }
+
+    #[test]
+    fn ancestor_collection_stops_at_the_root_and_breaks_cycles() {
+        let pid = |value| sysinfo::Pid::from_u32(value);
+        let parents = std::collections::HashMap::from([
+            (pid(40), pid(30)),
+            (pid(30), pid(20)),
+            (pid(20), pid(30)),
+        ]);
+        let ancestors =
+            collect_ancestor_pids(pid(40), |candidate| parents.get(&candidate).copied());
+
+        assert_eq!(ancestors, HashSet::from([pid(30), pid(20)]));
     }
 
     #[test]

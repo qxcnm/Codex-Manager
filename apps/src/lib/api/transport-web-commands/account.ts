@@ -10,6 +10,7 @@ export function createAccountWebCommands(postWebRpc: WebRpcCaller): Record<strin
     service_account_delete_by_statuses: { rpcMethod: "account/deleteByStatuses" },
     service_account_delete_unavailable_free: { rpcMethod: "account/deleteUnavailableFree" },
     service_account_update: { rpcMethod: "account/update" },
+    service_account_reset_warmup_update: { rpcMethod: "account/resetWarmup/update" },
     service_account_update_sorts: { rpcMethod: "account/updateSorts" },
     service_account_fetch_models: { rpcMethod: "account/fetchModels" },
     service_account_associate_models: { rpcMethod: "account/associateModels" },

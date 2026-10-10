@@ -28,7 +28,7 @@ import { useAppStore } from "@/lib/store/useAppStore";
 import { useI18n } from "@/lib/i18n/provider";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
 import {
-  getAllowedTopLevelRoutes,
+  getAllowedTopLevelRouteSections,
   getTopLevelRouteLabel,
   type TopLevelRoutePath,
 } from "@/lib/app-shell/top-level-routes";
@@ -36,7 +36,9 @@ import { resolveSessionRole, useAppSession } from "@/hooks/useAppSession";
 import {
   memo,
   useCallback,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type MouseEvent,
 } from "react";
@@ -84,19 +86,15 @@ const NavItem = memo(({
     aria-label={itemName}
     title={itemName}
     className={cn(
-      "group/nav relative flex min-h-10 items-center gap-3 overflow-hidden rounded-xl px-3.5 py-1.5 text-dense font-medium transition-[background-color,color] duration-300 ease-out hover:bg-primary/6 hover:text-primary xl:min-h-11 xl:gap-3.5 xl:rounded-xl xl:px-4 xl:py-2 [@media(max-height:800px)]:min-h-9 [@media(max-height:800px)]:gap-2.5 [@media(max-height:800px)]:px-3.5 [@media(max-height:800px)]:py-1",
+      "group/nav relative flex min-h-8 items-center gap-3 overflow-hidden rounded-md px-3 py-1 text-sm font-medium transition-colors hover:bg-primary/6 hover:text-foreground xl:min-h-9",
       !isSidebarOpen && "justify-center px-0",
       isActive
-        ? "min-h-12 bg-primary/10 text-primary shadow-none xl:min-h-[52px] [@media(max-height:800px)]:min-h-11"
-        : "text-muted-foreground",
+        ? "bg-primary/10 text-primary hover:text-primary"
+        : "text-foreground/75",
     )}
   >
-    {isActive ? (
-      <>
-        <span className="absolute inset-y-3 left-0 w-[3px] rounded-full bg-primary" />
-      </>
-    ) : null}
-    <item.icon className="h-[18px] w-[18px] shrink-0 xl:h-[22px] xl:w-[22px]" />
+    {isActive ? <span className="absolute inset-y-2 left-0 w-[3px] rounded-full bg-primary" /> : null}
+    <item.icon className="size-[18px] shrink-0" />
     {isSidebarOpen && (
       <span className="min-w-0 truncate">{itemName}</span>
     )}
@@ -121,6 +119,7 @@ NavItem.displayName = "NavItem";
 export function Sidebar() {
   const { t } = useI18n();
   const [logoFailed, setLogoFailed] = useState(false);
+  const navScrollRef = useRef<HTMLDivElement>(null);
   const isSidebarOpen = useAppStore((state) => state.isSidebarOpen);
   const currentShellPath = useAppStore((state) => state.currentShellPath);
   const toggleSidebar = useAppStore((state) => state.toggleSidebar);
@@ -161,46 +160,59 @@ export function Sidebar() {
   );
 
   const renderedItems = useMemo(() => {
-    const items: SidebarNavItem[] = getAllowedTopLevelRoutes(routeAccess).flatMap(
-      (route) => {
-        const item = NAV_ITEM_BY_PATH.get(route.path);
-        if (!item) return [];
-        return [{ href: route.path, icon: item.icon }];
-      },
-    );
+    const sections = getAllowedTopLevelRouteSections(routeAccess);
+    const showGroups = sections.length > 5;
 
-    return (
-      <div
-        className={cn(
-          "grid",
-          isDesktopRuntime
-            ? "gap-2 xl:gap-2.5 [@media(max-height:800px)]:gap-2"
-            : "gap-1.5 xl:gap-2 [@media(max-height:800px)]:gap-1",
-        )}
-      >
-        {items.map((item) => {
-          const itemName = t(getTopLevelRouteLabel(item.href, routeAccess));
-          return (
-            <NavItem
-              key={item.href}
-              item={item}
-              itemName={itemName}
-              isActive={item.href === currentShellPath}
-              isSidebarOpen={isSidebarOpen}
-              onNavigate={handleNavigate}
-            />
-          );
-        })}
-      </div>
-    );
-  }, [currentShellPath, handleNavigate, isDesktopRuntime, isSidebarOpen, routeAccess, t]);
+    return sections.map((section, index) => {
+      const items: SidebarNavItem[] = section.routes.flatMap((route) => {
+        const item = NAV_ITEM_BY_PATH.get(route.path);
+        return item ? [{ href: route.path, icon: item.icon }] : [];
+      });
+      if (items.length === 0) return null;
+
+      return (
+        <div
+          key={section.id}
+          className={cn(
+            "grid gap-0.5",
+            showGroups && index > 0 && "mt-1.5 border-t border-border/60 pt-1.5",
+          )}
+        >
+          {showGroups && isSidebarOpen && items.length > 1 ? (
+            <div className="px-3 text-[11px] font-semibold text-muted-foreground">
+              {t(section.label)}
+            </div>
+          ) : null}
+          {items.map((item) => {
+            const itemName = t(getTopLevelRouteLabel(item.href, routeAccess));
+            return (
+              <NavItem
+                key={item.href}
+                item={item}
+                itemName={itemName}
+                isActive={item.href === currentShellPath}
+                isSidebarOpen={isSidebarOpen}
+                onNavigate={handleNavigate}
+              />
+            );
+          })}
+        </div>
+      );
+    });
+  }, [currentShellPath, handleNavigate, isSidebarOpen, routeAccess, t]);
+
+  useEffect(() => {
+    navScrollRef.current
+      ?.querySelector('[aria-current="page"]')
+      ?.scrollIntoView({ block: "nearest" });
+  }, [renderedItems]);
 
   return (
     <div
       data-slot="app-sidebar"
       className={cn(
         "relative z-20 flex shrink-0 flex-col glass-sidebar",
-        isSidebarOpen ? "w-[220px] xl:w-[280px]" : "w-[60px] xl:w-[72px]"
+        isSidebarOpen ? "w-[220px] xl:w-[248px]" : "w-[60px] xl:w-[72px]"
       )}
     >
       <div
@@ -209,14 +221,14 @@ export function Sidebar() {
         className={cn(
           "pointer-events-none absolute inset-y-0 left-0 z-20 w-px bg-border/70 transition-transform duration-300 ease-out will-change-transform motion-reduce:transition-none",
           isSidebarOpen
-            ? "translate-x-[calc(220px-1px)] xl:translate-x-[calc(280px-1px)]"
+            ? "translate-x-[calc(220px-1px)] xl:translate-x-[calc(248px-1px)]"
             : "translate-x-[calc(60px-1px)] xl:translate-x-[calc(72px-1px)]",
         )}
       />
       <div
         className={cn(
-          "flex h-[68px] items-center border-b border-border/55 shrink-0 xl:h-[96px] [@media(max-height:800px)]:h-[68px]",
-          isSidebarOpen ? "px-4 xl:px-6" : "px-2 xl:px-2.5"
+          "flex h-[50px] shrink-0 items-center border-b border-border/55",
+          isSidebarOpen ? "px-3.5" : "px-2 xl:px-2.5"
         )}
       >
         <Button
@@ -226,11 +238,11 @@ export function Sidebar() {
           title={brandTitle}
           aria-label={brandTitle}
           className={cn(
-            "flex h-auto w-full items-center gap-2.5 overflow-hidden rounded-xl px-0 py-1.5 transition-colors duration-200 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 xl:gap-3.5 xl:py-2",
+            "flex h-auto w-full items-center gap-2.5 overflow-hidden rounded-md px-0 py-1.5 transition-colors hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
             isSidebarOpen ? "justify-start text-left" : "justify-center"
           )}
         >
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-[10px] border border-primary/20 bg-card text-primary shadow-[0_12px_24px_-18px_rgb(var(--primary-rgb)/0.8)] xl:h-12 xl:w-12 xl:rounded-xl [@media(max-height:800px)]:h-9 [@media(max-height:800px)]:w-9 [@media(max-height:800px)]:rounded-[10px]">
+          <div className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-md border border-primary/20 bg-card text-primary">
             {logoFailed ? (
               <span className="text-sm font-bold">CM</span>
             ) : (
@@ -246,8 +258,8 @@ export function Sidebar() {
           </div>
           {isSidebarOpen && (
             <div className="flex flex-col overflow-hidden animate-in fade-in slide-in-from-left-1 duration-200 motion-reduce:animate-none">
-              <span className="truncate text-lg font-semibold tracking-[-0.02em] text-foreground">CodexManager</span>
-              <span className="truncate text-compact text-muted-foreground xl:mt-0.5">
+              <span className="truncate text-sm font-semibold text-foreground">CodexManager</span>
+              <span className="truncate text-xs text-muted-foreground">
                 {t("账号池 · 路由管理")}
               </span>
             </div>
@@ -255,8 +267,12 @@ export function Sidebar() {
         </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto py-3 no-scrollbar xl:py-4 [@media(max-height:800px)]:py-2.5">
-        <nav className="px-2.5 xl:px-3.5">
+      <div
+        ref={navScrollRef}
+        data-slot="app-sidebar-scroll"
+        className="sidebar-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain py-2"
+      >
+        <nav className="px-2.5" aria-label="CodexManager">
           {renderedItems}
         </nav>
       </div>

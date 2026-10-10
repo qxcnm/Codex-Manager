@@ -30,7 +30,7 @@ export default function RootLayout({
 }>) {
   return (
     <html
-      lang="zh-CN"
+      lang="en"
       suppressHydrationWarning
       data-appearance={DEFAULT_APPEARANCE_PRESET}
     >

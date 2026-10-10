@@ -48,12 +48,12 @@ pub(crate) fn read_admin_usage_summary(
         .filter(|value| *value > range_start)
         .unwrap_or(today_end);
 
-    let raw_daily_usage = storage
+    let raw_daily_usage = crate::dashboard_storage::DashboardStorage::new(&storage)
         .summarize_request_token_stats_daily(range_start, range_end, time_bounds::DAY_SECONDS)
         .map_err(|err| format!("summarize daily usage failed: {err}"))?;
     let today_usage = match daily_usage_bucket(&raw_daily_usage, today_start, today_end) {
         Some(usage) => usage,
-        None => storage
+        None => crate::dashboard_storage::DashboardStorage::new(&storage)
             .summarize_request_token_stats_daily(today_start, today_end, time_bounds::DAY_SECONDS)
             .map_err(|err| format!("summarize today usage failed: {err}"))?
             .into_iter()
@@ -70,7 +70,7 @@ pub(crate) fn read_admin_usage_summary(
         let raw_series_usage = if series_bucket_seconds == time_bounds::DAY_SECONDS {
             raw_daily_usage.clone()
         } else {
-            storage
+            crate::dashboard_storage::DashboardStorage::new(&storage)
                 .summarize_request_token_stats_daily(range_start, range_end, series_bucket_seconds)
                 .map_err(|err| format!("summarize usage series failed: {err}"))?
         };
@@ -84,7 +84,7 @@ pub(crate) fn read_admin_usage_summary(
             range_start,
             range_end,
             series_bucket_seconds,
-            storage
+            crate::dashboard_storage::DashboardStorage::new(&storage)
                 .summarize_request_token_stats_by_model_timeline(
                     range_start,
                     range_end,
@@ -105,14 +105,14 @@ pub(crate) fn read_admin_usage_summary(
     let (users, openai_accounts, aggregate_apis) = if include_breakdowns {
         let users = build_dashboard_user_summaries(
             &storage,
-            storage
+            crate::dashboard_storage::DashboardStorage::new(&storage)
                 .summarize_request_token_stats_by_user_between_limited(
                     today_start,
                     today_end,
                     Some(ADMIN_TOP_USER_LIMIT),
                 )
                 .map_err(|err| format!("summarize today user usage failed: {err}"))?,
-            storage
+            crate::dashboard_storage::DashboardStorage::new(&storage)
                 .summarize_request_token_stats_by_user_between_limited(
                     range_start,
                     range_end,
@@ -120,7 +120,7 @@ pub(crate) fn read_admin_usage_summary(
                 )
                 .map_err(|err| format!("summarize range user usage failed: {err}"))?,
         )?;
-        let today_source_usage = storage
+        let today_source_usage = crate::dashboard_storage::DashboardStorage::new(&storage)
             .summarize_request_token_stats_by_sources_between_limited(
                 &["openai_account", "aggregate_api"],
                 today_start,
@@ -128,7 +128,7 @@ pub(crate) fn read_admin_usage_summary(
                 Some(ADMIN_TOP_SOURCE_LIMIT),
             )
             .map_err(|err| format!("summarize today source usage failed: {err}"))?;
-        let range_source_usage = storage
+        let range_source_usage = crate::dashboard_storage::DashboardStorage::new(&storage)
             .summarize_request_token_stats_by_sources_between_limited(
                 &["openai_account", "aggregate_api"],
                 range_start,
@@ -395,7 +395,7 @@ fn build_dashboard_user_summaries(
         return Ok(Vec::new());
     }
     let user_id_list = user_ids.iter().cloned().collect::<Vec<_>>();
-    let users = storage
+    let users = crate::dashboard_storage::DashboardStorage::new(&storage)
         .list_dashboard_app_user_summaries_for_ids(&user_id_list)
         .map_err(|err| format!("list dashboard app users failed: {err}"))?;
     let user_map = users
@@ -446,21 +446,23 @@ fn account_source_metadata(
     if source_ids.is_empty() {
         return Ok(HashMap::new());
     }
-    Ok(storage
-        .list_account_dashboard_source_metadata_for_ids(source_ids)
-        .map_err(|err| format!("list account dashboard metadata failed: {err}"))?
-        .into_iter()
-        .map(|account| {
-            (
-                account.id,
-                SourceMetadata {
-                    name: Some(account.label),
-                    status: Some(account.status),
-                    provider: Some("openai".to_string()),
-                },
-            )
-        })
-        .collect())
+    Ok(
+        crate::account::remote_storage::AccountStorage::new(&storage)
+            .list_account_dashboard_source_metadata_for_ids(source_ids)
+            .map_err(|err| format!("list account dashboard metadata failed: {err}"))?
+            .into_iter()
+            .map(|account| {
+                (
+                    account.id,
+                    SourceMetadata {
+                        name: Some(account.label),
+                        status: Some(account.status),
+                        provider: Some("openai".to_string()),
+                    },
+                )
+            })
+            .collect(),
+    )
 }
 
 fn aggregate_source_metadata(
@@ -470,28 +472,30 @@ fn aggregate_source_metadata(
     if source_ids.is_empty() {
         return Ok(HashMap::new());
     }
-    Ok(storage
-        .list_aggregate_api_dashboard_source_metadata_for_ids(source_ids)
-        .map_err(|err| format!("list aggregate API dashboard metadata failed: {err}"))?
-        .into_iter()
-        .map(|api| {
-            let name = api
-                .supplier_name
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or(api.url.as_str())
-                .to_string();
-            (
-                api.id,
-                SourceMetadata {
-                    name: Some(name),
-                    status: Some(api.status),
-                    provider: Some(api.provider_type),
-                },
-            )
-        })
-        .collect())
+    Ok(
+        crate::account::remote_storage::AccountStorage::new(&storage)
+            .list_aggregate_api_dashboard_source_metadata_for_ids(source_ids)
+            .map_err(|err| format!("list aggregate API dashboard metadata failed: {err}"))?
+            .into_iter()
+            .map(|api| {
+                let name = api
+                    .supplier_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or(api.url.as_str())
+                    .to_string();
+                (
+                    api.id,
+                    SourceMetadata {
+                        name: Some(name),
+                        status: Some(api.status),
+                        provider: Some(api.provider_type),
+                    },
+                )
+            })
+            .collect(),
+    )
 }
 
 fn dashboard_source_ids(
@@ -604,7 +608,7 @@ pub(crate) fn read_member_dashboard_summary(
         ));
     };
 
-    let key_ids = storage
+    let key_ids = crate::dashboard_storage::DashboardStorage::new(&storage)
         .list_api_key_ids_for_user(&user_id)
         .map_err(|err| format!("list api key ids for user failed: {err}"))?;
     let api_keys = apikey_list::read_api_keys_for_ids_with_storage(&storage, &key_ids)?;
@@ -717,7 +721,7 @@ fn read_member_wallet(
     storage: &codexmanager_core::storage::Storage,
     user_id: &str,
 ) -> Result<Option<MemberDashboardWalletResult>, String> {
-    let wallet = storage
+    let wallet = crate::dashboard_storage::DashboardStorage::new(&storage)
         .find_wallet_by_owner("user", user_id)
         .map_err(|err| format!("read app wallet failed: {err}"))?;
     Ok(wallet.map(|wallet| MemberDashboardWalletResult {
@@ -735,8 +739,7 @@ fn read_member_wallet(
 fn read_available_model_count(
     storage: &codexmanager_core::storage::Storage,
 ) -> Result<usize, String> {
-    storage
-        .list_api_models_v2()
+    crate::models_v2::api_models(storage)
         .map(|models| models.len())
         .map_err(|err| format!("count model catalog V2 failed: {err}"))
 }
@@ -771,7 +774,7 @@ fn read_usage_trend_7d(
 ) -> Result<MemberUsageTrend, String> {
     let day_span = (day_end - day_start).max(1);
     let range_start = day_start.saturating_sub((TREND_DAYS - 1) * day_span);
-    let items = storage
+    let items = crate::dashboard_storage::DashboardStorage::new(&storage)
         .summarize_request_token_stats_daily_for_user(user_id, range_start, day_end, day_span)
         .map_err(|err| format!("summarize member token trend failed: {err}"))?;
     let mut by_start = items
@@ -808,7 +811,7 @@ fn read_member_usage_breakdown(
     if key_ids.is_empty() {
         return Ok((Vec::new(), Vec::new()));
     }
-    let snapshot = storage
+    let snapshot = crate::dashboard_storage::DashboardStorage::new(&storage)
         .load_member_dashboard_usage_breakdown_snapshot(
             key_ids,
             day_start,

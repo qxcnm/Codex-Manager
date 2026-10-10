@@ -1,11 +1,15 @@
 use std::collections::HashMap;
 use std::io;
+use std::net::TcpListener;
+#[cfg(test)]
 use tiny_http::Header;
+#[cfg(test)]
 use tiny_http::Request;
+#[cfg(test)]
 use tiny_http::Response;
-use tiny_http::Server;
 use url::Url;
 
+#[cfg(test)]
 use crate::auth_tokens::complete_login;
 use crate::storage_helpers::open_storage;
 
@@ -45,6 +49,7 @@ pub(crate) fn resolve_redirect_uri() -> Option<String> {
 ///
 /// # 返回
 /// 返回函数执行结果
+#[cfg(test)]
 pub(crate) fn handle_login_request(request: Request) -> Result<(), String> {
     // 解析回调地址与参数
     let url = Url::parse(&format!("http://localhost{}", request.url()))
@@ -54,10 +59,8 @@ pub(crate) fn handle_login_request(request: Request) -> Result<(), String> {
         return Ok(());
     }
 
-    let params: HashMap<String, String> = url.query_pairs().into_owned().collect();
-
     // 完成登录流程并响应浏览器
-    let result = handle_login_callback_query(&params);
+    let result = process_login_callback_url(request.url());
     match result {
         Ok(_) => {
             let _ = request.respond(html_response(build_callback_success_page()));
@@ -68,6 +71,50 @@ pub(crate) fn handle_login_request(request: Request) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Process an OAuth callback URL without coupling the login flow to a
+/// particular HTTP server.  Both the dedicated OAuth listener and the service router use this
+/// function so callback validation and state handling remain identical.
+#[cfg(test)]
+pub(crate) fn process_login_callback_url(raw_url: &str) -> Result<(), String> {
+    let url = Url::parse(&format!("http://localhost{raw_url}"))
+        .map_err(|e| format!("invalid url: {e}"))?;
+    if url.path() != "/auth/callback" {
+        return Err("not found".to_string());
+    }
+    let params: HashMap<String, String> = url.query_pairs().into_owned().collect();
+    handle_login_callback_query(&params)
+}
+
+/// Native listeners await token exchange; only the legacy Storage preflight
+/// is scheduled as short bounded blocking work.
+pub(crate) async fn process_login_callback_url_async(raw_url: &str) -> Result<(), String> {
+    let url = Url::parse(&format!("http://localhost{raw_url}"))
+        .map_err(|e| format!("invalid url: {e}"))?;
+    if url.path() != "/auth/callback" {
+        return Err("not found".to_owned());
+    }
+    let params: HashMap<String, String> = url.query_pairs().into_owned().collect();
+    let (code, state) =
+        crate::auth_tokens::run_auth_storage(move || prepare_login_callback_query(&params)).await?;
+    crate::auth_tokens::complete_login_async(&state, &code)
+        .await
+        .map_err(|err| {
+            if err == "unknown login session" {
+                "State mismatch or expired login session.".to_owned()
+            } else {
+                err
+            }
+        })
+}
+
+pub(crate) fn callback_success_page() -> String {
+    build_callback_success_page()
+}
+
+pub(crate) fn callback_error_page(err: &str) -> String {
+    build_callback_error_page(err)
 }
 
 /// 函数 `handle_login_callback_query`
@@ -81,7 +128,15 @@ pub(crate) fn handle_login_request(request: Request) -> Result<(), String> {
 ///
 /// # 返回
 /// 返回函数执行结果
+#[cfg(test)]
 fn handle_login_callback_query(params: &HashMap<String, String>) -> Result<(), String> {
+    let (code, state) = prepare_login_callback_query(params)?;
+    handle_login_callback_params(&code, &state)
+}
+
+fn prepare_login_callback_query(
+    params: &HashMap<String, String>,
+) -> Result<(String, String), String> {
     let state = params
         .get("state")
         .map(String::as_str)
@@ -117,7 +172,7 @@ fn handle_login_callback_query(params: &HashMap<String, String>) -> Result<(), S
             update_login_session_failed(Some(state), &message);
             message
         })?;
-    handle_login_callback_params(code, state)
+    Ok((code.to_owned(), state.to_owned()))
 }
 
 /// 函数 `handle_login_callback_params`
@@ -131,6 +186,7 @@ fn handle_login_callback_query(params: &HashMap<String, String>) -> Result<(), S
 ///
 /// # 返回
 /// 返回函数执行结果
+#[cfg(test)]
 pub(crate) fn handle_login_callback_params(code: &str, state: &str) -> Result<(), String> {
     complete_login(state, code).map_err(|err| {
         if err == "unknown login session" {
@@ -156,6 +212,7 @@ fn ensure_login_session_exists(state: &str) -> Result<(), String> {
     let Some(storage) = open_storage() else {
         return Err("storage unavailable".to_string());
     };
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     match storage
         .get_login_session(state)
         .map_err(|e| e.to_string())?
@@ -184,6 +241,7 @@ fn update_login_session_failed(state: Option<&str>, error: &str) {
     let Some(storage) = open_storage() else {
         return;
     };
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let _ = storage.fail_pending_login_session(state, Some(error));
 }
 
@@ -239,8 +297,24 @@ pub(crate) struct LoginServerInfo {
     port: u16,
 }
 
-static LOGIN_SERVER_STATE: std::sync::OnceLock<std::sync::Mutex<Option<LoginServerInfo>>> =
+struct LoginServerState {
+    info: LoginServerInfo,
+    task: tokio::task::JoinHandle<()>,
+}
+
+static LOGIN_SERVER_STATE: std::sync::OnceLock<std::sync::Mutex<Option<LoginServerState>>> =
     std::sync::OnceLock::new();
+
+pub(crate) async fn drain_login_server() {
+    let task = LOGIN_SERVER_STATE.get().and_then(|cell| {
+        crate::lock_utils::lock_recover(cell, "login_server_state")
+            .take()
+            .map(|state| state.task)
+    });
+    if let Some(task) = task {
+        let _ = task.await;
+    }
+}
 
 /// 函数 `ensure_login_server`
 ///
@@ -273,14 +347,31 @@ pub(crate) fn ensure_login_server() -> Result<LoginServerInfo, String> {
 fn ensure_login_server_with_addr(addr: &str) -> Result<LoginServerInfo, String> {
     let cell = LOGIN_SERVER_STATE.get_or_init(|| std::sync::Mutex::new(None));
     let mut guard = crate::lock_utils::lock_recover(cell, "login_server_state");
-    if let Some(info) = guard.as_ref() {
-        return Ok(info.clone());
+    if crate::shutdown_requested() {
+        return Err("OAuth listener rejected during shutdown".to_owned());
+    }
+    if let Some(state) = guard.as_ref().filter(|state| !state.task.is_finished()) {
+        return Ok(state.info.clone());
     }
     let (servers, info) = bind_login_server(addr)?;
-    for server in servers {
-        let _ = std::thread::spawn(move || run_login_server(server));
+    let runtime = crate::runtime::service_runtime::process_runtime()?;
+    for server in &servers {
+        server
+            .set_nonblocking(true)
+            .map_err(|error| error.to_string())?;
     }
-    *guard = Some(info.clone());
+    let task = runtime.spawn(async move {
+        let tasks = servers.into_iter().map(run_login_server);
+        for result in futures_util::future::join_all(tasks).await {
+            if result.is_err() {
+                log::warn!("event=oauth_listener_failed");
+            }
+        }
+    });
+    *guard = Some(LoginServerState {
+        info: info.clone(),
+        task,
+    });
     Ok(info)
 }
 
@@ -331,12 +422,11 @@ fn allow_non_loopback_login_addr() -> bool {
 ///
 /// # 返回
 /// 返回函数执行结果
-fn server_port(server: &Server) -> Result<u16, String> {
+fn server_port(server: &TcpListener) -> Result<u16, String> {
     server
-        .server_addr()
-        .to_ip()
-        .map(|a| a.port())
-        .ok_or_else(|| "login server missing port".to_string())
+        .local_addr()
+        .map(|address| address.port())
+        .map_err(|error| error.to_string())
 }
 
 /// 函数 `try_bind_login_server`
@@ -355,18 +445,18 @@ fn server_port(server: &Server) -> Result<u16, String> {
 /// 返回函数执行结果
 fn try_bind_login_server(
     addr: &str,
-    servers: &mut Vec<Server>,
+    servers: &mut Vec<TcpListener>,
     addr_in_use: &mut bool,
     last_err: &mut Option<String>,
 ) -> Result<Option<u16>, String> {
-    match Server::http(addr) {
+    match TcpListener::bind(addr) {
         Ok(server) => {
             let port = server_port(&server)?;
             servers.push(server);
             Ok(Some(port))
         }
         Err(err) => {
-            *addr_in_use |= is_addr_in_use(err.as_ref());
+            *addr_in_use |= is_addr_in_use(&err);
             if last_err.is_none() {
                 *last_err = Some(err.to_string());
             }
@@ -386,10 +476,10 @@ fn try_bind_login_server(
 ///
 /// # 返回
 /// 返回函数执行结果
-fn bind_localhost_login_servers(port: u16) -> Result<(Vec<Server>, LoginServerInfo), String> {
+fn bind_localhost_login_servers(port: u16) -> Result<(Vec<TcpListener>, LoginServerInfo), String> {
     let mut addr_in_use = false;
     let mut last_err: Option<String> = None;
-    let mut servers: Vec<Server> = Vec::new();
+    let mut servers: Vec<TcpListener> = Vec::new();
     let mut selected_port = port;
 
     if port == 0 {
@@ -462,7 +552,7 @@ fn bind_localhost_login_servers(port: u16) -> Result<(Vec<Server>, LoginServerIn
 ///
 /// # 返回
 /// 返回函数执行结果
-fn bind_login_server(addr: &str) -> Result<(Vec<Server>, LoginServerInfo), String> {
+fn bind_login_server(addr: &str) -> Result<(Vec<TcpListener>, LoginServerInfo), String> {
     if let Ok(url) = Url::parse(&format!("http://{addr}")) {
         let host = url.host_str().unwrap_or("localhost");
         let port = url.port_or_known_default().unwrap_or(1455);
@@ -476,7 +566,7 @@ fn bind_login_server(addr: &str) -> Result<(Vec<Server>, LoginServerInfo), Strin
         }
     }
 
-    let server = Server::http(addr).map_err(|e| e.to_string())?;
+    let server = TcpListener::bind(addr).map_err(|e| e.to_string())?;
     let port = server_port(&server)?;
     Ok((vec![server], LoginServerInfo { port }))
 }
@@ -509,12 +599,26 @@ fn is_addr_in_use(err: &(dyn std::error::Error + 'static)) -> bool {
 ///
 /// # 返回
 /// 无
-fn run_login_server(server: Server) {
-    for request in server.incoming_requests() {
-        if let Err(err) = handle_login_request(request) {
-            log::warn!("login request error: {err}");
-        }
-    }
+async fn run_login_server(server: TcpListener) -> io::Result<()> {
+    let listener = tokio::net::TcpListener::from_std(server)?;
+    let app = axum::Router::new()
+        .route(
+            "/auth/callback",
+            axum::routing::get(crate::http::callback_endpoint::handle_callback_http),
+        )
+        .layer(axum::middleware::from_fn(
+            crate::http::middleware::request_timeout,
+        ))
+        .layer(axum::middleware::from_fn(
+            crate::http::middleware::request_id,
+        ));
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            while !crate::shutdown_requested() {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await
 }
 
 /// 函数 `html_response`
@@ -528,6 +632,7 @@ fn run_login_server(server: Server) {
 ///
 /// # 返回
 /// 返回函数执行结果
+#[cfg(test)]
 fn html_response(body: String) -> Response<std::io::Cursor<Vec<u8>>> {
     let mut response = Response::from_string(body);
     if let Ok(header) = Header::from_bytes(
@@ -637,3 +742,106 @@ fn build_callback_error_page(err: &str) -> String {
 #[cfg(test)]
 #[path = "../../tests/auth/auth_callback_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod native_listener_tests {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shared_runtime_oauth_listener_drains_and_rebinds_after_shutdown() {
+        let _guard = crate::test_env_guard();
+        crate::clear_shutdown_flag();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let first = super::ensure_login_server_with_addr("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", first.port);
+        for iteration in 0..2 {
+            if iteration == 1 {
+                let restarted = super::ensure_login_server_with_addr(&addr).unwrap();
+                assert_eq!(restarted.port, first.port);
+            }
+            assert_eq!(
+                client
+                    .get(format!("http://{addr}/unknown"))
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                reqwest::StatusCode::NOT_FOUND
+            );
+            crate::request_shutdown("");
+            assert!(super::ensure_login_server_with_addr(&addr).is_err());
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                super::drain_login_server(),
+            )
+            .await
+            .unwrap();
+            assert!(
+                std::net::TcpStream::connect(&addr).is_err(),
+                "shutdown must close the callback port"
+            );
+            crate::clear_shutdown_flag();
+        }
+    }
+
+    #[tokio::test]
+    async fn oauth_listener_uses_axum_for_callback_method_and_error_responses() {
+        let (listeners, info) =
+            super::bind_login_server("localhost:0").expect("bind oauth listeners");
+        assert_ne!(info.port, 0);
+        let mut tasks = Vec::new();
+        let mut addresses = Vec::new();
+        for listener in listeners {
+            addresses.push(listener.local_addr().unwrap());
+            listener.set_nonblocking(true).unwrap();
+            tasks.push(tokio::spawn(super::run_login_server(listener)));
+        }
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        for address in addresses {
+            assert_eq!(
+                address.port(),
+                info.port,
+                "dual-stack listeners share one redirect port"
+            );
+            let response = client
+                .get(format!("http://{address}/auth/callback?code=fixture"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                reqwest::StatusCode::INTERNAL_SERVER_ERROR
+            );
+            assert!(response.headers().contains_key("x-request-id"));
+            assert!(response.headers()["content-type"]
+                .to_str()
+                .unwrap()
+                .starts_with("text/html"));
+            assert!(response
+                .text()
+                .await
+                .unwrap()
+                .contains("Missing login state"));
+            assert_eq!(
+                client
+                    .post(format!("http://{address}/auth/callback"))
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                reqwest::StatusCode::METHOD_NOT_ALLOWED
+            );
+            assert_eq!(
+                client
+                    .get(format!("http://{address}/unknown"))
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                reqwest::StatusCode::NOT_FOUND
+            );
+        }
+        for task in tasks {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+}

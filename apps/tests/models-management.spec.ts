@@ -16,7 +16,16 @@ const SETTINGS_SNAPSHOT = {
   routeStrategy: "ordered",
   routeStrategyOptions: ["ordered", "balanced"],
   freeAccountMaxModel: "auto",
-  freeAccountMaxModelOptions: ["auto", "gpt-5"],
+  freeAccountMaxModelOptions: [
+    "auto",
+    "gpt-6-astra",
+    "gpt-6-sol",
+    "gpt-6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+  ],
   modelForwardRules: "",
   accountMaxInflight: 1,
   gatewayOriginator: "codex-cli",
@@ -75,6 +84,14 @@ type MockState = {
   batchStateUpdateDelayMs: number;
   deletes: string[];
   importCalls: Array<{ method: string; params: JsonObject }>;
+  applyModelCalls: JsonObject[];
+  applyModelError: string | null;
+  applyModelDelayMs: number;
+  managedCatalogActive: boolean;
+  priceSyncCalls: JsonObject[];
+  priceSyncError: string | null;
+  priceSyncDelayMs: number;
+  priceSyncFailedSources: string[];
   listCalls: number;
   listError: string | null;
   listDelayMs: number;
@@ -84,16 +101,48 @@ type MockState = {
   deleteErrors: Record<string, string>;
 };
 
+const IMAGE_BUILTIN_SLUGS = new Set([
+  "gpt-image-2",
+  "gpt-image-2.5-sunburst",
+  "gpt-image-2.5-flare",
+]);
+
+const IMAGE_25_SLUGS = [
+  "gpt-image-2.5-sunburst",
+  "gpt-image-2.5-flare",
+] as const;
+
+const LONG_CONTEXT_SLUGS = new Set([
+  "gpt-6-astra",
+  "gpt-6-sol",
+  "gpt-6-luna",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  "gpt-5.5",
+]);
+
+const CACHE_WRITE_SLUGS = new Set([
+  "gpt-6-astra",
+  "gpt-6-sol",
+  "gpt-6-luna",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+]);
+
 const PRICED_MODELS: Record<string, [number, number, number]> = {
+  "gpt-6-astra": [10_000_000, 1_000_000, 50_000_000],
+  "gpt-6-sol": [2_000_000, 200_000, 10_000_000],
+  "gpt-6-luna": [100_000, 10_000, 500_000],
   "gpt-5.6-sol": [5_000_000, 500_000, 30_000_000],
   "gpt-5.6-terra": [2_000_000, 200_000, 12_000_000],
   "gpt-5.6-luna": [200_000, 20_000, 1_200_000],
   "gpt-5.5": [5_000_000, 500_000, 30_000_000],
-  "gpt-5.4": [2_500_000, 250_000, 15_000_000],
-  "gpt-5.4-mini": [750_000, 75_000, 4_500_000],
-  "gpt-5.2": [1_750_000, 175_000, 14_000_000],
   "gpt-image-2": [8_000_000, 2_000_000, 30_000_000],
 };
+
+const VISIBLE_PRICED_MODELS = [...Object.keys(PRICED_MODELS), ...IMAGE_25_SLUGS];
 
 function builtinModel(
   slug: string,
@@ -101,25 +150,63 @@ function builtinModel(
   visibility: "list" | "hide" = "list",
 ): JsonObject {
   const rates = PRICED_MODELS[slug] ?? null;
-  const isImageModel = slug === "gpt-image-2";
+  const isImageModel = IMAGE_BUILTIN_SLUGS.has(slug);
+  const hasCacheWrite = CACHE_WRITE_SLUGS.has(slug);
+  const hasLongContext = LONG_CONTEXT_SLUGS.has(slug);
+  const displayNames: Record<string, string> = {
+    "gpt-6-astra": "GPT-6-Astra",
+    "gpt-6-sol": "GPT-6-Sol",
+    "gpt-6-luna": "GPT-6-Luna",
+    "gpt-5.6-sol": "GPT-5.6-Sol",
+    "gpt-5.6-terra": "GPT-5.6-Terra",
+    "gpt-5.6-luna": "GPT-5.6-Luna",
+    "gpt-5.5": "GPT-5.5",
+    "codex-auto-review": "Codex Auto Review",
+  };
+  const imageDisplayNames: Record<string, string> = {
+    "gpt-image-2": "GPT Image 2",
+    "gpt-image-2.5-sunburst": "GPT Image 2.5 Sunburst",
+    "gpt-image-2.5-flare": "GPT Image 2.5 Flare",
+  };
+  const descriptions: Record<string, string> = {
+    "gpt-6-astra": "Our most capable model for complex, demanding work.",
+    "gpt-6-sol": "Latest frontier agentic coding model.",
+    "gpt-6-luna": "Fast and affordable agentic coding model.",
+    "gpt-5.6-sol": "Older coding model for complex work.",
+    "gpt-5.6-terra": "Older balanced model for straightforward work.",
+    "gpt-5.6-luna": "Older fast and efficient model.",
+    "gpt-5.5": "Frontier model for complex coding, research, and real-world work.",
+    "gpt-image-2": "State-of-the-art image generation and editing model.",
+    "gpt-image-2.5-sunburst":
+      "Advanced image generation with high instruction following and image fidelity.",
+    "gpt-image-2.5-flare": "Fast, high-quality everyday image generation.",
+  };
   const price = rates
     ? {
         priceStatus: "official",
         priceSource: isImageModel
           ? "https://developers.openai.com/api/docs/pricing#image-generation"
-          : slug.startsWith("gpt-5.6")
-            ? "https://developers.openai.com/api/docs/models/compare"
-            : "seed-2026-05-11",
+          : slug === "gpt-6-astra"
+            ? "https://developers.openai.com/api/docs/models/gpt-6-astra"
+            : slug === "gpt-6-sol" || slug === "gpt-6-luna"
+              ? "https://developers.openai.com/api/docs/pricing"
+              : slug.startsWith("gpt-5.6")
+                ? "https://developers.openai.com/api/docs/models/compare"
+                : "verified_seed_2026-05-11",
         inputMicrousdPer1m: rates[0],
         cachedInputMicrousdPer1m: rates[1],
-        cacheWriteMicrousdPer1m: slug.startsWith("gpt-5.6")
+        cacheWriteMicrousdPer1m: hasCacheWrite
           ? rates[0] * 1.25
           : null,
         outputMicrousdPer1m: rates[2],
       }
     : {
         priceStatus: "missing",
-        priceSource: null,
+        priceSource: IMAGE_25_SLUGS.includes(
+          slug as (typeof IMAGE_25_SLUGS)[number],
+        )
+          ? `https://developers.openai.com/api/docs/models/${slug}`
+          : null,
         inputMicrousdPer1m: null,
         cachedInputMicrousdPer1m: null,
         cacheWriteMicrousdPer1m: null,
@@ -128,12 +215,11 @@ function builtinModel(
   return {
     id: `builtin:${slug}`,
     slug,
-    displayName: isImageModel ? "GPT Image 2" : slug.toUpperCase(),
-    description: isImageModel
-      ? "State-of-the-art image generation and editing model."
-      : `${slug} builtin`,
+    displayName:
+      imageDisplayNames[slug] ?? displayNames[slug] ?? slug.toUpperCase(),
+    description: descriptions[slug] ?? `${slug} builtin`,
     provider: "openai",
-    family: isImageModel ? "gpt-image" : "gpt-5",
+    family: isImageModel ? "gpt-image" : slug.startsWith("gpt-6-") ? "gpt-6" : "gpt-5",
     category: isImageModel ? "image" : "reasoning",
     tags: isImageModel ? ["image-generation", "image-editing"] : ["coding"],
     origin: "builtin",
@@ -141,17 +227,23 @@ function builtinModel(
     supportedInApi: true,
     visibility,
     sortOrder,
-    contextWindow: isImageModel
-      ? null
-      : slug.startsWith("gpt-5.6")
-        ? 372_000
-        : 272_000,
+    contextWindow: isImageModel ? null : 272_000,
     maxContextWindow: isImageModel
       ? null
-      : slug === "gpt-5.4"
-        ? 1_000_000
-        : 272_000,
-    defaultReasoningEffort: isImageModel ? null : "medium",
+      : slug === "gpt-6-astra" ||
+          slug.startsWith("gpt-6-") ||
+          slug.startsWith("gpt-5.6")
+        ? 872_000
+        : slug === "codex-auto-review"
+          ? 1_000_000
+          : 272_000,
+    defaultReasoningEffort: isImageModel
+      ? null
+      : slug === "gpt-6-astra" || slug === "gpt-5.6-sol"
+        ? "low"
+        : slug === "gpt-6-luna"
+          ? "high"
+          : "medium",
     capabilities: isImageModel
       ? {
           reasoningEfforts: [],
@@ -163,21 +255,56 @@ function builtinModel(
             "/v1/images/generations",
             "/v1/images/edits",
           ],
-          snapshot: "gpt-image-2-2026-04-21",
-          supportsTextGeneration: false,
-          supportsImageGeneration: true,
-          supportsImageEditing: true,
-          supportsTransparentBackground: false,
-        }
-      : {
-          reasoningEfforts: ["low", "medium", "high", "xhigh"],
-          inputModalities: ["text", "image"],
-          supportsParallelToolCalls: true,
-        },
+            snapshot:
+              slug === "gpt-image-2"
+                ? "gpt-image-2-2026-04-21"
+                : `${slug}-2026-09-08`,
+            supportsTextGeneration: false,
+            supportsImageGeneration: true,
+            supportsImageEditing: true,
+            supportsTransparentBackground: slug !== "gpt-image-2",
+          }
+        : {
+            reasoningEfforts:
+              slug === "gpt-6-astra" ||
+              slug === "gpt-6-sol" ||
+              slug.startsWith("gpt-5.6")
+                ? [
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max",
+                    ...(slug === "gpt-6-astra" ||
+                    slug === "gpt-6-sol" ||
+                    slug !== "gpt-5.6-luna"
+                      ? ["ultra"]
+                      : []),
+                  ]
+                : [
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    ...(slug.startsWith("gpt-6-") ? ["max"] : []),
+                  ],
+            serviceTiers:
+              slug === "gpt-6-sol" || slug === "gpt-5.6-sol"
+                ? ["priority", "ultrafast"]
+                : slug === "codex-auto-review"
+                  ? []
+                  : ["priority"],
+            additionalSpeedTiers:
+              slug === "codex-auto-review"
+                ? []
+                : ["fast"],
+            inputModalities: ["text", "image"],
+            supportsParallelToolCalls: true,
+          },
     instructionsMode: "passthrough",
     instructionsText: null,
     fastPolicy: "passthrough",
-    builtinRevision: isImageModel ? 7 : slug.startsWith("gpt-5.6") ? 7 : 2,
+    builtinRevision: 9,
     userEdited: false,
     price,
     priceTiers: rates
@@ -186,18 +313,20 @@ function builtinModel(
             minInputTokens: 0,
             inputMicrousdPer1m: rates[0],
             cachedInputMicrousdPer1m: rates[1],
-            cacheWriteMicrousdPer1m: slug.startsWith("gpt-5.6")
+            cacheWriteMicrousdPer1m: hasCacheWrite
               ? rates[0] * 1.25
               : null,
             outputMicrousdPer1m: rates[2],
           },
-          ...(slug.startsWith("gpt-5.6")
+          ...(hasLongContext
             ? [
                 {
-                  minInputTokens: 272_001,
+                  minInputTokens: slug === "gpt-5.5" ? 272_000 : 272_001,
                   inputMicrousdPer1m: rates[0] * 2,
                   cachedInputMicrousdPer1m: rates[1] * 2,
-                  cacheWriteMicrousdPer1m: rates[0] * 2.5,
+                  cacheWriteMicrousdPer1m: hasCacheWrite
+                    ? rates[0] * 2.5
+                    : null,
                   outputMicrousdPer1m: (rates[2] * 3) / 2,
                 },
               ]
@@ -223,15 +352,17 @@ function builtinModel(
 
 function freshModels(): JsonObject[] {
   return [
-    builtinModel("gpt-5.6-sol", 1),
-    builtinModel("gpt-5.6-terra", 2),
-    builtinModel("gpt-5.6-luna", 3),
+    builtinModel("gpt-6-astra", 1),
+    builtinModel("gpt-6-sol", 2),
+    builtinModel("gpt-6-luna", 3),
+    builtinModel("gpt-5.6-sol", 4),
+    builtinModel("gpt-5.6-terra", 7),
+    builtinModel("gpt-5.6-luna", 8),
     builtinModel("gpt-5.5", 7),
-    builtinModel("gpt-5.4", 16),
-    builtinModel("gpt-5.4-mini", 23),
-    builtinModel("gpt-5.2", 29),
-    builtinModel("gpt-image-2", 44),
     builtinModel("codex-auto-review", 43, "hide"),
+    builtinModel("gpt-image-2", 44),
+    builtinModel("gpt-image-2.5-sunburst", 45),
+    builtinModel("gpt-image-2.5-flare", 46),
   ];
 }
 
@@ -286,6 +417,14 @@ async function installMockRuntime(page: Page): Promise<MockState> {
     batchStateUpdateDelayMs: 0,
     deletes: [],
     importCalls: [],
+    applyModelCalls: [],
+    applyModelError: null,
+    applyModelDelayMs: 0,
+    managedCatalogActive: false,
+    priceSyncCalls: [],
+    priceSyncError: null,
+    priceSyncDelayMs: 0,
+    priceSyncFailedSources: [],
     listCalls: 0,
     listError: null,
     listDelayMs: 0,
@@ -365,8 +504,10 @@ async function installMockRuntime(page: Page): Promise<MockState> {
         codexHome: "/tmp/.codex",
         mode: "gateway",
         selectedAccountId: null,
-        selectedApiKeyId: "key-hybrid",
+        selectedApiKeyId: null,
         gatewayBaseUrl: "http://localhost:48760/v1",
+        profileWritable: true,
+        managedCatalogActive: state.managedCatalogActive,
         warnings: [],
       });
       return;
@@ -374,17 +515,96 @@ async function installMockRuntime(page: Page): Promise<MockState> {
     if (method === "codexProfile/listCandidates") {
       await ok({
         accounts: [],
-        apiKeys: [
-          {
-            id: "key-hybrid",
-            name: "Hybrid gateway",
-            status: "active",
-            modelSlug: null,
-            reasoningEffort: null,
-            rotationStrategy: "hybrid_rotation",
-            catalogSource: "managed",
-          },
+        apiKeys: [],
+      });
+      return;
+    }
+    if (method === "codexProfile/applyModels") {
+      state.applyModelCalls.push(structuredClone(params));
+      if (state.applyModelDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, state.applyModelDelayMs));
+      }
+      if (state.applyModelError) {
+        await route.fulfill({
+          contentType: "application/json; charset=utf-8",
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32000, message: state.applyModelError },
+          }),
+        });
+        return;
+      }
+      state.managedCatalogActive = true;
+      await ok({
+        codexHome: "/tmp/.codex",
+        mode: "gateway",
+        selectedAccountId: null,
+        selectedApiKeyId: null,
+        gatewayBaseUrl: "http://localhost:48760/v1",
+        supportsWebsockets: false,
+        profileWritable: true,
+        managedCatalogActive: true,
+        warnings: [],
+        runtimeReload: {
+          requested: false,
+          matchedProcessCount: 0,
+          signaledProcessCount: 0,
+          warnings: [],
+          message: "reload not requested",
+        },
+      });
+      return;
+    }
+    if (method === "apikey/managedModelPriceSyncV2") {
+      state.priceSyncCalls.push(structuredClone(params));
+      if (state.priceSyncDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, state.priceSyncDelayMs));
+      }
+      if (state.priceSyncError) {
+        await route.fulfill({
+          contentType: "application/json; charset=utf-8",
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32000, message: state.priceSyncError },
+          }),
+        });
+        return;
+      }
+      const source = (name: string, url: string) => {
+        const failed = state.priceSyncFailedSources.includes(name);
+        return {
+          name,
+          url,
+          status: failed ? "error" : "ok",
+          providers: failed ? 0 : 4,
+          modelsSeen: failed ? 0 : 30,
+          pricedModels: failed ? 0 : 20,
+          skippedNonUsd: 0,
+          skippedMissingTextPrice: 1,
+          skippedSubscription: 0,
+          skippedTiers: 0,
+          ...(failed ? { error: `${name} unavailable` } : {}),
+        };
+      };
+      const selectedSlugs = Array.isArray(params.modelSlugs)
+        ? params.modelSlugs.map((slug) => String(slug))
+        : [];
+      const hasSelection = selectedSlugs.length > 0;
+      await ok({
+        sources: [
+          source("basellm", "https://basellm.github.io/llm-metadata/api/all.json"),
+          source("models.dev", "https://models.dev/api.json"),
         ],
+        catalogPrices: 40,
+        scannedModels: hasSelection ? selectedSlugs.length : state.models.length,
+        updated: hasSelection ? selectedSlugs.length : 2,
+        unchanged: hasSelection ? 0 : 3,
+        preservedCustom: hasSelection ? 0 : 1,
+        unmatched: hasSelection ? 0 : 4,
+        ambiguous: hasSelection ? 0 : 5,
+        updatedSlugs: hasSelection ? selectedSlugs : ["gpt-6-sol", "gpt-6-luna"],
       });
       return;
     }
@@ -620,21 +840,81 @@ test("模型与路由页面说明当前 Codex 是否使用本地目录", async (
     page.getByRole("main").getByRole("heading", { name: "模型与路由" }),
   ).toBeVisible();
   await expect(page.getByText("当前 Codex 模型来源", { exact: true })).toBeVisible();
-  await expect(page.getByText("混合路由", { exact: true })).toBeVisible();
+  const catalogFact = page.getByText("模型来源", { exact: true }).locator("..");
   await expect(
-    page.getByText("CodexManager 本地目录", { exact: true }),
+    catalogFact.getByText("无法确认", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText("当前平台密钥使用本地网关目录；下方模型、路由和可见性设置会影响当前 Codex。", {
+    page.getByText("当前 Codex 尚未应用本地模型目录；点击应用模型后，模型列表将使用下方目录。", {
       exact: true,
     }),
   ).toBeVisible();
 });
 
-test("重新读取会更新目录并明确反馈成功与失败", async ({ page }) => {
+test("模型页头操作在桌面和窄窗口中保持可见且不重叠", async ({ page }, testInfo) => {
+  await installMockRuntime(page);
+  const actionNames = [
+    "同步价格",
+    "应用模型",
+    "导入到本地网关目录",
+    "新增网关自定义模型",
+  ];
+
+  for (const viewport of [
+    { name: "desktop", width: 1440, height: 900 },
+    { name: "narrow", width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/models/");
+    const heading = page.getByRole("main").getByRole("heading", { name: "模型与路由" });
+    await expect(heading).toBeVisible();
+    const header = heading.locator("xpath=ancestor::section[1]");
+    const headerBox = await header.boundingBox();
+    expect(headerBox).not.toBeNull();
+
+    const actionBoxes: Array<{ name: string; box: Rect }> = [];
+    for (const name of actionNames) {
+      const button = page.getByRole("button", { name, exact: true });
+      await expect(button).toBeVisible();
+      const box = await button.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(headerBox!.x - 1);
+      expect(box!.y).toBeGreaterThanOrEqual(headerBox!.y - 1);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(headerBox!.x + headerBox!.width + 1);
+      expect(box!.y + box!.height).toBeLessThanOrEqual(headerBox!.y + headerBox!.height + 1);
+      actionBoxes.push({ name, box: box! });
+    }
+
+    for (let left = 0; left < actionBoxes.length; left += 1) {
+      for (let right = left + 1; right < actionBoxes.length; right += 1) {
+        const a = actionBoxes[left];
+        const b = actionBoxes[right];
+        const overlaps =
+          a.box.x < b.box.x + b.box.width &&
+          a.box.x + a.box.width > b.box.x &&
+          a.box.y < b.box.y + b.box.height &&
+          a.box.y + a.box.height > b.box.y;
+        expect(overlaps, `${a.name} overlaps ${b.name} at ${viewport.name}`).toBe(false);
+      }
+    }
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(`models-header-${viewport.name}.png`),
+      animations: "disabled",
+    });
+  }
+});
+
+test("应用模型只写入勾选项，支持图片模型且不会重载 Codex 后台", async ({ page }) => {
   const pageErrors: Error[] = [];
   page.on("pageerror", (error) => pageErrors.push(error));
   const state = await installMockRuntime(page);
+  const imageModel = state.models.find((model) => model.slug === "gpt-image-2");
+  expect(imageModel).toBeDefined();
+  imageModel!.enabled = false;
+  imageModel!.supportedInApi = false;
 
   await page.goto("/models/");
   await expect(
@@ -643,34 +923,191 @@ test("重新读取会更新目录并明确反馈成功与失败", async ({ page 
   await expect(page.getByText("gpt-5.6-sol", { exact: true })).toBeVisible();
 
   const callsBeforeReload = state.listCalls;
-  state.models.push(importedModel());
-  await page.getByRole("button", { name: "刷新本地目录" }).click();
-  await expect(page.getByText("imported-local", { exact: true })).toBeVisible();
-  await expect(page.getByText("本地网关模型目录已刷新", { exact: true })).toBeVisible();
+  state.applyModelDelayMs = 200;
+  const applyModelsButton = page.getByRole("button", { name: "应用模型" });
+  await expect(applyModelsButton).toBeEnabled();
+
+  await page.getByLabel("选择模型 gpt-5.6-sol").click();
+  await page.getByLabel("选择模型 gpt-image-2", { exact: true }).click();
+  const applySelectedModelsButton = page.getByRole("button", {
+    name: "应用模型 (2)",
+  });
+  await expect(applySelectedModelsButton).toBeEnabled();
+  await applySelectedModelsButton.click();
+  await expect(page.getByRole("button", { name: "正在应用..." })).toBeDisabled();
+  await expect(
+    page.getByLabel("选择模型 gpt-image-2", { exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText("已将 2 个所选模型写入 Codex 配置；关闭并重新打开 Codex 后会显示最新模型", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("CodexManager 本地目录", { exact: true }),
+  ).toBeVisible();
   const refreshToast = page.locator("[data-sonner-toast]", {
-    hasText: "本地网关模型目录已刷新",
+    hasText: "已将 2 个所选模型写入 Codex 配置；关闭并重新打开 Codex 后会显示最新模型",
   });
   await expect(refreshToast).toHaveCSS("pointer-events", "none");
   await expect(refreshToast.locator("[data-close-button]")).toHaveCSS(
     "pointer-events",
     "auto",
   );
+  expect(state.applyModelCalls).toEqual([
+    {
+      addr: "localhost:48760",
+      codexHome: "/tmp/.codex",
+      modelSlugs: ["gpt-5.6-sol", "gpt-image-2"],
+      reloadAfterSwitch: false,
+    },
+  ]);
   expect(state.listCalls).toBeGreaterThan(callsBeforeReload);
 
-  state.listError = "catalog reload failed";
-  await page.getByRole("button", { name: "刷新本地目录" }).click();
+  state.applyModelDelayMs = 0;
+  state.applyModelError = "apply models failed";
+  await page.getByRole("button", { name: "应用模型 (2)" }).click();
   await expect(
-    page.getByText(/\u8bfb取模型失败.*catalog reload failed/),
+    page.getByText(/应用模型失败.*apply models failed/),
   ).toBeVisible();
-  await expect(page.getByText("imported-local", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("选择模型 gpt-5.6-sol")).toBeChecked();
+  await expect(
+    page.getByLabel("选择模型 gpt-image-2", { exact: true }),
+  ).toBeChecked();
   expect(pageErrors).toEqual([]);
+
+  state.applyModelError = null;
+  await page.getByLabel("选择模型 gpt-5.6-sol").click();
+  await page.getByLabel("选择模型 gpt-image-2", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "应用模型" })).toBeEnabled();
+  await page.getByRole("button", { name: "应用模型" }).click();
+  await expect.poll(() => state.applyModelCalls.length).toBe(3);
+  expect(state.applyModelCalls[2]).toEqual({
+    addr: "localhost:48760",
+    codexHome: "/tmp/.codex",
+    modelSlugs: state.models.map((model) => model.slug),
+    reloadAfterSwitch: false,
+  });
+});
+
+test("模型应用成功后目录重读失败不会误报应用失败", async ({ page }) => {
+  const state = await installMockRuntime(page);
+  await page.goto("/models/");
+  await expect(page.getByText("gpt-5.6-sol", { exact: true })).toBeVisible();
+
+  state.listError = "reload after applied models failed";
+  await page.getByLabel("选择模型 gpt-5.6-sol").click();
+  await page.getByRole("button", { name: "应用模型 (1)" }).click();
+  const successText =
+    "已将 1 个所选模型写入 Codex 配置；关闭并重新打开 Codex 后会显示最新模型";
+  await expect(
+    page.locator('[data-sonner-toast][data-type="success"]', {
+      hasText: successText,
+    }),
+  ).toBeVisible();
+  const warningText = "模型已应用，但重新读取状态失败: reload after applied models failed";
+  await expect(
+    page.locator('[data-sonner-toast][data-type="warning"]', {
+      hasText: warningText,
+    }),
+  ).toBeVisible();
+  await expect(page.getByText(/应用模型失败/)).toHaveCount(0);
+});
+
+test("同步价格会刷新目录、汇总结果并区分部分来源失败", async ({ page }) => {
+  const pageErrors: Error[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error));
+  const state = await installMockRuntime(page);
+
+  await page.goto("/models/");
+  await expect(page.getByText("gpt-5.6-sol", { exact: true })).toBeVisible();
+
+  const callsBeforeSync = state.listCalls;
+  state.priceSyncDelayMs = 200;
+  await page.getByRole("button", { name: "同步价格" }).click();
+  await expect(
+    page.getByRole("button", { name: "正在同步价格..." }),
+  ).toBeDisabled();
+  await expect(page.getByRole("button", { name: "应用模型" })).toBeDisabled();
+  await expect(
+    page.getByText(
+      "价格同步完成：更新 2，未变化 3，保留自定义 1，未匹配 4，歧义 5",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  expect(state.priceSyncCalls).toEqual([
+    { modelSlugs: [] },
+  ]);
+  expect(state.listCalls).toBeGreaterThan(callsBeforeSync);
+
+  state.priceSyncDelayMs = 0;
+  state.priceSyncFailedSources = ["basellm"];
+  await page.getByRole("button", { name: "同步价格" }).click();
+  const warningText =
+    "价格同步部分完成（失败来源：basellm）：更新 2，未变化 3，保留自定义 1，未匹配 4，歧义 5";
+  await expect(
+    page.locator('[data-sonner-toast][data-type="warning"]', {
+      hasText: warningText,
+    }),
+  ).toBeVisible();
+
+  state.priceSyncError = "all price sources failed";
+  await page.getByRole("button", { name: "同步价格" }).click();
+  await expect(
+    page.getByText(/同步价格失败.*all price sources failed/),
+  ).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test("同步价格会将已勾选模型传给后端", async ({ page }) => {
+  const state = await installMockRuntime(page);
+
+  await page.goto("/models/");
+  await expect(page.getByText("gpt-5.6-sol", { exact: true })).toBeVisible();
+
+  await page.getByLabel("选择模型 gpt-6-sol").click();
+  await expect(
+    page.getByRole("button", { name: "同步价格 (1)" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "同步价格 (1)" }).click();
+
+  await expect(
+    page.getByText(
+      "价格同步完成：更新 1，未变化 0，保留自定义 0，未匹配 0，歧义 0",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  expect(state.priceSyncCalls).toEqual([
+    { modelSlugs: ["gpt-6-sol"] },
+  ]);
+});
+
+test("价格已提交后目录重读失败不会误报同步失败", async ({ page }) => {
+  const state = await installMockRuntime(page);
+  await page.goto("/models/");
+  await expect(page.getByText("gpt-5.6-sol", { exact: true })).toBeVisible();
+
+  state.listError = "reload after committed price sync failed";
+  await page.getByRole("button", { name: "同步价格" }).click();
+  await expect(
+    page.getByText(
+      "价格同步完成：更新 2，未变化 3，保留自定义 1，未匹配 4，歧义 5",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      /价格已同步，但重新读取模型失败.*reload after committed price sync failed/,
+    ),
+  ).toBeVisible();
+  await expect(page.getByText(/同步价格失败/)).toHaveCount(0);
 });
 
 test("模型状态下拉支持四态切换并直接恢复隐藏模型", async ({ page }) => {
   const pageErrors: Error[] = [];
   page.on("pageerror", (error) => pageErrors.push(error));
   const state = await installMockRuntime(page);
-  const slug = "gpt-5.4";
+  const slug = "gpt-6-sol";
 
   await page.goto("/models/");
   await expect(
@@ -760,7 +1197,7 @@ test("模型状态更新失败时保留原状态", async ({ page }) => {
   page.on("pageerror", (error) => pageErrors.push(error));
   const state = await installMockRuntime(page);
   state.stateUpdateError = "state update failed";
-  const slug = "gpt-5.4";
+  const slug = "gpt-6-sol";
 
   await page.goto("/models/");
   await expect(
@@ -799,7 +1236,7 @@ test("批量状态下拉一次更新多个模型并保持原子失败", async ({
   const pageErrors: Error[] = [];
   page.on("pageerror", (error) => pageErrors.push(error));
   const state = await installMockRuntime(page);
-  const slugs = ["gpt-5.6-sol", "gpt-5.6-terra"];
+  const slugs = ["gpt-6-sol", "gpt-6-luna"];
   const row = (slug: string) =>
     page.locator("tr", {
       has: page.getByText(slug, { exact: true }),
@@ -873,7 +1310,7 @@ test("批量状态下拉一次更新多个模型并保持原子失败", async ({
   await chooseBatchState("隐藏但启用", 2);
   await expect.poll(() => state.batchStateUpdates.length).toBe(3);
   await expect(batchStateButton(2)).toBeDisabled();
-  await expect(page.getByRole("button", { name: "刷新本地目录" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "应用模型" })).toBeDisabled();
   await expect(
     page.getByRole("button", { name: "批量分配路由 (2)" }),
   ).toBeDisabled();
@@ -921,19 +1358,19 @@ test("批量删除会隐藏内置模型并删除自定义模型", async ({ page 
   await page.getByRole("button", { name: "批量删除模型 (2)" }).click();
 
   const confirmDialog = page.getByRole("dialog", {
-    name: "从本地网关目录批量移除模型",
+    name: "从本地网关目录批量删除模型",
   });
   await expect(confirmDialog).toContainText(
-    "1 个内置模型会被隐藏并禁用，其余自定义模型会被删除",
+    "确定要从本地网关目录永久删除这 2 个模型吗？",
   );
-  await confirmDialog.getByRole("button", { name: "移除", exact: true }).click();
+  await confirmDialog.getByRole("button", { name: "删除", exact: true }).click();
   await expect(confirmDialog).toHaveCount(0);
 
   expect(state.deletes).toEqual(["gpt-5.6-sol", "imported-local"]);
   await expect(page.locator("tr", { hasText: "gpt-5.6-sol" })).toHaveCount(0);
   await expect(page.locator("tr", { hasText: "imported-local" })).toHaveCount(0);
   await expect(
-    page.getByText("已隐藏 1 个内置模型，并删除 1 个自定义模型", {
+    page.getByText("已删除 2 个模型", {
       exact: true,
     }),
   ).toBeVisible();
@@ -961,14 +1398,14 @@ test("删除提交成功后刷新失败仍关闭确认框并保留成功结果",
     page.getByRole("main").getByRole("heading", { name: "模型与路由" }),
   ).toBeVisible();
   await page
-    .getByRole("button", { name: "从本地网关目录隐藏模型 gpt-5.4", exact: true })
+    .getByRole("button", { name: "从本地网关目录删除模型 gpt-6-sol", exact: true })
     .click();
 
   const confirmDialog = page.getByRole("dialog", {
-    name: "从本地网关目录移除模型",
+    name: "从本地网关目录删除模型",
   });
-  await confirmDialog.getByRole("button", { name: "移除", exact: true }).click();
-  await expect.poll(() => state.deletes).toEqual(["gpt-5.4"]);
+  await confirmDialog.getByRole("button", { name: "删除", exact: true }).click();
+  await expect.poll(() => state.deletes).toEqual(["gpt-6-sol"]);
 
   await page.keyboard.press("Escape");
   await page.mouse.click(2, 2);
@@ -983,11 +1420,11 @@ test("删除提交成功后刷新失败仍关闭确认框并保留成功结果",
   ).toBeDisabled();
   await expect(
     page.locator("tr", {
-      has: page.getByText("gpt-5.4", { exact: true }),
+      has: page.getByText("gpt-6-sol", { exact: true }),
     }),
   ).toHaveCount(0);
   await expect(
-    page.getByText("已隐藏内置模型 gpt-5.4", { exact: true }),
+    page.getByText("已删除模型 gpt-6-sol", { exact: true }),
   ).toBeVisible();
   await expect(
     page.getByText(/读取模型失败.*post-delete catalog reload failed/),
@@ -995,7 +1432,7 @@ test("删除提交成功后刷新失败仍关闭确认框并保留成功结果",
   await expect(
     page.getByRole("button", { name: "新增网关自定义模型" }),
   ).toBeEnabled();
-  expect(state.models.find((model) => model.slug === "gpt-5.4")).toMatchObject({
+  expect(state.models.find((model) => model.slug === "gpt-6-sol")).toMatchObject({
     enabled: false,
     visibility: "hide",
     userEdited: true,
@@ -1015,16 +1452,16 @@ test("批量删除部分失败时只保留失败模型并允许重试", async ({
   await page.getByLabel("选择模型 imported-local").click();
   await page.getByRole("button", { name: "批量删除模型 (2)" }).click();
   await page
-    .getByRole("dialog", { name: "从本地网关目录批量移除模型" })
-    .getByRole("button", { name: "移除", exact: true })
+    .getByRole("dialog", { name: "从本地网关目录批量删除模型" })
+    .getByRole("button", { name: "删除", exact: true })
     .click();
 
   const retryDialog = page.getByRole("dialog", {
-    name: "从本地网关目录移除模型",
+    name: "从本地网关目录删除模型",
   });
   await expect(retryDialog).toBeVisible();
   await expect(
-    page.getByText("批量处理完成：隐藏1个，删除0个，失败1个", {
+    page.getByText("批量删除完成：成功1个，失败1个", {
       exact: true,
     }),
   ).toBeVisible();
@@ -1033,7 +1470,7 @@ test("批量删除部分失败时只保留失败模型并允许重试", async ({
   await expect(page.getByLabel("选择模型 imported-local")).toBeChecked();
 
   delete state.deleteErrors["imported-local"];
-  await retryDialog.getByRole("button", { name: "移除", exact: true }).click();
+  await retryDialog.getByRole("button", { name: "删除", exact: true }).click();
   await expect(retryDialog).toHaveCount(0);
   await expect(page.locator("tr", { hasText: "imported-local" })).toHaveCount(0);
   expect(state.deletes).toEqual([
@@ -1058,31 +1495,97 @@ test("编辑器不依赖后续动画帧即可载入目标模型", async ({ page 
     window.requestAnimationFrame = () => 1;
   });
   await page
-    .getByRole("button", { name: "编辑模型 gpt-5.4", exact: true })
+    .getByRole("button", { name: "编辑模型 gpt-6-sol", exact: true })
     .click();
-  await expect(page.getByLabel("模型标识（Slug）")).toHaveValue("gpt-5.4");
-  await expect(page.getByLabel("显示名称")).toHaveValue("GPT-5.4");
-  await expect(page.getByLabel("描述")).toHaveValue("gpt-5.4 builtin");
+  await expect(page.getByLabel("模型标识（Slug）")).toHaveValue("gpt-6-sol");
+  await expect(page.getByLabel("显示名称")).toHaveValue("GPT-6-Sol");
+  await expect(page.getByLabel("描述")).toHaveValue(
+    "Latest frontier agentic coding model.",
+  );
   await expect(page.getByLabel("提供方")).toHaveValue("openai");
-  await expect(page.getByLabel("模型系列")).toHaveValue("gpt-5");
+  await expect(page.getByLabel("模型系列")).toHaveValue("gpt-6");
   await expect(page.getByLabel("模型分类")).toHaveValue("reasoning");
   await expect(page.getByLabel("标签")).toHaveValue("coding");
   await expect(page.getByLabel("标签")).toHaveAttribute(
     "placeholder",
     "例如：编程, 推理",
   );
-  await expect(page.getByLabel("排序")).toHaveValue("16");
+  await expect(page.getByLabel("排序")).toHaveValue("2");
   await expect(page.getByLabel("上下文窗口", { exact: true })).toHaveValue(
     "272000",
   );
   await expect(page.getByLabel("最大上下文窗口", { exact: true })).toHaveValue(
-    "1000000",
+    "872000",
   );
-  await expect(page.getByLabel("默认推理强度")).toHaveValue("medium");
+  await expect(page.getByRole("combobox", { name: "默认推理强度" })).toContainText("medium");
   await expect(page.getByRole("combobox", { name: "可见性" })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "Fast 策略" })).toContainText(
     "透传（保留 service_tier）",
   );
+});
+
+test("模型推理档位与默认档位同步保存且保留其他能力", async ({ page }) => {
+  const state = await installMockRuntime(page);
+  const model = state.models.find((item) => item.slug === "gpt-6-sol");
+  if (!model) throw new Error("missing model fixture");
+  model.capabilities = {
+    ...(model.capabilities as JsonObject),
+    reasoning_efforts: ["low", "medium", "experimental"],
+    reasoningEfforts: ["ultra"],
+    customCapability: "preserved",
+  };
+  model.defaultReasoningEffort = "ultra";
+
+  await page.goto("/models/");
+  await page.getByRole("button", { name: "编辑模型 gpt-6-sol", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  const defaultEffort = dialog.getByRole("combobox", { name: "默认推理强度" });
+  await expect(dialog.getByRole("checkbox", { name: "experimental" })).toBeChecked();
+  await expect(dialog.getByRole("checkbox", { name: "ultra" })).not.toBeChecked();
+  await expect(defaultEffort).toContainText("ultra (未在支持档位中)");
+  await dialog.getByRole("button", { name: "保存模型" }).click();
+  await expect(dialog.getByText("默认推理强度必须属于支持的档位")).toBeVisible();
+  expect(state.upserts).toHaveLength(0);
+
+  await dialog.getByLabel("关键能力 JSON").fill(JSON.stringify({
+    reasoning_efforts: ["low", "high", "experimental"],
+    reasoningEfforts: ["ultra"],
+    customCapability: "preserved",
+  }));
+  await expect(dialog.getByRole("checkbox", { name: "high", exact: true })).toBeChecked();
+  await expect(dialog.getByRole("checkbox", { name: "medium" })).not.toBeChecked();
+  await expect(defaultEffort).toContainText("不指定");
+
+  await defaultEffort.click();
+  await page.getByRole("option", { name: "high", exact: true }).click();
+  await dialog.locator('label[for="model-reasoning-0"]').click();
+  await expect(dialog.getByRole("checkbox", { name: "low", exact: true })).not.toBeChecked();
+  await dialog.getByRole("checkbox", { name: "experimental" }).uncheck();
+  await expect(defaultEffort).toContainText("high");
+  await dialog.getByRole("button", { name: "保存模型" }).click();
+  await expect(dialog).toHaveCount(0);
+
+  expect(state.upserts).toHaveLength(1);
+  const firstSave = state.upserts[0].model as JsonObject;
+  expect(firstSave.defaultReasoningEffort).toBe("high");
+  expect(firstSave.capabilities).toMatchObject({
+    reasoning_efforts: ["high"],
+    customCapability: "preserved",
+  });
+  expect((firstSave.capabilities as JsonObject).reasoningEfforts).toBeUndefined();
+
+  await page.getByRole("button", { name: "编辑模型 gpt-6-sol", exact: true }).click();
+  const reopened = page.getByRole("dialog");
+  await reopened.getByRole("checkbox", { name: "high", exact: true }).uncheck();
+  await expect(reopened.getByRole("combobox", { name: "默认推理强度" })).toContainText("不指定");
+  await reopened.getByRole("button", { name: "保存模型" }).click();
+  await expect(reopened).toHaveCount(0);
+
+  expect(state.upserts).toHaveLength(2);
+  const secondSave = state.upserts[1].model as JsonObject;
+  expect(secondSave.defaultReasoningEffort).toBeNull();
+  expect((secondSave.capabilities as JsonObject).reasoning_efforts).toEqual([]);
+  expect((secondSave.capabilities as JsonObject).customCapability).toBe("preserved");
 });
 
 test("长路由来源不会覆盖相邻的模型和批量路由字段", async ({ page }) => {
@@ -1173,12 +1676,12 @@ test("批量路由弹窗在小窗口内保留底部操作并允许正文滚动",
     page.getByRole("main").getByRole("heading", { name: "模型与路由" }),
   ).toBeVisible();
 
-  for (const slug of Object.keys(PRICED_MODELS)) {
+  for (const slug of VISIBLE_PRICED_MODELS) {
     await page
       .getByRole("checkbox", { name: `选择模型 ${slug}`, exact: true })
       .click();
   }
-  await page.getByRole("button", { name: "批量分配路由 (8)" }).click();
+  await page.getByRole("button", { name: "批量分配路由 (10)" }).click();
 
   const dialog = page.getByRole("dialog", { name: "批量分配模型路由" });
   await expect(dialog).toBeVisible();
@@ -1187,7 +1690,7 @@ test("批量路由弹窗在小窗口内保留底部操作并允许正文滚动",
   await dialog.getByRole("button", { name: "添加聚合路由" }).click();
 
   const body = dialog.getByTestId("batch-route-dialog-body");
-  const applyButton = dialog.getByRole("button", { name: "应用到 8 个模型" });
+  const applyButton = dialog.getByRole("button", { name: "应用到 10 个模型" });
   const [dialogBox, applyButtonBox, bodyMetrics] = await Promise.all([
     dialog.boundingBox(),
     applyButton.boundingBox(),
@@ -1213,6 +1716,15 @@ test("批量路由弹窗在小窗口内保留底部操作并允许正文滚动",
   expect(scrollTop).toBeGreaterThan(0);
 });
 
+test("revision 9 fresh 目录不再包含已退役模型", async ({ page }) => {
+  await installMockRuntime(page);
+  await page.goto("/models/");
+
+  for (const slug of ["gpt-5.4", "gpt-5.4-mini", "gpt-5.2"]) {
+    await expect(page.getByText(slug, { exact: true })).toHaveCount(0);
+  }
+});
+
 test("模型目录支持中文展示并为多个模型批量分配路由", async ({ page }) => {
   const state = await installMockRuntime(page);
 
@@ -1223,19 +1735,27 @@ test("模型目录支持中文展示并为多个模型批量分配路由", async
 
   await expect(page.getByText("内置模型", { exact: true })).toBeVisible();
   await expect(page.getByText("自定义模型", { exact: true })).toBeVisible();
-  await expect(page.getByText("价格缺失", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("paragraph").filter({ hasText: "价格缺失" }),
+  ).toBeVisible();
   await expect(page.getByText("路由缺失", { exact: true })).toBeVisible();
   await expect(
-    page.getByText("最新的前沿智能体编程模型。", { exact: true }),
+    page
+      .locator("tr", {
+        has: page.getByText("gpt-6-sol", { exact: true }),
+      })
+      .getByText("最新的前沿智能体编程模型。", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText("Latest frontier agentic coding model.", { exact: true }),
+    page.getByText("Older coding model for complex work.", { exact: true }),
   ).toHaveCount(0);
   await expect(page.getByRole("columnheader", { name: "来源" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "指令" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "路由" })).toBeVisible();
   await expect(
-    page.getByText("请先勾选一个或多个模型，再使用批量分配路由。"),
+    page.getByText(
+      "未勾选模型时会应用全部模型；勾选后仅应用所选模型。批量操作仍需先勾选模型。",
+    ),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "批量分配路由 (0)" }),
@@ -1294,14 +1814,26 @@ test("模型目录 V2 完成本地管理、原子保存和导入", async ({ page
   ).toBeVisible();
 
   const rows = page.getByRole("main").locator("tbody tr");
-  await expect(rows).toHaveCount(8);
+  await expect(rows).toHaveCount(10);
   const solRow = page.locator("tr", { hasText: "gpt-5.6-sol" });
   await expect(solRow).toContainText("官方价格");
   await expect(solRow).toContainText("5 / 0.5 / 6.25 / 30");
-  const imageRow = page.locator("tr", { hasText: "gpt-image-2" });
+  const gpt6SolRow = page.locator("tr", { hasText: "gpt-6-sol" });
+  await expect(gpt6SolRow).toContainText("官方价格");
+  await expect(gpt6SolRow).toContainText("2 / 0.2 / 2.5 / 10");
+  await expect(page.getByText("gpt-6-luna", { exact: true })).toBeVisible();
+  const imageRow = page.locator("tr", {
+    has: page.getByText("gpt-image-2", { exact: true }),
+  });
   await expect(imageRow).toContainText("先进的图像生成和编辑模型。");
   await expect(imageRow).toContainText("官方价格");
   await expect(imageRow).toContainText("8 / 2 / 8 / 30");
+  for (const slug of ["gpt-image-2.5-sunburst", "gpt-image-2.5-flare"]) {
+    const row = page.locator("tr", {
+      has: page.getByText(slug, { exact: true }),
+    });
+    await expect(row).toContainText("价格缺失");
+  }
   await expect(page.getByText("codex-auto-review", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "远端并入" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "清理远端旧模型" })).toHaveCount(0);
@@ -1391,11 +1923,13 @@ test("模型目录 V2 完成本地管理、原子保存和导入", async ({ page
 
   await page
     .getByRole("button", {
-      name: "从本地网关目录隐藏模型 gpt-5.6-sol",
+      name: "从本地网关目录删除模型 gpt-6-sol",
     })
     .click();
-  await page.getByRole("button", { name: "移除", exact: true }).click();
-  const builtinRow = page.locator("tr", { hasText: "gpt-5.6-sol" });
+  await page.getByRole("button", { name: "删除", exact: true }).click();
+  const builtinRow = page.locator("tr", {
+    has: page.getByText("gpt-6-sol", { exact: true }),
+  });
   await expect(builtinRow).toHaveCount(0);
 
   await page.getByRole("main").getByRole("combobox").click();
@@ -1409,9 +1943,9 @@ test("模型目录 V2 完成本地管理、原子保存和导入", async ({ page
   await page
     .getByRole("button", { name: "删除模型 my-custom-model" })
     .click();
-  await page.getByRole("button", { name: "移除", exact: true }).click();
+  await page.getByRole("button", { name: "删除", exact: true }).click();
   await expect(customRow).toHaveCount(0);
-  expect(state.deletes).toEqual(["gpt-5.6-sol", "my-custom-model"]);
+  expect(state.deletes).toEqual(["gpt-6-sol", "my-custom-model"]);
 
   await page.getByRole("button", { name: "导入到本地网关目录" }).click();
   const importDialog = page.getByRole("dialog");

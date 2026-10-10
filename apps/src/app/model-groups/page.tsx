@@ -389,7 +389,7 @@ export default function ModelGroupsPage() {
 
   if (!isAdminMode) {
     return (
-      <div className="container mx-auto p-6">
+      <div className="container mx-auto p-3">
         <Card className="glass-card mission-panel">
           <CardContent className="py-10 text-center text-sm text-muted-foreground">
             {t("只有管理员可以管理模型组")}
@@ -409,10 +409,10 @@ export default function ModelGroupsPage() {
   const activeUserCount = activeGroup ? groupUserCount(activeGroup.id, userAssignments) : 0;
 
   return (
-    <div className="container mx-auto flex flex-col gap-6 p-6">
-      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-        <div className="flex flex-col gap-2">
-          <h1 className="text-3xl font-bold">{t("模型组")}</h1>
+    <div className="container mx-auto flex flex-col gap-3 p-3">
+      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-lg font-semibold">{t("模型组")}</h1>
           <p className="text-sm text-muted-foreground">
             {t("按用户分配可用平台模型，并为不同订阅层配置扣费倍率。")}
           </p>

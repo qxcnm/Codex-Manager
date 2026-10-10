@@ -68,7 +68,8 @@ pub(crate) fn update_account(
         return Err("missing account update fields".to_string());
     }
 
-    let mut storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     if normalized_status == Some("force_enabled") {
         let current_status = storage
             .find_account_status_by_id(normalized_account_id)
@@ -224,6 +225,7 @@ pub(crate) fn update_account_sorts(
     }
 
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
     let updated = storage
         .update_account_sorts(normalized.as_slice(), now_ts())
         .map_err(|e| {

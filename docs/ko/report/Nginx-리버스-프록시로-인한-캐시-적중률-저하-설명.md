@@ -33,7 +33,7 @@ ignore_invalid_headers off;
    `conversation_id`, `session_id`, `x-codex-turn-state` 등을 추출합니다.
 2. `crates/service/src/gateway/request/session_affinity.rs`
    실제 스레드 앵커를 계산합니다.
-3. `crates/service/src/gateway/request/request_rewrite_responses.rs`
+3. `crates/service/src/gateway/request/official_responses_http.rs`
    안정적인 `prompt_cache_key` 를 요청 본문에 다시 씁니다.
 
 프록시가 이 헤더를 제거하면 백엔드는 약한 fallback 세션 앵커로 퇴화하고, 프롬프트 캐시 재사용도 불안정해집니다.
@@ -172,6 +172,6 @@ Cloudflare 가 경로를 복잡하게 만들 수는 있지만, 가장 흔한 직
 
 - [`crates/service/src/gateway/request/incoming_headers.rs`](../../../crates/service/src/gateway/request/incoming_headers.rs)
 - [`crates/service/src/gateway/request/session_affinity.rs`](../../../crates/service/src/gateway/request/session_affinity.rs)
-- [`crates/service/src/gateway/request/request_rewrite_responses.rs`](../../../crates/service/src/gateway/request/request_rewrite_responses.rs)
+- [`crates/service/src/gateway/request/official_responses_http.rs`](../../../crates/service/src/gateway/request/official_responses_http.rs)
 - [`crates/service/src/gateway/observability/http_bridge/aggregate/output_text.rs`](../../../crates/service/src/gateway/observability/http_bridge/aggregate/output_text.rs)
-- [`crates/service/src/gateway/protocol_adapter/response_conversion/sse_conversion/openai_sse_anthropic_bridge.rs`](../../../crates/service/src/gateway/protocol_adapter/response_conversion/sse_conversion/openai_sse_anthropic_bridge.rs)
+- [`crates/service/src/gateway/observability/http_bridge/stream_readers/responses_from_anthropic.rs`](../../../crates/service/src/gateway/observability/http_bridge/stream_readers/responses_from_anthropic.rs)

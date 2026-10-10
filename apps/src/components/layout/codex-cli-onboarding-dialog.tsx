@@ -246,7 +246,7 @@ export function CodexCliOnboardingDialog({
                   <div className="font-medium text-foreground">{t("直接连接 OpenAI")}</div>
                   <p className="mt-1 text-sm leading-6 text-muted-foreground">
                     {t(
-                      "直连 OpenAI 官方后端，不经过 CodexManager 网关；不会产生 CodexManager 请求日志，仪表盘用量统计不可用。",
+                      "直连 OpenAI 官方后端，不经过 CodexManager 网关；本机 Codex 的直连请求不会写入网关日志，但仪表盘仍会展示已记录的其他网关流量。",
                     )}
                   </p>
                 </div>

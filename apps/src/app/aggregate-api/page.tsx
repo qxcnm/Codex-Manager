@@ -53,6 +53,7 @@ import { useDesktopPageActive } from "@/hooks/useDesktopPageActive";
 import { usePageTransitionReady } from "@/hooks/usePageTransitionReady";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
 import { accountClient } from "@/lib/api/account-client";
+import { CODEX_PROFILE_CANDIDATES_QUERY_KEY } from "@/lib/api/codex-profile-client";
 import {
   buildAggregateApiListQueryKey,
   buildApiKeyListQueryKey,
@@ -60,7 +61,10 @@ import {
   buildManagedModelSelectorQueryKey,
   normalizeQueryServiceAddress,
 } from "@/lib/api/account-query-keys";
-import { aggregateApiProviderMatchesFilter } from "@/lib/aggregate-api-provider";
+import {
+  aggregateApiProviderMatchesFilter,
+  aggregateApiStatusMatchesFilter,
+} from "@/lib/aggregate-api-provider";
 import { useI18n } from "@/lib/i18n/provider";
 import { useAppStore } from "@/lib/store/useAppStore";
 import { copyTextToClipboard } from "@/lib/utils/clipboard";
@@ -144,6 +148,7 @@ export default function AggregateApiPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [providerFilter, setProviderFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [revealedSecrets, setRevealedSecrets] = useState<
     Record<string, AggregateApiSecretResult>
   >({});
@@ -202,12 +207,12 @@ export default function AggregateApiPage() {
   );
   const filteredApis = useMemo(
     () =>
-      providerFilter === "all"
-        ? aggregateApis
-        : aggregateApis.filter((api) =>
-            aggregateApiProviderMatchesFilter(api.providerType, providerFilter),
-          ),
-    [aggregateApis, providerFilter],
+      aggregateApis.filter(
+        (api) =>
+          aggregateApiProviderMatchesFilter(api.providerType, providerFilter) &&
+          aggregateApiStatusMatchesFilter(api.status, statusFilter),
+      ),
+    [aggregateApis, providerFilter, statusFilter],
   );
   const defaultCreateSort = useMemo(
     () =>
@@ -232,6 +237,9 @@ export default function AggregateApiPage() {
         queryClient.invalidateQueries({ queryKey: managedModelSelectorQueryKey }),
         queryClient.invalidateQueries({ queryKey: apiKeyListQueryKey }),
         queryClient.invalidateQueries({ queryKey: startupSnapshotQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: CODEX_PROFILE_CANDIDATES_QUERY_KEY,
+        }),
       ]);
       toast.success(t("聚合 API 已删除"));
     },
@@ -283,6 +291,9 @@ export default function AggregateApiPage() {
         queryClient.invalidateQueries({ queryKey: aggregateApiListQueryKey }),
         queryClient.invalidateQueries({ queryKey: apiKeyListQueryKey }),
         queryClient.invalidateQueries({ queryKey: startupSnapshotQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: CODEX_PROFILE_CANDIDATES_QUERY_KEY,
+        }),
       ]);
       toast.success(t("状态已更新"));
     },
@@ -405,18 +416,42 @@ export default function AggregateApiPage() {
                   {t("连通性测试只使用已配置路由对应的模型。")}
                 </p>
               </div>
-              <Select value={providerFilter} onValueChange={(value) => setProviderFilter(value || "all")}>
-                <SelectTrigger className="h-9 w-[150px]"><SelectValue /></SelectTrigger>
-                <SelectContent><SelectGroup>
-                  <SelectItem value="all">{t("全部类型")}</SelectItem>
-                  <SelectItem value="codex">Codex</SelectItem>
-                  <SelectItem value="claude">Claude</SelectItem>
-                  <SelectItem value="gemini">Gemini</SelectItem>
-                  <SelectItem value="compatible">
-                    {t("通用兼容（Codex + Claude）")}
-                  </SelectItem>
-                </SelectGroup></SelectContent>
-              </Select>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <Select
+                  value={statusFilter}
+                  onValueChange={(value) => setStatusFilter(value || "all")}
+                >
+                  <SelectTrigger className="h-9 w-[130px]" aria-label={t("状态")}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="all">{t("全部状态")}</SelectItem>
+                      <SelectItem value="active">{t("已启用")}</SelectItem>
+                      <SelectItem value="disabled">{t("已禁用")}</SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={providerFilter}
+                  onValueChange={(value) => setProviderFilter(value || "all")}
+                >
+                  <SelectTrigger className="h-9 w-[150px]" aria-label={t("类型")}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="all">{t("全部类型")}</SelectItem>
+                      <SelectItem value="codex">Codex</SelectItem>
+                      <SelectItem value="claude">Claude</SelectItem>
+                      <SelectItem value="gemini">Gemini</SelectItem>
+                      <SelectItem value="compatible">
+                        {t("通用兼容（Codex + Claude）")}
+                      </SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </CardHeader>
           <CardContent className="p-0">
@@ -425,6 +460,7 @@ export default function AggregateApiPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>{t("供应商")}</TableHead>
+                    <TableHead className="w-[84px]">{t("顺序值")}</TableHead>
                     <TableHead>{t("类型")}</TableHead>
                     <TableHead>{t("密钥")}</TableHead>
                     <TableHead>{t("模型路由")}</TableHead>
@@ -438,15 +474,17 @@ export default function AggregateApiPage() {
                   {isLoading ? (
                     Array.from({ length: 4 }).map((_, index) => (
                       <TableRow key={index}>
-                        {Array.from({ length: 8 }).map((__, cell) => (
+                        {Array.from({ length: 9 }).map((__, cell) => (
                           <TableCell key={cell}><Skeleton className="h-7 w-full" /></TableCell>
                         ))}
                       </TableRow>
                     ))
                   ) : filteredApis.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={8} className="h-48 text-center text-muted-foreground">
-                        {t("暂无聚合 API，点击右上角新建")}
+                      <TableCell colSpan={9} className="h-48 text-center text-muted-foreground">
+                        {aggregateApis.length === 0
+                          ? t("暂无聚合 API，点击右上角新建")
+                          : t("没有匹配当前筛选的聚合 API")}
                       </TableCell>
                     </TableRow>
                   ) : (
@@ -462,6 +500,9 @@ export default function AggregateApiPage() {
                             <div className="mt-1 text-[10px] text-muted-foreground">
                               {t("创建时间")}: {formatTsFromSeconds(api.createdAt, "-")}
                             </div>
+                          </TableCell>
+                          <TableCell className="font-mono text-xs tabular-nums">
+                            {api.sort}
                           </TableCell>
                           <TableCell>
                             <Badge variant="secondary">

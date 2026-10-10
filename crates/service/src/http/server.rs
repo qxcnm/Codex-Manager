@@ -1,4 +1,3 @@
-use crate::http::backend_runtime::{start_backend_server, wake_backend_shutdown};
 use crate::http::proxy_runtime::run_front_proxy;
 
 /// 函数 `start_http`
@@ -13,9 +12,5 @@ use crate::http::proxy_runtime::run_front_proxy;
 /// # 返回
 /// 返回函数执行结果
 pub fn start_http(addr: &str) -> std::io::Result<()> {
-    let backend = start_backend_server()?;
-    let result = run_front_proxy(addr, &backend.addr);
-    wake_backend_shutdown(&backend.addr);
-    let _ = backend.join.join();
-    result
+    run_front_proxy(addr)
 }

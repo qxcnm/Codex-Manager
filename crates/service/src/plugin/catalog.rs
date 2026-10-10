@@ -31,6 +31,16 @@ pub(crate) fn handle_catalog_list(req: &JsonRpcRequest) -> JsonRpcResponse {
     }
 }
 
+pub(super) async fn handle_catalog_list_async(req: &JsonRpcRequest) -> JsonRpcResponse {
+    let result = catalog_list_result_async(req).await;
+    super::json_response(req, result.unwrap_or_else(error_result))
+}
+
+pub(super) async fn handle_install_async(req: &JsonRpcRequest, is_update: bool) -> JsonRpcResponse {
+    let result = install_or_update_plugin_async(req, is_update).await;
+    super::json_response(req, result.unwrap_or_else(error_result))
+}
+
 /// 函数 `handle_install`
 ///
 /// 作者: gaohongshun
@@ -87,6 +97,7 @@ pub(crate) fn handle_uninstall(req: &JsonRpcRequest) -> JsonRpcResponse {
     let Some(storage) = open_storage() else {
         return super::json_response(req, error_result("storage unavailable"));
     };
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     if storage.delete_plugin_install(&plugin_id).is_err() {
         return super::json_response(req, error_result("uninstall plugin failed"));
     }
@@ -141,11 +152,21 @@ fn string_param(req: &JsonRpcRequest, key: &str) -> Option<String> {
 /// # 返回
 /// 返回函数执行结果
 fn catalog_list_result(req: &JsonRpcRequest) -> Result<Value, String> {
-    let market_mode = market_source_mode_for_request(req);
-    let source_url = source_url_from_request(req);
+    super::runtime::run_network_future(catalog_list_result_async(req))
+}
+
+async fn catalog_list_result_async(req: &JsonRpcRequest) -> Result<Value, String> {
+    let request = req.clone();
+    let (market_mode, source_url) = super::runtime::run_storage(move || {
+        Ok((
+            market_source_mode_for_request(&request),
+            source_url_from_request(&request),
+        ))
+    })
+    .await?;
     let items = if market_mode == CUSTOM_MARKET_MODE {
         if source_url.is_some() {
-            match fetch_catalog_entries(source_url.as_deref()) {
+            match fetch_catalog_entries(source_url.as_deref()).await {
                 Ok(items) => items,
                 Err(err) => {
                     log::warn!("fetch custom plugin catalog failed: {err}");
@@ -277,13 +298,13 @@ pub(crate) fn current_market_source_mode() -> String {
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(crate) fn fetch_catalog_entries(
+pub(crate) async fn fetch_catalog_entries(
     source_url: Option<&str>,
 ) -> Result<Vec<PluginCatalogEntry>, String> {
     if let Some(source_url) = source_url {
         let normalized = source_url.trim();
         if !normalized.is_empty() {
-            match super::runtime::fetch_text(normalized) {
+            match super::runtime::fetch_text(normalized).await {
                 Ok(text) => {
                     let value: Value = serde_json::from_str(&text)
                         .map_err(|err| format!("parse catalog response failed: {err}"))?;
@@ -445,6 +466,7 @@ pub(crate) fn sync_builtin_cleanup_task_schedule() {
     let Some(storage) = open_storage() else {
         return;
     };
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     let Some(install) = storage
         .find_plugin_install("cleanup-banned-accounts")
         .ok()
@@ -761,19 +783,28 @@ fn build_plugin_tasks(entry: &PluginCatalogEntry, now: i64) -> Result<Vec<Plugin
 /// # 返回
 /// 返回函数执行结果
 fn install_or_update_plugin(req: &JsonRpcRequest, is_update: bool) -> Result<Value, String> {
+    super::runtime::run_network_future(install_or_update_plugin_async(req, is_update))
+}
+
+async fn install_or_update_plugin_async(
+    req: &JsonRpcRequest,
+    is_update: bool,
+) -> Result<Value, String> {
     let entry_value = req
         .params
         .as_ref()
         .and_then(|value| value.get("entry"))
         .cloned();
-    let source_url = source_url_from_request(req);
+    let request = req.clone();
+    let source_url =
+        super::runtime::run_storage(move || Ok(source_url_from_request(&request))).await?;
     let entry = if let Some(value) = entry_value {
         parse_catalog_entry_value(&value, source_url.as_deref())?
     } else {
         let plugin_id = string_param(req, "pluginId")
             .or_else(|| string_param(req, "plugin_id"))
             .ok_or_else(|| "missing pluginId".to_string())?;
-        let items = fetch_catalog_entries(source_url.as_deref())?;
+        let items = fetch_catalog_entries(source_url.as_deref()).await?;
         items
             .into_iter()
             .find(|item| item.id == plugin_id)
@@ -787,7 +818,7 @@ fn install_or_update_plugin(req: &JsonRpcRequest, is_update: bool) -> Result<Val
         .unwrap_or_default();
     let script_body = if script_body.trim().is_empty() {
         if let Some(script_url) = entry.script_url.as_deref() {
-            super::runtime::fetch_text(script_url)?
+            super::runtime::fetch_text(script_url).await?
         } else {
             return Err(format!("plugin script missing: {}", entry.id));
         }
@@ -795,10 +826,23 @@ fn install_or_update_plugin(req: &JsonRpcRequest, is_update: bool) -> Result<Val
         script_body
     };
 
+    super::runtime::run_storage(move || {
+        persist_plugin_install(entry, source_url, script_body, is_update)
+    })
+    .await
+}
+
+fn persist_plugin_install(
+    entry: PluginCatalogEntry,
+    source_url: Option<String>,
+    script_body: String,
+    is_update: bool,
+) -> Result<Value, String> {
     let existing_install = if is_update {
         let Some(storage) = open_storage() else {
             return Err("storage unavailable".to_string());
         };
+        let storage = crate::account::remote_storage::AccountStorage::new(&storage);
         let Some(existing) = storage
             .find_plugin_install(&entry.id)
             .map_err(|err| err.to_string())?
@@ -848,6 +892,7 @@ fn install_or_update_plugin(req: &JsonRpcRequest, is_update: bool) -> Result<Val
     let Some(storage) = open_storage() else {
         return Err("storage unavailable".to_string());
     };
+    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
     if storage.replace_plugin_install(&plugin, &tasks).is_err() {
         return Err(if is_update {
             "update plugin failed".to_string()

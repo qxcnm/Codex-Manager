@@ -318,7 +318,7 @@ fn classify_prefix(prefix: &[u8], include_incomplete_frame: bool) -> PrefixDecis
     PrefixDecision::NeedMore
 }
 
-pub(in super::super) fn preflight_stream_response(
+pub(in super::super) async fn preflight_stream_response(
     response: GatewayUpstreamResponse,
     request_path: &str,
     upstream_is_stream: bool,
@@ -331,9 +331,10 @@ pub(in super::super) fn preflight_stream_response(
         has_more_candidates,
         crate::gateway::upstream_stream_timeout(),
     )
+    .await
 }
 
-fn preflight_stream_response_with_idle_timeout(
+async fn preflight_stream_response_with_idle_timeout(
     response: GatewayUpstreamResponse,
     request_path: &str,
     upstream_is_stream: bool,
@@ -348,9 +349,10 @@ fn preflight_stream_response_with_idle_timeout(
         idle_timeout,
         Some(STREAM_PREFLIGHT_WALL_CLOCK_TIMEOUT),
     )
+    .await
 }
 
-fn preflight_stream_response_with_timeouts(
+async fn preflight_stream_response_with_timeouts(
     response: GatewayUpstreamResponse,
     request_path: &str,
     upstream_is_stream: bool,
@@ -361,7 +363,7 @@ fn preflight_stream_response_with_timeouts(
     let status_code = response.status().as_u16();
     if has_more_candidates && !(200..=299).contains(&status_code) {
         if should_prefetch_actionable_error_body(status_code) {
-            return match response.into_buffered() {
+            return match response.into_buffered_async().await {
                 Ok((body, _response)) => actionable_message_from_error_body(body.as_ref())
                     .map(StreamPreflightOutcome::Failover)
                     .unwrap_or_else(|| StreamPreflightOutcome::StatusFailover {
@@ -394,12 +396,14 @@ fn preflight_stream_response_with_timeouts(
         return StreamPreflightOutcome::Ready(response);
     }
 
-    let (prefix, response, terminal) = response.prefetch_stream_prefix(
-        STREAM_PREFLIGHT_MAX_BYTES,
-        idle_timeout,
-        wall_clock_timeout,
-        |prefix| !matches!(classify_prefix(prefix, false), PrefixDecision::NeedMore),
-    );
+    let (prefix, response, terminal) = response
+        .prefetch_stream_prefix_async(
+            STREAM_PREFLIGHT_MAX_BYTES,
+            idle_timeout,
+            wall_clock_timeout,
+            |prefix| !matches!(classify_prefix(prefix, false), PrefixDecision::NeedMore),
+        )
+        .await;
     let include_incomplete_frame = matches!(
         terminal,
         GatewayStreamPrefetchTerminal::Eof

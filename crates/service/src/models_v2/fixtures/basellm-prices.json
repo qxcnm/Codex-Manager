@@ -1,0 +1,73 @@
+{
+  "openai": {
+    "id": "openai",
+    "name": "OpenAI",
+    "models": {
+      "gpt-alpha": {
+        "id": "gpt-alpha",
+        "cost": {
+          "input": 1.25,
+          "output": 5,
+          "cache_read": 0.125,
+          "cache_write": 1.5,
+          "context_over_200k": {
+            "input": 1.75,
+            "output": 6,
+            "cache_read": 0.175
+          },
+          "tiers": [
+            {
+              "input": 2.5,
+              "output": 7.5,
+              "tier": { "type": "context", "size": 272000 }
+            }
+          ]
+        }
+      },
+      "context-model": {
+        "cost": {
+          "input": 2,
+          "output": 8,
+          "context_over_200k": {
+            "input": 4,
+            "output": 12,
+            "cache_read": 0.4
+          }
+        }
+      },
+      "fallback-candidate": {
+        "cost": { "per_image": 0.04 }
+      },
+      "cny-model": {
+        "cost": { "currency": "CNY", "input": 1, "output": 2 }
+      }
+    }
+  },
+  "anthropic": {
+    "id": "anthropic",
+    "name": "Anthropic",
+    "models": {
+      "shared-model": {
+        "cost": { "input": 3, "output": 15, "cache_read": 0.3 }
+      }
+    }
+  },
+  "google": {
+    "id": "google",
+    "name": "Google",
+    "models": {
+      "shared-model": {
+        "cost": { "input": 0.5, "output": 2 }
+      }
+    }
+  },
+  "subscription-plan": {
+    "id": "subscription-plan",
+    "subscription": true,
+    "models": {
+      "free-looking": {
+        "cost": { "input": 0, "output": 0 }
+      }
+    }
+  }
+}

@@ -19,7 +19,7 @@ cargo build -p codexmanager-web --release
 cargo build -p codexmanager-start --release
 
 # Bundle frontend static assets into codexmanager-web (single-binary mode)
-pnpm -C apps run build
+pnpm -C apps run build:desktop
 cargo build -p codexmanager-web --release --features embedded-ui
 ```
 
@@ -35,6 +35,8 @@ pwsh -NoLogo -NoProfile -File scripts/rebuild.ps1 -Bundle nsis -CleanDist -Porta
 ./scripts/rebuild-linux.sh --bundles "appimage,deb" --clean-dist
 ./scripts/rebuild-macos.sh --bundles "dmg" --clean-dist
 ```
+
+Linux packaging requires `squashfs-tools` and checks that each AppImage contains a valid root `.DirIcon`, repairing the bundle when needed. The interface language defaults to **Auto-detect**, following the system language in the desktop app or the browser language in Web mode. Chinese, English, Russian, and Korean are supported; other languages fall back to English. Choose Auto-detect or a fixed language in Settings or the header; the choice applies immediately and remains saved.
 
 ## GitHub Actions
 The unified release workflow is `.github/workflows/release-all.yml`. Pushing a `v*` tag automatically runs `build-and-publish`; `workflow_dispatch` also supports manual runs in `build-and-publish`, `build-artifacts`, or `publish-artifacts` mode.
@@ -95,12 +97,12 @@ pwsh -NoLogo -NoProfile -File scripts/rebuild.ps1 -Bundle nsis -CleanDist -Porta
 pwsh -NoLogo -NoProfile -File scripts/rebuild.ps1 `
   -AllPlatforms `
   -GitRef main `
-  -ReleaseTag v0.1.9 `
+  -ReleaseTag v0.6.0 `
   -GithubToken <token>
 
 # Force a pre-release
 pwsh -NoLogo -NoProfile -File scripts/rebuild.ps1 `
-  -AllPlatforms -GitRef main -ReleaseTag v0.1.9-beta.1 -GithubToken <token> -Prerelease true
+  -AllPlatforms -GitRef main -ReleaseTag v0.6.0-beta.1 -GithubToken <token> -Prerelease true
 ```
 
 ### Main parameters
@@ -121,26 +123,16 @@ pwsh -NoLogo -NoProfile -File scripts/rebuild.ps1 `
 - `-TimeoutMin <n>`: timeout in minutes, default `60`
 - `-DryRun`: print the execution plan only
 
-## `scripts/bump-version.ps1`
-```powershell
-pwsh -NoLogo -NoProfile -File scripts/bump-version.ps1 -Version 0.1.9
-```
+## Version synchronization
 
-This updates:
-- the workspace version in the root `Cargo.toml`
-- `apps/src-tauri/Cargo.toml`
-- `apps/src-tauri/tauri.conf.json`
+The repository no longer contains `scripts/bump-version.ps1`. Before a release, follow the checklist in [Release and Artifacts](release-and-artifacts.md) and verify the versions in the root `Cargo.toml`, `apps/package.json`, `apps/src-tauri/Cargo.toml`, `apps/src-tauri/tauri.conf.json`, and both `Cargo.lock` files.
 
 ## Protocol regression probe
 ```powershell
-pwsh -NoLogo -NoProfile -File scripts/tests/gateway_regression_suite.ps1 `
-  -Base http://localhost:48760 -ApiKey <key> -Model gpt-5.3-codex
+cargo test -p codexmanager-service gateway --offline -- --test-threads=1
 ```
 
-It runs the following in sequence:
-- `chat_tools_hit_probe.ps1`
-- `chat_tools_hit_probe.ps1 -Stream`
-- `codex_stream_probe.ps1`
+This runs the Service gateway regression tests. The old `scripts/tests/gateway_regression_suite.ps1`, `chat_tools_hit_probe.ps1`, and `codex_stream_probe.ps1` probes have been removed from the repository.
 
 ## Related documents
 - Release and artifacts: [Release and Artifacts](release-and-artifacts.md)
