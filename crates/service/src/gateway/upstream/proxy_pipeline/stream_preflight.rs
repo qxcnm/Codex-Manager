@@ -28,9 +28,15 @@ enum PrefixDecision {
 pub(in super::super) enum StreamPreflightOutcome {
     Ready(GatewayUpstreamResponse),
     Failover(String),
-    StatusFailover { status_code: u16, message: String },
+    StatusFailover {
+        status_code: u16,
+        message: String,
+    },
     RetryUsageNotice(String),
-    ModelUnsupported(String),
+    ModelUnsupported {
+        message: String,
+        response: GatewayUpstreamResponse,
+    },
     TransportFailover(String),
 }
 
@@ -362,36 +368,43 @@ async fn preflight_stream_response_with_timeouts(
     wall_clock_timeout: Option<Duration>,
 ) -> StreamPreflightOutcome {
     let status_code = response.status().as_u16();
-    // “该账户不支持该模型”是一类精确、可记忆的拒绝：不论是否还有候选，都要先读正文分类，
-    // 否则 (a) 会被当成普通 non-200 汇总而丢失模型维度，(b) 最后一个候选时学不到。
-    // 详见 BUG-2026-0930-01。
     if status_code == 400 {
-        return match response.into_buffered_async().await {
-            Ok((body, response)) => {
-                let text = crate::account::model_support::bound_message(&String::from_utf8_lossy(
-                    body.as_ref(),
-                ));
-                if crate::account::model_support::looks_like_account_model_unsupported(&text) {
-                    StreamPreflightOutcome::ModelUnsupported(text)
-                } else if has_more_candidates {
-                    StreamPreflightOutcome::StatusFailover {
-                        status_code,
-                        message: summarize_non_200_status_failover(
-                            status_code,
-                            Some(body.as_ref()),
-                        ),
-                    }
-                } else {
-                    // 未命中该模式且无更多候选：保持旧行为，原样把（已缓冲的）响应交给下游。
-                    StreamPreflightOutcome::Ready(response)
-                }
+        // Classification has independent byte, idle and wall-clock bounds, including
+        // non-streaming requests and the final candidate. All consumed bytes replay.
+        let idle_timeout = Some(
+            idle_timeout
+                .unwrap_or(Duration::from_secs(2))
+                .min(Duration::from_secs(2)),
+        );
+        let wall_timeout = Some(
+            wall_clock_timeout
+                .unwrap_or(STREAM_PREFLIGHT_WALL_CLOCK_TIMEOUT)
+                .min(STREAM_PREFLIGHT_WALL_CLOCK_TIMEOUT),
+        );
+        let (body, response, terminal) = response
+            .prefetch_stream_prefix_async(
+                STREAM_PREFLIGHT_MAX_BYTES,
+                idle_timeout,
+                wall_timeout,
+                |_| false,
+            )
+            .await;
+        // Only a complete body can establish eligibility. Truncated/timeout/error
+        // prefixes may contain misleading or incomplete rejection JSON.
+        if matches!(terminal, GatewayStreamPrefetchTerminal::Eof) {
+            if let Some(message) =
+                crate::account::model_support::account_model_rejection_message(&body)
+            {
+                return StreamPreflightOutcome::ModelUnsupported { message, response };
             }
-            Err(err) => StreamPreflightOutcome::StatusFailover {
+        }
+        return if has_more_candidates {
+            StreamPreflightOutcome::StatusFailover {
                 status_code,
-                message: format!(
-                    "upstream non-200 status={status_code}; read response body failed: {err}"
-                ),
-            },
+                message: summarize_non_200_status_failover(status_code, Some(&body)),
+            }
+        } else {
+            StreamPreflightOutcome::Ready(response)
         };
     }
     if has_more_candidates && !(200..=299).contains(&status_code) {

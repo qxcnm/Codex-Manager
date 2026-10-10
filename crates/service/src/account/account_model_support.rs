@@ -15,7 +15,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const ENV_TTL_SECS: &str = "CODEXMANAGER_ACCOUNT_MODEL_UNSUPPORTED_TTL_SECS";
 const DEFAULT_TTL_SECS: u64 = 30 * 60;
-const MAX_MESSAGE_CHARS: usize = 2000;
 
 fn now_secs() -> u64 {
     SystemTime::now()
@@ -45,43 +44,78 @@ fn with_marks<T>(action: impl FnOnce(&mut HashMap<String, u64>) -> T) -> T {
     action(&mut guard)
 }
 
+// Upstream model IDs are case sensitive; use the exact final sent ID.
 fn normalize_model(model: &str) -> String {
-    model.trim().to_ascii_lowercase()
+    model.trim().to_owned()
 }
 
 fn mark_key(account_id: &str, model: &str) -> String {
     format!("{}\u{1}{}", account_id.trim(), normalize_model(model))
 }
 
-/// 把上游错误正文裁剪到有界长度，避免把整个响应体带进日志或记忆。
-pub(crate) fn bound_message(message: &str) -> String {
-    let trimmed = message.trim();
-    if trimmed.chars().count() <= MAX_MESSAGE_CHARS {
-        return trimmed.to_string();
-    }
-    trimmed.chars().take(MAX_MESSAGE_CHARS).collect()
+/// Match only complete, explicit account/model rejection templates.
+/// Tool capability and parameter errors must not poison the primary model.
+fn rejected_model(message: &str) -> Option<&str> {
+    let message = message.trim().trim_end_matches('.');
+    let model = if let Some(rest) = message.strip_prefix("The '") {
+        rest.strip_suffix("' model is not supported when using Codex with a ChatGPT account")?
+    } else if let Some(rest) = message.strip_prefix("model ") {
+        rest.strip_suffix(" is not supported for this account")?
+    } else {
+        return None;
+    };
+    (!model.is_empty()
+        && model
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')))
+    .then_some(model)
 }
 
-/// 识别“该账户不支持该模型”这一类上游拒绝。
-///
-/// 只匹配同时出现“模型不被支持”与“账户/Codex 范围”的文案，避免把参数错误
-/// （例如 “images[].file_id is not supported (use image_url)”）误判为资格问题。
-pub(crate) fn looks_like_account_model_unsupported(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    if lower.is_empty() {
-        return false;
+pub(crate) fn account_model_rejection_message(body: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let error = value.get("error")?;
+    // A parameter/tool-scoped error never establishes primary-model eligibility.
+    if error
+        .get("param")
+        .is_some_and(|param| !param.is_null() && param.as_str() != Some("model"))
+    {
+        return None;
     }
-    let mentions_model = lower.contains("model") || lower.contains("gpt-");
-    let mentions_unsupported = lower.contains("is not supported")
-        || lower.contains("not supported for")
-        || lower.contains("does not support")
-        || lower.contains("unsupported model");
-    let mentions_account_scope = lower.contains("chatgpt account")
-        || lower.contains("using codex")
-        || lower.contains("this account")
-        || lower.contains("account does not")
-        || lower.contains("account is not");
-    mentions_model && mentions_unsupported && mentions_account_scope
+    let message = error.get("message")?.as_str()?;
+    rejected_model(message).map(|_| message.to_owned())
+}
+
+#[cfg(test)]
+fn looks_like_account_model_unsupported(message: &str) -> bool {
+    rejected_model(message).is_some()
+}
+
+/// Use the same configured account-pool model for routing and the final request.
+pub(crate) fn account_model_override_for_request(
+    storage: &codexmanager_core::storage::Storage,
+    requested_model: Option<&str>,
+) -> Option<String> {
+    requested_model
+        .and_then(|model| {
+            crate::models_v2::enabled_model(storage, crate::models_v2::policy_catalog_slug(model))
+                .ok()
+                .flatten()
+        })
+        .and_then(|model| {
+            model
+                .routes
+                .into_iter()
+                .filter(|route| {
+                    route.enabled
+                        && route.source_kind == "account_pool"
+                        && route.source_id == "default"
+                })
+                .max_by_key(|route| route.priority)
+                .map(|route| route.upstream_model)
+        })
+        .filter(|model| {
+            !crate::models_v2::should_preserve_luna_reserve_alias(requested_model, Some(model))
+        })
 }
 
 /// 记录 (账户, 模型) 不支持，TTL 取环境变量或默认值。
@@ -138,7 +172,9 @@ pub(crate) fn note_account_model_unsupported(
     let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) else {
         return false;
     };
-    if !looks_like_account_model_unsupported(message) {
+    if !rejected_model(message)
+        .is_some_and(|rejected| normalize_model(rejected) == normalize_model(model))
+    {
         return false;
     }
     log::warn!(
@@ -186,7 +222,7 @@ mod tests {
         mark_unsupported(&account, "gpt-6-astra");
 
         assert!(is_unsupported(&account, "gpt-6-astra"));
-        assert!(is_unsupported(&account, "GPT-6-ASTRA"));
+        assert!(!is_unsupported(&account, "GPT-6-ASTRA"));
         assert!(!is_unsupported(&account, "gpt-5.6-luna"));
         assert!(!is_unsupported(&other_account, "gpt-6-astra"));
 
@@ -238,9 +274,62 @@ mod tests {
     }
 
     #[test]
-    fn bound_message_limits_size() {
-        let long = "x".repeat(MAX_MESSAGE_CHARS + 50);
-        assert_eq!(bound_message(&long).chars().count(), MAX_MESSAGE_CHARS);
-        assert_eq!(bound_message("  short  "), "short");
+    fn learning_requires_the_rejected_primary_model_and_explicit_error_field() {
+        let account = unique("dimension");
+        let tool_error =
+            "The 'gpt-image-2' model is not supported when using Codex with a ChatGPT account.";
+        assert!(!note_account_model_unsupported(
+            &account,
+            Some("gpt-6-luna"),
+            tool_error
+        ));
+        assert!(!is_unsupported(&account, "gpt-6-luna"));
+        let parameter_error = "The 'gpt-6-luna' model parameter temperature is not supported when using Codex with a ChatGPT account.";
+        assert!(!note_account_model_unsupported(
+            &account,
+            Some("gpt-6-luna"),
+            parameter_error
+        ));
+        let precise =
+            "The 'gpt-6-luna' model is not supported when using Codex with a ChatGPT account.";
+        let parameter_body = serde_json::to_vec(
+            &serde_json::json!({"error": {"message": precise, "param": "tools[0].model"}}),
+        )
+        .unwrap();
+        assert!(account_model_rejection_message(&parameter_body).is_none());
+        let metadata_body =
+            serde_json::to_vec(&serde_json::json!({"error": {"context": {"message": precise}}}))
+                .unwrap();
+        assert!(account_model_rejection_message(&metadata_body).is_none());
+        let body = serde_json::to_vec(
+            &serde_json::json!({"error": {"message": precise, "param": "model"}}),
+        )
+        .unwrap();
+        let message = account_model_rejection_message(&body).unwrap();
+        assert!(note_account_model_unsupported(
+            &account,
+            Some("gpt-6-luna"),
+            &message
+        ));
+        clear_unsupported(&account, "gpt-6-luna");
+    }
+
+    #[test]
+    fn ttl_configuration_defaults_for_zero_invalid_and_missing_values() {
+        let _guard = crate::test_env_guard();
+        let previous = std::env::var(ENV_TTL_SECS).ok();
+        for raw in ["0", "-1", "invalid", "", "18446744073709551616"] {
+            std::env::set_var(ENV_TTL_SECS, raw);
+            assert_eq!(ttl_secs(), DEFAULT_TTL_SECS);
+        }
+        std::env::remove_var(ENV_TTL_SECS);
+        assert_eq!(ttl_secs(), DEFAULT_TTL_SECS);
+        std::env::set_var(ENV_TTL_SECS, " 10 ");
+        assert_eq!(ttl_secs(), 10);
+        if let Some(previous) = previous {
+            std::env::set_var(ENV_TTL_SECS, previous);
+        } else {
+            std::env::remove_var(ENV_TTL_SECS);
+        }
     }
 }

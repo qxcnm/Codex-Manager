@@ -79,3 +79,14 @@ fn parse_openai_responses_event_treats_partial_image_as_non_terminal() {
     );
     assert!(event.terminal.is_none());
 }
+
+#[test]
+fn completed_event_with_failed_status_never_succeeds_or_links_a_response_id() {
+    for status in ["failed", "incomplete", "cancelled", "canceled"] {
+        let lines = vec![format!("data: {{\"type\":\"response.completed\",\"response\":{{\"object\":\"response\",\"id\":\"resp_contradictory\",\"status\":\"{status}\",\"output\":[]}}}}")];
+        let event = super::OpenAIResponsesEvent::parse(&lines).unwrap();
+        assert!(matches!(event.terminal, Some(super::SseTerminal::Err(_))));
+        assert!(event.usage.response_id.is_none());
+        assert!(event.usage.explicit_failure);
+    }
+}

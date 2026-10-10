@@ -77,6 +77,9 @@ pub(crate) fn prepare_gateway_candidates(
     account_plan_filter: Option<&str>,
     low_quota_mode: super::super::super::LowQuotaCandidateMode,
 ) -> Result<Vec<(Account, Token)>, String> {
+    let support_model_override =
+        crate::account::model_support::account_model_override_for_request(storage, request_model);
+    let support_model = support_model_override.as_deref().or(request_model);
     let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let normalized_group_filter = account_group_filter
         .map(str::trim)
@@ -98,7 +101,7 @@ pub(crate) fn prepare_gateway_candidates(
             storage,
             low_quota_mode,
         )?;
-        drop_known_unsupported_model_candidates(&mut candidates, request_model);
+        drop_known_unsupported_model_candidates(&mut candidates, support_model);
         return Ok(candidates);
     }
 
@@ -169,7 +172,7 @@ pub(crate) fn prepare_gateway_candidates(
             low_quota_mode,
         )?
     };
-    drop_known_unsupported_model_candidates(&mut candidates, request_model);
+    drop_known_unsupported_model_candidates(&mut candidates, support_model);
     Ok(candidates)
 }
 

@@ -62,6 +62,9 @@ pub(in super::super) fn prepare_request_setup(
             candidates,
             route_conversation_source,
         );
+    let support_model_override =
+        crate::account::model_support::account_model_override_for_request(storage, model_for_log);
+    let support_model = support_model_override.as_deref().or(model_for_log);
     // 资格过滤先于粘性选择（BUG-2026-0930-01）：若绑定账户已知不支持本次请求的模型，
     // 则放弃该绑定，让候选过滤接管；绑定对其它模型仍然有效。
     if let Some(routing) = conversation_routing.as_mut() {
@@ -70,7 +73,7 @@ pub(in super::super) fn prepare_request_setup(
             .as_ref()
             .map(|binding| binding.account_id.clone())
             .filter(|account_id| {
-                model_for_log
+                support_model
                     .map(str::trim)
                     .filter(|model| !model.is_empty())
                     .is_some_and(|model| {

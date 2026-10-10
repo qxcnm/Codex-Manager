@@ -86,12 +86,28 @@ impl OpenAIResponsesEvent {
             .map(OpenAIResponsesEventKind::from_type)
             .unwrap_or(OpenAIResponsesEventKind::Other);
 
-        let upstream_error_hint = extract_error_message_from_json(&value);
+        let upstream_error_hint = extract_error_message_from_json(&value).or_else(|| {
+            if !matches!(
+                kind,
+                OpenAIResponsesEventKind::Completed | OpenAIResponsesEventKind::Done
+            ) {
+                return None;
+            }
+            let status = value.pointer("/response/status").and_then(Value::as_str)?;
+            match status {
+                "incomplete" => Some(STREAM_INCOMPLETE_FALLBACK_MESSAGE.to_owned()),
+                "failed" | "cancelled" | "canceled" => {
+                    Some(UPSTREAM_NON_SUCCESS_FALLBACK_MESSAGE.to_owned())
+                }
+                _ => None,
+            }
+        });
         let terminal =
             terminal_for_event(kind, event_type.as_deref(), upstream_error_hint.as_deref());
 
         let mut usage = parse_usage_from_json(&value);
-        if kind == OpenAIResponsesEventKind::Completed {
+        if kind == OpenAIResponsesEventKind::Completed && matches!(terminal, Some(SseTerminal::Ok))
+        {
             usage.response_id = value
                 .get("response")
                 .and_then(|response| response.get("id"))
