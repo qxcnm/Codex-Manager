@@ -131,7 +131,7 @@ PatewayAI специализируется на высококачественн
     <td valign="top">
       <strong><a href="https://www.aixiamo.com/?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=brand_home_v3">AIXiamo — официальное пополнение ChatGPT Plus / Pro для собственного аккаунта в Китае</a></strong><br />
       <strong>Не хватает лимита Codex — Plus или Pro?</strong> Для обычной работы выберите <a href="https://www.aixiamo.com/chatgpt-plus-domestic-recharge?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=plus_owner_v3">Plus</a>; при частых лимитах и длительных задачах сравните <a href="https://www.aixiamo.com/chatgpt-pro?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=pro_owner_v3">Pro 5x / 20x</a>.<br />
-      <strong>Руководство спонсора:</strong> <a rel="sponsored nofollow" href="https://github.com/momochoog/gpt-daichong">выбор и пополнение ChatGPT Plus / Pro в Китае в 2026 году</a><br />
+      <strong>Руководство спонсора:</strong> <a rel="sponsored nofollow" href="https://gpt-guide.aixiamo.com/knowledge">выбор и пополнение ChatGPT Plus / Pro в Китае в 2026 году</a><br />
       Поддерживается Alipay без зарубежной карты; сервис не запрашивает пароли, коды подтверждения или восстановления. Заказы отслеживаются, доступна поддержка на китайском, неудачные пополнения возвращаются после проверки. Также доступны Claude Pro / Max, Gemini, Grok / SuperGrok и другие подписки.<br />
       Доступны корпоративные закупки и <a href="https://www.aixiamo.com/articles/aixiamo-invoice-application-notice-2026?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=invoice_notice_v3">выставление счетов для завершённых заказов после согласования с поддержкой</a>.
     </td>

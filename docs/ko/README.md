@@ -131,7 +131,7 @@ PatewayAI는 공식 고품질 모델 API 중계에 집중하며 Claude와 Codex 
     <td valign="top">
       <strong><a href="https://www.aixiamo.com/?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=brand_home_v3">AIXiamo 공식 사이트 | 중국 내 본인 계정 ChatGPT Plus / Pro 정식 충전</a></strong><br />
       <strong>Codex 한도가 부족하다면 Plus와 Pro 중 무엇을 선택할까요?</strong> 일상 사용은 <a href="https://www.aixiamo.com/chatgpt-plus-domestic-recharge?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=plus_owner_v3">Plus</a>, 한도에 자주 도달하거나 장시간 작업은 <a href="https://www.aixiamo.com/chatgpt-pro?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=pro_owner_v3">Pro 5x / 20x</a>를 비교하세요.<br />
-      <strong>스폰서 가이드:</strong> <a rel="sponsored nofollow" href="https://github.com/momochoog/gpt-daichong">2026 중국 ChatGPT Plus / Pro 충전 및 요금제 선택 가이드</a><br />
+      <strong>스폰서 가이드:</strong> <a rel="sponsored nofollow" href="https://gpt-guide.aixiamo.com/knowledge">2026 중국 ChatGPT Plus / Pro 충전 및 요금제 선택 가이드</a><br />
       해외 은행 카드 없이 Alipay를 지원하며 비밀번호, 인증 코드, 복구 코드를 요구하지 않습니다. 주문 조회와 중국어 상담을 제공하고, 충전 실패 시 확인 후 전액 환불합니다. Claude Pro / Max, Gemini, Grok / SuperGrok 등도 제공합니다.<br />
       기업 구매도 가능하며, <a href="https://www.aixiamo.com/articles/aixiamo-invoice-application-notice-2026?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=invoice_notice_v3">완료된 주문은 상담 확인 후 청구서를 신청</a>할 수 있습니다.
     </td>
