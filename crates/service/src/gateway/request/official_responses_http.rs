@@ -348,6 +348,45 @@ fn ensure_tools_list(path: &str, obj: &mut Map<String, Value>) -> bool {
     }
 }
 
+// Historical hosted search calls need a matching tool declaration even when
+// Codex sends no tools during context compaction. If there were no tools,
+// preserve that intent by disabling new tool calls.
+fn ensure_historical_web_search_tool(path: &str, obj: &mut Map<String, Value>) -> bool {
+    if !is_standard_responses_path(path) {
+        return false;
+    }
+    let has_search_history = obj
+        .get("input")
+        .and_then(Value::as_array)
+        .is_some_and(|input| {
+            input.iter().any(|item| {
+                item.get("type").and_then(Value::as_str) == Some("web_search_call")
+            })
+        });
+    if !has_search_history {
+        return false;
+    }
+    let Some(tools) = obj.get_mut("tools").and_then(Value::as_array_mut) else {
+        return false;
+    };
+    if tools.iter().any(|tool| {
+        tool.get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind.starts_with("web_search"))
+    }) {
+        return false;
+    }
+    let had_no_tools = tools.is_empty();
+    tools.push(serde_json::json!({
+        "type": "web_search",
+        "external_web_access": false
+    }));
+    if had_no_tools {
+        obj.insert("tool_choice".to_string(), Value::String("none".to_string()));
+    }
+    true
+}
+
 fn ensure_parallel_tool_calls_bool(path: &str, obj: &mut Map<String, Value>) -> bool {
     if !is_responses_path(path) {
         return false;
@@ -645,6 +684,9 @@ pub(crate) fn apply_codex_http_request_rules(
             result.changed = true;
         }
         if ensure_tools_list(path, obj) {
+            result.changed = true;
+        }
+        if ensure_historical_web_search_tool(path, obj) {
             result.changed = true;
         }
         if ensure_parallel_tool_calls_bool(path, obj) {

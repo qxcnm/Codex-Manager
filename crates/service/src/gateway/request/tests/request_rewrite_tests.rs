@@ -1748,6 +1748,107 @@ fn responses_defaults_tool_choice_and_reasoning_include_for_codex_backend() {
 }
 
 #[test]
+fn responses_declares_historical_web_search_without_enabling_new_searches() {
+    let _guard = crate::test_env_guard();
+    let body = json!({
+        "model": "gpt-6.1-sol",
+        "input": [
+            {"type": "web_search_call", "id": "ws_old", "status": "completed"},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "result"}]}
+        ],
+        "tools": [],
+        "tool_choice": "auto"
+    });
+    let out = apply_codex_compat_request_overrides(
+        "/v1/responses",
+        serde_json::to_vec(&body).expect("serialize request"),
+        None,
+        None,
+        Some("https://chatgpt.com/backend-api/codex"),
+    );
+    let value: serde_json::Value = serde_json::from_slice(&out).expect("parse request");
+    assert_eq!(value["input"], body["input"]);
+    assert_eq!(
+        value["tools"],
+        json!([{"type": "web_search", "external_web_access": false}])
+    );
+    assert_eq!(value["tool_choice"], "none");
+}
+
+#[test]
+fn responses_historical_web_search_preserves_other_tools_and_existing_declaration() {
+    let _guard = crate::test_env_guard();
+    let history = json!([{"type": "web_search_call", "id": "ws_old"}]);
+    let function = json!({"type": "function", "name": "ping", "parameters": {"type": "object"}});
+    for tools in [
+        json!([function]),
+        json!([{"type": "web_search", "external_web_access": true}]),
+    ] {
+        let body = json!({
+            "model": "gpt-6.1-sol",
+            "input": history,
+            "tools": tools,
+            "tool_choice": "auto"
+        });
+        let out = apply_codex_compat_request_overrides(
+            "/v1/responses",
+            serde_json::to_vec(&body).expect("serialize request"),
+            None,
+            None,
+            Some("https://chatgpt.com/backend-api/codex"),
+        );
+        let value: serde_json::Value = serde_json::from_slice(&out).expect("parse request");
+        assert_eq!(value["tool_choice"], "auto");
+        let expected_len = if tools[0]["type"] == "function" {
+            2
+        } else {
+            1
+        };
+        assert_eq!(value["tools"].as_array().unwrap().len(), expected_len);
+        assert_eq!(value["tools"][0], tools[0]);
+    }
+}
+
+#[test]
+fn responses_historical_web_search_fix_is_codex_backend_only() {
+    let _guard = crate::test_env_guard();
+    let body = json!({
+        "model": "gpt-6.1-sol",
+        "input": [{"type": "web_search_call", "id": "ws_old"}],
+        "tools": []
+    });
+    for (path, upstream) in [
+        ("/v1/responses", "https://example.org/v1"),
+        ("/v1/responses/compact", "https://chatgpt.com/backend-api/codex"),
+    ] {
+        let out = apply_codex_compat_request_overrides(
+            path,
+            serde_json::to_vec(&body).expect("serialize request"),
+            None,
+            None,
+            Some(upstream),
+        );
+        let value: serde_json::Value = serde_json::from_slice(&out).expect("parse request");
+        assert_eq!(value["tools"], json!([]));
+    }
+    let no_history = json!({
+        "model": "gpt-6.1-sol",
+        "input": [{"role": "user", "content": "hello"}],
+        "tools": []
+    });
+    let out = apply_codex_compat_request_overrides(
+        "/v1/responses",
+        serde_json::to_vec(&no_history).expect("serialize request"),
+        None,
+        None,
+        Some("https://chatgpt.com/backend-api/codex"),
+    );
+    let value: serde_json::Value = serde_json::from_slice(&out).expect("parse request");
+    assert_eq!(value["tools"], json!([]));
+    assert_eq!(value["tool_choice"], "auto");
+}
+
+#[test]
 fn responses_preserve_specific_function_tool_choice_object() {
     let _guard = crate::test_env_guard();
     let body = json!({
