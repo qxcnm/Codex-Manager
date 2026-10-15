@@ -38,21 +38,21 @@ pub(crate) fn mark_terminal_delivered(
         return;
     }
     collector.terminal_delivery_tail.extend_from_slice(chunk);
+    // Inspect the full chunk before retaining only the suffix needed to match
+    // markers split across reads. A large terminal frame may start with its
+    // only terminal marker and end with a long response/error payload.
+    let text = String::from_utf8_lossy(&collector.terminal_delivery_tail).to_ascii_lowercase();
+    let delivered = text.contains("response.completed")
+        || text.contains("response.failed")
+        || text.contains("response.incomplete")
+        || text.contains("response.done")
+        || text.contains("data: [done]");
     const TAIL_LIMIT: usize = 256;
     if collector.terminal_delivery_tail.len() > TAIL_LIMIT {
         let keep_from = collector.terminal_delivery_tail.len() - TAIL_LIMIT;
         collector.terminal_delivery_tail.drain(..keep_from);
     }
-    let text = String::from_utf8_lossy(&collector.terminal_delivery_tail).to_ascii_lowercase();
-    if !text.contains("response.completed")
-        && !text.contains("response.failed")
-        && !text.contains("response.incomplete")
-        && !text.contains("response.done")
-        && !text.contains("data: [done]")
-    {
-        return;
-    }
-    collector.terminal_delivered = true;
+    collector.terminal_delivered = delivered;
 }
 
 fn elapsed_ms_since(started_at: Instant) -> i64 {

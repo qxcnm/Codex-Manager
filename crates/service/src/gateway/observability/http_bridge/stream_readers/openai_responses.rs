@@ -408,12 +408,12 @@ mod terminal_error_tests {
     use super::*;
     use bytes::Bytes;
 
-    fn read_fixture(sse: &'static [u8]) -> (String, PassthroughSseCollector) {
+    fn read_fixture(sse: &[u8]) -> (String, PassthroughSseCollector) {
         let usage = Arc::new(Mutex::new(PassthroughSseCollector::default()));
         let response = GatewayStreamResponse::new(
             reqwest::StatusCode::OK,
             reqwest::header::HeaderMap::new(),
-            GatewayByteStream::from_bytes(Bytes::from_static(sse)),
+            GatewayByteStream::from_bytes(Bytes::copy_from_slice(sse)),
         );
         let mut reader = OpenAIResponsesPassthroughSseReader::from_stream_response(
             response,
@@ -444,6 +444,26 @@ mod terminal_error_tests {
             .terminal_error
             .as_deref()
             .is_some_and(|message| message.contains("response protection is unavailable")));
+    }
+
+    #[test]
+    fn native_long_terminal_frames_are_not_duplicated() {
+        for terminal in [
+            "response.failed",
+            "response.incomplete",
+            "response.completed",
+        ] {
+            let response =
+                serde_json::json!({"error": {"message": "upstream failure ".repeat(100)}});
+            let payload = format!(r#"{{"type":"{terminal}","response":{response}}}"#);
+            let upstream = format!("event: {terminal}\ndata: {payload}\n\n");
+            let (body, collected) = read_fixture(upstream.as_bytes());
+            assert_eq!(
+                body, upstream,
+                "terminal event {terminal} must pass through unchanged"
+            );
+            assert!(collected.terminal_delivered);
+        }
     }
 
     #[test]

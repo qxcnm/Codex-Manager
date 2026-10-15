@@ -4,6 +4,16 @@ use super::{
 };
 
 #[test]
+fn terminal_delivery_detects_split_marker_before_large_payload() {
+    let collector = super::Arc::new(super::Mutex::new(super::PassthroughSseCollector::default()));
+    super::mark_terminal_delivered(&collector, b"event: response.fa");
+    assert!(!collector.lock().unwrap().terminal_delivered);
+    let remainder = format!("iled\ndata: {}\n\n", "x".repeat(1024));
+    super::mark_terminal_delivered(&collector, remainder.as_bytes());
+    assert!(collector.lock().unwrap().terminal_delivered);
+}
+
+#[test]
 fn comment_keepalive_is_not_a_semantic_event() {
     let frame = super::SseKeepAliveFrame::Comment.bytes();
     assert_eq!(frame, b": keep-alive\n\n");
