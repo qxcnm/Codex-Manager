@@ -359,9 +359,9 @@ fn ensure_historical_web_search_tool(path: &str, obj: &mut Map<String, Value>) -
         .get("input")
         .and_then(Value::as_array)
         .is_some_and(|input| {
-            input.iter().any(|item| {
-                item.get("type").and_then(Value::as_str) == Some("web_search_call")
-            })
+            input
+                .iter()
+                .any(|item| item.get("type").and_then(Value::as_str) == Some("web_search_call"))
         });
     if !has_search_history {
         return false;
@@ -686,12 +686,14 @@ pub(crate) fn apply_codex_http_request_rules(
         if ensure_tools_list(path, obj) {
             result.changed = true;
         }
-        if ensure_historical_web_search_tool(path, obj) {
-            result.changed = true;
-        }
         if ensure_parallel_tool_calls_bool(path, obj) {
             result.changed = true;
         }
+    }
+    // Native Codex skips compatibility defaults, but still needs a matching
+    // hosted-tool declaration when replaying search history during compaction.
+    if ensure_historical_web_search_tool(path, obj) {
+        result.changed = true;
     }
     if !is_compact_path(path) {
         let had_stream_passthrough = obj.contains_key("stream_passthrough");

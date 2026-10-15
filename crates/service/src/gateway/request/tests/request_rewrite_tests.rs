@@ -1748,6 +1748,38 @@ fn responses_defaults_tool_choice_and_reasoning_include_for_codex_backend() {
 }
 
 #[test]
+fn responses_historical_web_search_also_repairs_native_codex_requests() {
+    let _guard = crate::test_env_guard();
+    let body = json!({
+        "model": "gpt-6.1-sol",
+        "input": [{"type": "web_search_call", "id": "ws_old", "status": "completed"}],
+        "tools": [],
+        "tool_choice": "auto",
+        "stream": false,
+        "store": true
+    });
+    let out = apply_request_overrides_with_service_tier_and_prompt_cache_key_scope(
+        "/v1/responses",
+        serde_json::to_vec(&body).expect("serialize request"),
+        None,
+        None,
+        None,
+        Some("https://chatgpt.com/backend-api/codex"),
+        None,
+        false,
+    );
+    let value: serde_json::Value = serde_json::from_slice(&out).expect("parse request");
+    assert_eq!(value["input"], body["input"]);
+    assert_eq!(
+        value["tools"],
+        json!([{"type": "web_search", "external_web_access": false}])
+    );
+    assert_eq!(value["tool_choice"], "none");
+    assert_eq!(value["stream"], false);
+    assert_eq!(value["store"], true);
+}
+
+#[test]
 fn responses_declares_historical_web_search_without_enabling_new_searches() {
     let _guard = crate::test_env_guard();
     let body = json!({
@@ -1799,11 +1831,7 @@ fn responses_historical_web_search_preserves_other_tools_and_existing_declaratio
         );
         let value: serde_json::Value = serde_json::from_slice(&out).expect("parse request");
         assert_eq!(value["tool_choice"], "auto");
-        let expected_len = if tools[0]["type"] == "function" {
-            2
-        } else {
-            1
-        };
+        let expected_len = if tools[0]["type"] == "function" { 2 } else { 1 };
         assert_eq!(value["tools"].as_array().unwrap().len(), expected_len);
         assert_eq!(value["tools"][0], tools[0]);
     }
@@ -1819,7 +1847,10 @@ fn responses_historical_web_search_fix_is_codex_backend_only() {
     });
     for (path, upstream) in [
         ("/v1/responses", "https://example.org/v1"),
-        ("/v1/responses/compact", "https://chatgpt.com/backend-api/codex"),
+        (
+            "/v1/responses/compact",
+            "https://chatgpt.com/backend-api/codex",
+        ),
     ] {
         let out = apply_codex_compat_request_overrides(
             path,
