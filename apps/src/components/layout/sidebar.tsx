@@ -227,7 +227,7 @@ export function Sidebar() {
       />
       <div
         className={cn(
-          "flex h-[50px] shrink-0 items-center border-b border-border/55",
+          "flex h-16 shrink-0 items-center border-b border-border/55",
           isSidebarOpen ? "px-3.5" : "px-2 xl:px-2.5"
         )}
       >
@@ -238,8 +238,8 @@ export function Sidebar() {
           title={brandTitle}
           aria-label={brandTitle}
           className={cn(
-            "flex h-auto w-full items-center gap-2.5 overflow-hidden rounded-md px-0 py-1.5 transition-colors hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
-            isSidebarOpen ? "justify-start text-left" : "justify-center"
+            "flex h-auto w-full items-center gap-2.5 overflow-hidden rounded-md py-1.5 transition-colors hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+            isSidebarOpen ? "justify-start px-2 text-left" : "justify-center px-0"
           )}
         >
           <div className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-md border border-primary/20 bg-card text-primary">
