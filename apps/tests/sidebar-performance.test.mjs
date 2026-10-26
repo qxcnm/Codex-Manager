@@ -160,7 +160,7 @@ test("wide but short windows keep the complete sidebar discoverable", async () =
 
   assert.match(source, /min-h-8[\s\S]*xl:min-h-9/);
   assert.match(source, /min-h-0 flex-1 overflow-y-auto overscroll-contain py-2/);
-  assert.match(source, /flex h-\[50px\] shrink-0 items-center/);
+  assert.match(source, /flex h-16 shrink-0 items-center/);
 });
 
 test("page fallback stays aligned with both sidebar widths", async () => {
