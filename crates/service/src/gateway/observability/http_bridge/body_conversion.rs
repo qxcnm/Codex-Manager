@@ -558,7 +558,7 @@ pub(super) fn convert_success_body_for_adapter(
             convert_anthropic_messages_body_to_responses(body)
         }
         ResponseAdapter::ChatCompletionsFromResponses => {
-            convert_responses_body_to_chat_completions(body)
+            convert_responses_body_to_chat_completions(body, tool_name_restore_map)
         }
         ResponseAdapter::CompactFromChatCompletions => {
             convert_chat_completions_body_to_compact(body)
@@ -638,7 +638,10 @@ fn responses_usage_to_chat_usage(usage: &Value) -> Value {
     mapped
 }
 
-pub(super) fn convert_responses_body_to_chat_completions(body: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn convert_responses_body_to_chat_completions(
+    body: &[u8],
+    tool_name_restore_map: Option<&ToolNameRestoreMap>,
+) -> Option<Vec<u8>> {
     let value = serde_json::from_slice::<Value>(body).ok()?;
     let response = value.get("response").unwrap_or(&value);
     let mut text = String::new();
@@ -731,6 +734,30 @@ pub(super) fn convert_responses_body_to_chat_completions(body: &[u8]) -> Option<
     }
     if let Some(usage) = usage {
         completion["usage"] = usage;
+    }
+    let tool_calls: Vec<Value> = response
+        .get("output")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("function_call"))
+        .map(|item| {
+            Some(json!({
+                "id": item.get("call_id").or_else(|| item.get("id"))?.as_str()?,
+                "type": "function",
+                "function": {
+                    "name": restore_tool_name(item.get("name")?.as_str()?, tool_name_restore_map),
+                    "arguments": item.get("arguments")?.as_str()?,
+                }
+            }))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    if !tool_calls.is_empty() {
+        completion["choices"][0]["message"]["tool_calls"] = Value::Array(tool_calls);
+        completion["choices"][0]["finish_reason"] = Value::String("tool_calls".to_string());
+        if text.is_empty() {
+            completion["choices"][0]["message"]["content"] = Value::Null;
+        }
     }
     if !reasoning_text.trim().is_empty() {
         completion["choices"][0]["message"]["reasoning"] = Value::String(reasoning_text.clone());
