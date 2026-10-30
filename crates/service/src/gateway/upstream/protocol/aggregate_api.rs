@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use super::super::GatewayUpstreamResponse;
+use super::claude_sampling::strip_unsupported_claude_sampling_params;
 use crate::aggregate_api::{
     AGGREGATE_API_AUTH_APIKEY, AGGREGATE_API_AUTH_USERPASS, AGGREGATE_API_PROVIDER_CLAUDE,
     AGGREGATE_API_PROVIDER_CODEX, AGGREGATE_API_PROVIDER_COMPATIBLE, AGGREGATE_API_PROVIDER_GEMINI,
@@ -171,7 +172,10 @@ fn rewrite_body_for_candidate_transport(
     path: &str,
     upstream_url: &str,
 ) -> Bytes {
-    let rewritten = rewrite_body_model_override(body, candidate.model_override.as_deref());
+    let rewritten = strip_unsupported_claude_sampling_params(&rewrite_body_model_override(
+        body,
+        candidate.model_override.as_deref(),
+    ));
     if !super::super::config::should_send_chatgpt_account_header(upstream_url) {
         return Bytes::from(
             super::super::super::apply_external_dynamic_tools_transport_rules(
@@ -2040,6 +2044,51 @@ mod bridge_tests {
         assert_eq!(compatible_value["service_tier"], "fast");
         assert!(compatible_value.get("instructions").is_none());
         assert!(compatible_value.get("store").is_none());
+    }
+
+    #[test]
+    fn candidate_transport_drops_sampling_params_only_for_routed_new_claude_models() {
+        let _guard = crate::test_env_guard();
+        let body = Bytes::from_static(
+            br#"{"model":"gpt-6-sol","stream":true,"temperature":0.7,"top_p":0.9,"max_completion_tokens":1600,"messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"search_order","parameters":{"type":"object"}}}]}"#,
+        );
+        let mut claude = candidate("claude-official", 10);
+        claude.provider_type = AGGREGATE_API_PROVIDER_COMPATIBLE.to_string();
+        claude.url = "https://api.anthropic.com/v1".to_string();
+        claude.model_override = Some("claude-haiku-5-5".to_string());
+        let mut older_claude = claude.clone();
+        older_claude.model_override = Some("claude-opus-4-6".to_string());
+        let mut manu = candidate("manu", 5);
+        manu.model_override = Some("gpt-6-luna".to_string());
+
+        let rewrite = |candidate: &AggregateApi, upstream_url: &str| -> Value {
+            let rewritten = rewrite_body_for_candidate_transport(
+                &body,
+                candidate,
+                "/v1/chat/completions",
+                upstream_url,
+            );
+            serde_json::from_slice(rewritten.as_ref()).expect("rewritten body")
+        };
+        let claude_value = rewrite(&claude, "https://api.anthropic.com/v1/chat/completions");
+        let older_value = rewrite(
+            &older_claude,
+            "https://api.anthropic.com/v1/chat/completions",
+        );
+        let manu_value = rewrite(&manu, "https://manu.example.com/v1/chat/completions");
+
+        assert_eq!(claude_value["model"], "claude-haiku-5-5");
+        assert!(claude_value.get("temperature").is_none());
+        assert!(claude_value.get("top_p").is_none());
+        assert_eq!(claude_value["stream"], true);
+        assert_eq!(claude_value["max_completion_tokens"], 1600);
+        assert_eq!(claude_value["tools"][0]["function"]["name"], "search_order");
+
+        assert_eq!(older_value["model"], "claude-opus-4-6");
+        assert_eq!(older_value["temperature"], 0.7);
+        assert_eq!(manu_value["model"], "gpt-6-luna");
+        assert_eq!(manu_value["temperature"], 0.7);
+        assert_eq!(manu_value["top_p"], 0.9);
     }
 
     /// 函数 `ids`
