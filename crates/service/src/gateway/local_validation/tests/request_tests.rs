@@ -104,6 +104,67 @@ fn anthropic_key_keeps_empty_overrides() {
     assert_eq!(service_tier, None);
 }
 
+#[test]
+fn images_passthrough_keeps_image_model_without_text_key_defaults() {
+    let api_key = sample_api_key(
+        crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        Some("gpt-6-sol"),
+        Some("medium"),
+        Some("fast"),
+    );
+    for path in ["/v1/images/generations", "/v1/images/edits"] {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "model": "gpt-image-2", "prompt": "a red apple"
+        }))
+        .expect("serialize image request");
+        let (rewritten_body, model_for_log, reasoning_for_log, _, service_tier_for_log, ..) =
+            apply_passthrough_request_overrides(path, body, &api_key, None, None);
+        let payload: Value = serde_json::from_slice(&rewritten_body).expect("json body");
+
+        assert_eq!(payload["model"], "gpt-image-2");
+        assert!(payload.get("reasoning").is_none());
+        assert!(payload.get("service_tier").is_none());
+        assert_eq!(model_for_log.as_deref(), Some("gpt-image-2"));
+        assert!(reasoning_for_log.is_none());
+        assert!(service_tier_for_log.is_none());
+    }
+}
+
+#[test]
+fn images_adapters_keep_configured_main_and_selected_tool_models_independent() {
+    let _guard = crate::test_env_guard();
+    let _main_model = RuntimeEnvGuard::set("CODEXMANAGER_CODEX_IMAGE_MAIN_MODEL", "gpt-6.1-terra");
+    let _tool_model =
+        RuntimeEnvGuard::set("CODEXMANAGER_CODEX_IMAGE_TOOL_MODEL", "gpt-image-2.5-flare");
+    for requested_model in [None, Some("gpt-image-2")] {
+        let mut request = serde_json::json!({ "prompt": "a red apple" });
+        if let Some(model) = requested_model {
+            request["model"] = serde_json::json!(model);
+        }
+        let (generated, _) = adapt_openai_images_generations_body_to_responses(
+            serde_json::to_vec(&request).expect("generation body"),
+        )
+        .expect("adapt generation request");
+        request["images"] = serde_json::json!([{
+            "image_url": "data:image/png;base64,aW1hZ2U="
+        }]);
+        let (edited, _) = adapt_openai_images_edits_body_to_responses(
+            serde_json::to_vec(&request).expect("edit body"),
+            Some("application/json"),
+        )
+        .expect("adapt edit request");
+        for mapped in [generated, edited] {
+            let payload: Value = serde_json::from_slice(&mapped).expect("adapted body");
+            assert_eq!(payload["model"], "gpt-6.1-terra");
+            assert_eq!(
+                payload["tools"][0]["model"],
+                requested_model.unwrap_or("gpt-image-2.5-flare")
+            );
+            assert!(payload.get("reasoning").is_none());
+        }
+    }
+}
+
 /// 函数 `anthropic_key_applies_custom_model_and_reasoning`
 ///
 /// 作者: gaohongshun

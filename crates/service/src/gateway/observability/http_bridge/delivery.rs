@@ -235,7 +235,7 @@ pub(crate) async fn respond_with_stream_upstream(
     let is_sse = upstream_meta.is_sse;
     let is_json = upstream_meta.is_json;
     if response_adapter != ResponseAdapter::Passthrough {
-        let status = StatusCode(upstream.status().as_u16());
+        let mut status = StatusCode(upstream.status().as_u16());
         let mut headers = copy_upstream_response_headers(upstream.headers(), trace_id);
 
         if !is_stream {
@@ -243,8 +243,14 @@ pub(crate) async fn respond_with_stream_upstream(
                 .read_all_bytes_cancellable(request.cancellation_receiver())
                 .await
                 .map_err(|err| format!("read upstream body failed: {err}"))?;
-            let detected_sse =
-                is_sse || (!is_json && looks_like_sse_payload(upstream_body.as_ref()));
+            let images_response_format = match response_adapter {
+                ResponseAdapter::ImagesB64JsonFromResponses => Some(ImagesResponseFormat::B64Json),
+                ResponseAdapter::ImagesUrlFromResponses => Some(ImagesResponseFormat::Url),
+                _ => None,
+            };
+            let detected_sse = is_sse
+                || ((!is_json || images_response_format.is_some())
+                    && looks_like_sse_payload(upstream_body.as_ref()));
             let (body, usage) = if detected_sse {
                 let (synthesized, mut usage) =
                     collect_non_stream_json_from_sse_bytes(upstream_body.as_ref());
@@ -258,6 +264,7 @@ pub(crate) async fn respond_with_stream_upstream(
                     .unwrap_or_default();
                 (upstream_body.to_vec(), usage)
             };
+            let mut image_error = None;
             let response_body = if status.0 >= 400 {
                 let message = with_upstream_debug_suffix(
                     extract_error_hint_from_body_or_headers(
@@ -277,6 +284,28 @@ pub(crate) async fn respond_with_stream_upstream(
                 )
                 .unwrap_or_else(|| "upstream compatibility bridge failed".to_string());
                 convert_error_body_for_adapter(response_adapter, &message)
+            } else if let Some(response_format) = images_response_format {
+                match super::images::parse_images_response_body(upstream_body.as_ref()) {
+                    Ok(response) => serde_json::to_vec(&super::build_images_api_response(
+                        &response,
+                        response_format,
+                    ))
+                    .map_err(|error| format!("serialize images response failed: {error}"))?,
+                    Err(message) => {
+                        let message = with_upstream_debug_suffix(
+                            Some(message),
+                            None,
+                            upstream_request_id.as_deref(),
+                            upstream_cf_ray.as_deref(),
+                            upstream_auth_error.as_deref(),
+                            upstream_identity_error_code.as_deref(),
+                        )
+                        .unwrap_or_else(|| "upstream image response failed".to_string());
+                        status = StatusCode(502);
+                        image_error = Some(message.clone());
+                        convert_error_body_for_adapter(response_adapter, &message)
+                    }
+                }
             } else {
                 convert_success_body_for_adapter(
                     response_adapter,
@@ -287,16 +316,23 @@ pub(crate) async fn respond_with_stream_upstream(
                 .unwrap_or_else(|| body.clone())
             };
             let delivery_error = respond_json_bytes(request, status, headers, response_body).await;
-            return Ok(terminal_bridge_result_with_debug_meta(
+            let mut result = terminal_bridge_result_with_debug_meta(
                 usage,
                 delivery_error,
-                None,
+                image_error.clone(),
                 &upstream_request_id,
                 &upstream_cf_ray,
                 &upstream_auth_error,
                 &upstream_identity_error_code,
                 &upstream_content_type,
-            ));
+            );
+            if image_error.is_some() {
+                result.usage.completed_successfully = false;
+                result.usage.explicit_failure = true;
+                result.stream_terminal_error = image_error;
+                result.delivered_status_code = Some(status.0);
+            }
+            return Ok(result);
         }
 
         if status.0 >= 400 && !is_sse {

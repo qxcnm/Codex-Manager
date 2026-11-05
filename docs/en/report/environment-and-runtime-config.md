@@ -108,12 +108,14 @@
 ### Codex image generation
 
 - `CODEXMANAGER_CODEX_IMAGE_GENERATION_ENABLED`: enables the image-generation compatibility path. Default `1`.
-- `CODEXMANAGER_CODEX_IMAGE_MAIN_MODEL`: main conversation model used internally by Images API compatibility endpoints. Default `gpt-6-luna`.
-- `CODEXMANAGER_CODEX_IMAGE_TOOL_MODEL`: image tool model. Default `gpt-image-2`.
+- `CODEXMANAGER_CODEX_IMAGE_MAIN_MODEL`: main conversation model used internally by Images API compatibility endpoints. Default `gpt-6-luna`. `auto` and known retired models such as `gpt-5.4-mini` fall back to this concrete default, rather than being forwarded as `auto`.
+- `CODEXMANAGER_CODEX_IMAGE_TOOL_MODEL`: default image tool model when the Images request omits `model`. Default `gpt-image-2`; an explicit request `model` takes precedence. `auto` and known retired values fall back to the default.
 
 Notes:
 
 - `/v1/images/generations` and `/v1/images/edits` are converted internally to `/v1/responses + image_generation tool`.
+- These compatibility requests do not inject text-model reasoning effort or platform-key text defaults; some upstream image models reject reasoning effort mapped to image complexity. Model selection is forwarded to the tool, though the upstream may report its own internal image model alias.
+- Non-streaming requests return Images JSON (`data[].b64_json`, or `data[].url` for `response_format=url`). Failed or incomplete upstream responses return a JSON error instead of raw SSE with a JSON content type. JSON requests with explicit `stream=true` retain Images streaming events.
 - When Codex CLI sends `tools[].type = "image_generation"` natively, the gateway forwards it and does not affect the existing text request path.
 
 ## 迁移中的弃用项

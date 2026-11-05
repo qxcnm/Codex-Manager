@@ -794,9 +794,8 @@ pub(super) fn convert_responses_body_to_images(
     body: &[u8],
     response_format: ImagesResponseFormat,
 ) -> Option<Vec<u8>> {
-    let value = serde_json::from_slice::<Value>(body).ok()?;
-    let response = value.get("response").unwrap_or(&value);
-    serde_json::to_vec(&build_images_api_response(response, response_format)).ok()
+    let response = super::images::parse_images_response_body(body).ok()?;
+    serde_json::to_vec(&build_images_api_response(&response, response_format)).ok()
 }
 
 // Keep response-to-SSE converters for the streaming compatibility adapter surface.

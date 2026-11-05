@@ -1,5 +1,103 @@
 use serde_json::{json, Value};
 
+use super::aggregate::{
+    collect_non_stream_json_from_sse_bytes, extract_error_message_from_json,
+    inspect_sse_frame_for_protocol, looks_like_sse_payload, parse_sse_frame_json,
+    PassthroughSseProtocol, SseTerminal,
+};
+
+/// Images requests use a streaming Responses upstream even when the caller
+/// expects JSON. Inspect the payload rather than trusting its Content-Type.
+pub(super) fn parse_images_response_body(body: &[u8]) -> Result<Value, String> {
+    let value = if looks_like_sse_payload(body) {
+        let text = std::str::from_utf8(body)
+            .map_err(|_| "upstream image response is not valid UTF-8".to_string())?;
+        let mut frame = Vec::new();
+        let mut saw_completion = false;
+        let mut inspect = |frame: &[String]| -> Result<(), String> {
+            let inspection = inspect_sse_frame_for_protocol(frame, PassthroughSseProtocol::Generic);
+            let payload = parse_sse_frame_json(frame);
+            let event_type = inspection
+                .last_event_type
+                .as_deref()
+                .filter(|kind| !kind.eq_ignore_ascii_case("message"))
+                .or_else(|| payload.as_ref()?.get("type")?.as_str());
+            match inspection.terminal {
+                Some(SseTerminal::Err(message)) => return Err(message),
+                Some(SseTerminal::Ok)
+                    if matches!(event_type, Some("response.completed" | "response.done")) =>
+                {
+                    saw_completion = true;
+                }
+                _ => {}
+            }
+            Ok(())
+        };
+        for line in text.lines() {
+            if line.is_empty() {
+                inspect(&frame)?;
+                frame.clear();
+            } else {
+                frame.push(line.to_string());
+            }
+        }
+        inspect(&frame)?;
+        if !saw_completion {
+            return Err("upstream image stream ended without a completed response".to_string());
+        }
+        let (response, _) = collect_non_stream_json_from_sse_bytes(body);
+        let response = response
+            .ok_or_else(|| "upstream image stream did not contain a response".to_string())?;
+        serde_json::from_slice::<Value>(&response)
+            .map_err(|_| "upstream image response is not valid JSON".to_string())?
+    } else {
+        serde_json::from_slice::<Value>(body)
+            .map_err(|_| "upstream image response is not valid JSON".to_string())?
+    };
+    if let Some(message) = extract_error_message_from_json(&value) {
+        return Err(message);
+    }
+    if let Some(kind) = value.get("type").and_then(Value::as_str) {
+        if matches!(
+            kind,
+            "error"
+                | "response.failed"
+                | "response.error"
+                | "response.incomplete"
+                | "response.canceled"
+                | "response.cancelled"
+        ) {
+            return Err(format!(
+                "upstream image response did not complete (type={kind})"
+            ));
+        }
+    }
+    let response = value.get("response").unwrap_or(&value);
+    validate_images_response(response)?;
+    Ok(response.clone())
+}
+
+pub(super) fn validate_images_response(response: &Value) -> Result<(), String> {
+    if let Some(message) = extract_error_message_from_json(response).or_else(|| {
+        response
+            .get("status_details")
+            .and_then(extract_error_message_from_json)
+    }) {
+        return Err(message);
+    }
+    if let Some(status) = response.get("status").and_then(Value::as_str) {
+        if status != "completed" {
+            return Err(format!(
+                "upstream image response did not complete (status={status})"
+            ));
+        }
+    }
+    if collect_image_generation_results(response).is_empty() {
+        return Err("upstream image response did not contain a generated image".to_string());
+    }
+    Ok(())
+}
+
 pub(super) fn mime_type_from_codex_output_format(output_format: Option<&str>) -> &'static str {
     match output_format
         .map(str::trim)
@@ -233,3 +331,7 @@ pub(super) fn build_images_api_response(
     }
     out
 }
+
+#[cfg(test)]
+#[path = "images_tests.rs"]
+mod tests;

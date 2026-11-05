@@ -987,10 +987,6 @@ fn adapt_openai_images_generations_body_to_responses(
         },
         "stream": true,
         "store": false,
-        "reasoning": {
-            "effort": "medium",
-            "summary": "auto"
-        },
         "parallel_tool_calls": true,
         "include": ["reasoning.encrypted_content"],
         "metadata": {
@@ -1086,10 +1082,6 @@ fn build_images_responses_request(
         },
         "stream": true,
         "store": false,
-        "reasoning": {
-            "effort": "medium",
-            "summary": "auto"
-        },
         "parallel_tool_calls": true,
         "include": ["reasoning.encrypted_content"],
         "metadata": {
@@ -2333,9 +2325,18 @@ pub(super) fn build_local_validation_result(
     // 中文注释：下游调用方的 stream 语义必须来自原始客户端请求；
     // 否则协议适配（例如 Anthropic/Gemini 转 /responses 强制 stream=true）会污染响应模式判断。
     let client_request_meta = initial_request_meta.clone();
-    let preserve_images_fields = should_preserve_openai_images_request_fields(path.as_str());
+    // Images requests keep their own model semantics even after adapting the transport path.
+    let preserve_images_fields =
+        should_preserve_openai_images_request_fields(logical_path.as_str());
     let (mut effective_model, effective_reasoning, effective_service_tier) =
-        resolve_effective_request_overrides_for_path(&api_key, path.as_str());
+        resolve_effective_request_overrides_for_path(&api_key, logical_path.as_str());
+    if preserve_images_fields && path == "/v1/responses" {
+        // The original Images model selects the tool; policies and routing use the main model.
+        effective_model = super::super::parse_request_json_value(&body)
+            .as_ref()
+            .map(super::super::parse_request_metadata_from_value)
+            .and_then(|metadata| metadata.model);
+    }
     effective_model = resolve_compact_model_override_for_request(
         normalized_path.as_str(),
         &incoming_headers,

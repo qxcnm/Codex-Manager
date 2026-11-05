@@ -179,6 +179,28 @@ fn reload_from_env_updates_timeout_and_proxy() {
     );
 }
 
+#[test]
+fn image_models_use_concrete_defaults_instead_of_auto() {
+    let _lock = crate::test_env_guard();
+    let _reload_guard = RuntimeConfigReloadGuard;
+    let _main_guard = EnvGuard::clear(ENV_CODEX_IMAGE_MAIN_MODEL);
+    let _tool_guard = EnvGuard::clear(ENV_CODEX_IMAGE_TOOL_MODEL);
+
+    for model in ["auto", "gpt-5.4-mini", "gpt-5.4-pro"] {
+        std::env::set_var(ENV_CODEX_IMAGE_MAIN_MODEL, model);
+        std::env::set_var(ENV_CODEX_IMAGE_TOOL_MODEL, model);
+        reload_from_env();
+        assert_eq!(current_codex_image_main_model(), "gpt-6-luna", "{model}");
+        assert_eq!(current_codex_image_tool_model(), "gpt-image-2", "{model}");
+    }
+
+    std::env::set_var(ENV_CODEX_IMAGE_MAIN_MODEL, "gpt-6.1-terra");
+    std::env::set_var(ENV_CODEX_IMAGE_TOOL_MODEL, "gpt-image-2.5-flare");
+    reload_from_env();
+    assert_eq!(current_codex_image_main_model(), "gpt-6.1-terra");
+    assert_eq!(current_codex_image_tool_model(), "gpt-image-2.5-flare");
+}
+
 /// 函数 `reload_from_env_defaults_keep_request_gate_legacy_unbounded`
 ///
 /// 作者: gaohongshun

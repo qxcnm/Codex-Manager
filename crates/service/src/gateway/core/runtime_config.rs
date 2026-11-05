@@ -1883,6 +1883,9 @@ pub(super) fn reload_from_env() {
 
     let codex_image_main_model = env_non_empty(ENV_CODEX_IMAGE_MAIN_MODEL)
         .and_then(|value| normalize_model_slug(value.as_str()).ok())
+        // Unlike the free-account ceiling, an Images request needs a concrete model.
+        // Obsolete slugs normalize to `auto`, which is not a usable upstream model.
+        .filter(|value| value != "auto")
         .unwrap_or_else(|| DEFAULT_CODEX_IMAGE_MAIN_MODEL.to_string());
     let mut cached_codex_image_main_model =
         crate::lock_utils::write_recover(codex_image_main_model_cell(), "codex_image_main_model");
@@ -1891,6 +1894,7 @@ pub(super) fn reload_from_env() {
 
     let codex_image_tool_model = env_non_empty(ENV_CODEX_IMAGE_TOOL_MODEL)
         .and_then(|value| normalize_model_slug(value.as_str()).ok())
+        .filter(|value| value != "auto")
         .unwrap_or_else(|| DEFAULT_CODEX_IMAGE_TOOL_MODEL.to_string());
     let mut cached_codex_image_tool_model =
         crate::lock_utils::write_recover(codex_image_tool_model_cell(), "codex_image_tool_model");

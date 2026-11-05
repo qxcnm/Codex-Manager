@@ -1,11 +1,11 @@
 use super::{
-    build_images_api_response, classify_upstream_stream_read_error,
-    collect_image_generation_results, image_generation_result_payload, images_usage_value,
+    classify_upstream_stream_read_error, collect_image_generation_results,
+    image_generation_result_payload, images_usage_value, inspect_sse_frame_for_protocol,
     mark_first_response_ms, merge_usage, stream_idle_timed_out, stream_idle_timeout_message,
     stream_reader_disconnected_message, stream_wait_timeout,
     upstream_hint_or_stream_incomplete_message, Arc, Cursor, ImagesResponseFormat, Mutex,
-    PassthroughSseCollector, Read, SseKeepAliveFrame, UpstreamSseFramePump,
-    UpstreamSseFramePumpItem,
+    PassthroughSseCollector, PassthroughSseProtocol, Read, SseKeepAliveFrame, SseTerminal,
+    UpstreamSseFramePump, UpstreamSseFramePumpItem,
 };
 use serde_json::{json, Value};
 use std::time::Instant;
@@ -89,7 +89,7 @@ impl ImagesFromResponsesSseReader {
             let trimmed = line.trim_end_matches(['\r', '\n']).trim_start();
             if let Some(rest) = trimmed.strip_prefix("event:") {
                 let event = rest.trim();
-                if !event.is_empty() {
+                if !event.is_empty() && !event.eq_ignore_ascii_case("message") {
                     return Some(event.to_string());
                 }
             }
@@ -168,10 +168,46 @@ impl ImagesFromResponsesSseReader {
                 collector.last_event_type = Some(event_type.to_string());
             }
             collector.saw_terminal = true;
+            collector.usage.completed_successfully = true;
         }
     }
 
+    fn error_chunk(
+        &mut self,
+        message: String,
+        event_type: Option<&str>,
+        saw_terminal: bool,
+    ) -> Vec<u8> {
+        if let Ok(mut collector) = self.usage_collector.lock() {
+            if let Some(event_type) = event_type {
+                collector.last_event_type = Some(event_type.to_string());
+            }
+            collector.saw_terminal |= saw_terminal;
+            collector.usage.completed_successfully = false;
+            collector.usage.explicit_failure |= saw_terminal;
+            collector.terminal_error = Some(message.clone());
+            collector.upstream_error_hint = Some(message.clone());
+        }
+        self.finished = true;
+        Self::sse_event(
+            "error",
+            json!({
+                "type": "error",
+                "error": { "type": "upstream_error", "code": "upstream_error", "message": message }
+            }),
+        )
+    }
+
     fn handle_frame(&mut self, lines: &[String]) -> Option<Vec<u8>> {
+        let inspection = inspect_sse_frame_for_protocol(lines, PassthroughSseProtocol::Generic);
+        if let Some(SseTerminal::Err(message)) = inspection.terminal {
+            if let Some(usage) = inspection.usage {
+                if let Ok(mut collector) = self.usage_collector.lock() {
+                    merge_usage(&mut collector.usage, usage);
+                }
+            }
+            return Some(self.error_chunk(message, inspection.last_event_type.as_deref(), true));
+        }
         let value = Self::data_json(lines)?;
         let event_type = Self::event_type(lines, &value);
         match event_type.as_deref() {
@@ -179,15 +215,11 @@ impl ImagesFromResponsesSseReader {
                 self.partial_image_chunk(&value)
             }
             Some("response.completed") | Some("response.done") => {
-                let mut out = Vec::new();
-                if let Some(response) = value.get("response") {
-                    out.extend(self.completed_chunks(response));
-                } else {
-                    out.extend(Self::sse_event(
-                        "image_generation.completed",
-                        build_images_api_response(&value, self.response_format),
-                    ));
+                let response = value.get("response").unwrap_or(&value);
+                if let Err(message) = super::super::images::validate_images_response(response) {
+                    return Some(self.error_chunk(message, event_type.as_deref(), true));
                 }
+                let out = self.completed_chunks(response);
                 self.update_terminal_success(event_type.as_deref());
                 self.finished = true;
                 Some(out)

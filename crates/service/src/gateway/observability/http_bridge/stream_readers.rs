@@ -8,10 +8,10 @@ use super::{
     extract_error_message_from_json, merge_usage,
 };
 use super::{
-    build_images_api_response, chat_image_payload, collect_image_generation_data_urls,
-    collect_image_generation_results, image_generation_result_payload, images_usage_value,
-    inspect_sse_frame_for_protocol, ImagesResponseFormat, OpenAIResponsesEvent,
-    OpenAIResponsesOutputTextState, PassthroughSseProtocol, SseTerminal, UpstreamResponseUsage,
+    chat_image_payload, collect_image_generation_data_urls, collect_image_generation_results,
+    image_generation_result_payload, images_usage_value, inspect_sse_frame_for_protocol,
+    ImagesResponseFormat, OpenAIResponsesEvent, OpenAIResponsesOutputTextState,
+    PassthroughSseProtocol, SseTerminal, UpstreamResponseUsage,
 };
 #[path = "stream_readers/anthropic.rs"]
 mod anthropic;

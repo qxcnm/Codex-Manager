@@ -141,6 +141,8 @@ fn gateway_images_generation_wraps_codex_sse_as_openai_images_json() {
     let dir = new_test_dir("codexmanager-gateway-images-generation");
     let db_path: PathBuf = dir.join("codexmanager.db");
     let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+    let _images_guard = EnvGuard::set("CODEXMANAGER_CODEX_IMAGE_GENERATION_ENABLED", "1");
+    let _main_model_guard = EnvGuard::set("CODEXMANAGER_CODEX_IMAGE_MAIN_MODEL", "gpt-6.1-terra");
 
     let codex_sse = concat!(
         "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"ig_test\",\"type\":\"image_generation_call\",\"status\":\"completed\",\"result\":\"aGVsbG8=\",\"revised_prompt\":\"a small cat\",\"output_format\":\"png\",\"size\":\"1024x1024\",\"quality\":\"high\",\"background\":\"transparent\"}}\n\n",
@@ -149,7 +151,9 @@ fn gateway_images_generation_wraps_codex_sse_as_openai_images_json() {
     );
     let (upstream_addr, upstream_rx, upstream_join) =
         start_mock_upstream_sequence_lenient_with_content_types(
-            vec![(200, codex_sse.to_string(), "text/event-stream".to_string())],
+            // Some Codex upstreams label their SSE as JSON. The downstream
+            // Images API must still return a complete JSON object.
+            vec![(200, codex_sse.to_string(), "application/json".to_string())],
             Duration::from_secs(3),
         );
     let upstream_base = format!("http://{upstream_addr}/backend-api/codex");
@@ -158,7 +162,10 @@ fn gateway_images_generation_wraps_codex_sse_as_openai_images_json() {
     let storage = Storage::open(&db_path).expect("open db");
     storage.init().expect("init db");
     let _rules_guard = GatewayModelForwardRulesResetGuard::reset();
-    seed_model_catalog_models(&storage, &["gpt-5.4-mini", "gpt-5.4", "gpt-image-2"]);
+    seed_model_catalog_models(
+        &storage,
+        &["gpt-6-sol", "gpt-6.1-terra", "gpt-image-2.5-flare"],
+    );
     let now = now_ts();
     storage
         .insert_account(&Account {
@@ -190,8 +197,8 @@ fn gateway_images_generation_wraps_codex_sse_as_openai_images_json() {
         .insert_api_key(&ApiKey {
             id: "gk_images_generation".to_string(),
             name: Some("images-generation".to_string()),
-            model_slug: None,
-            reasoning_effort: None,
+            model_slug: Some("gpt-6-sol".to_string()),
+            reasoning_effort: Some("medium".to_string()),
             service_tier: None,
             rotation_strategy: "account_rotation".to_string(),
             aggregate_api_id: None,
@@ -212,7 +219,7 @@ fn gateway_images_generation_wraps_codex_sse_as_openai_images_json() {
     let server = codexmanager_service::start_one_shot_server().expect("start server");
     let req_body = serde_json::json!({
         "prompt": "draw a small cat",
-        "model": "gpt-image-2",
+        "model": "gpt-image-2.5-flare",
         "size": "1024x1024",
         "quality": "high",
         "background": "transparent",
@@ -221,17 +228,18 @@ fn gateway_images_generation_wraps_codex_sse_as_openai_images_json() {
         "stream": false
     })
     .to_string();
-    let (status, response_body) = post_http_raw(
+    let (status, content_type, response_body) = post_images_request(
         &server.addr,
         "/v1/images/generations",
         &req_body,
-        &[
-            ("Content-Type", "application/json"),
-            ("Authorization", &format!("Bearer {platform_key}")),
-        ],
+        platform_key,
     );
     server.join();
     assert_eq!(status, 200, "gateway response: {response_body}");
+    assert!(
+        content_type.starts_with("application/json"),
+        "{content_type}"
+    );
 
     let captured = upstream_rx
         .recv_timeout(Duration::from_secs(3))
@@ -244,9 +252,10 @@ fn gateway_images_generation_wraps_codex_sse_as_openai_images_json() {
     );
     let upstream_body: serde_json::Value =
         serde_json::from_slice(&decode_upstream_request_body(&captured)).expect("upstream json");
-    assert_eq!(upstream_body["model"], "gpt-6-luna");
+    assert_eq!(upstream_body["model"], "gpt-6.1-terra");
+    assert!(upstream_body.get("reasoning").is_none());
     assert_eq!(upstream_body["tools"][0]["type"], "image_generation");
-    assert_eq!(upstream_body["tools"][0]["model"], "gpt-image-2");
+    assert_eq!(upstream_body["tools"][0]["model"], "gpt-image-2.5-flare");
     assert_eq!(upstream_body["tool_choice"]["type"], "image_generation");
 
     let value: serde_json::Value =
@@ -259,6 +268,210 @@ fn gateway_images_generation_wraps_codex_sse_as_openai_images_json() {
     assert_eq!(value["quality"], "high");
     assert_eq!(value["background"], "transparent");
     assert_eq!(value["usage"]["total_tokens"], 4);
+}
+
+fn post_images_request(
+    addr: &str,
+    path: &str,
+    body: &str,
+    platform_key: &str,
+) -> (u16, String, String) {
+    let response = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("build images client")
+        .post(format!("http://{addr}{path}"))
+        .bearer_auth(platform_key)
+        .header("content-type", "application/json")
+        .header("connection", "close")
+        .body(body.to_string())
+        .send()
+        .expect("send images request");
+    let status = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    (
+        status,
+        content_type,
+        response.text().expect("read images response"),
+    )
+}
+
+fn run_images_generation_fixture(
+    main_model: &str,
+    upstream_status: u16,
+    upstream_body: String,
+    upstream_content_type: &str,
+) -> (u16, String, String, Vec<CapturedUpstreamRequest>) {
+    let _lock = test_env_guard();
+    let dir = new_test_dir("codexmanager-images-terminal-response");
+    let db_path = dir.join("codexmanager.db");
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+    let _images_guard = EnvGuard::set("CODEXMANAGER_CODEX_IMAGE_GENERATION_ENABLED", "1");
+    let _main_model_guard = EnvGuard::set("CODEXMANAGER_CODEX_IMAGE_MAIN_MODEL", main_model);
+    let (upstream_addr, upstream_rx, upstream_join) =
+        start_mock_upstream_sequence_lenient_with_content_types(
+            vec![(
+                upstream_status,
+                upstream_body,
+                upstream_content_type.to_string(),
+            )],
+            Duration::from_millis(300),
+        );
+    let upstream_base = format!("http://{upstream_addr}/backend-api/codex");
+    let _upstream_guard = EnvGuard::set("CODEXMANAGER_UPSTREAM_BASE_URL", &upstream_base);
+
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init db");
+    let _rules_guard = GatewayModelForwardRulesResetGuard::reset();
+    seed_model_catalog_models(
+        &storage,
+        &[
+            "gpt-6-luna",
+            "gpt-6-sol",
+            "gpt-6.1-terra",
+            "gpt-image-2.5-flare",
+        ],
+    );
+    let now = now_ts();
+    storage
+        .insert_account(&Account {
+            id: "acc_images_terminal".to_string(),
+            label: "images-terminal".to_string(),
+            issuer: "https://auth.openai.com".to_string(),
+            chatgpt_account_id: Some("chatgpt_images_terminal".to_string()),
+            workspace_id: None,
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("insert account");
+    storage
+        .insert_token(&Token {
+            account_id: "acc_images_terminal".to_string(),
+            id_token: String::new(),
+            access_token: "access_images_terminal".to_string(),
+            refresh_token: String::new(),
+            api_key_access_token: Some("api_access_images_terminal".to_string()),
+            last_refresh: now,
+        })
+        .expect("insert token");
+    let platform_key = "pk_images_terminal";
+    storage
+        .insert_api_key(&ApiKey {
+            id: "gk_images_terminal".to_string(),
+            name: Some("images-terminal".to_string()),
+            model_slug: Some("gpt-6-sol".to_string()),
+            reasoning_effort: Some("low".to_string()),
+            service_tier: None,
+            rotation_strategy: "account_rotation".to_string(),
+            aggregate_api_id: None,
+            account_plan_filter: None,
+            aggregate_api_url: None,
+            client_type: "codex".to_string(),
+            protocol_type: "openai_compat".to_string(),
+            auth_scheme: "authorization_bearer".to_string(),
+            upstream_base_url: None,
+            static_headers_json: None,
+            key_hash: hash_platform_key_for_test(platform_key),
+            status: "active".to_string(),
+            created_at: now,
+            last_used_at: None,
+        })
+        .expect("insert api key");
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let request_body = serde_json::json!({
+        "model": "gpt-image-2.5-flare",
+        "prompt": "a red apple on white background",
+        "size": "1024x1024",
+        "n": 1,
+        "stream": false
+    })
+    .to_string();
+    let (status, content_type, response_body) = post_images_request(
+        &server.addr,
+        "/v1/images/generations",
+        &request_body,
+        platform_key,
+    );
+    server.join();
+    upstream_join.join().expect("join mock upstream");
+    let captured = upstream_rx.into_iter().collect();
+    (status, content_type, response_body, captured)
+}
+
+#[test]
+fn gateway_images_generation_failed_sse_returns_json_error() {
+    let failed_sse = concat!(
+        "event: response.image_generation_call.generating\n",
+        "data: {\"type\":\"response.image_generation_call.generating\",\"item_id\":\"ig_failed\"}\n\n",
+        "event: response.failed\n",
+        "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_image_failed\",\"status\":\"failed\",\"error\":{\"type\":\"image_generation_user_error\",\"code\":\"invalid_value\",\"message\":\"Complexity 'medium' is not supported for this image model.\",\"param\":\"complexity\"}}}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let (status, content_type, body, requests) = run_images_generation_fixture(
+        "gpt-6.1-terra",
+        200,
+        failed_sse.to_string(),
+        "application/json",
+    );
+    assert_eq!(status, 502, "gateway response: {body}");
+    assert!(
+        content_type.starts_with("application/json"),
+        "{content_type}"
+    );
+    let error: serde_json::Value = serde_json::from_str(&body).expect("images error JSON");
+    let message = error["error"]["message"].as_str().expect("error message");
+    assert!(
+        message.contains("Complexity 'medium' is not supported for this image model."),
+        "upstream image failure must survive adaptation: {message}"
+    );
+    assert_eq!(requests.len(), 1, "image user errors must not be retried");
+    let request: serde_json::Value =
+        serde_json::from_slice(&decode_upstream_request_body(&requests[0])).expect("upstream JSON");
+    assert_eq!(request["model"], "gpt-6.1-terra");
+    assert!(request.get("reasoning").is_none());
+    assert_eq!(request["tools"][0]["model"], "gpt-image-2.5-flare");
+}
+
+#[test]
+fn gateway_images_generation_obsolete_main_model_uses_concrete_default_once() {
+    let completed_sse = concat!(
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_image_default\",\"created_at\":1772000000,\"output\":[{\"id\":\"ig_default\",\"type\":\"image_generation_call\",\"status\":\"completed\",\"result\":\"aGVsbG8=\"}]}}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let (status, content_type, body, requests) = run_images_generation_fixture(
+        "gpt-5.4-mini",
+        200,
+        completed_sse.to_string(),
+        "text/event-stream",
+    );
+    assert_eq!(status, 200, "gateway response: {body}");
+    assert!(
+        content_type.starts_with("application/json"),
+        "{content_type}"
+    );
+    let images: serde_json::Value = serde_json::from_str(&body).expect("images response JSON");
+    assert_eq!(images["data"][0]["b64_json"], "aGVsbG8=");
+    assert_eq!(
+        requests.len(),
+        1,
+        "obsolete main model must not cause retries"
+    );
+    assert_eq!(requests[0].path, "/backend-api/codex/responses");
+    let request: serde_json::Value =
+        serde_json::from_slice(&decode_upstream_request_body(&requests[0])).expect("upstream JSON");
+    assert_eq!(request["model"], "gpt-6-luna");
+    assert_eq!(request["tools"][0]["model"], "gpt-image-2.5-flare");
+    assert!(request.get("reasoning").is_none());
 }
 
 #[test]
