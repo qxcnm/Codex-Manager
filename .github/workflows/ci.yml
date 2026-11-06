@@ -117,6 +117,7 @@ jobs:
         run: |
           cargo test -p codexmanager-service --lib gateway::http_bridge::stream_readers -- --test-threads=1
           cargo test -p codexmanager-service --lib gateway::http_bridge::aggregate -- --test-threads=1
+          cargo test -p codexmanager-service --lib gateway::http_bridge::images:: -- --test-threads=1
           cargo test -p codexmanager-service --test gateway_logs -- --test-threads=1
 
       - name: Test local proxy fixture isolation and multi-choice tools
@@ -187,7 +188,7 @@ jobs:
 
   tauri_macos:
     name: Tauri macOS arm64 bundle
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v5

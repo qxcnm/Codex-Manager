@@ -146,7 +146,7 @@ jobs:
   build_macos_beta:
     needs: build_frontend_dist
     if: ${{ github.event_name != 'workflow_dispatch' || (github.event.inputs.mode || 'build-and-publish') != 'publish-artifacts' }}
-    runs-on: macos-14
+    runs-on: macos-15
     strategy:
       fail-fast: false
       matrix:
@@ -311,7 +311,7 @@ jobs:
             artifact: codexmanager-service-windows
           - platform: macos
             arch: arm64
-            runner: macos-14
+            runner: macos-15
             rust_target: aarch64-apple-darwin
             release_subdir: aarch64-apple-darwin/release
             shell_type: bash
@@ -319,7 +319,7 @@ jobs:
             artifact: codexmanager-service-macos-arm64
           - platform: macos
             arch: x64
-            runner: macos-14
+            runner: macos-15
             rust_target: x86_64-apple-darwin
             release_subdir: x86_64-apple-darwin/release
             shell_type: bash
