@@ -701,7 +701,12 @@ async fn refresh_usage_for_token(
             .as_ref()
             .and_then(|identity| identity.workspace_id.clone());
     }
-    let (derived_chatgpt_id, derived_workspace_id) = derive_account_meta(&current);
+    let selected_account_id = account
+        .chatgpt_account_id
+        .as_deref()
+        .or(account.workspace_id.as_deref());
+    let (derived_chatgpt_id, derived_workspace_id) =
+        derive_account_meta(&current, selected_account_id);
 
     if resolved_workspace_id.is_none() {
         resolved_workspace_id = derived_workspace_id
@@ -834,7 +839,8 @@ async fn refresh_usage_for_token(
                 mark_usage_unreachable_if_needed(storage, &current.account_id, &refresh_err);
                 return Err(refresh_err);
             }
-            let (refreshed_chatgpt_id, refreshed_workspace_id) = derive_account_meta(&current);
+            let (refreshed_chatgpt_id, refreshed_workspace_id) =
+                derive_account_meta(&current, selected_account_id);
             patch_account_meta(
                 storage,
                 &current.account_id,

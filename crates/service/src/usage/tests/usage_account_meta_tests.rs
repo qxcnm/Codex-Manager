@@ -354,7 +354,7 @@ fn derive_account_meta_filters_storage_style_scope_suffix_from_token_claims() {
         last_refresh: now_ts(),
     };
 
-    let (chatgpt_account_id, workspace_id) = derive_account_meta(&token);
+    let (chatgpt_account_id, workspace_id) = derive_account_meta(&token, None);
 
     assert_eq!(
         chatgpt_account_id.as_deref(),
@@ -364,4 +364,47 @@ fn derive_account_meta_filters_storage_style_scope_suffix_from_token_claims() {
         workspace_id.as_deref(),
         Some("org-AP6ypcMi84Thfueli6EU3B4m")
     );
+}
+
+#[test]
+fn derive_account_meta_requires_matching_user_and_selected_workspace() {
+    use base64::Engine as _;
+    let jwt = |user: Option<&str>, workspace: &str| {
+        let claims = serde_json::json!({
+            "sub": "fixture-subject",
+            "workspace_id": workspace,
+            "https://api.openai.com/auth": {
+                "chatgpt_user_id": user,
+                "chatgpt_account_id": workspace
+            }
+        });
+        format!(
+            "e30.{}.fixture",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims.to_string())
+        )
+    };
+    for (access_user, selected, expected) in [
+        (Some("fixture-user"), Some("workspace-new"), "workspace-new"),
+        (
+            Some("different-user"),
+            Some("workspace-new"),
+            "workspace-old",
+        ),
+        (None, Some("workspace-new"), "workspace-old"),
+        (Some("fixture-user"), Some("unmatched"), "workspace-old"),
+        (Some("fixture-user"), None, "workspace-old"),
+    ] {
+        let token = Token {
+            account_id: "local-account".to_string(),
+            id_token: jwt(Some("fixture-user"), "workspace-old"),
+            access_token: jwt(access_user, "workspace-new"),
+            refresh_token: String::new(),
+            api_key_access_token: None,
+            last_refresh: now_ts(),
+        };
+        assert_eq!(
+            derive_account_meta(&token, selected),
+            (Some(expected.to_string()), Some(expected.to_string())),
+        );
+    }
 }

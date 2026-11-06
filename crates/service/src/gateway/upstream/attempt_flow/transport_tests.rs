@@ -1413,7 +1413,7 @@ fn websocket_upstream_request_text_from_http_body_wraps_response_create() {
     );
     assert_eq!(
         value.get("stream").and_then(serde_json::Value::as_bool),
-        None
+        Some(true)
     );
     assert_eq!(
         value
@@ -1422,6 +1422,32 @@ fn websocket_upstream_request_text_from_http_body_wraps_response_create() {
             .and_then(serde_json::Value::as_str),
         Some("high")
     );
+}
+
+#[test]
+fn websocket_upstream_request_text_streams_even_for_non_streaming_http_clients() {
+    for stream in [None, Some(false), Some(true)] {
+        let mut body = serde_json::json!({
+            "model": "codex",
+            "input": [{"type": "function_call_output", "call_id": "call_ping", "output": "pong"}],
+            "tools": [{"type": "function", "name": "ping", "parameters": {"type": "object", "properties": {}}}],
+            "background": true
+        });
+        if let Some(stream) = stream {
+            body["stream"] = serde_json::json!(stream);
+        }
+        let text = super::websocket_upstream_request_text_from_http_body(&Bytes::from(
+            serde_json::to_vec(&body).expect("serialize HTTP body"),
+        ))
+        .expect("adapt HTTP body")
+        .expect("non-empty frame");
+        let value: serde_json::Value = serde_json::from_str(&text).expect("parse websocket frame");
+
+        assert_eq!(value["stream"], true);
+        assert_eq!(value["input"], body["input"]);
+        assert_eq!(value["tools"], body["tools"]);
+        assert!(value.get("background").is_none());
+    }
 }
 
 #[test]
@@ -1724,7 +1750,7 @@ fn send_websocket_upstream_request_builds_valid_handshake_and_stops_on_completed
     crate::gateway::reload_runtime_config_from_env();
     let (url, headers_rx, frame_rx, handle) =
         spawn_mock_websocket_upstream(r#"{"type":"response.completed"}"#);
-    let body = Bytes::from(r#"{"model":"codex","input":"hello"}"#);
+    let body = Bytes::from(r#"{"model":"codex","input":"hello","stream":false}"#);
     let response = crate::gateway::run_upstream_io(super::send_websocket_upstream_request(
         url.as_str(),
         "acct_ws_direct",
@@ -1785,6 +1811,7 @@ fn send_websocket_upstream_request_builds_valid_handshake_and_stops_on_completed
         frame.get("input").and_then(serde_json::Value::as_str),
         Some("hello")
     );
+    assert_eq!(frame["stream"], true);
     handle.join().expect("join websocket upstream");
 }
 

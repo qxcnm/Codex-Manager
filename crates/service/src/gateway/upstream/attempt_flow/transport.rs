@@ -1665,10 +1665,10 @@ fn websocket_upstream_request_text_from_http_body(
         serde_json::from_slice(request_body.as_ref()).map_err(|err| {
             format!("request body is not a valid WebSocket response.create payload: {err}")
         })?;
-    // This adapter is only a bounded transport probe. Its upstream frame still
-    // follows the official WebSocket response.create shape, so HTTP-only
-    // transport controls must not cross the WebSocket boundary.
-    request.stream = false;
+    // The bridge consumes streamed upstream events even when the HTTP caller
+    // requests a non-streaming response; downstream conversion aggregates them.
+    // Official Codex includes this flag in its response.create frames as well.
+    request.stream = true;
     request.extra.remove("background");
     serde_json::to_string(&crate::http::codex_source::ResponsesWsRequest::ResponseCreate(request))
         .map(Some)

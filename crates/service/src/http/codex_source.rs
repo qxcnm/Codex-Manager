@@ -15,8 +15,8 @@ fn default_tool_choice() -> String {
     "auto".to_string()
 }
 
-fn is_false(value: &bool) -> bool {
-    !*value
+fn default_stream() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -37,10 +37,9 @@ pub(crate) struct ResponseCreateWsRequest {
     pub reasoning: Option<Value>,
     #[serde(default)]
     pub store: bool,
-    // WebSocket mode does not use the HTTP streaming transport flag. Keep the
-    // field while decoding HTTP compatibility requests, but never emit the
-    // default `false` value in a `response.create` WebSocket event.
-    #[serde(default, skip_serializing_if = "is_false")]
+    // Official Codex includes `stream` in response.create frames. Older clients
+    // that omit it retain the streaming behavior of the WebSocket bridge.
+    #[serde(default = "default_stream")]
     pub stream: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub include: Vec<String>,

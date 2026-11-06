@@ -1,7 +1,7 @@
 use super::{
     append_passthrough_codex_headers, apply_codex_target_accept_header,
     build_codex_compact_upstream_headers, build_codex_upstream_headers,
-    resolve_codex_installation_id,
+    resolve_codex_installation_id, resolve_window_id,
 };
 use crate::gateway::{
     set_codex_user_agent_version, set_gateway_user_agent, set_originator,
@@ -454,7 +454,7 @@ fn build_codex_compact_upstream_headers_use_session_fallback_only() {
 }
 
 #[test]
-fn build_codex_upstream_headers_rebuilds_mismatched_window_id_from_session() {
+fn build_codex_upstream_headers_preserves_thread_window_with_independent_session() {
     let _guard = crate::test_env_guard();
     let _ = set_originator("codex_cli_rs_tests").expect("set originator");
     let _ = set_codex_user_agent_version("0.999.3").expect("set ua version");
@@ -467,7 +467,7 @@ fn build_codex_upstream_headers_rebuilds_mismatched_window_id_from_session() {
         incoming_originator: None,
         preserve_client_identity: false,
         incoming_session_id: Some("session-anchor"),
-        incoming_window_id: Some("stale-window-anchor:9"),
+        incoming_window_id: Some("request-anchor:9"),
         incoming_client_request_id: Some("request-anchor"),
         incoming_subagent: None,
         incoming_beta_features: None,
@@ -488,7 +488,57 @@ fn build_codex_upstream_headers_rebuilds_mismatched_window_id_from_session() {
     assert_eq!(header_value(&headers, "thread-id"), Some("request-anchor"));
     assert_eq!(
         header_value(&headers, "x-codex-window-id"),
-        Some("session-anchor:0")
+        Some("request-anchor:9")
+    );
+}
+
+#[test]
+fn window_id_is_rebuilt_only_when_missing_invalid_or_affinity_is_reset() {
+    assert_eq!(
+        resolve_window_id(Some(" thread-anchor:9 "), Some("cache-affinity"), false),
+        Some("thread-anchor:9".to_string())
+    );
+    assert_eq!(
+        resolve_window_id(Some("thread-anchor:9"), Some("new-affinity"), true),
+        Some("new-affinity:0".to_string())
+    );
+    assert_eq!(resolve_window_id(Some("thread-anchor:9"), None, true), None);
+    for window_id in [None, Some(" "), Some("thread\r\ninjected: value")] {
+        assert_eq!(
+            resolve_window_id(window_id, Some("cache-affinity"), false),
+            Some("cache-affinity:0".to_string())
+        );
+    }
+}
+
+#[test]
+fn build_codex_compact_headers_preserves_thread_window_with_independent_session() {
+    let _guard = crate::test_env_guard();
+    let headers = build_codex_compact_upstream_headers(CodexCompactUpstreamHeaderInput {
+        auth_token: "token-window-compact",
+        is_fedramp: false,
+        chatgpt_account_id: None,
+        installation_id: Some("install-compact"),
+        incoming_user_agent: None,
+        incoming_originator: None,
+        preserve_client_identity: false,
+        incoming_session_id: Some("cache-affinity"),
+        thread_id: Some("thread-anchor"),
+        incoming_window_id: Some("thread-anchor:9"),
+        incoming_subagent: None,
+        incoming_parent_thread_id: None,
+        incoming_oai_attestation: None,
+        passthrough_codex_headers: &[],
+        fallback_session_id: None,
+        strip_session_affinity: false,
+        has_body: true,
+    });
+
+    assert_eq!(header_value(&headers, "session-id"), Some("cache-affinity"));
+    assert_eq!(header_value(&headers, "thread-id"), Some("thread-anchor"));
+    assert_eq!(
+        header_value(&headers, "x-codex-window-id"),
+        Some("thread-anchor:9")
     );
 }
 

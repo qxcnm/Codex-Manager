@@ -1682,25 +1682,13 @@ pub(crate) async fn refresh_access_token_async(
             .body(body.clone())
     };
     let client = token_refresh_http_client_for_proxy(explicit_proxy_url)?;
-    let resp = match build_request(client).send().await {
-        Ok(resp) => resp,
-        Err(first_err) => {
-            let retried = build_request(refresh_token_refresh_http_client_for_proxy(
-                explicit_proxy_url,
-            )?)
-            .send()
-            .await;
-            match retried {
-                Ok(resp) => resp,
-                Err(second_err) => {
-                    return Err(format!(
-                        "{}; retry_after_client_rebuild: {}",
-                        first_err, second_err
-                    ));
-                }
-            }
-        }
-    };
+    // A transport error can arrive after the provider consumed and rotated this
+    // grant. Replaying the old refresh token can invalidate the session, so keep
+    // an ambiguous delivery as an error instead of issuing a second POST.
+    let resp = build_request(client)
+        .send()
+        .await
+        .map_err(|error| format!("request token refresh failed: {error}"))?;
     if !resp.status().is_success() {
         let status = resp.status();
         let headers = resp.headers().clone();
@@ -1767,21 +1755,6 @@ fn token_refresh_http_client_for_proxy(explicit_proxy_url: Option<&str>) -> Resu
     {
         Some(proxy_url) => build_token_refresh_http_client_with_explicit_proxy(proxy_url),
         None => Ok(usage_http_client()),
-    }
-}
-
-fn refresh_token_refresh_http_client_for_proxy(
-    explicit_proxy_url: Option<&str>,
-) -> Result<Client, String> {
-    match explicit_proxy_url
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(proxy_url) => build_token_refresh_http_client_with_explicit_proxy(proxy_url),
-        None => {
-            rebuild_usage_http_client();
-            Ok(usage_http_client())
-        }
     }
 }
 

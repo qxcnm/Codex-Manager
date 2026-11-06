@@ -202,7 +202,13 @@ fn collect_luna_reserve_candidates(
         }
 
         let mut candidate_account = account;
-        let (chatgpt_account_id, workspace_id) = derive_account_meta(&token);
+        let (chatgpt_account_id, workspace_id) = derive_account_meta(
+            &token,
+            candidate_account
+                .chatgpt_account_id
+                .as_deref()
+                .or(candidate_account.workspace_id.as_deref()),
+        );
         if patch_account_meta_in_place(&mut candidate_account, chatgpt_account_id, workspace_id) {
             candidate_account.updated_at = now_ts();
             let _ = storage.update_account_workspace_identity(

@@ -75,8 +75,10 @@ pub(super) async fn resolve_with_base_url(
         }
         let result = async {
             let key = generate_agent_key_material()?;
-            let fedramp = token_chatgpt_account_is_fedramp(&binding.access_token)
-                || token_chatgpt_account_is_fedramp(&token.id_token);
+            let fedramp = binding.selected_workspace_fedramp.unwrap_or_else(|| {
+                token_chatgpt_account_is_fedramp(&binding.access_token)
+                    || token_chatgpt_account_is_fedramp(&token.id_token)
+            });
             let runtime =
                 register_agent_identity(client, base, &binding.access_token, fedramp, &key).await?;
             let now = now_ts();

@@ -1284,6 +1284,107 @@ fn token_refresh_routes_ignore_custom_gateway_user_agent() {
 }
 
 #[test]
+fn token_refresh_does_not_replay_a_grant_after_response_connection_closes() {
+    use std::io::Read;
+    use std::net::TcpListener;
+    use std::time::Instant;
+
+    let (_guard, _restore) = usage_header_runtime_scope();
+    let _endpoint = EnvVarRestore::remove("CODEX_REFRESH_TOKEN_URL_OVERRIDE");
+    for explicit in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind refresh server");
+        let proxy_url = format!("http://{}", listener.local_addr().expect("server address"));
+        let server = thread::spawn(move || {
+            let (mut client, _) = listener.accept().expect("accept refresh request");
+            client
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("read timeout");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let read = client.read(&mut buffer).expect("read refresh request");
+                assert_ne!(read, 0, "request closed before the complete grant arrived");
+                request.extend_from_slice(&buffer[..read]);
+                if let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&request[..header_end]);
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().expect("content length"))
+                        })
+                        .expect("grant content length");
+                    if request.len() >= header_end + 4 + content_length {
+                        let body = &request[header_end + 4..header_end + 4 + content_length];
+                        let content_type = headers
+                            .lines()
+                            .find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                name.eq_ignore_ascii_case("content-type")
+                                    .then(|| value.trim())
+                            })
+                            .expect("grant content type");
+                        if content_type.starts_with("application/json") {
+                            let grant: serde_json::Value =
+                                serde_json::from_slice(body).expect("refresh JSON");
+                            assert_eq!(grant["refresh_token"], "fixture-rotating-grant");
+                        } else {
+                            assert!(content_type.starts_with("application/x-www-form-urlencoded"));
+                            let grant = std::str::from_utf8(body).expect("refresh form");
+                            assert!(grant
+                                .split('&')
+                                .any(|field| field == "refresh_token=fixture-rotating-grant"));
+                        }
+                        break;
+                    }
+                }
+            }
+            // The provider has consumed the complete grant; lose the response.
+            drop(client);
+            listener
+                .set_nonblocking(true)
+                .expect("nonblocking listener");
+            let deadline = Instant::now() + Duration::from_millis(500);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok(_) => return true,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("accept duplicate grant: {error}"),
+                }
+            }
+            false
+        });
+        let _proxy = EnvVarRestore::set("CODEXMANAGER_UPSTREAM_PROXY_URL", &proxy_url);
+        super::reload_usage_http_client_from_env();
+        let result = if explicit {
+            super::refresh_access_token_with_explicit_proxy(
+                "http://auth.test",
+                "fixture-client",
+                "fixture-rotating-grant",
+                &proxy_url,
+            )
+        } else {
+            super::refresh_access_token(
+                "http://auth.test",
+                "fixture-client",
+                "fixture-rotating-grant",
+            )
+        };
+        assert!(
+            result.is_err(),
+            "lost refresh response must remain an error"
+        );
+        assert!(
+            !server.join().expect("join refresh server"),
+            "refresh grant was replayed"
+        );
+    }
+}
+
+#[test]
 fn fetch_usage_snapshot_preserves_agent_assertion_authorization() {
     let _guard = crate::test_env_guard();
     let _global_proxy = EnvVarRestore::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "");

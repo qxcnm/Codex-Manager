@@ -1,4 +1,6 @@
-# Current Differences from Official Codex
+# Historical Differences from Official Codex
+
+This is a historical workspace snapshot. In particular, the statements below about fixed originator values, session-header spelling and complete alignment are not current guarantees. Refer to the [2026-11-06 upstream audit](codex-upstream-alignment-20261106.md), including its separate publication scope and validation evidence.
 
 This document keeps only the remaining request-header differences that are still worth tracking.
 

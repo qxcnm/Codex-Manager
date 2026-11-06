@@ -5,6 +5,12 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserved WebSocket streaming flags, canonical session/thread headers, and valid window identifiers when session affinity differs from the thread.
+- Stopped replaying a rotating refresh-token request after a transport failure leaves delivery uncertain.
+- Preserved the selected workspace when an imported auth file retains an older ID token, and refreshed conflicting AgentIdentity workspace/FedRAMP bindings.
+
 ## [0.7.0] - 2026-11-06
 
 ### Fixed

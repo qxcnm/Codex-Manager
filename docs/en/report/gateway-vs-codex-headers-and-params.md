@@ -1,4 +1,6 @@
-# Current gateway and Codex parameter passing comparison table
+# Historical gateway and Codex parameter passing comparison
+
+This is a historical workspace snapshot, not a statement of the current protocol contract. Its authentication, session-header and alignment conclusions have been superseded by the [2026-11-06 upstream audit](codex-upstream-alignment-20261106.md), which distinguishes the research workspace from the changes included in the published commit. Use that audit's scope and validation notes when assessing current behavior.
 
 Note: In the current workspace, Codex outbound direct contract differences have been collected. The following is reorganized according to "How to move the parameters / How to eventually exit the station / Whether it is aligned with upstream".
 

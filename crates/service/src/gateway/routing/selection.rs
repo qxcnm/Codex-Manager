@@ -158,7 +158,13 @@ fn collect_gateway_candidates_uncached(
     let mut out = Vec::with_capacity(candidates.len());
     for (account, token) in candidates {
         let mut candidate_account = account.clone();
-        let (chatgpt_account_id, workspace_id) = derive_account_meta(&token);
+        let (chatgpt_account_id, workspace_id) = derive_account_meta(
+            &token,
+            account
+                .chatgpt_account_id
+                .as_deref()
+                .or(account.workspace_id.as_deref()),
+        );
         if patch_account_meta_in_place(&mut candidate_account, chatgpt_account_id, workspace_id) {
             candidate_account.updated_at = now_ts();
             let _ = storage.update_account_workspace_identity(

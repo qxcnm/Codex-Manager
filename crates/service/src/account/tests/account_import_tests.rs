@@ -35,6 +35,100 @@ fn test_jwt(payload: serde_json::Value) -> String {
     format!("{header}.{payload}.signature")
 }
 
+#[test]
+fn import_codex_selected_workspace_survives_metadata_refresh() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    let mut index = ExistingAccountIndex::build(&storage).expect("account index");
+    let id_token = test_jwt(json!({
+        "sub": "fixture-user", "workspace_id": "workspace-old",
+        "https://api.openai.com/auth": {
+            "chatgpt_user_id": "fixture-user", "chatgpt_account_id": "workspace-old"
+        }
+    }));
+    let access_token = test_jwt(json!({
+        "sub": "fixture-user",
+        "https://api.openai.com/auth": {
+            "chatgpt_user_id": "fixture-user", "chatgpt_account_id": "workspace-selected"
+        }
+    }));
+    let item = json!({"tokens": {
+        "id_token": id_token, "access_token": access_token,
+        "refresh_token": "fixture-refresh", "account_id": "workspace-selected"
+    }});
+    import_single_item(&storage, &mut index, &item, 1).expect("import selected workspace");
+    let accounts = storage.list_accounts().expect("accounts");
+    assert_eq!(accounts.len(), 1);
+    let account = &accounts[0];
+    assert_eq!(
+        account.chatgpt_account_id.as_deref(),
+        Some("workspace-selected")
+    );
+    assert_eq!(account.workspace_id.as_deref(), Some("workspace-selected"));
+    let token = storage
+        .find_token_by_account_id(&account.id)
+        .expect("token")
+        .expect("stored token");
+    let derived = crate::usage_account_meta::derive_account_meta(
+        &token,
+        account.chatgpt_account_id.as_deref(),
+    );
+    assert_eq!(
+        derived,
+        (
+            Some("workspace-selected".into()),
+            Some("workspace-selected".into())
+        )
+    );
+    crate::usage_account_meta::patch_account_meta(&storage, &account.id, derived.0, derived.1);
+    let refreshed = storage
+        .find_account_by_id(&account.id)
+        .expect("account")
+        .expect("stored account");
+    assert_eq!(
+        refreshed.chatgpt_account_id.as_deref(),
+        Some("workspace-selected")
+    );
+    assert_eq!(
+        refreshed.workspace_id.as_deref(),
+        Some("workspace-selected")
+    );
+}
+
+#[test]
+fn import_workspace_hint_does_not_override_unrelated_or_unselected_claims() {
+    for (access_user, selected) in [
+        ("different-user", "workspace-new"),
+        ("fixture-user", "unmatched"),
+    ] {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let mut index = ExistingAccountIndex::build(&storage).expect("account index");
+        let item = json!({"tokens": {
+            "id_token": test_jwt(json!({
+                "sub": "fixture-user", "workspace_id": "workspace-old",
+                "https://api.openai.com/auth": {
+                    "chatgpt_user_id": "fixture-user", "chatgpt_account_id": "workspace-old"
+                }
+            })),
+            "access_token": test_jwt(json!({
+                "sub": access_user,
+                "https://api.openai.com/auth": {
+                    "chatgpt_user_id": access_user, "chatgpt_account_id": "workspace-new"
+                }
+            })),
+            "refresh_token": "fixture-refresh", "account_id": selected
+        }});
+        import_single_item(&storage, &mut index, &item, 1).expect("import preserves priority");
+        let accounts = storage.list_accounts().expect("accounts");
+        assert_eq!(
+            accounts[0].chatgpt_account_id.as_deref(),
+            Some("workspace-old")
+        );
+        assert_eq!(accounts[0].workspace_id.as_deref(), Some("workspace-old"));
+    }
+}
+
 /// 函数 `payload`
 ///
 /// 作者: gaohongshun

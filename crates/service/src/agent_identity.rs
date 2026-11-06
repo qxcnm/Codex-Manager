@@ -51,6 +51,7 @@ struct AgentIdentityBinding {
     chatgpt_user_id: Option<String>,
     account_scope_id: Option<String>,
     access_token: String,
+    selected_workspace_fedramp: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -141,6 +142,21 @@ pub(crate) use async_completion::{
 
 fn resolve_agent_identity_binding(account: &Account, token: &Token) -> AgentIdentityBinding {
     let access_token = token.access_token.trim().to_string();
+    let selected_workspace_fedramp =
+        codexmanager_core::auth::parse_id_token_claims(&token.id_token)
+            .ok()
+            .zip(codexmanager_core::auth::parse_id_token_claims(&access_token).ok())
+            .and_then(|(id, access)| {
+                crate::account_identity::selected_workspace_from_access_token(
+                    &id,
+                    &access,
+                    account
+                        .chatgpt_account_id
+                        .as_deref()
+                        .or(account.workspace_id.as_deref()),
+                )
+            })
+            .map(|_| token_chatgpt_account_is_fedramp(&access_token));
     let chatgpt_user_id =
         extract_chatgpt_user_id(&access_token).or_else(|| extract_chatgpt_user_id(&token.id_token));
     let account_scope_id = extract_chatgpt_account_id(&access_token)
@@ -163,6 +179,7 @@ fn resolve_agent_identity_binding(account: &Account, token: &Token) -> AgentIden
         chatgpt_user_id,
         account_scope_id,
         access_token,
+        selected_workspace_fedramp,
     }
 }
 
@@ -170,6 +187,14 @@ fn agent_identity_matches_binding(
     identity: &AccountAgentIdentity,
     binding: &AgentIdentityBinding,
 ) -> bool {
+    // An existing registration belongs to its original routing context. Do not
+    // relabel it after a workspace switch; let the caller register a new identity.
+    if binding
+        .selected_workspace_fedramp
+        .is_some_and(|fedramp| identity.chatgpt_account_is_fedramp != fedramp)
+    {
+        return false;
+    }
     if let Some(expected_user_id) = binding.chatgpt_user_id.as_deref() {
         if non_empty_borrowed(&identity.chatgpt_user_id) != Some(expected_user_id) {
             return false;
