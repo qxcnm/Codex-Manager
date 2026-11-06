@@ -418,6 +418,10 @@ jobs:
           compression-level: 0
 
   release:
+    permissions:
+      actions: read
+      contents: write
+      packages: write
     needs: [build_windows, build_macos_beta, build_linux, build_service]
     if: ${{ always() && (github.event_name != 'workflow_dispatch' || (github.event.inputs.mode || 'build-and-publish') != 'build-artifacts') && ((github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'publish-artifacts') || (needs.build_windows.result == 'success' && needs.build_macos_beta.result == 'success' && needs.build_linux.result == 'success' && needs.build_service.result == 'success')) }}
     runs-on: ubuntu-22.04
