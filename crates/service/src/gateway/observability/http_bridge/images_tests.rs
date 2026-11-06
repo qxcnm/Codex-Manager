@@ -53,6 +53,8 @@ fn non_stream_images_accepts_responses_sse_in_both_output_formats() {
 #[test]
 fn non_stream_images_accepts_bom_and_sse_metadata_before_completion() {
     let response = image_response();
+    let mut expected = response.clone();
+    expected["created"] = response["created_at"].clone();
     let payload = json!({"type": "response.completed", "response": response});
     for prefix in [
         "\u{feff}",
@@ -67,7 +69,7 @@ fn non_stream_images_accepts_bom_and_sse_metadata_before_completion() {
             let body = format!("{prefix}{frame}");
             assert_eq!(
                 parse_images_response_body(body.as_bytes()).unwrap(),
-                response
+                expected
             );
             let mapped =
                 convert_responses_body_to_images(body.as_bytes(), ImagesResponseFormat::B64Json)
@@ -120,13 +122,15 @@ fn sse_detection_keeps_json_and_invalid_payloads_distinct() {
 #[test]
 fn non_stream_images_honors_declared_sse_with_ignored_extension_fields() {
     let response = image_response();
+    let mut expected = response.clone();
+    expected["created"] = response["created_at"].clone();
     let body = format!(
         "vendor-metadata: ignored\n{}",
         completed_sse(response.clone())
     );
     assert_eq!(
         super::parse_images_response_body_with_sse(body.as_bytes(), true).unwrap(),
-        response
+        expected
     );
     assert!(
         super::parse_images_response_body_with_sse(b"vendor-metadata: ignored\n\n", true).is_err()
