@@ -5,11 +5,15 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-06
+
 ### Fixed
 
 - Fixed Codex Responses compaction requests being rejected for system messages within conversation history by mapping the remaining system message roles to developer in place, preserving content, order, and tool history (#519).
 - Fixed Images API compatibility requests forcing text reasoning effort into image complexity, retained configured image model selection, and returned standard Images JSON or JSON errors for upstream Responses event streams (#520).
 - Upgraded the desktop window runtime to include the upstream fix for unresponsive native title bar buttons after initial display or tray restoration on Linux / Wayland (#518).
+- Fixed requests to Claude 4.7 and newer models being rejected for unsupported sampling parameters by removing incompatible parameters before forwarding (#517).
+- Fixed image event streams with BOM or SSE metadata being mistaken for JSON, and moved macOS builds to the supported macOS 15 runner.
 
 ## [0.6.9] - 2026-10-27
 
@@ -680,7 +684,8 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 ### Changed
 - The operation area of ​​the account management page is integrated into a single "Account Operation" drop-down menu, replacing the stack of multiple buttons on the right, making the interface more concise.
 
-[Unreleased]: https://github.com/qxcnm/Codex-Manager/compare/v0.6.5...HEAD
+[Unreleased]: https://github.com/qxcnm/Codex-Manager/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/qxcnm/Codex-Manager/compare/v0.6.9...v0.7.0
 [0.6.5]: https://github.com/qxcnm/Codex-Manager/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/qxcnm/Codex-Manager/releases/tag/v0.6.4
 [0.6.3]: https://github.com/qxcnm/Codex-Manager/releases/tag/v0.6.3

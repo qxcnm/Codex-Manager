@@ -5,11 +5,15 @@
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-06
+
 ### Fixed
 
 - 修复 Codex Responses 压缩请求因历史中段的 system 消息被上游拒绝的问题，将剩余系统消息原位映射为 developer，保留内容、顺序和工具调用历史（#519）。
 - 修复 Images API 兼容请求强制推理强度导致图片复杂度报错的问题，保留图片模型选择，并将上游 Responses 事件流转换为标准图片 JSON 或 JSON 错误（#520）。
 - 升级桌面窗口运行时，纳入 Linux / Wayland 首次显示或从托盘恢复后原生标题栏按钮无响应的上游修复（#518）。
+- 修复 Claude 4.7 及更新型号因不支持采样参数而拒绝请求的问题，转发时移除不兼容参数（#517）。
+- 修复图片事件流包含 BOM 或 SSE 元数据时被误判为 JSON 的问题，并切换到受支持的 macOS 15 构建环境。
 
 ## [0.6.9] - 2026-10-27
 
@@ -681,7 +685,8 @@
 ### Changed
 - 账号管理页操作区整合为单一“账号操作”下拉菜单，替代右侧多按钮堆叠，界面更简洁。
 
-[Unreleased]: https://github.com/qxcnm/Codex-Manager/compare/v0.6.5...HEAD
+[Unreleased]: https://github.com/qxcnm/Codex-Manager/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/qxcnm/Codex-Manager/compare/v0.6.9...v0.7.0
 [0.6.5]: https://github.com/qxcnm/Codex-Manager/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/qxcnm/Codex-Manager/releases/tag/v0.6.4
 [0.6.3]: https://github.com/qxcnm/Codex-Manager/releases/tag/v0.6.3
