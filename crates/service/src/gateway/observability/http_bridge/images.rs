@@ -9,7 +9,19 @@ use super::aggregate::{
 /// Images requests use a streaming Responses upstream even when the caller
 /// expects JSON. Inspect the payload rather than trusting its Content-Type.
 pub(super) fn parse_images_response_body(body: &[u8]) -> Result<Value, String> {
-    let value = if looks_like_sse_payload(body) {
+    parse_images_response_body_with_sse(body, false)
+}
+
+pub(super) fn parse_images_response_body_with_sse(
+    body: &[u8],
+    is_sse: bool,
+) -> Result<Value, String> {
+    // SSE permits one UTF-8 BOM at the start of the stream. Strip it before
+    // both terminal inspection and aggregation, including data-only frames.
+    let body = body.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(body);
+    let value = if let Ok(value) = serde_json::from_slice::<Value>(body) {
+        value
+    } else if is_sse || looks_like_sse_payload(body) {
         let text = std::str::from_utf8(body)
             .map_err(|_| "upstream image response is not valid UTF-8".to_string())?;
         let mut frame = Vec::new();
@@ -51,8 +63,7 @@ pub(super) fn parse_images_response_body(body: &[u8]) -> Result<Value, String> {
         serde_json::from_slice::<Value>(&response)
             .map_err(|_| "upstream image response is not valid JSON".to_string())?
     } else {
-        serde_json::from_slice::<Value>(body)
-            .map_err(|_| "upstream image response is not valid JSON".to_string())?
+        return Err("upstream image response is not valid JSON".to_string());
     };
     if let Some(message) = extract_error_message_from_json(&value) {
         return Err(message);

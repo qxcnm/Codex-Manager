@@ -51,6 +51,94 @@ fn non_stream_images_accepts_responses_sse_in_both_output_formats() {
 }
 
 #[test]
+fn non_stream_images_accepts_bom_and_sse_metadata_before_completion() {
+    let response = image_response();
+    let payload = json!({"type": "response.completed", "response": response});
+    for prefix in [
+        "\u{feff}",
+        "id: image-1\n",
+        "retry: 1000\n",
+        "\u{feff}id: image-1\nretry: 1000\n\n",
+    ] {
+        for frame in [
+            completed_sse(response.clone()),
+            format!("data: {payload}\n\n"),
+        ] {
+            let body = format!("{prefix}{frame}");
+            assert_eq!(
+                parse_images_response_body(body.as_bytes()).unwrap(),
+                response
+            );
+            let mapped =
+                convert_responses_body_to_images(body.as_bytes(), ImagesResponseFormat::B64Json)
+                    .unwrap();
+            let mapped: Value = serde_json::from_slice(&mapped).unwrap();
+            assert_eq!(mapped["data"][0]["b64_json"], "aGVsbG8=");
+            assert_eq!(mapped["usage"]["total_tokens"], 3);
+        }
+    }
+}
+
+#[test]
+fn non_stream_images_preserves_prefixed_sse_failures_and_rejects_truncation() {
+    let failed = json!({"type": "response.failed", "response": {"status": "failed", "error": {"message": "image generation rejected"}}});
+    for prefix in [
+        "\u{feff}",
+        "id: image-1\n",
+        "retry: 1000\n",
+        "\u{feff}id: image-1\nretry: 1000\n\n",
+    ] {
+        for frame in [
+            event("response.failed", failed.clone()),
+            format!("data: {failed}\n\n"),
+        ] {
+            let error =
+                parse_images_response_body(format!("{prefix}{frame}").as_bytes()).unwrap_err();
+            assert!(error.contains("image generation rejected"), "{error}");
+        }
+        let incomplete =
+            format!("{prefix}data: {{\"type\":\"response.created\"}}\n\ndata: [DONE]\n\n");
+        assert!(parse_images_response_body(incomplete.as_bytes())
+            .unwrap_err()
+            .contains("without a completed response"));
+    }
+}
+
+#[test]
+fn sse_detection_keeps_json_and_invalid_payloads_distinct() {
+    use super::looks_like_sse_payload;
+    for body in [
+        r#"{"id":"image-1","retry":1000,"data":"event: response.completed"}"#,
+        "<html>upstream error</html>",
+        "not an event stream",
+    ] {
+        assert!(!looks_like_sse_payload(body.as_bytes()), "{body}");
+    }
+    assert!(!looks_like_sse_payload(b"\xffdata: invalid utf8"));
+}
+
+#[test]
+fn non_stream_images_honors_declared_sse_with_ignored_extension_fields() {
+    let response = image_response();
+    let body = format!(
+        "vendor-metadata: ignored\n{}",
+        completed_sse(response.clone())
+    );
+    assert_eq!(
+        super::parse_images_response_body_with_sse(body.as_bytes(), true).unwrap(),
+        response
+    );
+    assert!(
+        super::parse_images_response_body_with_sse(b"vendor-metadata: ignored\n\n", true).is_err()
+    );
+    assert_eq!(
+        super::parse_images_response_body_with_sse(response.to_string().as_bytes(), true).unwrap(),
+        response,
+        "valid JSON stays accepted even when its Content-Type advertises SSE"
+    );
+}
+
+#[test]
 fn non_stream_images_retains_output_item_done_when_completion_output_is_empty() {
     let response = image_response();
     let item = response["output"][0].clone();

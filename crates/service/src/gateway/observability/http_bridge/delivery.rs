@@ -285,7 +285,10 @@ pub(crate) async fn respond_with_stream_upstream(
                 .unwrap_or_else(|| "upstream compatibility bridge failed".to_string());
                 convert_error_body_for_adapter(response_adapter, &message)
             } else if let Some(response_format) = images_response_format {
-                match super::images::parse_images_response_body(upstream_body.as_ref()) {
+                match super::images::parse_images_response_body_with_sse(
+                    upstream_body.as_ref(),
+                    detected_sse,
+                ) {
                     Ok(response) => serde_json::to_vec(&super::build_images_api_response(
                         &response,
                         response_format,

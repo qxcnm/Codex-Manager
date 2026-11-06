@@ -443,6 +443,97 @@ fn gateway_images_generation_failed_sse_returns_json_error() {
 }
 
 #[test]
+fn gateway_images_generation_accepts_bom_and_sse_metadata_before_image_events() {
+    let completed = serde_json::json!({
+        "type": "response.completed",
+        "response": {
+            "id": "resp_image_sse_prefix", "status": "completed", "created_at": 1772000000,
+            "output": [{"id": "ig_sse_prefix", "type": "image_generation_call",
+                "status": "completed", "result": "aGVsbG8=", "output_format": "png"}]
+        }
+    });
+    for upstream_content_type in ["text/event-stream", "application/json"] {
+        for (prefix, event_line) in [
+            (
+                "\u{feff}id: image-prefix\r\nretry: 1000\r\n",
+                "event: response.completed\r\n",
+            ),
+            ("\u{feff}retry: 1000\r\nid: image-prefix\r\n", ""),
+        ] {
+            let upstream_body =
+                format!("{prefix}{event_line}data: {completed}\r\n\r\ndata: [DONE]\r\n\r\n");
+            let (status, content_type, body, requests) = run_images_generation_fixture(
+                "gpt-6.1-terra",
+                200,
+                upstream_body,
+                upstream_content_type,
+            );
+            assert_eq!(status, 200, "{upstream_content_type}: {body}");
+            assert_eq!(
+                content_type.split(';').next(),
+                Some("application/json"),
+                "{content_type}"
+            );
+            let images: serde_json::Value =
+                serde_json::from_str(&body).expect("images response JSON");
+            assert_eq!(images["created"], 1772000000);
+            assert_eq!(images["data"].as_array().expect("image data").len(), 1);
+            assert_eq!(images["data"][0]["b64_json"], "aGVsbG8=");
+            assert!(images.get("error").is_none());
+            assert_eq!(
+                requests.len(),
+                1,
+                "image success must use one upstream request"
+            );
+            assert_eq!(requests[0].path, "/backend-api/codex/responses");
+        }
+    }
+}
+
+#[test]
+fn gateway_images_generation_preserves_errors_after_bom_and_sse_metadata() {
+    let upstream_message = "Image model rejected the requested size.";
+    let failed = serde_json::json!({
+        "type": "response.failed",
+        "response": {"id": "resp_image_sse_prefix_failed", "status": "failed", "error": {
+            "type": "image_generation_user_error", "code": "invalid_value",
+            "message": upstream_message, "param": "size"
+        }}
+    });
+    for upstream_content_type in ["text/event-stream", "application/json"] {
+        for (prefix, event_line) in [
+            (
+                "\u{feff}id: image-prefix-failed\r\nretry: 1000\r\n",
+                "event: response.failed\r\n",
+            ),
+            ("\u{feff}retry: 1000\r\nid: image-prefix-failed\r\n", ""),
+        ] {
+            let upstream_body =
+                format!("{prefix}{event_line}data: {failed}\r\n\r\ndata: [DONE]\r\n\r\n");
+            let (status, content_type, body, requests) = run_images_generation_fixture(
+                "gpt-6.1-terra",
+                200,
+                upstream_body,
+                upstream_content_type,
+            );
+            assert_eq!(status, 502, "{upstream_content_type}: {body}");
+            assert_eq!(
+                content_type.split(';').next(),
+                Some("application/json"),
+                "{content_type}"
+            );
+            let error: serde_json::Value = serde_json::from_str(&body).expect("images error JSON");
+            let message = error["error"]["message"].as_str().expect("error message");
+            assert!(message.contains(upstream_message), "{message}");
+            assert!(message.contains("invalid_value"), "{message}");
+            assert!(error.get("data").is_none());
+            assert_eq!(requests.len(), 1, "image user errors must not be retried");
+            assert_eq!(requests[0].path, "/backend-api/codex/responses");
+        }
+    }
+}
+
+#[test]
 fn gateway_images_generation_obsolete_main_model_uses_concrete_default_once() {
     let completed_sse = concat!(
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_image_default\",\"created_at\":1772000000,\"output\":[{\"id\":\"ig_default\",\"type\":\"image_generation_call\",\"status\":\"completed\",\"result\":\"aGVsbG8=\"}]}}\n\n",

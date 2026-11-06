@@ -812,6 +812,7 @@ pub(in super::super) fn collect_non_stream_json_from_sse_bytes(
 /// # 返回
 /// 返回函数执行结果
 pub(in super::super) fn looks_like_sse_payload(body: &[u8]) -> bool {
+    let body = body.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(body);
     let Ok(text) = std::str::from_utf8(body) else {
         return false;
     };
@@ -824,7 +825,11 @@ pub(in super::super) fn looks_like_sse_payload(body: &[u8]) -> bool {
             }
             continue;
         }
-        if trimmed.starts_with("data:") || trimmed.starts_with("event:") || trimmed.starts_with(':')
+        if trimmed.starts_with("data:")
+            || trimmed.starts_with("event:")
+            || trimmed.starts_with("id:")
+            || trimmed.starts_with("retry:")
+            || trimmed.starts_with(':')
         {
             saw_sse_prefix = true;
             continue;
