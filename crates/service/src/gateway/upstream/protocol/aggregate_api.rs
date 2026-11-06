@@ -1968,9 +1968,32 @@ mod bridge_tests {
     #[test]
     fn candidate_transport_rewrite_isolated_between_codex_and_generic_upstreams() {
         let _guard = crate::test_env_guard();
-        let body = Bytes::from_static(
-            br#"{"model":"platform-model","input":"hello","stream":false,"service_tier":"fast","dynamicTools":[{"name":"spawn_agent"}]}"#,
-        );
+        let original_value = serde_json::json!({
+            "model": "platform-model",
+            "input": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "earlier reply"},
+                {
+                    "type": "message",
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": "compact the preceding history"}]
+                },
+                {"role": "user", "content": "continue"}
+            ],
+            "stream": false,
+            "service_tier": "fast",
+            "tools": [{
+                "type": "function",
+                "name": "record_message",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"role": {"type": "string", "default": "system"}},
+                    "default": {"role": "system", "nested": {"role": "system"}}
+                }
+            }],
+            "dynamicTools": [{"name": "spawn_agent"}]
+        });
+        let body = Bytes::from(serde_json::to_vec(&original_value).expect("original body"));
         let mut codex = candidate("codex", 0);
         codex.model_override = Some("gpt-5.4".to_string());
         let mut generic = candidate("generic", 1);
@@ -2020,13 +2043,15 @@ mod bridge_tests {
         assert_eq!(codex_value["stream"], true);
         assert_eq!(codex_value["store"], false);
         assert_eq!(codex_value["service_tier"], "priority");
+        let mut codex_input = original_value["input"].clone();
+        codex_input[2]["role"] = Value::String("developer".to_string());
+        assert_eq!(codex_value["input"], codex_input);
 
         assert_eq!(generic_value["model"], "MiniMax-M3");
-        assert_eq!(generic_value["input"], "hello");
         assert_eq!(generic_value["stream"], false);
         assert_eq!(generic_value["service_tier"], "fast");
-        assert_eq!(generic_value["tools"][0]["type"], "function");
-        assert_eq!(generic_value["tools"][0]["name"], "spawn_agent");
+        assert_eq!(generic_value["tools"][1]["type"], "function");
+        assert_eq!(generic_value["tools"][1]["name"], "spawn_agent");
         assert!(generic_value.get("dynamicTools").is_none());
         assert!(generic_value.get("instructions").is_none());
         assert!(generic_value.get("store").is_none());
@@ -2039,11 +2064,37 @@ mod bridge_tests {
         assert!(claude_value.get("store").is_none());
 
         assert_eq!(compatible_value["model"], "platform-model");
-        assert_eq!(compatible_value["input"], "hello");
         assert_eq!(compatible_value["stream"], false);
         assert_eq!(compatible_value["service_tier"], "fast");
         assert!(compatible_value.get("instructions").is_none());
         assert!(compatible_value.get("store").is_none());
+
+        for (name, value) in [
+            ("generic", &generic_value),
+            ("claude", &claude_value),
+            ("compatible", &compatible_value),
+        ] {
+            assert_eq!(
+                value["input"], original_value["input"],
+                "{name} must retain the mid-conversation system role"
+            );
+        }
+        for (name, value) in [
+            ("codex", &codex_value),
+            ("generic", &generic_value),
+            ("claude", &claude_value),
+            ("compatible", &compatible_value),
+        ] {
+            assert_eq!(
+                value["tools"][0]["parameters"], original_value["tools"][0]["parameters"],
+                "{name} must not rewrite role values in tool parameters"
+            );
+        }
+        let shared_value: Value = serde_json::from_slice(body.as_ref()).expect("shared body");
+        assert_eq!(
+            shared_value, original_value,
+            "candidate rewrites must stay isolated"
+        );
     }
 
     #[test]

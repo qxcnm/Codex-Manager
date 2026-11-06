@@ -236,6 +236,42 @@ fn promote_leading_instruction_messages_to_instructions(
     true
 }
 
+fn normalize_system_message_roles(path: &str, obj: &mut Map<String, Value>) -> bool {
+    if !is_responses_path(path) {
+        return false;
+    }
+    let normalize_message = |item: &mut Value| {
+        let Some(message) = item.as_object_mut() else {
+            return false;
+        };
+        if message
+            .get("type")
+            .is_some_and(|kind| kind.as_str() != Some("message"))
+        {
+            return false;
+        }
+        let Some(Value::String(role)) = message.get_mut("role") else {
+            return false;
+        };
+        if !role.eq_ignore_ascii_case("system") {
+            return false;
+        }
+        *role = "developer".to_string();
+        true
+    };
+    match obj.get_mut("input") {
+        Some(Value::Array(items)) => {
+            let mut changed = false;
+            for item in items {
+                changed |= normalize_message(item);
+            }
+            changed
+        }
+        Some(item @ Value::Object(_)) => normalize_message(item),
+        _ => false,
+    }
+}
+
 fn ensure_stream_true(path: &str, obj: &mut Map<String, Value>) -> bool {
     if !is_standard_responses_path(path) {
         return false;
@@ -665,6 +701,10 @@ pub(crate) fn apply_codex_http_request_rules(
         result.changed = true;
     }
     if promote_leading_instruction_messages_to_instructions(path, obj) {
+        result.changed = true;
+    }
+    // Codex rejects system roles anywhere in the remaining history, including native requests.
+    if normalize_system_message_roles(path, obj) {
         result.changed = true;
     }
     if ensure_non_empty_instructions(path, obj) {

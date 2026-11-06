@@ -1098,6 +1098,177 @@ fn responses_codex_backend_hoists_leading_system_message_to_instructions() {
 }
 
 #[test]
+fn responses_codex_backend_normalizes_mid_conversation_system_roles_without_changing_history() {
+    let _guard = crate::test_env_guard();
+    let body = json!({
+        "model": "gpt-6-sol",
+        "instructions": "",
+        "input": [
+            {"role":"system","content":"  Leading instructions\n"},
+            {"role":"user","content":"first turn"},
+            {"type":"function_call","call_id":"call-1","name":"inspect","arguments":"{\"role\":\"system\",\"content\":\"tool argument\"}"},
+            {"type":"function_call_output","call_id":"call-1","output":"{\"role\":\"system\",\"content\":\"tool result\"}"},
+            {"type":"message","id":"mid-1","role":"system","content":[{"type":"input_text","text":"  Runtime instructions\n"}]},
+            {"role":"system","content":"compaction reminder"},
+            {"role":"developer","content":"existing developer instructions"},
+            {"type":"item_reference","id":"ref-1","role":"system"},
+            {"type":"function_call","role":"system","arguments":{"role":"system"}},
+            {"type":null,"role":"system","content":"not a message item"},
+            {"role":"user","content":[{"type":"input_text","text":"continue"},{"type":"input_image","image_url":"data:image/png;base64,aW1hZ2U="}]}
+        ]
+    });
+    let mut expected_input = body["input"].as_array().expect("input array").clone();
+    expected_input.remove(0);
+    expected_input[3]["role"] = json!("developer");
+    expected_input[4]["role"] = json!("developer");
+
+    for path in ["/v1/responses", "/v1/responses?trace=compaction"] {
+        let out = apply_request_overrides(
+            path,
+            serde_json::to_vec(&body).expect("serialize request body"),
+            None,
+            None,
+            Some("https://chatgpt.com/backend-api/codex"),
+        );
+        let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
+
+        assert_eq!(value["instructions"], "  Leading instructions\n");
+        assert_eq!(value["input"], json!(expected_input));
+    }
+}
+
+#[test]
+fn responses_codex_backend_normalizes_system_roles_with_existing_instructions_for_native_and_compat_requests(
+) {
+    let _guard = crate::test_env_guard();
+    let body = json!({
+        "model":"gpt-6-sol",
+        "instructions":"  Keep the existing instructions\n",
+        "input":[
+            {"type":"message","role":"system","content":"leading message"},
+            {"role":"user","content":"hello"},
+            {"role":"SyStEm","content":"mid-conversation message"}
+        ]
+    });
+    let expected_input = json!([
+        {"type":"message","role":"developer","content":"leading message"},
+        {"role":"user","content":"hello"},
+        {"role":"developer","content":"mid-conversation message"}
+    ]);
+    for allow_codex_compat_rewrite in [false, true] {
+        let out = apply_request_overrides_with_service_tier_and_prompt_cache_key_scope(
+            "/v1/responses",
+            serde_json::to_vec(&body).expect("serialize request body"),
+            None,
+            None,
+            None,
+            Some("https://chatgpt.com/backend-api/codex"),
+            None,
+            allow_codex_compat_rewrite,
+        );
+        let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
+
+        assert_eq!(value["instructions"], body["instructions"]);
+        assert_eq!(value["input"], expected_input);
+    }
+}
+
+#[test]
+fn responses_codex_backend_normalizes_single_object_system_input_with_existing_instructions() {
+    let _guard = crate::test_env_guard();
+    let body = json!({
+        "model":"gpt-6-sol",
+        "instructions":"keep instructions",
+        "input":{"type":"message","id":"msg-1","role":"system","content":"  Keep message content\n"}
+    });
+    let out = apply_request_overrides(
+        "/v1/responses",
+        serde_json::to_vec(&body).expect("serialize request body"),
+        None,
+        None,
+        Some("https://chatgpt.com/backend-api/codex"),
+    );
+    let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
+
+    assert_eq!(value["instructions"], body["instructions"]);
+    assert_eq!(
+        value["input"],
+        json!({"type":"message","id":"msg-1","role":"developer","content":"  Keep message content\n"})
+    );
+}
+
+#[test]
+fn responses_codex_compact_normalizes_system_roles_without_standard_request_defaults() {
+    let _guard = crate::test_env_guard();
+    let body = json!({
+        "model":"gpt-6-sol",
+        "input":[
+            {"role":"system","content":"leading compact instructions"},
+            {"role":"user","content":"conversation history"},
+            {"type":"message","role":"system","content":"compact reminder"}
+        ]
+    });
+    let expected_input = json!([
+        {"role":"developer","content":"leading compact instructions"},
+        {"role":"user","content":"conversation history"},
+        {"type":"message","role":"developer","content":"compact reminder"}
+    ]);
+    for path in ["/v1/responses/compact", "/v1/responses/compact?trace=test"] {
+        let out = apply_request_overrides(
+            path,
+            serde_json::to_vec(&body).expect("serialize request body"),
+            None,
+            None,
+            Some("https://chatgpt.com/backend-api/codex"),
+        );
+        let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
+
+        assert_eq!(value["input"], expected_input);
+        assert!(value.get("instructions").is_none());
+        assert!(value.get("stream").is_none());
+        assert!(value.get("store").is_none());
+    }
+}
+
+#[test]
+fn responses_non_codex_targets_and_deferred_aggregate_keep_system_roles() {
+    let _guard = crate::test_env_guard();
+    let body = json!({
+        "model":"gpt-6-sol",
+        "input":[
+            {"role":"system","content":"leading instructions"},
+            {"role":"user","content":"hello"},
+            {"type":"message","role":"system","content":"mid-conversation instructions"}
+        ]
+    });
+    for path in ["/v1/responses", "/v1/responses/compact?trace=test"] {
+        for upstream_base in ["https://api.openai.com/v1", "https://api.example.com/v1"] {
+            let out = apply_request_overrides(
+                path,
+                serde_json::to_vec(&body).expect("serialize request body"),
+                None,
+                None,
+                Some(upstream_base),
+            );
+            let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
+            assert_eq!(value["input"], body["input"]);
+            assert!(value.get("instructions").is_none());
+        }
+        let deferred = apply_request_overrides_for_deferred_aggregate(
+            path,
+            serde_json::to_vec(&body).expect("serialize request body"),
+            None,
+            None,
+            None,
+        );
+        let value: serde_json::Value =
+            serde_json::from_slice(&deferred).expect("parse deferred body");
+        assert_eq!(value["input"], body["input"]);
+        assert!(value.get("instructions").is_none());
+    }
+}
+
+#[test]
 fn responses_codex_backend_hoists_single_object_system_input_to_instructions() {
     let _guard = crate::test_env_guard();
     let body = json!({

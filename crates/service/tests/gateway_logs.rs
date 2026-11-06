@@ -6,6 +6,8 @@ mod anthropic_stream;
 mod basic;
 #[path = "gateway_logs/chat_non_stream_tools.rs"]
 mod chat_non_stream_tools;
+#[path = "gateway_logs/compaction.rs"]
+mod compaction;
 #[path = "gateway_logs/fast_policy.rs"]
 mod fast_policy;
 #[path = "gateway_logs/hybrid_routing.rs"]

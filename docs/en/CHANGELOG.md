@@ -7,6 +7,7 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 
 ### Fixed
 
+- Fixed Codex Responses compaction requests being rejected for system messages within conversation history by mapping the remaining system message roles to developer in place, preserving content, order, and tool history (#519).
 - Fixed Images API compatibility requests forcing text reasoning effort into image complexity, retained configured image model selection, and returned standard Images JSON or JSON errors for upstream Responses event streams (#520).
 - Upgraded the desktop window runtime to include the upstream fix for unresponsive native title bar buttons after initial display or tray restoration on Linux / Wayland (#518).
 
