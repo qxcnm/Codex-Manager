@@ -191,11 +191,11 @@ If this project has helped you, donations are welcome!
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=qxcnm%2FCodex-Manager&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=qxcnm%2FCodex-Manager&amp;type=date&amp;legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="../../assets/images/star-history-dark.png" />
-   <source media="(prefers-color-scheme: light)" srcset="../../assets/images/star-history-light.png" />
-   <img alt="Codex Manager Star History Chart" src="../../assets/images/star-history-light.png" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=qxcnm%2FCodex-Manager&amp;type=date&amp;legend=top-left&amp;theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=qxcnm%2FCodex-Manager&amp;type=date&amp;legend=top-left" />
+   <img alt="Codex Manager Star History Chart" src="https://api.star-history.com/chart?repos=qxcnm%2FCodex-Manager&amp;type=date&amp;legend=top-left" />
  </picture>
 </a>
 
