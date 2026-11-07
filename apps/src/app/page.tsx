@@ -499,12 +499,14 @@ function DailyTokenLineChart({
           <CartesianGrid vertical={false} stroke="rgb(var(--primary-rgb) / 0.16)" strokeDasharray="4 8" />
           <XAxis
             dataKey="date"
+            tick={{ fill: "var(--muted-foreground)" }}
             tickLine={false}
             axisLine={false}
             tickMargin={10}
             minTickGap={18}
           />
           <YAxis
+            tick={{ fill: "var(--muted-foreground)" }}
             tickLine={false}
             axisLine={false}
             tickMargin={10}

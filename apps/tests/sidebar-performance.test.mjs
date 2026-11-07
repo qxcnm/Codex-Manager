@@ -117,7 +117,7 @@ test("theme palettes and previews stay synchronized", async () => {
   assert.doesNotMatch(cssSource, /--background: #fff1f2/);
 });
 
-test("gradient appearance keeps surfaces subtle in desktop and web shells", async () => {
+test("modern appearance keeps readable surfaces and subtle elevation in desktop and web shells", async () => {
   const [cssSource, layoutSource, webBuildSource] = await Promise.all([
     fs.readFile(path.join(appsRoot, "src", "app", "globals.css"), "utf8"),
     fs.readFile(path.join(appsRoot, "src", "app", "layout.tsx"), "utf8"),
@@ -128,13 +128,29 @@ test("gradient appearance keeps surfaces subtle in desktop and web shells", asyn
     cssSource.indexOf("[data-appearance='modern'] {"),
     cssSource.indexOf("[data-appearance='classic'] body"),
   );
-  assert.match(modernTheme, /rgb\(var\(--surface-rgb\) \/ 0\.76\) 90%/);
-  assert.match(modernTheme, /--glass-surface: color-mix\(in srgb, var\(--card\) 86%, transparent\)/);
-  assert.match(modernTheme, /0 8px 20px -20px rgb\(var\(--primary-rgb\) \/ 0\.14\)/);
+  assert.match(modernTheme, /--card: color-mix\(in srgb, rgb\(var\(--surface-rgb\) \/ 0\.94\) 97%, rgb\(var\(--bg-gradient-1-rgb\) \/ 1\) 3%\)/);
+  assert.match(modernTheme, /--glass-surface: var\(--card\)/);
+  assert.match(modernTheme, /--glass-border: var\(--border\)/);
+  assert.match(modernTheme, /--glass-shadow:\s*0 2px 6px -3px rgb\(15 23 42 \/ 0\.12\),\s*0 8px 20px -16px rgb\(15 23 42 \/ 0\.1\)/);
   assert.doesNotMatch(modernTheme, /rgb\(var\(--bg-gradient-1-rgb\) \/ 1\) 24%/);
 
-  assert.match(cssSource, /\[data-appearance='modern'\] \.dashboard-primary-panel[\s\S]{0,360}var\(--card\) 72%/);
+  const dashboardPanel = cssSource.match(
+    /\[data-appearance='modern'\] \.dashboard-primary-panel\s*\{([^}]+)\}/,
+  )?.[1];
+  assert.ok(dashboardPanel, "dashboard primary panels must keep a shared surface rule");
+  assert.match(dashboardPanel, /background: var\(--glass-surface\) !important/);
+  assert.match(dashboardPanel, /border-color: var\(--glass-border\) !important/);
+  assert.match(dashboardPanel, /box-shadow: var\(--glass-shadow\) !important/);
   assert.match(cssSource, /\[data-appearance='modern'\] \.dashboard-analytics-card \.mission-panel[\s\S]{0,260}var\(--card\) 34%/);
+
+  const nestedCard = cssSource.match(
+    /\[data-appearance='modern'\] \[data-slot="card"\] \[data-slot="card"\]\s*\{([^}]+)\}/,
+  )?.[1];
+  assert.ok(nestedCard, "nested cards must avoid another elevated glass layer");
+  assert.match(nestedCard, /(?:^|\n)\s*backdrop-filter: none;/);
+  assert.match(nestedCard, /-webkit-backdrop-filter: none;/);
+  assert.match(nestedCard, /background: color-mix\(in srgb, var\(--card-solid\) 80%, var\(--background\)\)/);
+  assert.match(nestedCard, /box-shadow: none;/);
 
   assert.match(layoutSource, /<AppFrame>\{children\}<\/AppFrame>/);
   assert.match(webBuildSource, /join\("\.\.\/\.\.\/apps\/out"\)/);
@@ -153,14 +169,17 @@ test("narrow viewports start with the sidebar collapsed", async () => {
 });
 
 test("wide but short windows keep the complete sidebar discoverable", async () => {
-  const source = await fs.readFile(
-    path.join(appsRoot, "src", "components", "layout", "sidebar.tsx"),
-    "utf8",
-  );
+  const [source, headerSource, cssSource] = await Promise.all([
+    fs.readFile(path.join(appsRoot, "src", "components", "layout", "sidebar.tsx"), "utf8"),
+    fs.readFile(path.join(appsRoot, "src", "components", "layout", "header.tsx"), "utf8"),
+    fs.readFile(path.join(appsRoot, "src", "app", "globals.css"), "utf8"),
+  ]);
 
   assert.match(source, /min-h-8[\s\S]*xl:min-h-9/);
   assert.match(source, /min-h-0 flex-1 overflow-y-auto overscroll-contain py-2/);
-  assert.match(source, /flex h-16 shrink-0 items-center/);
+  assert.match(cssSource, /--shell-header-height: 3\.5rem;/);
+  assert.match(source, /flex h-\[var\(--shell-header-height\)\] shrink-0 items-center/);
+  assert.match(headerSource, /<header[^>]*h-\[var\(--shell-header-height\)\] shrink-0 items-center/);
 });
 
 test("page fallback stays aligned with both sidebar widths", async () => {

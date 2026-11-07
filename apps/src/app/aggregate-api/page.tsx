@@ -492,7 +492,7 @@ export default function AggregateApiPage() {
                     <TableHead>{t("余额")}</TableHead>
                     <TableHead>{t("连通性")}</TableHead>
                     <TableHead>{t("启用")}</TableHead>
-                    <TableHead className="text-right">{t("操作")}</TableHead>
+                    <TableHead className="table-sticky-action-head w-[112px] text-right">{t("操作")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -613,7 +613,7 @@ export default function AggregateApiPage() {
                               onCheckedChange={(enabled) => toggleMutation.mutate({ api, enabled })}
                             />
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="table-sticky-action-cell">
                             <div className="flex justify-end gap-1">
                               <Tooltip>
                                 <TooltipTrigger

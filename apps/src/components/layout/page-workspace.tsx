@@ -32,20 +32,11 @@ type WorkPanelProps = {
   className?: string;
 };
 
-const metricToneClassName = {
-  blue: "border-blue-500/20 bg-blue-500/10 text-blue-600 shadow-sm",
-  emerald: "border-emerald-500/20 bg-emerald-500/10 text-emerald-600 shadow-sm",
-  amber: "border-amber-500/24 bg-amber-500/10 text-amber-600 shadow-sm",
-  rose: "border-rose-500/20 bg-rose-500/10 text-rose-600 shadow-sm",
-  violet: "border-violet-500/20 bg-violet-500/10 text-violet-600 shadow-sm",
-  slate: "border-slate-500/20 bg-slate-500/10 text-slate-600 shadow-sm",
-};
-
 export function PageWorkspace({ children, className }: PageWorkspaceProps) {
   return (
     <div
       className={cn(
-        "mx-auto flex w-full max-w-[1680px] flex-col gap-2.5",
+        "mx-auto flex w-full min-w-0 max-w-[1680px] flex-col gap-3",
         className,
       )}
     >
@@ -64,14 +55,15 @@ export function PageHeader({
 }: PageHeaderProps) {
   return (
     <section
+      data-slot="page-header"
       className={cn(
-        "flex flex-col gap-1.5 border-b border-border/60 pb-2 lg:flex-row lg:items-center lg:justify-between",
+        "page-header border-b border-border pb-3",
         className,
       )}
     >
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <h2 className="min-w-0 text-lg font-semibold text-foreground">
+          <h2 className="min-w-0 text-xl font-semibold tracking-tight text-foreground">
             {title}
           </h2>
           {eyebrow ? (
@@ -92,7 +84,7 @@ export function PageHeader({
         {meta ? <div className="flex flex-wrap gap-1.5">{meta}</div> : null}
       </div>
       {actions ? (
-        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto lg:ml-4 lg:justify-end">
+        <div className="page-header-actions">
           {actions}
         </div>
       ) : null}
@@ -115,26 +107,24 @@ export function MetricCard({
         className,
       )}
     >
-      <CardContent className="flex min-h-[52px] items-center justify-between gap-2 px-3 py-2">
-        <div className="min-w-0">
-          <p className="truncate text-xs font-semibold text-muted-foreground">
+      <CardContent className="flex min-h-16 items-center justify-between gap-3 px-3 py-2.5">
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <p className="truncate text-xs font-medium text-muted-foreground">
             {title}
           </p>
           <div
-            className="mt-1 truncate font-mono text-xl font-semibold leading-none tabular-nums text-foreground"
-            title={typeof detail === "string" ? detail : undefined}
+            className="truncate font-mono text-xl font-semibold leading-none tabular-nums text-foreground"
           >
             {value}
           </div>
+          {detail ? <p className="text-xs leading-5 text-muted-foreground">{detail}</p> : null}
         </div>
         {Icon ? (
           <div
-            className={cn(
-              "flex h-7 w-7 shrink-0 items-center justify-center rounded-md border",
-              metricToneClassName[tone],
-            )}
+            data-tone={tone}
+            className="metric-icon flex size-8 shrink-0 items-center justify-center rounded-lg"
           >
-            <Icon className="h-3 w-3" />
+            <Icon className="size-4" />
           </div>
         ) : null}
       </CardContent>

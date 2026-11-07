@@ -688,6 +688,7 @@ export default function ModelsPage() {
                             aria-label={t("选择全部模型")}
                             disabled={isModelOperationPending}
                             checked={allVisibleSelected}
+                            indeterminate={selectedVisibleCount > 0 && !allVisibleSelected}
                             onCheckedChange={(checked) => {
                               const visibleSlugs = filteredModels.map((model) => model.slug);
                               setSelectedSlugs((current) =>

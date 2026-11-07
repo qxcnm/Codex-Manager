@@ -169,7 +169,7 @@ export function Header() {
 
   return (
     <>
-      <header className="sticky top-0 z-30 flex min-h-[50px] items-center justify-between gap-2 glass-header px-3 sm:gap-3 sm:px-4 lg:px-6">
+      <header className="sticky top-0 z-30 flex h-[var(--shell-header-height)] shrink-0 items-center justify-between gap-2 glass-header px-3 sm:gap-3 sm:px-4 lg:px-6">
         <div className="header-title-group flex min-w-0 flex-1 items-center overflow-hidden">
           <h1 className="header-page-title min-w-0 truncate text-sm font-medium text-muted-foreground">
             {getPageTitle()}

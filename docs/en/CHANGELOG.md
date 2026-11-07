@@ -11,11 +11,13 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 
 ### Changed
 
+- Refined page headings, metric cards, table separators, and form controls; aligned the sidebar and header, improved keyboard focus and dark-theme clarity, and polished narrow-window and low-transparency layouts.
 - Updated the frontend and backend default client version against Codex 0.164.0, with pinned upstream evidence and documented integration boundaries.
 - Added read-only discovery of skills in the service user's `~/.agents/skills`, preserving the existing installation and removal scope.
 
 ### Fixed
 
+- Improved checkbox visibility across all themes and glass surfaces, with clearer hover, keyboard focus and disabled states, plus partial-selection indicators for account and model lists.
 - Preserved stream options and access-program selections in Codex Responses requests, and stopped stale WebSocket handshake metadata from overriding later frames.
 - Aligned token refresh with Codex's JSON request encoding and removed the fixed scope that could reduce the original grant, preserving proxy handling, error classification, and rotated credentials.
 - Fixed parsing of multiline YAML skill descriptions, quoted values, and nested metadata so valid manifests retain their intended names and descriptions.

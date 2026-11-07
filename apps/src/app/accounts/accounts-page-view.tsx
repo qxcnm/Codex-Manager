@@ -486,6 +486,12 @@ export function AccountsPageView(props: AccountsPageViewProps) {
   const statusMutationBusy =
     isUpdatingManyStatuses || Boolean(isUpdatingStatusAccountId);
   const selectedIdSet = new Set(effectiveSelectedIds);
+  const selectedVisibleCount = visibleAccounts.filter((account) =>
+    selectedIdSet.has(account.id),
+  ).length;
+  const allVisibleSelected =
+    visibleAccounts.length > 0 && selectedVisibleCount === visibleAccounts.length;
+  const someVisibleSelected = selectedVisibleCount > 0 && !allVisibleSelected;
   const resetWarmupEnableTargetIds = accounts
     .filter((account) => selectedIdSet.has(account.id) && account.resetWarmupEnabled === false)
     .map((account) => account.id);
@@ -768,9 +774,8 @@ export function AccountsPageView(props: AccountsPageViewProps) {
         <div className="col-span-full flex items-center gap-2 px-1 text-sm text-muted-foreground">
           <Checkbox
             id="account-grid-select-all"
-            checked={visibleAccounts.every((account) =>
-              effectiveSelectedIds.includes(account.id),
-            )}
+            checked={allVisibleSelected}
+            indeterminate={someVisibleSelected}
             onCheckedChange={toggleSelectAllVisible}
             aria-label={t("全选")}
           />
@@ -965,7 +970,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
           <div className="min-w-0">
             <Input
               placeholder={t("搜索账号名 / 编号...")}
-              className="glass-card mission-panel h-10 rounded-xl px-3"
+              className="w-full"
               value={search}
               onChange={(event) => handleSearchChange(event.target.value)}
             />
@@ -973,7 +978,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
 
           <div className="grid min-w-0 grid-cols-2 gap-2 sm:flex sm:shrink-0 sm:items-center sm:gap-3">
             <Select value={planFilter} onValueChange={handlePlanFilterChange}>
-              <SelectTrigger className="h-10 w-full min-w-0 rounded-xl bg-card/50 sm:w-[140px] sm:shrink-0">
+              <SelectTrigger className="w-full min-w-0 sm:w-[140px] sm:shrink-0">
                 <SelectValue placeholder={t("全部类型")}>
                   {(value) => formatPlanFilterLabel(String(value || ""), t)}
                 </SelectValue>
@@ -998,7 +1003,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                 handleStatusFilterChange(value as StatusFilter)
               }
             >
-              <SelectTrigger className="h-10 w-full min-w-0 rounded-xl bg-card/50 sm:w-[152px] sm:shrink-0">
+              <SelectTrigger className="w-full min-w-0 sm:w-[152px] sm:shrink-0">
                 <SelectValue placeholder={t("全部状态")}>
                   {(value) => formatStatusFilterLabel(String(value || ""), t)}
                 </SelectValue>
@@ -1044,7 +1049,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
               <TooltipTrigger render={<span />} className="inline-flex">
                 <Button
                   variant="outline"
-                  className="glass-card mission-panel h-10 min-w-[88px] gap-2 rounded-xl px-3"
+                  className="min-w-[88px] gap-2 px-3"
                   disabled={
                     !isServiceReady || isWarmingUpAccounts || accounts.length === 0
                   }
@@ -1070,7 +1075,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
               <DropdownMenuTrigger>
                 <Button
                   variant="outline"
-                  className="glass-card mission-panel h-10 min-w-[50px] justify-between gap-2 rounded-xl px-3"
+                  className="min-w-[50px] justify-between gap-2 px-3"
                   render={<span />}
                   nativeButton={false}
                 >
@@ -1495,12 +1500,8 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                 <TableHead className="w-12 text-center">
                   <Checkbox
                     aria-label={t("全选")}
-                    checked={
-                      visibleAccounts.length > 0 &&
-                      visibleAccounts.every((account) =>
-                        effectiveSelectedIds.includes(account.id),
-                      )
-                    }
+                    checked={allVisibleSelected}
+                    indeterminate={someVisibleSelected}
                     onCheckedChange={toggleSelectAllVisible}
                   />
                 </TableHead>

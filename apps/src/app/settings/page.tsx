@@ -1375,19 +1375,19 @@ function AdminSettingsPage() {
         className="w-full"
       >
         <TabsList variant="line" className="mb-3 flex h-10 w-full justify-start gap-1 overflow-x-auto rounded-none border-b border-border/60 p-0 no-scrollbar">
-          <TabsTrigger value="general" className="h-10 shrink-0 rounded-none border-b-2 px-3 data-active:border-primary data-active:bg-transparent data-active:shadow-none">
+          <TabsTrigger value="general" className="h-10 shrink-0 px-3">
             <SettingsIcon className="h-4 w-4" /> {t("通用")}
           </TabsTrigger>
-          <TabsTrigger value="appearance" className="h-10 shrink-0 rounded-none border-b-2 px-3 data-active:border-primary data-active:bg-transparent data-active:shadow-none">
+          <TabsTrigger value="appearance" className="h-10 shrink-0 px-3">
             <Palette className="h-4 w-4" /> {t("外观")}
           </TabsTrigger>
-          <TabsTrigger value="gateway" className="h-10 shrink-0 rounded-none border-b-2 px-3 data-active:border-primary data-active:bg-transparent data-active:shadow-none">
+          <TabsTrigger value="gateway" className="h-10 shrink-0 px-3">
             <Globe className="h-4 w-4" /> {t("网关")}
           </TabsTrigger>
-          <TabsTrigger value="tasks" className="h-10 shrink-0 rounded-none border-b-2 px-3 data-active:border-primary data-active:bg-transparent data-active:shadow-none">
+          <TabsTrigger value="tasks" className="h-10 shrink-0 px-3">
             <Cpu className="h-4 w-4" /> {t("任务")}
           </TabsTrigger>
-          <TabsTrigger value="env" className="h-10 shrink-0 rounded-none border-b-2 px-3 data-active:border-primary data-active:bg-transparent data-active:shadow-none">
+          <TabsTrigger value="env" className="h-10 shrink-0 px-3">
             <Variable className="h-4 w-4" /> {t("环境")}
           </TabsTrigger>
         </TabsList>

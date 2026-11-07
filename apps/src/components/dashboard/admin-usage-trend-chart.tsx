@@ -553,12 +553,14 @@ export function AdminUsageTrendChart({
               />
               <XAxis
                 dataKey="label"
+                tick={{ fill: "var(--muted-foreground)" }}
                 tickLine={false}
                 axisLine={false}
                 tickMargin={10}
                 minTickGap={granularity === "hour" ? 36 : 18}
               />
               <YAxis
+                tick={{ fill: "var(--muted-foreground)" }}
                 tickLine={false}
                 axisLine={false}
                 tickMargin={10}
