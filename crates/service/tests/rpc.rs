@@ -3451,9 +3451,11 @@ fn rpc_chatgpt_auth_tokens_refresh_updates_access_token() {
     subscription_join
         .join()
         .expect("join mock subscription server");
-    assert!(refresh_body.contains("grant_type=refresh_token"));
-    assert!(refresh_body.contains("refresh_token=refresh-token-old"));
-    assert!(refresh_body.contains("scope=openid+profile+email"));
+    let refresh_body: serde_json::Value =
+        serde_json::from_str(&refresh_body).expect("JSON refresh request");
+    assert_eq!(refresh_body["grant_type"], "refresh_token");
+    assert_eq!(refresh_body["refresh_token"], "refresh-token-old");
+    assert!(refresh_body.get("scope").is_none());
     assert_eq!(subscription_request.path, "/accounts/check/v4-2023-04-27");
     assert_eq!(
         subscription_request.authorization.as_deref(),

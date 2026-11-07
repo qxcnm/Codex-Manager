@@ -489,14 +489,6 @@ fn refresh_token_status_error_maps_app_session_terminated_400_to_official_messag
     );
 }
 
-#[test]
-fn refresh_token_body_matches_codex_refresh_scope() {
-    assert_eq!(
-        super::build_refresh_token_body("client-id", "refresh-token"),
-        "client_id=client-id&grant_type=refresh_token&refresh_token=refresh-token&scope=openid+profile+email"
-    );
-}
-
 /// 函数 `refresh_token_status_error_maps_invalidated_401_to_official_message`
 ///
 /// 作者: gaohongshun
@@ -1129,7 +1121,13 @@ fn refresh_access_token_mock_region_blocked_response_surfaces_marker() {
             .as_reader()
             .read_to_string(&mut body)
             .expect("read refresh request body");
-        tx.send(body).expect("send refresh request body");
+        let content_type = request
+            .headers()
+            .iter()
+            .find(|header| header.field.equiv("content-type"))
+            .map(|header| header.value.as_str().to_owned());
+        tx.send((content_type, body))
+            .expect("send refresh request body");
         let response = Response::from_string("")
             .with_status_code(TinyStatusCode(403))
             .with_header(
@@ -1149,7 +1147,7 @@ fn refresh_access_token_mock_region_blocked_response_surfaces_marker() {
             Ok(_) => panic!("region blocked refresh should fail"),
             Err(err) => err,
         };
-    let body = rx
+    let (content_type, body) = rx
         .recv_timeout(Duration::from_secs(5))
         .expect("receive refresh request body");
     handle.join().expect("join refresh server");
@@ -1158,8 +1156,12 @@ fn refresh_access_token_mock_region_blocked_response_surfaces_marker() {
         None => std::env::remove_var("CODEX_REFRESH_TOKEN_URL_OVERRIDE"),
     }
 
-    assert!(body.contains("grant_type=refresh_token"));
-    assert!(body.contains("refresh_token=refresh-old"));
+    assert_eq!(content_type.as_deref(), Some("application/json"));
+    let body: serde_json::Value = serde_json::from_str(&body).expect("JSON refresh request");
+    assert_eq!(body["client_id"], "client-id");
+    assert_eq!(body["grant_type"], "refresh_token");
+    assert_eq!(body["refresh_token"], "refresh-old");
+    assert!(body.get("scope").is_none());
     assert!(err.contains("refresh token failed with status 403 Forbidden"));
     assert!(err.contains("auth_error=unsupported_country_region_territory"));
     assert!(super::is_refresh_token_region_blocked_error_message(&err));
@@ -1248,12 +1250,14 @@ fn changing_gateway_user_agent_preserves_standard_usage_user_agent() {
 }
 
 #[test]
-fn token_refresh_routes_ignore_custom_gateway_user_agent() {
+fn token_refresh_routes_match_codex_json_and_ignore_custom_gateway_user_agent() {
     let (_guard, _restore) = usage_header_runtime_scope();
     let _endpoint = EnvVarRestore::remove("CODEX_REFRESH_TOKEN_URL_OVERRIDE");
     crate::gateway::set_gateway_user_agent(Some("Gateway-Only/1.0"))
         .expect("set custom gateway user agent");
     let expected_user_agent = crate::gateway::current_codex_user_agent().to_ascii_lowercase();
+    let client_id = "client-id+with/slash";
+    let refresh_token = "refresh+with/quote\"and\\slash";
     for explicit in [false, true] {
         let (proxy_url, request_rx, proxy_handle) = spawn_recording_http_proxy(
             r#"{"access_token":"refreshed-access","refresh_token":"refreshed-token"}"#,
@@ -1264,22 +1268,119 @@ fn token_refresh_routes_ignore_custom_gateway_user_agent() {
         let refreshed = if explicit {
             super::refresh_access_token_with_explicit_proxy(
                 "http://auth.test",
-                "client-id",
-                "refresh-old",
+                client_id,
+                refresh_token,
                 &proxy_url,
             )
         } else {
-            super::refresh_access_token("http://auth.test", "client-id", "refresh-old")
+            super::refresh_access_token("http://auth.test", client_id, refresh_token)
         }
         .expect("refresh access token");
         let request = request_rx
             .recv_timeout(Duration::from_secs(5))
-            .expect("capture refresh request")
-            .to_ascii_lowercase();
+            .expect("capture refresh request");
         proxy_handle.join().expect("join refresh proxy");
+        let (headers, body) = request
+            .split_once("\r\n\r\n")
+            .expect("HTTP refresh request");
+        let headers = headers.to_ascii_lowercase();
+        let body: serde_json::Value = serde_json::from_str(body).expect("JSON refresh request");
         assert_eq!(refreshed.access_token, "refreshed-access");
-        assert!(request.contains(format!("user-agent: {expected_user_agent}").as_str()));
-        assert!(!request.contains("gateway-only/1.0"));
+        assert_eq!(refreshed.refresh_token.as_deref(), Some("refreshed-token"));
+        assert!(headers.starts_with("post http://auth.test/oauth/token "));
+        assert!(headers.contains("content-type: application/json"));
+        assert!(headers.contains(format!("user-agent: {expected_user_agent}").as_str()));
+        assert!(!headers.contains("gateway-only/1.0"));
+        assert_eq!(body["client_id"], client_id);
+        assert_eq!(body["grant_type"], "refresh_token");
+        assert_eq!(body["refresh_token"], refresh_token);
+        assert!(body.get("scope").is_none());
+    }
+}
+
+#[test]
+fn token_refresh_does_not_replay_a_grant_after_response_connection_closes() {
+    use std::io::Read;
+    use std::net::TcpListener;
+    use std::time::Instant;
+
+    let (_guard, _restore) = usage_header_runtime_scope();
+    let _endpoint = EnvVarRestore::remove("CODEX_REFRESH_TOKEN_URL_OVERRIDE");
+    for explicit in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind refresh server");
+        let proxy_url = format!("http://{}", listener.local_addr().expect("server address"));
+        let server = thread::spawn(move || {
+            let (mut client, _) = listener.accept().expect("accept refresh request");
+            client
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("read timeout");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let read = client.read(&mut buffer).expect("read refresh request");
+                assert_ne!(read, 0, "request closed before the complete grant arrived");
+                request.extend_from_slice(&buffer[..read]);
+                if let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&request[..header_end]);
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().expect("content length"))
+                        })
+                        .expect("grant content length");
+                    if request.len() >= header_end + 4 + content_length {
+                        let grant: serde_json::Value = serde_json::from_slice(
+                            &request[header_end + 4..header_end + 4 + content_length],
+                        )
+                        .expect("refresh JSON");
+                        assert_eq!(grant["refresh_token"], "fixture-rotating-grant");
+                        break;
+                    }
+                }
+            }
+            // The provider has consumed the complete grant; lose the response.
+            drop(client);
+            listener
+                .set_nonblocking(true)
+                .expect("nonblocking listener");
+            let deadline = Instant::now() + Duration::from_millis(500);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok(_) => return true,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("accept duplicate grant: {error}"),
+                }
+            }
+            false
+        });
+        let _proxy = EnvVarRestore::set("CODEXMANAGER_UPSTREAM_PROXY_URL", &proxy_url);
+        super::reload_usage_http_client_from_env();
+        let result = if explicit {
+            super::refresh_access_token_with_explicit_proxy(
+                "http://auth.test",
+                "fixture-client",
+                "fixture-rotating-grant",
+                &proxy_url,
+            )
+        } else {
+            super::refresh_access_token(
+                "http://auth.test",
+                "fixture-client",
+                "fixture-rotating-grant",
+            )
+        };
+        assert!(
+            result.is_err(),
+            "lost refresh response must remain an error"
+        );
+        assert!(
+            !server.join().expect("join refresh server"),
+            "refresh grant was replayed"
+        );
     }
 }
 

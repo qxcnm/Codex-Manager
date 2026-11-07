@@ -1102,6 +1102,62 @@ fn websocket_frame_without_client_pck_uses_root_session_upstream_and_session_rou
 }
 
 #[test]
+fn upstream_websocket_request_keeps_session_and_thread_headers_distinct() {
+    let _guard = crate::test_env_guard();
+    for session_header in ["session-id", "session_id"] {
+        for (thread_id, client_request_id) in [
+            (Some("thread-current"), Some("request-current")),
+            (None, Some("request-current")),
+            (Some("thread-current"), None),
+            (None, None),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(session_header, HeaderValue::from_static("session-root"));
+            if let Some(thread_id) = thread_id {
+                headers.insert("thread-id", HeaderValue::from_static(thread_id));
+            }
+            if let Some(client_request_id) = client_request_id {
+                headers.insert(
+                    "x-client-request-id",
+                    HeaderValue::from_static(client_request_id),
+                );
+            }
+            let context = WsRequestContext {
+                api_key: sample_api_key(),
+                incoming_headers: crate::gateway::IncomingHeaderSnapshot::from_http_headers(
+                    &headers,
+                ),
+                prompt_cache_key: None,
+                cache_affinity_key: None,
+                route_conversation_id: None,
+                route_conversation_source: None,
+                effective_upstream_base: "https://chatgpt.com/backend-api/codex".to_string(),
+                prefer_raw_errors: false,
+            };
+            let request = build_upstream_websocket_request(
+                "wss://chatgpt.com/backend-api/codex/responses",
+                &sample_account(),
+                &websocket_bearer_authorization("bearer-ws"),
+                &context,
+                false,
+            )
+            .unwrap_or_else(|err| panic!("build websocket request failed: {}", err.message));
+            let value = |name: &str| {
+                request
+                    .headers()
+                    .get(name)
+                    .and_then(|value| value.to_str().ok())
+            };
+
+            assert_eq!(value("session-id"), Some("session-root"));
+            assert_eq!(value("session_id"), None);
+            assert_eq!(value("thread-id"), thread_id.or(client_request_id));
+            assert_eq!(value("x-client-request-id"), client_request_id);
+        }
+    }
+}
+
+#[test]
 fn upstream_websocket_request_filters_local_image_marker_and_forwards_oai_attestation() {
     let mut headers = HeaderMap::new();
     headers.insert("x-oai-attestation", HeaderValue::from_static("attest-ws"));
@@ -1331,6 +1387,48 @@ fn websocket_frame_merges_header_metadata_into_client_metadata() {
 }
 
 #[test]
+fn websocket_frame_metadata_overrides_initial_handshake_on_each_turn() {
+    let _guard = crate::test_env_guard();
+    let context = WsRequestContext {
+        api_key: sample_api_key(),
+        incoming_headers: sample_incoming_headers_with_metadata(),
+        prompt_cache_key: None,
+        cache_affinity_key: None,
+        route_conversation_id: None,
+        route_conversation_source: None,
+        effective_upstream_base: "https://chatgpt.com/backend-api/codex".to_string(),
+        prefer_raw_errors: false,
+    };
+    for turn in ["turn-2", "turn-3"] {
+        let turn_metadata = json!({"session_id": "session-1", "turn_id": turn}).to_string();
+        let frame = json!({
+            "type": "response.create",
+            "model": "gpt-6.1-sol",
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+            "client_metadata": {
+                "x-codex-turn-metadata": turn_metadata,
+                "x-codex-window-id": "window-current:1",
+                "x-openai-subagent": "collab_spawn",
+                "x-codex-parent-thread-id": "parent-current",
+                "ws_request_header_traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"
+            }
+        });
+        let prepared = rewrite_client_frame(&frame.to_string(), &context)
+            .unwrap_or_else(|_| panic!("rewrite websocket frame failed"));
+        let value: Value = serde_json::from_str(&prepared.text).expect("parse prepared frame");
+        for key in [
+            "x-codex-turn-metadata",
+            "x-codex-window-id",
+            "x-openai-subagent",
+            "x-codex-parent-thread-id",
+            "ws_request_header_traceparent",
+        ] {
+            assert_eq!(value["client_metadata"][key], frame["client_metadata"][key]);
+        }
+    }
+}
+
+#[test]
 fn websocket_response_create_keeps_codex_field_snapshot() {
     let _guard = crate::test_env_guard();
     let context = WsRequestContext {
@@ -1356,6 +1454,8 @@ fn websocket_response_create_keeps_codex_field_snapshot() {
                 "reasoning": { "effort": "medium", "summary": "auto", "context": "current_turn" },
                 "store": false,
                 "stream": true,
+                "stream_options": {"reasoning_summary_delivery": "sequential_cutoff"},
+                "access_programs": {"cyber": "standard"},
                 "include": ["reasoning.encrypted_content"],
                 "service_tier": "priority",
                 "prompt_cache_key": "pc_ws_snapshot",
@@ -1387,6 +1487,7 @@ fn websocket_response_create_keeps_codex_field_snapshot() {
         .map(String::as_str)
         .collect::<std::collections::BTreeSet<_>>();
     let expected = [
+        "access_programs",
         "client_metadata",
         "generate",
         "include",
@@ -1399,6 +1500,8 @@ fn websocket_response_create_keeps_codex_field_snapshot() {
         "reasoning",
         "service_tier",
         "store",
+        "stream",
+        "stream_options",
         "text",
         "tool_choice",
         "tools",
@@ -1412,8 +1515,13 @@ fn websocket_response_create_keeps_codex_field_snapshot() {
     assert_eq!(value["instructions"], "  stay exactly\n");
     assert_eq!(value["previous_response_id"], "resp_previous");
     assert_eq!(value["generate"], false);
-    assert!(object.get("stream").is_none());
+    assert_eq!(value["stream"], true);
     assert!(object.get("background").is_none());
+    assert_eq!(
+        value["stream_options"]["reasoning_summary_delivery"],
+        "sequential_cutoff"
+    );
+    assert_eq!(value["access_programs"]["cyber"], "standard");
     assert_eq!(value["reasoning"]["context"], "current_turn");
     assert_eq!(value["reasoning"]["summary"], "auto");
     assert_eq!(value["client_metadata"]["source"], "ws-snapshot");
@@ -1436,6 +1544,49 @@ fn websocket_response_create_keeps_codex_field_snapshot() {
     assert!(object.get("truncation").is_none());
     assert!(object.get("user").is_none());
     assert!(object.get("unknown_field").is_none());
+}
+
+#[test]
+fn websocket_response_create_preserves_stream_control_and_defaults_to_streaming() {
+    let _guard = crate::test_env_guard();
+    let context = WsRequestContext {
+        api_key: sample_api_key(),
+        incoming_headers: sample_incoming_headers_with_metadata(),
+        prompt_cache_key: None,
+        cache_affinity_key: None,
+        route_conversation_id: None,
+        route_conversation_source: None,
+        effective_upstream_base: "https://chatgpt.com/backend-api/codex".to_string(),
+        prefer_raw_errors: false,
+    };
+    for stream in [None, Some(true), Some(false)] {
+        for generate in [None, Some(false)] {
+            let mut frame = json!({
+                "type": "response.create",
+                "model": "gpt-5.4",
+                "previous_response_id": "resp_previous",
+                "input": [{"type": "function_call_output", "call_id": "call_ping", "output": "pong"}],
+                "tools": [{"type": "function", "name": "ping", "parameters": {"type": "object", "properties": {}}}],
+                "background": true
+            });
+            if let Some(stream) = stream {
+                frame["stream"] = json!(stream);
+            }
+            if let Some(generate) = generate {
+                frame["generate"] = json!(generate);
+            }
+            let prepared = rewrite_client_frame(&frame.to_string(), &context)
+                .unwrap_or_else(|_| panic!("rewrite websocket frame failed"));
+            let value: Value = serde_json::from_str(&prepared.text).expect("parse prepared frame");
+
+            assert_eq!(value["stream"], stream.unwrap_or(true));
+            assert_eq!(value.get("generate"), frame.get("generate"));
+            assert_eq!(value["previous_response_id"], frame["previous_response_id"]);
+            assert_eq!(value["input"], frame["input"]);
+            assert_eq!(value["tools"], frame["tools"]);
+            assert!(value.get("background").is_none());
+        }
+    }
 }
 
 #[test]
@@ -1854,7 +2005,8 @@ fn websocket_account_rebase_rejects_orphan_tool_output() {
 #[test]
 fn upstream_websocket_account_rebase_strips_session_affinity_headers() {
     let mut headers = HeaderMap::new();
-    headers.insert("session_id", HeaderValue::from_static("session-old"));
+    headers.insert("session-id", HeaderValue::from_static("session-old"));
+    headers.insert("thread-id", HeaderValue::from_static("thread-old"));
     headers.insert("x-codex-window-id", HeaderValue::from_static("window-old"));
     headers.insert(
         "x-client-request-id",
@@ -1891,7 +2043,9 @@ fn upstream_websocket_account_rebase_strips_session_affinity_headers() {
     .unwrap_or_else(|err| panic!("build rebased websocket request failed: {}", err.message));
 
     for header in [
+        "session-id",
         "session_id",
+        "thread-id",
         "x-codex-window-id",
         "x-client-request-id",
         "x-codex-turn-state",

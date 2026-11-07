@@ -10,14 +10,6 @@ const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER_NAME: &str =
 const X_OPENAI_ACTOR_AUTHORIZATION_HEADER_NAME: &str = "x-openai-actor-authorization";
 const X_CODEX_IMAGE_TURN_ID_HEADER_NAME: &str = "x-codex-image-turn-id";
 
-fn anchor_fingerprint_or_dash(value: Option<&str>) -> String {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(crate::gateway::anchor_fingerprint::fingerprint_anchor)
-        .unwrap_or_else(|| "-".to_string())
-}
-
 fn normalize_non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
@@ -430,22 +422,11 @@ fn resolve_window_id(
         if let Some(window_id) = incoming_window_id
             .map(str::trim)
             .filter(|value| !value.is_empty())
+            .filter(|value| reqwest::header::HeaderValue::from_str(value).is_ok())
         {
-            let matches_session = match normalized_session_id {
-                Some(session_id) => {
-                    window_id == session_id
-                        || window_id.starts_with(format!("{session_id}:").as_str())
-                }
-                None => true,
-            };
-            if matches_session {
-                return Some(window_id.to_string());
-            }
-            log::info!(
-                "event=gateway_window_id_rebuilt reason=session_mismatch incoming_window_fp={} resolved_session_fp={}",
-                anchor_fingerprint_or_dash(Some(window_id)),
-                anchor_fingerprint_or_dash(normalized_session_id),
-            );
+            // Codex windows belong to a thread, while session-id can be an
+            // independent cache-affinity override. A different prefix is valid.
+            return Some(window_id.to_string());
         }
     }
     normalized_session_id.map(|session_id| format!("{session_id}:0"))

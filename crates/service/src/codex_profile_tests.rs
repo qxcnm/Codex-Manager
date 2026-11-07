@@ -300,7 +300,12 @@ async fn assert_switch_to_account_writes_auth(storage: &Storage, profile_dir: &P
     )
     .await;
     let request_body = oauth.join().expect("join local OAuth fixture");
-    assert!(request_body.contains("refresh_token=account-refresh-before-switch"));
+    let request_body: serde_json::Value =
+        serde_json::from_str(&request_body).expect("JSON refresh request");
+    assert_eq!(
+        request_body["refresh_token"],
+        "account-refresh-before-switch"
+    );
     let status = applied.expect("switch provider profile to selected account");
     assert!(matches!(status.mode, CodexProfileMode::DirectAccount));
     assert_eq!(

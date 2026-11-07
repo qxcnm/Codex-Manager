@@ -2,6 +2,30 @@ use codexmanager_core::storage::{Account, AccountWorkspaceIdentity};
 
 use crate::storage_helpers::account_key;
 
+/// Codex workspace switching retains the previous ID token until refresh. Only
+/// use the access-token workspace when the selected account and both user claims
+/// agree; an arbitrary import hint must not select another user's workspace.
+pub(crate) fn selected_workspace_from_access_token(
+    id_token: &codexmanager_core::auth::IdTokenClaims,
+    access_token: &codexmanager_core::auth::IdTokenClaims,
+    selected_account_id: Option<&str>,
+) -> Option<String> {
+    let selected = selected_account_id.filter(|value| !value.is_empty())?;
+    let previous = id_token.auth.as_ref()?;
+    let current = access_token.auth.as_ref()?;
+    let user_id = previous
+        .chatgpt_user_id
+        .as_deref()
+        .filter(|value| !value.is_empty())?;
+    if current.chatgpt_user_id.as_deref() != Some(user_id)
+        || current.chatgpt_account_id.as_deref() != Some(selected)
+        || previous.chatgpt_account_id.as_deref() == Some(selected)
+    {
+        return None;
+    }
+    Some(selected.to_string())
+}
+
 /// 函数 `clean_value`
 ///
 /// 作者: gaohongshun

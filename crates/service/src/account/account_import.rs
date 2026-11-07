@@ -844,6 +844,16 @@ fn import_single_item_with_account_id(
     let id_token_claims = parse_id_token_claims(&payload.id_token).ok();
     let access_token_claims = parse_id_token_claims(&payload.access_token).ok();
     let claims = id_token_claims.as_ref().or(access_token_claims.as_ref());
+    let selected_workspace = id_token_claims
+        .as_ref()
+        .zip(access_token_claims.as_ref())
+        .and_then(|(id, access)| {
+            crate::account_identity::selected_workspace_from_access_token(
+                id,
+                access,
+                payload.account_id_hint.as_deref(),
+            )
+        });
     let token_fingerprint = token_fingerprint(&payload.refresh_token);
     let subject_account_id = payload
         .agent_identity
@@ -861,6 +871,7 @@ fn import_single_item_with_account_id(
         meta.chatgpt_account_id
             .clone()
             .or_else(|| payload.chatgpt_account_id_hint.clone())
+            .or_else(|| selected_workspace.clone())
             .or_else(|| claims.and_then(|c| c.auth.as_ref()?.chatgpt_account_id.clone()))
             .or_else(|| extract_chatgpt_account_id(&payload.id_token))
             .or_else(|| extract_chatgpt_account_id(&payload.access_token)),
@@ -869,6 +880,7 @@ fn import_single_item_with_account_id(
     let workspace_id = clean_value(
         meta.workspace_id
             .clone()
+            .or_else(|| selected_workspace.clone())
             .or_else(|| claims.and_then(|c| c.workspace_id.clone()))
             .or_else(|| extract_workspace_id(&payload.id_token))
             .or_else(|| extract_workspace_id(&payload.access_token))

@@ -1520,6 +1520,47 @@ fn responses_preserves_priority_service_tier_for_codex_backend() {
 }
 
 #[test]
+fn responses_codex_backend_preserves_current_codex_request_controls() {
+    let _guard = crate::test_env_guard();
+    for stream in [false, true] {
+        for use_compat_rewrite in [false, true] {
+            let body = json!({
+                "model": "gpt-6.1-sol",
+                "input": [
+                    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+                    {"type": "function_call", "call_id": "call-1", "name": "ping", "arguments": "{}"},
+                    {"type": "function_call_output", "call_id": "call-1", "output": "pong"}
+                ],
+                "tools": [{"type": "function", "name": "ping", "parameters": {"type": "object", "properties": {}}}],
+                "stream": stream,
+                "stream_options": {"reasoning_summary_delivery": "sequential_cutoff"},
+                "access_programs": {"cyber": "standard"},
+                "reasoning": {"effort": "high", "context": "all_turns"},
+                "unknown_field": true
+            });
+            let out = apply_request_overrides_with_service_tier_and_prompt_cache_key_scope(
+                "/v1/responses",
+                serde_json::to_vec(&body).expect("serialize request body"),
+                None,
+                None,
+                None,
+                Some("https://chatgpt.com/backend-api/codex"),
+                None,
+                use_compat_rewrite,
+            );
+            let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
+            assert_eq!(value["stream_options"], body["stream_options"]);
+            assert_eq!(value["access_programs"], body["access_programs"]);
+            assert_eq!(value["input"], body["input"]);
+            assert_eq!(value["tools"], body["tools"]);
+            assert_eq!(value["reasoning"], body["reasoning"]);
+            assert_eq!(value["stream"], stream || use_compat_rewrite);
+            assert!(value.get("unknown_field").is_none());
+        }
+    }
+}
+
+#[test]
 fn responses_codex_backend_keeps_conservative_field_snapshot() {
     let _guard = crate::test_env_guard();
     let body = json!({

@@ -127,7 +127,22 @@ pub(crate) fn resolve_workspace_id_for_account(
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(crate) fn derive_account_meta(token: &Token) -> (Option<String>, Option<String>) {
+pub(crate) fn derive_account_meta(
+    token: &Token,
+    selected_account_id: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    if let (Ok(id), Ok(access)) = (
+        parse_id_token_claims(&token.id_token),
+        parse_id_token_claims(&token.access_token),
+    ) {
+        if let Some(workspace) = crate::account_identity::selected_workspace_from_access_token(
+            &id,
+            &access,
+            selected_account_id,
+        ) {
+            return (Some(workspace.clone()), Some(workspace));
+        }
+    }
     let mut chatgpt_account_id = None;
     let mut workspace_id = None;
 

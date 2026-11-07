@@ -33,7 +33,6 @@ const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
     "Your access token could not be refreshed. Please log out and sign in again.";
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
-const REFRESH_TOKEN_SCOPES: &str = "openid profile email";
 const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
 const CHATGPT_ACCOUNT_ID_HEADER_NAME: &str = "ChatGPT-Account-ID";
 const REQUEST_ID_HEADER: &str = "x-request-id";
@@ -146,6 +145,13 @@ pub(crate) struct RefreshTokenResponse {
     pub(crate) refresh_token: Option<String>,
     #[serde(default)]
     pub(crate) id_token: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct RefreshTokenRequest<'a> {
+    client_id: &'a str,
+    grant_type: &'static str,
+    refresh_token: &'a str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -1674,33 +1680,22 @@ pub(crate) async fn refresh_access_token_async(
     explicit_proxy_url: Option<&str>,
 ) -> Result<RefreshTokenResponse, String> {
     let refresh_token_url = resolve_refresh_token_url(issuer);
-    let body = build_refresh_token_body(client_id, refresh_token);
-    let build_request = |client: Client| {
-        client
-            .post(refresh_token_url.clone())
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(body.clone())
+    // Match Codex's ChatGPT OAuth refresh contract. Omitting scope retains
+    // the original grant, including connector scopes acquired at login.
+    let body = RefreshTokenRequest {
+        client_id,
+        grant_type: "refresh_token",
+        refresh_token,
     };
+    let build_request = |client: Client| client.post(refresh_token_url.clone()).json(&body);
     let client = token_refresh_http_client_for_proxy(explicit_proxy_url)?;
-    let resp = match build_request(client).send().await {
-        Ok(resp) => resp,
-        Err(first_err) => {
-            let retried = build_request(refresh_token_refresh_http_client_for_proxy(
-                explicit_proxy_url,
-            )?)
-            .send()
-            .await;
-            match retried {
-                Ok(resp) => resp,
-                Err(second_err) => {
-                    return Err(format!(
-                        "{}; retry_after_client_rebuild: {}",
-                        first_err, second_err
-                    ));
-                }
-            }
-        }
-    };
+    // A transport error can arrive after the provider consumed and rotated this
+    // grant. Replaying the old refresh token can invalidate the session, so keep
+    // an ambiguous delivery as an error instead of issuing a second POST.
+    let resp = build_request(client)
+        .send()
+        .await
+        .map_err(|error| format!("request token refresh failed: {error}"))?;
     if !resp.status().is_success() {
         let status = resp.status();
         let headers = resp.headers().clone();
@@ -1767,21 +1762,6 @@ fn token_refresh_http_client_for_proxy(explicit_proxy_url: Option<&str>) -> Resu
     {
         Some(proxy_url) => build_token_refresh_http_client_with_explicit_proxy(proxy_url),
         None => Ok(usage_http_client()),
-    }
-}
-
-fn refresh_token_refresh_http_client_for_proxy(
-    explicit_proxy_url: Option<&str>,
-) -> Result<Client, String> {
-    match explicit_proxy_url
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(proxy_url) => build_token_refresh_http_client_with_explicit_proxy(proxy_url),
-        None => {
-            rebuild_usage_http_client();
-            Ok(usage_http_client())
-        }
     }
 }
 
@@ -1948,27 +1928,6 @@ where
             timeout.as_millis()
         )),
     }
-}
-
-/// 函数 `build_refresh_token_body`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - client_id: 参数 client_id
-/// - refresh_token: 参数 refresh_token
-///
-/// # 返回
-/// 返回函数执行结果
-fn build_refresh_token_body(client_id: &str, refresh_token: &str) -> String {
-    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-    serializer.append_pair("client_id", client_id);
-    serializer.append_pair("grant_type", "refresh_token");
-    serializer.append_pair("refresh_token", refresh_token);
-    serializer.append_pair("scope", REFRESH_TOKEN_SCOPES);
-    serializer.finish()
 }
 
 #[cfg(test)]

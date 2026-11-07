@@ -5,6 +5,12 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 
 ## [Unreleased]
 
+### Fixed
+
+- Aligned Codex WebSocket streaming and session/thread headers, preserving valid window identities independent of session affinity.
+- Preserved the selected workspace when importing Codex credentials with a stale ID token after workspace switching; token refresh no longer automatically replays an old grant after an ambiguous transport failure.
+- Upgraded the desktop window runtime to include the upstream fix for unresponsive native title bar buttons after initial display or tray restoration on Linux / Wayland (#518).
+
 ## [0.6.8] - 2026-10-18
 
 ### Fixed

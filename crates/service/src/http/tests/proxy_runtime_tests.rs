@@ -2474,6 +2474,7 @@ async fn official_responses_websocket_proxies_frames_and_headers() {
         &[
             ("OpenAI-Beta", "responses_websockets=2026-02-06"),
             ("session_id", "session_ws_1"),
+            ("thread-id", "thread_ws_1"),
             ("x-codex-window-id", "session_ws_1:7"),
             ("x-client-request-id", "client_req_ws_1"),
             ("x-openai-subagent", "review"),
@@ -2512,7 +2513,7 @@ async fn official_responses_websocket_proxies_frames_and_headers() {
         serde_json::from_str(&first_upstream_frame).expect("parse first upstream frame");
     assert_eq!(first_payload["type"], "response.create");
     assert_eq!(first_payload["model"], "gpt-6-luna");
-    assert!(first_payload.get("stream").is_none());
+    assert_eq!(first_payload["stream"], false);
     assert!(first_payload.get("background").is_none());
     assert_eq!(first_payload["store"], true);
     assert_eq!(first_payload["service_tier"], "priority");
@@ -2584,6 +2585,7 @@ async fn official_responses_websocket_proxies_frames_and_headers() {
     let second_payload: serde_json::Value =
         serde_json::from_str(&second_upstream_frame).expect("parse second upstream frame");
     assert_eq!(second_payload["type"], "response.create");
+    assert_eq!(second_payload["stream"], true);
     assert_eq!(second_payload["previous_response_id"], "resp_prev_ws_1");
     assert_eq!(
         second_payload["client_metadata"]["source"],
@@ -2651,8 +2653,13 @@ async fn official_responses_websocket_proxies_frames_and_headers() {
         None
     );
     assert_eq!(
-        capture.headers.get("session_id").map(String::as_str),
+        capture.headers.get("session-id").map(String::as_str),
         Some("session_ws_1")
+    );
+    assert!(capture.headers.get("session_id").is_none());
+    assert_eq!(
+        capture.headers.get("thread-id").map(String::as_str),
+        Some("thread_ws_1")
     );
     assert_eq!(
         capture.headers.get("x-codex-window-id").map(String::as_str),
@@ -4821,6 +4828,7 @@ async fn official_responses_websocket_rebases_tool_output_on_next_account() {
         &[
             ("OpenAI-Beta", "responses_websockets=2026-02-06"),
             ("session_id", "session_ws_failover"),
+            ("thread-id", "thread_ws_failover"),
             ("x-client-request-id", "request_ws_failover"),
             ("x-codex-window-id", "window_ws_failover"),
             ("x-codex-turn-state", "turn_state_ws_failover"),
@@ -5008,14 +5016,21 @@ async fn official_responses_websocket_rebases_tool_output_on_next_account() {
         Some("chatgpt_proxy_runtime_ws_b")
     );
     assert_eq!(
-        captures[0].headers.get("session_id").map(String::as_str),
+        captures[0].headers.get("session-id").map(String::as_str),
         Some("session_ws_failover")
     );
+    assert!(captures[0].headers.get("session_id").is_none());
+    assert_eq!(
+        captures[0].headers.get("thread-id").map(String::as_str),
+        Some("thread_ws_failover")
+    );
     assert!(
-        captures[1].headers.get("session_id").is_none(),
+        captures[1].headers.get("session-id").is_none(),
         "cross-account websocket must not reuse the previous account session"
     );
     for header in [
+        "session_id",
+        "thread-id",
         "x-client-request-id",
         "x-codex-window-id",
         "x-codex-turn-state",

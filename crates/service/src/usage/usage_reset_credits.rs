@@ -64,15 +64,20 @@ fn load_token(storage: &Storage, account_id: &str) -> Result<Token, String> {
 
 fn resolve_account_header(storage: &Storage, token: &Token) -> Option<String> {
     let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
-    let (token_chatgpt_account_id, token_workspace_id) = derive_account_meta(token);
+    let identity = storage
+        .find_account_workspace_identity_by_id(&token.account_id)
+        .ok()
+        .flatten();
+    let selected_account_id = identity.as_ref().and_then(|identity| {
+        identity
+            .chatgpt_account_id
+            .as_deref()
+            .or(identity.workspace_id.as_deref())
+    });
+    let (token_chatgpt_account_id, token_workspace_id) =
+        derive_account_meta(token, selected_account_id);
     clean_header_value(token_chatgpt_account_id)
-        .or_else(|| {
-            storage
-                .find_account_workspace_identity_by_id(&token.account_id)
-                .ok()
-                .flatten()
-                .and_then(|identity| clean_header_value(identity.chatgpt_account_id))
-        })
+        .or_else(|| identity.and_then(|identity| clean_header_value(identity.chatgpt_account_id)))
         .or(token_workspace_id)
         .or_else(|| resolve_workspace_id_for_account(storage, &token.account_id))
 }

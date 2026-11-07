@@ -1,31 +1,17 @@
-# Current Differences from Official Codex
+# Gateway boundaries compared with official Codex
 
-This document keeps only the remaining request-header differences that are still worth tracking.
+See the [2026-11-06 follow-up](codex-upstream-alignment-20261106.md) for the 0.167 source comparison and current corrections. The table below describes the earlier 0.164 review.
 
-## `/v1/responses` request headers
+Baseline: Codex `rust-v0.164.0`, reviewed 2026-10-26. See the [compatibility report](gateway-vs-codex-headers-and-params.md) for fixes, pinned sources and remaining scope. Older versions of this report relied on an unversioned local source checkout; those comparisons have been replaced.
 
-| Field | Official Codex | Current gateway | Difference |
-| --- | --- | --- | --- |
-| `Authorization` | `Bearer <official account token>` | `Bearer <current account token>` | The gateway replaces the account token |
-| `User-Agent` | `codex_cli_rs/<compile-time version> (<os/version; <arch>) <terminal>` | `codex_cli_rs/<database-configured version> (<os/version; <arch>) <terminal>` | Official Codex uses `env!("CARGO_PKG_VERSION")`; the gateway currently reads this from a configurable database field |
-| `x-client-request-id` | Always equals `conversation_id` | Prefer the thread anchor | When switching accounts or threads, it becomes the new thread anchor |
-| `session_id` | Always equals `conversation_id` | Prefer the thread anchor | Not sent for normal `/responses` traffic when there is no thread anchor |
-| `x-codex-turn-state` | Replayed within the same turn | Replayed while the same thread remains stable | Dropped proactively when switching accounts or replacing the thread |
+| Behavior | Official Codex | CodexManager |
+| --- | --- | --- |
+| Authorization | Credentials for the selected provider/account. | Resolves credentials for the routed account; local API keys are not forwarded as account tokens. |
+| Client version | Compile-time package version. | Configurable runtime version, npm synchronization, and a `0.164.0` fallback. |
+| Originator and User-Agent | Built from the Codex client context. | Existing runtime settings remain effective. Token-refresh and usage clients retain their dedicated standard User-Agent behavior. |
+| Session affinity | Context for a single Codex conversation. | May discard account-specific affinity when changing accounts or recovering a conversation. |
+| Model and service tier | Selected by the client/provider. | May be overridden by local API-key and routing policy. |
+| HTTP transport | Codex Responses requests stream upstream. | Compatibility requests can be converted to upstream SSE and reconstructed as non-streaming Responses or Chat Completions for the caller. |
+| Model catalog | Provider-owned Codex metadata. | Official account-pool objects pass through; managed catalogs use the gateway's configured models and neutral instruction policy. |
 
-## Current conclusion
-
-1. These five request-header / transport-layer behaviors are still the main gaps worth tracking.
-2. The `gatewayOriginator` setting is still stored locally, but it no longer affects the actual outbound `originator`. Outbound traffic now always uses the official default value: `codex_cli_rs`.
-3. For `User-Agent`, official Codex uses the compile-time package version, while the current gateway allows the version segment to be configured from the database.
-
-## Source references
-
-- Official `codex`
-  - `D:\MyComputer\own\GPTTeam相关\CodexManager\codex\codex-rs\core\src\client.rs`
-  - `D:\MyComputer\own\GPTTeam相关\CodexManager\codex\codex-rs\codex-api\src\endpoint\responses.rs`
-  - `D:\MyComputer\own\GPTTeam相关\CodexManager\codex\codex-rs\codex-api\src\requests\headers.rs`
-  - `D:\MyComputer\own\GPTTeam相关\CodexManager\codex\codex-rs\core\src\default_client.rs`
-- Current gateway
-  - [transport.rs](../../../crates/service/src/gateway/upstream/attempt_flow/transport.rs)
-  - [codex_headers.rs](../../../crates/service/src/gateway/upstream/headers/codex_headers.rs)
-  - [runtime_config.rs](../../../crates/service/src/gateway/core/runtime_config.rs)
+These are product boundaries, not differences to remove indiscriminately. New Codex fields must be evaluated against both supported OpenAI-style endpoints, streaming/non-streaming output, tools, account switching and WebSocket reuse.

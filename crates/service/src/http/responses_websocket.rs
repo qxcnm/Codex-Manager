@@ -1817,11 +1817,9 @@ fn rewrite_client_frame(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
-    // `stream` and `background` are HTTP transport controls. Responses
-    // WebSocket mode sends response.create events directly and does not use
-    // either field, even when the incoming Codex-compatible payload contains
-    // them.
-    object.remove("stream");
+    // Codex response.create frames carry `stream`. Preserve the client's
+    // explicit value across HTTP compatibility rewriting, which may force SSE.
+    let stream = object.remove("stream");
     object.remove("background");
     let previous_response_id = object.remove("previous_response_id");
     let generate = object.remove("generate");
@@ -1850,9 +1848,9 @@ fn rewrite_client_frame(
             "rewritten websocket payload must be a JSON object",
         ));
     };
-    // Keep the transport-field boundary after gateway rewriting as well: a
-    // downstream override must not reintroduce HTTP-only WebSocket fields.
-    rewritten_object.remove("stream");
+    // Older WebSocket clients omitted stream and used the streaming bridge.
+    rewritten_object.insert("stream".to_string(), stream.unwrap_or(Value::Bool(true)));
+    // Background execution remains an HTTP-only control.
     rewritten_object.remove("background");
     if let Some(previous_response_id) = previous_response_id {
         rewritten_object.insert("previous_response_id".to_string(), previous_response_id);
@@ -2038,7 +2036,12 @@ fn merge_metadata_value(mapped: &mut HashMap<String, String>, client_metadata: O
 
 fn insert_header_metadata(mapped: &mut HashMap<String, String>, key: &str, value: Option<&str>) {
     if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
-        mapped.insert(key.to_string(), value.to_string());
+        // A reused socket's handshake describes its initial turn. Codex now
+        // sends canonical metadata on each response.create frame, so headers
+        // only supply compatibility defaults for older clients.
+        mapped
+            .entry(key.to_string())
+            .or_insert_with(|| value.to_string());
     }
 }
 
@@ -3299,7 +3302,16 @@ fn build_upstream_websocket_request(
     }
     if !strip_session_affinity {
         if let Some(session_id) = context.incoming_headers.session_id() {
-            insert_header(headers, "session_id", session_id)?;
+            insert_header(headers, "session-id", session_id)?;
+        }
+        // A child thread can share its parent's cache session. Keep its own
+        // thread identity; older Codex clients supplied it as x-client-request-id.
+        if let Some(thread_id) = context
+            .incoming_headers
+            .conversation_id()
+            .or_else(|| context.incoming_headers.client_request_id())
+        {
+            insert_header(headers, "thread-id", thread_id)?;
         }
         if let Some(window_id) = context.incoming_headers.window_id() {
             insert_header(

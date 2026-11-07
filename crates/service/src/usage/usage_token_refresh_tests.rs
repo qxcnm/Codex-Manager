@@ -170,7 +170,8 @@ fn refresh_and_persist_region_blocked_mock_suspends_account() {
         .expect("receive refresh request body");
     handle.join().expect("join refresh mock server");
 
-    assert!(body.contains("refresh_token=refresh-old"));
+    let body: serde_json::Value = serde_json::from_str(&body).expect("JSON refresh request");
+    assert_eq!(body["refresh_token"], "refresh-old");
     assert!(err.contains("auth_error=unsupported_country_region_territory"));
     assert!(
         crate::account_status::mark_account_unavailable_for_auth_error(
@@ -301,7 +302,8 @@ fn async_refresh_is_shared_per_account_and_independent_accounts_progress() {
                     started.notify_one();
                     let permit = release.acquire().await.unwrap();
                     permit.forget();
-                    let suffix = if body.contains("refresh_token=async-refresh-a") {
+                    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+                    let suffix = if body["refresh_token"] == "async-refresh-a" {
                         "a"
                     } else {
                         "b"
@@ -426,7 +428,10 @@ fn cancelled_refresh_persists_rotated_grant_and_preserves_concurrent_credentials
                     let release_grant = release_grant.clone();
                     let release_exchange = release_exchange.clone();
                     async move {
-                        if body.contains("refresh_token=") {
+                        if serde_json::from_str::<serde_json::Value>(&body)
+                            .ok()
+                            .is_some_and(|body| body["grant_type"] == "refresh_token")
+                        {
                             stage_tx.send(0).unwrap();
                             release_grant.acquire().await.unwrap().forget();
                             axum::Json(serde_json::json!({"access_token":"rotated-access", "refresh_token":"rotated-grant", "id_token":"new-id"}))
