@@ -50,6 +50,18 @@ pub(crate) fn list_app_settings_map() -> HashMap<String, String> {
         .collect()
 }
 
+/// Task configuration must fail closed on database errors, without using stale cache.
+pub(crate) fn list_app_settings_map_result() -> Result<HashMap<String, String>, String> {
+    if seaorm_enabled() {
+        return remote_settings();
+    }
+    let storage = open_app_settings_storage().ok_or_else(|| "storage unavailable".to_owned())?;
+    storage
+        .list_app_settings()
+        .map(|rows| rows.into_iter().collect())
+        .map_err(|_| "load application settings failed".to_owned())
+}
+
 /// 函数 `get_persisted_app_setting`
 ///
 /// 作者: gaohongshun

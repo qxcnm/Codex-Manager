@@ -1529,6 +1529,48 @@ fn websocket_frame_merges_header_metadata_into_client_metadata() {
 }
 
 #[test]
+fn websocket_frame_metadata_overrides_initial_handshake_on_each_turn() {
+    let _guard = crate::test_env_guard();
+    let context = WsRequestContext {
+        api_key: sample_api_key(),
+        incoming_headers: sample_incoming_headers_with_metadata(),
+        prompt_cache_key: None,
+        cache_affinity_key: None,
+        route_conversation_id: None,
+        route_conversation_source: None,
+        effective_upstream_base: "https://chatgpt.com/backend-api/codex".to_string(),
+        prefer_raw_errors: false,
+    };
+    for turn in ["turn-2", "turn-3"] {
+        let turn_metadata = json!({"session_id": "session-1", "turn_id": turn}).to_string();
+        let frame = json!({
+            "type": "response.create",
+            "model": "gpt-6.1-sol",
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}],
+            "client_metadata": {
+                "x-codex-turn-metadata": turn_metadata,
+                "x-codex-window-id": "window-current:1",
+                "x-openai-subagent": "collab_spawn",
+                "x-codex-parent-thread-id": "parent-current",
+                "ws_request_header_traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"
+            }
+        });
+        let prepared = rewrite_client_frame(&frame.to_string(), &context)
+            .unwrap_or_else(|_| panic!("rewrite websocket frame failed"));
+        let value: Value = serde_json::from_str(&prepared.text).expect("parse prepared frame");
+        for key in [
+            "x-codex-turn-metadata",
+            "x-codex-window-id",
+            "x-openai-subagent",
+            "x-codex-parent-thread-id",
+            "ws_request_header_traceparent",
+        ] {
+            assert_eq!(value["client_metadata"][key], frame["client_metadata"][key]);
+        }
+    }
+}
+
+#[test]
 fn websocket_response_create_keeps_codex_field_snapshot() {
     let _guard = crate::test_env_guard();
     let context = WsRequestContext {
@@ -1554,6 +1596,8 @@ fn websocket_response_create_keeps_codex_field_snapshot() {
                 "reasoning": { "effort": "medium", "summary": "auto", "context": "current_turn" },
                 "store": false,
                 "stream": true,
+                "stream_options": {"reasoning_summary_delivery": "sequential_cutoff"},
+                "access_programs": {"cyber": "standard"},
                 "include": ["reasoning.encrypted_content"],
                 "service_tier": "priority",
                 "prompt_cache_key": "pc_ws_snapshot",
@@ -1585,6 +1629,7 @@ fn websocket_response_create_keeps_codex_field_snapshot() {
         .map(String::as_str)
         .collect::<std::collections::BTreeSet<_>>();
     let expected = [
+        "access_programs",
         "client_metadata",
         "generate",
         "include",
@@ -1598,6 +1643,7 @@ fn websocket_response_create_keeps_codex_field_snapshot() {
         "service_tier",
         "store",
         "stream",
+        "stream_options",
         "text",
         "tool_choice",
         "tools",
@@ -1613,6 +1659,11 @@ fn websocket_response_create_keeps_codex_field_snapshot() {
     assert_eq!(value["generate"], false);
     assert_eq!(value["stream"], true);
     assert!(object.get("background").is_none());
+    assert_eq!(
+        value["stream_options"]["reasoning_summary_delivery"],
+        "sequential_cutoff"
+    );
+    assert_eq!(value["access_programs"]["cyber"], "standard");
     assert_eq!(value["reasoning"]["context"], "current_turn");
     assert_eq!(value["reasoning"]["summary"], "auto");
     assert_eq!(value["client_metadata"]["source"], "ws-snapshot");

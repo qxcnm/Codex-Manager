@@ -26,6 +26,8 @@ pub(crate) struct OfficialResponsesHttpRequest {
     pub(crate) store: bool,
     #[serde(default)]
     pub(crate) stream: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) stream_options: Option<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) include: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -36,6 +38,8 @@ pub(crate) struct OfficialResponsesHttpRequest {
     pub(crate) text: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) client_metadata: Option<Map<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) access_programs: Option<Value>,
     #[serde(flatten)]
     pub(crate) extra: Map<String, Value>,
 }
@@ -679,9 +683,11 @@ pub(crate) fn retain_codex_fields(path: &str, obj: &mut Map<String, Value>) -> V
             "service_tier",
             "store",
             "stream",
+            "stream_options",
             "include",
             "prompt_cache_key",
             "client_metadata",
+            "access_programs",
             "text",
         ],
     )

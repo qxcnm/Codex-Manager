@@ -56,6 +56,68 @@ fn zip_bytes(entries: &[(&str, &[u8], Option<u32>)]) -> Vec<u8> {
 }
 
 #[test]
+fn skill_frontmatter_supports_codex_yaml_scalars_without_nested_overrides() {
+    for scalar in ["|", "|-", "|+", ">", ">-", ">+"] {
+        let markdown = format!(
+            "---\nname: yaml-skill\ndescription: {scalar}\n  Build for AWS: ECS\n  and deploy safely.\nmetadata:\n  name: nested-name\n  description: nested-description\n---\n"
+        );
+        let (name, description) =
+            parse_skill_metadata_document(&markdown).expect("parse YAML block scalar");
+        assert_eq!(name, "yaml-skill", "{scalar}");
+        assert_eq!(
+            description, "Build for AWS: ECS and deploy safely.",
+            "{scalar}"
+        );
+    }
+
+    let (name, description) = parse_skill_metadata_document(
+        "---\nname: 'yaml-skill'\ndescription: Build for AWS: ECS # compatibility prose\n---\n",
+    )
+    .expect("retain Codex compatibility for unquoted prose");
+    assert_eq!(name, "yaml-skill");
+    assert_eq!(description, "Build for AWS: ECS");
+}
+
+#[test]
+fn skill_frontmatter_rejects_metadata_codex_cannot_load() {
+    for markdown in [
+        "---\nname: test\nmetadata:\n  description: nested-only\n---\n".to_string(),
+        "---\nname: test\ndescription: '  '\n---\n".to_string(),
+        "---\nname: test\ndescription: [invalid, scalar]\n---\n".to_string(),
+        "---\nname: first\nname: second\ndescription: duplicate keys\n---\n".to_string(),
+        format!(
+            "---\nname: {}\ndescription: Too long\n---\n",
+            "x".repeat(65)
+        ),
+    ] {
+        assert!(
+            parse_skill_metadata_document(&markdown).is_err(),
+            "{markdown}"
+        );
+    }
+}
+
+#[test]
+fn zip_install_and_inventory_use_yaml_frontmatter() {
+    let tree = TempTree::new("yaml-frontmatter");
+    let skills_root = tree.path.join("skills");
+    let markdown = b"---\nname: yaml-skill\ndescription: >-\n  Use this skill\n  for deployment.\nmetadata:\n  name: unrelated\n---\n";
+    let archive = zip_bytes(&[("yaml-skill/SKILL.md", markdown, Some(0o100644))]);
+    assert_eq!(
+        install_zip_into_root(&skills_root, &archive).expect("install YAML skill"),
+        "yaml-skill"
+    );
+    let inventory = list_from_root(&tree.path, &skills_root).expect("list YAML skill");
+    assert_eq!(inventory.items.len(), 1);
+    assert_eq!(inventory.items[0].name, "yaml-skill");
+    assert_eq!(
+        inventory.items[0].description,
+        "Use this skill for deployment."
+    );
+    assert!(inventory.items[0].valid);
+}
+
+#[test]
 fn list_scans_user_and_system_skills_without_item_paths() {
     let tree = TempTree::new("list");
     let skills_root = tree.path.join("skills");
@@ -108,6 +170,123 @@ fn list_scans_user_and_system_skills_without_item_paths() {
         .find(|item| item.directory_name == "unsafe name")
         .expect("unsafe directory entry");
     assert!(!unsafe_item.deletable);
+}
+
+#[test]
+fn agents_skills_are_listed_read_only_without_changing_managed_deletion() {
+    let tree = TempTree::new("agents-read-only");
+    let user_home = tree.path.join("user");
+    let codex_home = tree.path.join("custom-codex");
+    let skills_root = codex_home.join("skills");
+    let external = user_home.join(".agents/skills/shared-skill");
+    write_skill(&skills_root.join("shared-skill"), "shared-skill", "Managed");
+    write_skill(&external, "shared-skill", "External");
+
+    let inventory =
+        list_with_user_home(&codex_home, Some(&user_home)).expect("list both user skill roots");
+    assert_eq!(inventory.items.len(), 2);
+    let managed = inventory.items.iter().find(|item| item.deletable).unwrap();
+    assert_eq!(managed.directory_name, "shared-skill");
+    let external_item = inventory.items.iter().find(|item| !item.deletable).unwrap();
+    assert_eq!(
+        external_item.directory_name,
+        "~/.agents/skills/shared-skill"
+    );
+    assert_eq!(external_item.source, "user");
+    assert!(external_item.valid);
+    assert_eq!(external_item.description, "External");
+    assert!(delete_from_root(&skills_root, &external_item.directory_name).is_err());
+    assert!(external.join(SKILL_FILE_NAME).is_file());
+    assert!(skills_root.join("shared-skill/SKILL.md").is_file());
+
+    delete_from_root(&skills_root, &managed.directory_name).expect("delete only managed skill");
+    assert!(external.join(SKILL_FILE_NAME).is_file());
+    let remaining = list_with_user_home(&codex_home, Some(&user_home)).unwrap();
+    assert_eq!(remaining.items.len(), 1);
+    assert!(!remaining.items[0].deletable);
+}
+
+#[test]
+fn agents_inventory_uses_actual_user_home_with_a_custom_codex_home() {
+    let _env_lock = crate::test_env_guard();
+    struct RestoreEnvironment(Vec<(&'static str, Option<std::ffi::OsString>)>);
+    impl Drop for RestoreEnvironment {
+        fn drop(&mut self) {
+            for (key, value) in self.0.drain(..) {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+    let tree = TempTree::new("agents-real-home");
+    let user_home = tree.path.join("user");
+    let codex_home = tree.path.join("custom-codex");
+    let _restore = RestoreEnvironment(
+        ["USERPROFILE", "HOME", "CODEX_HOME"]
+            .into_iter()
+            .map(|key| (key, std::env::var_os(key)))
+            .collect(),
+    );
+    std::env::set_var("USERPROFILE", &user_home);
+    std::env::set_var("HOME", &user_home);
+    std::env::set_var("CODEX_HOME", &codex_home);
+    write_skill(
+        &user_home.join(".agents/skills/actual-home-skill"),
+        "actual-home-skill",
+        "Actual user home",
+    );
+    write_skill(
+        &codex_home.join(".agents/skills/wrong-home-skill"),
+        "wrong-home-skill",
+        "Must not use the profile directory as the user home",
+    );
+
+    let inventory = list_for_profile(&codex_home).expect("list custom profile");
+    assert_eq!(inventory.items.len(), 1);
+    assert_eq!(inventory.items[0].name, "actual-home-skill");
+    assert!(!inventory.items[0].deletable);
+    assert!(!codex_home.join("skills").exists());
+}
+
+#[test]
+fn agents_inventory_does_not_duplicate_the_managed_physical_root() {
+    let tree = TempTree::new("agents-shared-root");
+    let user_home = tree.path.join("user");
+    fs::create_dir_all(user_home.join("unused")).expect("create canonical path component");
+    let codex_home = user_home.join("unused/../.agents");
+    write_skill(
+        &user_home.join(".agents/skills/shared-skill"),
+        "shared-skill",
+        "Same physical directory",
+    );
+
+    let inventory = list_with_user_home(&codex_home, Some(&user_home)).expect("list aliased root");
+    assert_eq!(inventory.items.len(), 1);
+    assert!(inventory.items[0].deletable);
+    assert_eq!(inventory.items[0].directory_name, "shared-skill");
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_inventory_ignores_redirected_directories() {
+    use std::os::unix::fs::symlink;
+    let tree = TempTree::new("agents-symlink");
+    let user_home = tree.path.join("user");
+    let codex_home = tree.path.join("codex");
+    let outside = tree.path.join("outside");
+    write_skill(&outside.join("skills/external"), "external", "Outside root");
+    fs::create_dir_all(&user_home).unwrap();
+    symlink(&outside, user_home.join(".agents")).expect("redirect agents directory");
+
+    let inventory = list_with_user_home(&codex_home, Some(&user_home)).expect("skip unsafe source");
+    assert!(inventory.items.is_empty());
+    assert!(inventory
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("unsafe")));
+    assert!(outside.join("skills/external/SKILL.md").is_file());
 }
 
 #[test]

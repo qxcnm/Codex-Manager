@@ -134,6 +134,7 @@ pub fn start_server(addr: &str) -> std::io::Result<()> {
     crate::storage_maintenance::ensure_storage_maintenance();
     reconcile_active_gateway_profile_after_startup();
     crate::app_settings::ensure_codex_latest_version_sync();
+    crate::model_discovery::ensure_model_discovery();
     crate::usage_refresh::ensure_usage_polling();
     crate::usage_refresh::ensure_gateway_keepalive();
     crate::usage_refresh::ensure_token_refresh_polling();

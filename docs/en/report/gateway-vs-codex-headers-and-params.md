@@ -1,69 +1,50 @@
 # Historical gateway and Codex parameter passing comparison
 
-This is a historical workspace snapshot, not a statement of the current protocol contract. Its authentication, session-header and alignment conclusions have been superseded by the [2026-11-06 upstream audit](codex-upstream-alignment-20261106.md), which distinguishes the research workspace from the changes included in the published commit. Use that audit's scope and validation notes when assessing current behavior.
+This dated 0.164 workspace review is retained as history. The [2026-11-06 upstream audit](codex-upstream-alignment-20261106.md) records subsequent authentication and session-header corrections, the current integration scope, and separate historical validation results. This report does not establish parity with newer Codex releases.
 
-Note: In the current workspace, Codex outbound direct contract differences have been collected. The following is reorganized according to "How to move the parameters / How to eventually exit the station / Whether it is aligned with upstream".
+Follow-up: [2026-11-06 review against Codex 0.167.0](codex-upstream-alignment-20261106.md) records subsequent findings, corrections and remaining differences. The dated 0.164 record below is retained as history.
 
-## 1. Parameter transfer link
+Reviewed on 2026-10-26 against the latest stable release, [rust-v0.164.0](https://github.com/openai/codex/releases/tag/rust-v0.164.0), commit `6aaac694803004a63c6f393d153c96d22521a6b9`. The npm `@openai/codex` latest version was also `0.164.0`. This is a pinned integration review, not a claim of parity with every Codex feature or its moving `main` branch.
 
-1. The inbound HTTP request first enters `crates/service/src/gateway/request/incoming_headers.rs`, where only a header snapshot is taken and the request is not directly rewritten.
-2. Session affinity is calculated uniformly by `crates/service/src/gateway/request/session_affinity.rs`, yielding `incoming_session_id`, `incoming_client_request_id`, and `fallback_session_id`.
-3. The request body enters the rewriting process in `crates/service/src/gateway/request/request_rewrite.rs`, and then the Responses compatibility fields are processed in `official_responses_http.rs`.
-4. The final outbound header is assembled by `crates/service/src/gateway/upstream/headers/codex_headers.rs`.
-5. Before actually sending to the upstream, the headers + body are handed over to reqwest according to `crates/service/src/gateway/upstream/attempt_flow/transport.rs`.
+## Changes from the previous implementation
 
-## 2. Request header comparison
+| Integration | Previous behavior | Updated behavior |
+| --- | --- | --- |
+| Responses HTTP and WebSocket | The Codex field filter dropped `stream_options` and `access_programs`. | Both fields survive native and compatibility rewriting, including HTTP-to-WebSocket conversion. The gateway does not invent access selections; upstream authorization still applies. |
+| WebSocket turn metadata | Handshake headers overwrote metadata supplied by subsequent `response.create` frames. | Frame metadata wins; handshake headers fill missing entries for older clients. |
+| OAuth refresh | Form body with a fixed `scope=openid profile email`. | JSON body with `client_id`, `grant_type`, and `refresh_token`, without reducing the original grant's scopes. |
+| Skill manifests | Line parsing lost multiline descriptions and could read nested metadata as top-level fields. | Full YAML parsing, normalized multiline text, bounded prose repair matching Codex, required description, and a 64-character name limit. |
+| User skill discovery | Only `$CODEX_HOME/skills` appeared in the inventory. | Also lists the service user's `~/.agents/skills` as read-only entries; installation and removal stay in the managed root. |
+| History visibility repair | Only plain `.jsonl` files were scanned. | Recognizes `.jsonl.zst` histories, preserves their compressed format and original backups, and coordinates replacement with Codex's maintenance/writer locks. |
+| Default client version | `0.155.0`. | `0.164.0`; existing runtime configuration and npm version synchronization continue to apply. |
 
-| Field | How to upload currently | Codex upstream | Status | Remarks |
-| --- | --- | --- | --- | --- |
-| `Authorization` | Assembled from the current account token to `Bearer <current account token>` | Also uses Bearer token | Aligned | Token provided by the login/account link, replaced with the current account value when outbound |
-| `originator` | Send directly `codex_cli_rs` | Send the same `codex_cli_rs` | Aligned | The runtime configurable original value will be synchronized to the outbound header |
-| `User-Agent` | `codex_cli_rs/<runtime version> (<os/version; arch>) <terminal>` | `codex_cli_rs/<database-configured version> (<os/version; arch>) <terminal>` | Implementation-level differences | Version sources are different, formats are aligned |
-| `x-client-request-id` | `conversation_id` is taken first by the session affinity link, if not, it will not be supplemented | upstream uses `conversation_id` as the request id | Aligned | No new value will be created out of thin air during failover |
-| `session_id` | Calculated from `conversation_id` / fallback session, it will switch to fallback during failover | The upstream is mainly based on `conversation_id` | Aligned | The current implementation retains the affinity/fallback strategy |
-| `x-openai-subagent` | Transparently transmit the subagent of the current request | upstream will also carry a subagent with the same semantics | Aligned | Only sent when there is a value |
-| `x-codex-beta-features` | Transparent inbound values | Upstream will send | Aligned | Only send if there is a value |
-| `x-codex-turn-metadata` | Transparent inbound value | upstream HTTP outbound will also be carried; WS side will also be packaged in `client_metadata` | Aligned | The current gateway does not additionally construct the same WS model `client_metadata` |
-| `x-codex-turn-state` | Retained when directly connected, stripped when `strip_session_affinity` | upstream also depends on this session state | Aligned | Only sent when affinity is not stripped |
-| `OpenAI-Beta` | Streaming request is sent `responses_websockets=2026-02-06` | The upstream WebSocket path has the same value | Aligned | No streaming request is sent |
-| `x-responsesapi-include-timing-metrics` | Streaming and sent when enabled `true` | Upstream has the same semantics | Aligned | Not sent when not streaming |
-| `ChatGPT-Account-ID` | No longer sent as a Codex outbound header | Not sent as a Codex protocol header in upstream direct requests | Aligned | Only retained in the internal account/usage path and not counted in the outbound contract |
+## Contracts checked and retained
 
-## 3. Request parameter comparison
+- Provider configuration still uses `wire_api = "responses"`. The provider ID and its display name remain separate. Existing bearer-token, model-catalog and WebSocket settings are supported by this release.
+- Official account-pool model catalogs preserve raw model objects, including unknown fields. Managed catalogs continue using neutral instructions and disabling Responses Lite without official prompt metadata.
+- `state_5.sqlite` remains Codex's state database filename.
+- WebSocket fork revisions still match upstream: `tokio-tungstenite` `0e5b2d73aa18dd9f0a50ee9ff199d5aef7594186` and `tungstenite` `4fffad30fe373adbdcffab9545e9e9bf4f2fc19f`.
+- OAuth login scopes, AgentIdentity registration/assertions, usage account/residency headers and Luna Reserve opt-in headers were compared with the pinned source.
+- The legacy neutral top-level `instructions` compatibility field remains for older clients. Codex 0.164 constructs its own instructions within `input`.
 
-| Field | How to transmit currently | Codex upstream | Status | Remarks |
-| --- | --- | --- | --- | --- |
-| `model` | Written back after selection by inbound request or adaptation layer | upstream determined by prompt/model selection | Aligned | Result values are aligned, from different sources |
-| `instructions` | Fill empty string in Codex compat path when missing | upstream generated by prompt base directive | Aligned | compat path retains empty directive to stabilize upstream validation |
-| `input` | Strings/objects will be normalized into arrays first | upstream uses Responses input array | Aligned | Compatible with old input parameter format |
-| `tools` | dynamic tools will be mapped to `function` tools first | upstream is built directly from prompt tools | Aligned | Name shortening and recovery logic are handled by the adaptation layer |
-| `tool_choice` | Converges to `auto` when missing or not auto | upstream core path defaults to `auto` | Aligned | Project extension values are no longer preserved |
-| `parallel_tool_calls` | No tools and default time compensation `false` | upstream is explicitly passed in by prompt configuration | Partially consistent | The result fields are aligned and the default sources are different |
-| `reasoning` | The output is normalized by the request side `reasoning` / `reasoning_effort` and the model default value | upstream is built by the model default reasoning + turn configuration | Aligned | The output shape is consistent, but the source links are different |
-| `store` | Codex The compat path is uniformly changed to `false` | When upstream is not Azure Responses, it is `false` | Aligned | Azure special cases are not currently included in this outbound path |
-| `stream` | Standard Responses path is forced `true`, compact path remains compact | upstream Responses main path is fixed `true` | Aligned | `stream_passthrough` Just internal switch |
-| `include` | Only padded when `reasoning` exists `["reasoning.encrypted_content"]` | upstream is also only padded when reasoning exists | Aligned | No longer padded arrays |
-| `service_tier` | `Fast -> priority`, other values ​​are left as they are | upstream is also mapped according to enumeration semantics | Aligned | Currently only looking at Codex compatible values ​​|
-| `prompt_cache_key` | Generated by session anchor, can force override internally if necessary | upstream used directly `conversation_id` | Aligned | Current implementation retains override capability, but outbound results are aligned |
-| `text` | Output after normalization by verbosity / response_format / schema | upstream generated by `create_text_param_for_request()` | Aligned | The output structure is consistent |
-| `stream_passthrough` | Only used as internal adaptation mark, will be stripped before outbound | upstream does not have this field | Internal field | Not counted in Codex protocol differences |
+## Deliberate differences and remaining scope
 
-## 4. Conclusion
+The gateway owns account selection, model/tier overrides and session-affinity recovery. These differ from a single-account Codex client by design; see [the boundary notes](gateway-vs-codex-official-params.md).
 
-1. The current gateway’s Codex outbound request headers and request parameters have maintained the same shape as upstream.
-2. What remains now are mainly implementation-level differences, such as the version source of `User-Agent` and the `client_metadata` packaging of `x-codex-turn-metadata` in the WS scenario.
-3. `stream_passthrough`, internal account identification, session affinity fallback, etc. all belong to the internal logic of the adaptation layer and are no longer counted in Codex direct request for contract differences.
+The new `x-codex-routing-hint` header is a model/tier pre-routing hint. Blind forwarding could disagree with gateway overrides, so it is not added in this change. Personal Access Token and AgentIdentity JWT login modes are outside the existing account import contract. The additional rate-limit `normal_model_slug` metadata is not currently surfaced.
 
-## 5. Source code basis
+Skill imports continue requiring an explicit safe name, although Codex can use the directory name as a fallback. Installation and removal remain confined to the existing managed skill root.
 
-- `crates/service/src/gateway/request/incoming_headers.rs`
-- `crates/service/src/gateway/request/session_affinity.rs`
-- `crates/service/src/gateway/request/request_rewrite.rs`
-- `crates/service/src/gateway/request/official_responses_http.rs`
-- `crates/service/src/gateway/upstream/headers/codex_headers.rs`
-- `crates/service/src/gateway/upstream/attempt_flow/transport.rs`
-- `crates/service/src/gateway/core/runtime_config.rs`
-- `D:\MyComputer\own\GPTTeam相关\codex\codex\codex-rs\core\src\client.rs`
-- `D:\MyComputer\own\GPTTeam相关\codex\codex\codex-rs\codex-api\src\common.rs`
-- `D:\MyComputer\own\GPTTeam相关\codex\codex\codex-rs\codex-api\src\endpoint\responses.rs`
-- `D:\MyComputer\own\GPTTeam相关\codex\codex\codex-rs\codex-api\src\requests\headers.rs`
+## Pinned upstream evidence
+
+- [HTTP/WS request types and stream options](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/codex-api/src/common.rs)
+- [Canonical per-turn metadata](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/core/src/responses_metadata.rs)
+- [ChatGPT refresh encoding](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/login/src/auth/manager.rs) and [OAuth request fields](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/login/src/oauth/client.rs)
+- [Skill YAML parser](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/skills/src/parser.rs)
+- [Current and legacy user skill roots](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/ext/skills/src/host_roots.rs)
+- [Model provider settings](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/model-provider-info/src/lib.rs) and [model catalog compatibility](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/protocol/src/openai_models.rs)
+- [State database version](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/state/src/sqlite.rs) and [dependency pins](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/Cargo.toml)
+- [Compressed rollout format](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/rollout/src/compression.rs), [maintenance lock](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/rollout/src/maintenance.rs) and [writer coordination](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/rollout/src/writer_lock.rs)
+- [Official configuration reference](https://developers.openai.com/codex/config-reference)
+
+For future updates, pin the next stable tag and commit, compare these integration points, preserve account and filesystem boundaries, and run protocol regressions before updating this baseline. Updating the advertised client version alone does not update protocol support.

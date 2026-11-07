@@ -1,7 +1,7 @@
 "use client";
 
 import { useLayoutEffect, useRef, useSyncExternalStore } from "react";
-import type { Dispatch, SetStateAction } from "react";
+import type { Dispatch, ReactNode, SetStateAction } from "react";
 import {
   ArrowDown,
   ArrowDownToLine,
@@ -224,6 +224,7 @@ export interface AccountsPageViewProps {
   canManageAccountModels: boolean;
   fetchingModelsAccountId: string | null;
   openModelAssociation: (account: Account) => Promise<void>;
+  renderModelSyncControl: (account: Account) => ReactNode;
   isProxySettingsLoading: boolean;
   proxyEnabledDraft: boolean;
   proxySourceDraft: AccountProxySource;
@@ -370,6 +371,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     canManageAccountModels,
     fetchingModelsAccountId,
     openModelAssociation,
+    renderModelSyncControl,
     isProxySettingsLoading,
     proxyEnabledDraft,
     proxyProfileIdDraft,
@@ -935,7 +937,8 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                   </div>
                 </div>
               </CardContent>
-              <CardFooter className="justify-end bg-muted/20 px-3 py-2">
+              <CardFooter className="flex-wrap justify-between gap-2 bg-muted/20 px-3 py-2">
+                {canManageAccountModels ? renderModelSyncControl(account) : null}
                 {renderAccountActions(account)}
               </CardFooter>
             </Card>
@@ -1578,6 +1581,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                           account={account}
                           isPreferred={account.preferred}
                         />
+                        {canManageAccountModels ? <div className="mt-2">{renderModelSyncControl(account)}</div> : null}
                       </TableCell>
                       <TableCell>
                         <QuotaOverviewCell items={quotaItems} compact />

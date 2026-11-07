@@ -1390,7 +1390,7 @@ fn websocket_upstream_recovery_success_is_only_response_completed() {
 #[test]
 fn websocket_upstream_request_text_from_http_body_wraps_response_create() {
     let body = Bytes::from_static(
-        br#"{"model":"codex","input":"hello","stream":true,"reasoning":{"effort":"high"}}"#,
+        br#"{"model":"codex","input":"hello","stream":true,"stream_options":{"reasoning_summary_delivery":"sequential_cutoff"},"access_programs":{"cyber":"standard"},"reasoning":{"effort":"high"}}"#,
     );
 
     let text = super::websocket_upstream_request_text_from_http_body(&body)
@@ -1422,6 +1422,11 @@ fn websocket_upstream_request_text_from_http_body_wraps_response_create() {
             .and_then(serde_json::Value::as_str),
         Some("high")
     );
+    assert_eq!(
+        value["stream_options"]["reasoning_summary_delivery"],
+        "sequential_cutoff"
+    );
+    assert_eq!(value["access_programs"]["cyber"], "standard");
 }
 
 #[test]

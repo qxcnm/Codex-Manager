@@ -44,11 +44,16 @@ mod tests {
     fn shared_rpc_policy_is_conservative_and_explicit() {
         assert_eq!(rpc_replay_safety("account/list"), RpcReplaySafety::ReadOnly);
         assert_eq!(
+            rpc_replay_safety("modelDiscovery/list"),
+            RpcReplaySafety::ReadOnly
+        );
+        assert_eq!(
             rpc_replay_safety("apikey/disable"),
             RpcReplaySafety::IdempotentWrite
         );
         for method in [
             "apikey/create",
+            "modelDiscovery/update",
             "account/usage/resetCredit/consume",
             "accountManager/wallet/topUp",
             "appSettings/get",

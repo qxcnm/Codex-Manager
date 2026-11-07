@@ -191,13 +191,13 @@ fn admin_actor_can_list_codex_skills() {
             .and_then(|value| value.as_str()),
         Some(codex_home_string.as_str())
     );
-    assert_eq!(
-        resp.result
-            .get("items")
-            .and_then(|value| value.as_array())
-            .map(Vec::len),
-        Some(0)
-    );
+    let items = resp.result["items"].as_array().expect("skills inventory");
+    // The custom managed root is empty, but the user's shared .agents skills
+    // may still be listed. Every such entry must remain read-only.
+    assert!(items
+        .iter()
+        .all(|item| item["deletable"].as_bool() == Some(false)));
+    assert!(!codex_home.exists(), "listing must not create a profile");
 }
 
 #[test]

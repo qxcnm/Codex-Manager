@@ -2090,7 +2090,12 @@ fn merge_metadata_value(mapped: &mut HashMap<String, String>, client_metadata: O
 
 fn insert_header_metadata(mapped: &mut HashMap<String, String>, key: &str, value: Option<&str>) {
     if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
-        mapped.insert(key.to_string(), value.to_string());
+        // A reused socket's handshake describes its initial turn. Codex now
+        // sends canonical metadata on each response.create frame, so headers
+        // only supply compatibility defaults for older clients.
+        mapped
+            .entry(key.to_string())
+            .or_insert_with(|| value.to_string());
     }
 }
 

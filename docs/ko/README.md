@@ -224,9 +224,9 @@ PatewayAI는 공식 고품질 모델 API 중계에 집중하며 Claude와 Codex 
 - 모델 관리: Model Catalog V2를 유일한 런타임 기준으로 사용하며 builtin/custom, 정수로 저장하는 세 가지 가격과 긴 컨텍스트 단계별 가격, 계정 풀/집계 API 라우트, instructions policy, 로컬 JSON preview/commit을 지원합니다. 모델을 선택한 뒤 Codex의 `model_catalog_json`에 적용할 수 있습니다.
 - 현재 builtin 카탈로그에는 12개 레코드가 있습니다. `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, GPT-5.6 세 모델, `gpt-5.5`, `gpt-image-2`, Image 2.5 변형 두 개까지 총 11개 모델이 기본 표시되며, `codex-auto-review`만 숨겨집니다.
 - `gpt-5.4`와 `gpt-5.4-mini`는 2026-08-31에 ChatGPT 로그인 방식의 Codex에서 retired되었고, `gpt-5.2`도 해당 로그인 경로에서 deprecated되었습니다. 일반 API 모델은 이 정리의 영향을 받지 않습니다. revision 9는 수정되지 않은 해당 builtin을 제거하지만 사용자 편집, 가격 tier, 기본값이 아닌 route, permission/API Key 연결은 custom 모델로 전환해 보존합니다. API Key 사용자는 같은 slug를 custom 모델로 명시적으로 추가할 수도 있습니다.
-- 집계 API: 최소 중계 기능의 외부 업스트림을 관리하며 생성, 편집, 잔액 조회, 구성된 V2 라우트 기준의 연결 테스트를 제공합니다. 공급업체 모델을 자동 탐색하지 않으며, 관리자가 직접 가져와 Model Catalog V2에 선택적으로 연결할 수 있습니다. 기존 공급업체 모델 풀은 유지하지 않습니다.
+- 집계 API: 최소 중계 기능의 외부 업스트림을 관리하며 생성, 편집, 잔액 조회, 구성된 V2 라우트 기준의 연결 테스트를 제공합니다. 관리자가 모델을 직접 가져와 선택적으로 연결하거나, 계정 또는 연결별로 [백그라운드 모델 동기화](../en/report/model-discovery-background.md)를 시작하고 중지할 수 있습니다. 기본값은 꺼짐이며, 기존 설정을 유지하면서 누락된 모델과 라우트만 추가합니다.
 - 플러그인 센터: `/plugins/`에서 내장 추천, 기업 비공개, 사용자 소스 marketplace와 manifest, 작업, 로그, Rhai 인터페이스를 제공.
-- Skills와 플러그인: `/skills/`에서 Skills 설치와 Codex 플러그인 설치를 별도 탭으로 제공합니다. 내장 및 사용자 지정 GitHub 스킬 저장소, 저장소 새로고침과 개별 Skill 설치, skills.sh 검색·설치, ZIP/폴더 가져오기, 설치 항목 관리를 지원합니다. Codex 플러그인 설치는 기본 Marketplace의 전체 설치 과정을 유지하며 `.system` 내장 Skill은 항상 읽기 전용입니다.
+- Skills와 플러그인: `/skills/`에서 Skills 설치와 Codex 플러그인 설치를 별도 탭으로 제공합니다. 내장 및 사용자 지정 GitHub 스킬 저장소, 저장소 새로고침과 개별 Skill 설치, skills.sh 검색·설치, ZIP/폴더 가져오기, 설치 항목 관리를 지원합니다. Codex 플러그인 설치는 기본 Marketplace의 전체 설치 과정을 유지하며 `.system` 내장 Skill은 항상 읽기 전용입니다. 서비스를 실행하는 사용자의 `~/.agents/skills`도 읽기 전용으로 표시하며, 설치와 제거는 기존 관리 스킬 디렉터리로 제한됩니다.
 - 프로젝트 실행: 데스크톱에서 로컬 폴더를 즐겨찾기하고 Windows/macOS의 ChatGPT Codex App으로 열며, “세션”은 로컬 프로필로 새 터미널의 `resume` 선택기를 실행.
 - 설정: “시스템 기준 계산” 버튼, 계정별 동시 요청 상한, 업스트림 프록시, 요청 전체 시간 제한, 스트림 유휴 시간 제한, SSE 연결 유지 스위치와 주기, 더 보수적인 고동시성 성능 저하 정책을 제공합니다. SSE 연결 유지는 기본으로 켜지며 `CODEXMANAGER_SSE_KEEPALIVE_ENABLED=0`(또는 `false`)으로 끌 수 있습니다. 실험적 업스트림 WebSocket은 기본으로 꺼져 있으며 `CODEXMANAGER_USE_WEBSOCKET_UPSTREAM=1`로 켤 수 있습니다.
 - 시스템 내부 인터페이스 목록: 데스크톱/서비스 명령, RPC 메서드, 플러그인 내장 함수.
@@ -284,7 +284,7 @@ PatewayAI는 공식 고품질 모델 API 중계에 집중하며 Claude와 Codex 
 - 모델 관리: 데스크톱/Web은 `~/.codex/models_cache.json`을 기록하거나 다운로드하지 않습니다. 직접 계정은 공식 카탈로그, 로컬 게이트웨이는 독립 관리 카탈로그를 사용합니다.
 - 로컬 게이트웨이는 기존 ChatGPT 또는 API Key 인증(`auth_mode = "chatgpt"` 또는 `"apikey"`)을 지원하며 특정 로그인 방식을 요구하지 않습니다. 게이트웨이 설정은 `config.toml`만 업데이트하고 기존 `auth.json`을 바이트 단위로 유지합니다. 인증 파일을 생성하거나 ChatGPT 로그인 토큰을 요구하지 않습니다. `cm` provider는 `name = "cm"`, `requires_openai_auth = true`를 사용하며 플랫폼 Key는 `experimental_bearer_token`에 기록합니다.
 - 플러그인 센터: `/plugins/` marketplace 전환, 설치·활성화, 작업, 로그, Rhai.
-- Skills와 플러그인: `/skills/` 별도 탭, GitHub/skills.sh 설치, ZIP/폴더 가져오기, 안전한 제거, Marketplace, 읽기 전용 시스템 Skills.
+- Skills와 플러그인: `/skills/` 별도 탭, GitHub/skills.sh 설치, ZIP/폴더 가져오기, 안전한 제거, Marketplace, 읽기 전용 시스템 Skills. 서비스를 실행하는 사용자의 `~/.agents/skills`도 읽기 전용으로 표시하며, 설치와 제거는 기존 관리 스킬 디렉터리로 제한됩니다.
 - 프로젝트 실행: 데스크톱은 로컬 폴더를 저장하고 Windows/macOS는 ChatGPT Codex App으로 엽니다. 세션은 로컬 CLI를 사용하며 Web/Docker는 장치 폴더에 접근하지 않습니다.
 - 설정: 포트, 수신 주소, 프록시, timeout, SSE keepalive, 테마, 업데이트, 백그라운드 동작.
 

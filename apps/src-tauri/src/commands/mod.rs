@@ -10,6 +10,7 @@ pub mod codex_skills;
 pub mod dashboard;
 pub mod diagnostics;
 pub mod login;
+pub mod model_discovery;
 pub mod plugin;
 pub mod quota;
 mod registry;

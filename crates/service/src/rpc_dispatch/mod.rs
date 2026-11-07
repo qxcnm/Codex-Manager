@@ -34,6 +34,7 @@ mod codex_profile;
 mod codex_skills;
 mod dashboard;
 mod gateway;
+mod model_discovery;
 mod model_groups;
 mod quota;
 mod requestlog;
@@ -280,6 +281,8 @@ fn admin_only_method(method: &str) -> bool {
             | "apikey/managedModelReorderV2"
             | "storage/spaceUsage"
             | "storage/reclaim"
+            | "modelDiscovery/list"
+            | "modelDiscovery/update"
     )
 }
 
@@ -343,6 +346,9 @@ pub(crate) fn handle_request_with_actor(req: JsonRpcRequest, actor: RpcActor) ->
         return JsonRpcMessage::Response(resp);
     }
     if let Some(resp) = aggregate_api::try_handle(&req, &actor) {
+        return JsonRpcMessage::Response(resp);
+    }
+    if let Some(resp) = model_discovery::try_handle(&req, &actor) {
         return JsonRpcMessage::Response(resp);
     }
     if let Some(resp) = apikey::try_handle(&req, &actor) {

@@ -5,8 +5,21 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 
 ## [Unreleased]
 
+### Added
+
+- Add optional background model discovery for individual accounts and aggregate APIs, with start/stop controls, configurable intervals, persistent status, and append-only model/route updates (#515).
+
+### Changed
+
+- Updated the frontend and backend default client version against Codex 0.164.0, with pinned upstream evidence and documented integration boundaries.
+- Added read-only discovery of skills in the service user's `~/.agents/skills`, preserving the existing installation and removal scope.
+
 ### Fixed
 
+- Preserved stream options and access-program selections in Codex Responses requests, and stopped stale WebSocket handshake metadata from overriding later frames.
+- Aligned token refresh with Codex's JSON request encoding and removed the fixed scope that could reduce the original grant, preserving proxy handling, error classification, and rotated credentials.
+- Fixed parsing of multiline YAML skill descriptions, quoted values, and nested metadata so valid manifests retain their intended names and descriptions.
+- Extended history visibility repair to compressed Codex rollout files, preserving original backups and coordinating with upstream maintenance and active writers.
 - Preserved WebSocket streaming flags, canonical session/thread headers, and valid window identifiers when session affinity differs from the thread.
 - Stopped replaying a rotating refresh-token request after a transport failure leaves delivery uncertain.
 - Preserved the selected workspace when an imported auth file retains an older ID token, and refreshed conflicting AgentIdentity workspace/FedRAMP bindings.

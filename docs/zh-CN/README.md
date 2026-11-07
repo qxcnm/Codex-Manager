@@ -239,9 +239,9 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
 - 模型管理：模型目录 V2 是唯一运行时真相源；支持 builtin/custom、整数三价与长上下文阶梯价、账号池/聚合 API route、instructions policy、本地 JSON preview/commit，以及勾选模型后应用到 Codex 的 `model_catalog_json`
 - 当前 builtin 目录共 12 条记录：`gpt-6.1-sol`、`gpt-6-astra`、`gpt-6-sol`、`gpt-6-luna`、GPT-5.6 三款模型、`gpt-5.5`、`gpt-image-2` 和两个 Image 2.5 变体共 11 款模型默认可见；只有 `codex-auto-review` 默认隐藏
 - `gpt-5.4` 与 `gpt-5.4-mini` 已于 2026-08-31 从 ChatGPT 登录的 Codex 退役，`gpt-5.2` 也已在该登录方式下 deprecated；通用 API 模型不受此清理影响。revision 9 会清理未定制的对应 builtin；带有用户编辑、价格阶梯、路由或权限关联的数据会转为 custom 保留，需要 API Key 继续使用时也可显式添加同名 custom 模型
-- 聚合 API：管理第三方最小转发上游，支持创建、编辑、余额和基于已配置 V2 route 的连通性测试；不会自动发现供应商模型，管理员可主动拉取并选择性关联到模型目录 V2，不维护旧供应商模型池
+- 聚合 API：管理第三方最小转发上游，支持创建、编辑、余额和基于已配置 V2 route 的连通性测试；管理员可主动拉取并选择性关联，也可按账号或连接单独启停[后台模型同步](report/model-discovery-background.md)。后台同步默认关闭，只追加缺失模型与路由，保留已有配置。
 - 插件中心：路由为 `/plugins/`，支持内置精选、企业私有、自定义源三种市场模式，并提供插件清单、任务、日志与 Rhai 对接接口
-- Skills 与插件：`/skills/` 按“Skills 安装 / Codex 插件安装”分栏。Skills 安装提供内置及自定义 GitHub 技能仓库、仓库刷新与单 Skill 安装、skills.sh 搜索安装、ZIP / 目录导入和已安装管理；Codex 插件安装保留原生 Marketplace 的完整插件安装流程，`.system` 内置 Skill 始终只读
+- Skills 与插件：`/skills/` 按“Skills 安装 / Codex 插件安装”分栏。Skills 安装提供内置及自定义 GitHub 技能仓库、仓库刷新与单 Skill 安装、skills.sh 搜索安装、ZIP / 目录导入和已安装管理；Codex 插件安装保留原生 Marketplace 的完整插件安装流程，`.system` 内置 Skill 始终只读；同时只读识别服务运行用户的 `~/.agents/skills`，安装与卸载仍限于原有受管理技能目录
 - 项目启动（桌面端）：收藏本机项目目录；Windows / macOS 通过 ChatGPT Codex App 打开对应工作区，“会话”继续使用本机 CodexManager profile 在新终端中打开 `resume` 选择器
 - 设置页：支持“系统推导”按钮、单账号并发上限、上游代理、请求总超时、流式空闲超时、SSE 保活开关与间隔，以及更保守的高并发退化策略；SSE 保活默认开启，可通过 `CODEXMANAGER_SSE_KEEPALIVE_ENABLED=0`（或 `false`）关闭；实验性上游 WebSocket 可通过 `CODEXMANAGER_USE_WEBSOCKET_UPSTREAM=1` 开启，默认关闭
 - 系统内部接口总表：列出当前桌面端与服务端所有可对接命令、RPC 方法、以及插件内建函数
@@ -297,7 +297,7 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
 - Codex 接入方式：支持 OpenAI 账号直连、可安全映射到 Responses 的聚合 API 直连，以及通过 CodexManager 本地网关接入；账号直连会写入 `auth.json` 以切换账号，聚合 API 直连和本地网关只更新 `config.toml`、保留 `auth.json`，provider 的 `experimental_bearer_token` 在聚合直连时写入所选聚合 API Key，在网关接入时写入 CodexManager 平台 Key。直连聚合 API 不经过本地网关，因此不会写入网关请求日志
 - 模型管理：桌面端和 Web 端都不会写入或下载 `~/.codex/models_cache.json`；账号直连跟随 Codex 官方目录，本地网关使用 CodexManager 管理目录下独立生成的 catalog
 - 插件中心：`/plugins/` 路由，内置精选 / 企业私有 / 自定义源市场切换，插件安装、启停、任务、日志、Rhai 对接
-- Skills 与插件：`/skills/` 路由以独立 Tab 管理 Skills 安装和 Codex 插件安装；Skills 可从内置/自定义 GitHub 仓库或 skills.sh 搜索后单独安装，也支持 ZIP、目录导入和安全卸载；Codex 原生 Marketplace 继续负责完整插件安装，系统 Skill 只读
+- Skills 与插件：`/skills/` 路由以独立 Tab 管理 Skills 安装和 Codex 插件安装；Skills 可从内置/自定义 GitHub 仓库或 skills.sh 搜索后单独安装，也支持 ZIP、目录导入和安全卸载；Codex 原生 Marketplace 继续负责完整插件安装，系统 Skill 只读；同时只读识别服务运行用户的 `~/.agents/skills`，安装与卸载仍限于原有受管理技能目录
 - 项目启动：桌面端收藏本机目录；Windows / macOS 直接在 ChatGPT Codex App 中打开对应工作区，“会话”通过本机 CLI 继续项目；Web / Docker 不访问设备目录
 - 设置页：统一管理端口、监听地址、代理、请求超时、SSE 保活、主题、自动更新、后台行为
 - 本地网关兼容现有 ChatGPT 或 API Key 认证（`auth_mode = "chatgpt"` 或 `"apikey"`），不强制指定登录方式。应用网关只更新 `config.toml`，逐字节保留已有 `auth.json`，不会创建认证文件，也不要求具备 ChatGPT 登录 token。`cm` provider 固定使用 `name = "cm"`、`requires_openai_auth = true`，平台 Key 写入 `experimental_bearer_token`。

@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useAccountResetWarmup } from "@/hooks/useAccountResetWarmup";
+import { useSourceModelSync } from "@/hooks/useSourceModelSync";
 import {
   isAdminRole,
   resolveSessionRole,
@@ -35,6 +36,7 @@ import {
 } from "@/app/accounts/accounts-page-helpers";
 import { AccountsPageView } from "@/app/accounts/accounts-page-view";
 import { AggregateApiModelAssociationModal } from "@/components/modals/aggregate-api-model-association-modal";
+import { SourceModelSyncControl, SourceModelSyncDialog } from "@/components/source-model-sync";
 import { isBannedAccount, isLimitedAccount } from "@/lib/utils/usage";
 import { accountClient } from "@/lib/api/account-client";
 import { getAppErrorMessage } from "@/lib/api/transport";
@@ -139,6 +141,11 @@ function AccountsPageContent({ serviceAddr }: AccountsPageContentProps) {
   const { isUpdatingResetWarmup, setAccountResetWarmupEnabled } =
     useAccountResetWarmup(serviceAddr, isServiceReady);
   const isPageActive = useDesktopPageActive("/accounts/");
+  const modelSync = useSourceModelSync({
+    sourceKind: "openai_account",
+    serviceAddr,
+    enabled: isPageActive && isServiceReady && canManageAccountModels,
+  });
   usePageTransitionReady("/accounts/", !isServiceReady || !isLoading);
 
   const [search, setSearch] = useState("");
@@ -1034,6 +1041,15 @@ const toggleCleanupStatus = (rawStatus: string) => {
       canManageAccountModels={canManageAccountModels}
       fetchingModelsAccountId={fetchingModelsAccountId}
       openModelAssociation={openModelAssociation}
+      renderModelSyncControl={(account) => (
+        <SourceModelSyncControl
+          task={modelSync.tasks.get(account.id)}
+          loading={modelSync.isLoading}
+          error={Boolean(modelSync.error)}
+          disabled={!isServiceReady}
+          onClick={() => modelSync.openSource({ id: account.id, name: account.name })}
+        />
+      )}
       accountTestAccount={accountTestAccount}
       isProxySettingsLoading={isProxySettingsLoading}
       proxyEnabledDraft={proxyEnabledDraft}
@@ -1142,6 +1158,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
         isSaving={isAssociatingModels}
         onAssociate={associateAccountModels}
       />
+      <SourceModelSyncDialog controller={modelSync} />
     </>
   );
 }

@@ -489,14 +489,6 @@ fn refresh_token_status_error_maps_app_session_terminated_400_to_official_messag
     );
 }
 
-#[test]
-fn refresh_token_body_matches_codex_refresh_scope() {
-    assert_eq!(
-        super::build_refresh_token_body("client-id", "refresh-token"),
-        "client_id=client-id&grant_type=refresh_token&refresh_token=refresh-token&scope=openid+profile+email"
-    );
-}
-
 /// 函数 `refresh_token_status_error_maps_invalidated_401_to_official_message`
 ///
 /// 作者: gaohongshun
@@ -1129,7 +1121,13 @@ fn refresh_access_token_mock_region_blocked_response_surfaces_marker() {
             .as_reader()
             .read_to_string(&mut body)
             .expect("read refresh request body");
-        tx.send(body).expect("send refresh request body");
+        let content_type = request
+            .headers()
+            .iter()
+            .find(|header| header.field.equiv("content-type"))
+            .map(|header| header.value.as_str().to_owned());
+        tx.send((content_type, body))
+            .expect("send refresh request body");
         let response = Response::from_string("")
             .with_status_code(TinyStatusCode(403))
             .with_header(
@@ -1149,7 +1147,7 @@ fn refresh_access_token_mock_region_blocked_response_surfaces_marker() {
             Ok(_) => panic!("region blocked refresh should fail"),
             Err(err) => err,
         };
-    let body = rx
+    let (content_type, body) = rx
         .recv_timeout(Duration::from_secs(5))
         .expect("receive refresh request body");
     handle.join().expect("join refresh server");
@@ -1158,8 +1156,12 @@ fn refresh_access_token_mock_region_blocked_response_surfaces_marker() {
         None => std::env::remove_var("CODEX_REFRESH_TOKEN_URL_OVERRIDE"),
     }
 
-    assert!(body.contains("grant_type=refresh_token"));
-    assert!(body.contains("refresh_token=refresh-old"));
+    assert_eq!(content_type.as_deref(), Some("application/json"));
+    let body: serde_json::Value = serde_json::from_str(&body).expect("JSON refresh request");
+    assert_eq!(body["client_id"], "client-id");
+    assert_eq!(body["grant_type"], "refresh_token");
+    assert_eq!(body["refresh_token"], "refresh-old");
+    assert!(body.get("scope").is_none());
     assert!(err.contains("refresh token failed with status 403 Forbidden"));
     assert!(err.contains("auth_error=unsupported_country_region_territory"));
     assert!(super::is_refresh_token_region_blocked_error_message(&err));
@@ -1248,12 +1250,14 @@ fn changing_gateway_user_agent_preserves_standard_usage_user_agent() {
 }
 
 #[test]
-fn token_refresh_routes_ignore_custom_gateway_user_agent() {
+fn token_refresh_routes_match_codex_json_and_ignore_custom_gateway_user_agent() {
     let (_guard, _restore) = usage_header_runtime_scope();
     let _endpoint = EnvVarRestore::remove("CODEX_REFRESH_TOKEN_URL_OVERRIDE");
     crate::gateway::set_gateway_user_agent(Some("Gateway-Only/1.0"))
         .expect("set custom gateway user agent");
     let expected_user_agent = crate::gateway::current_codex_user_agent().to_ascii_lowercase();
+    let client_id = "client-id+with/slash";
+    let refresh_token = "refresh+with/quote\"and\\slash";
     for explicit in [false, true] {
         let (proxy_url, request_rx, proxy_handle) = spawn_recording_http_proxy(
             r#"{"access_token":"refreshed-access","refresh_token":"refreshed-token"}"#,
@@ -1264,22 +1268,33 @@ fn token_refresh_routes_ignore_custom_gateway_user_agent() {
         let refreshed = if explicit {
             super::refresh_access_token_with_explicit_proxy(
                 "http://auth.test",
-                "client-id",
-                "refresh-old",
+                client_id,
+                refresh_token,
                 &proxy_url,
             )
         } else {
-            super::refresh_access_token("http://auth.test", "client-id", "refresh-old")
+            super::refresh_access_token("http://auth.test", client_id, refresh_token)
         }
         .expect("refresh access token");
         let request = request_rx
             .recv_timeout(Duration::from_secs(5))
-            .expect("capture refresh request")
-            .to_ascii_lowercase();
+            .expect("capture refresh request");
         proxy_handle.join().expect("join refresh proxy");
+        let (headers, body) = request
+            .split_once("\r\n\r\n")
+            .expect("HTTP refresh request");
+        let headers = headers.to_ascii_lowercase();
+        let body: serde_json::Value = serde_json::from_str(body).expect("JSON refresh request");
         assert_eq!(refreshed.access_token, "refreshed-access");
-        assert!(request.contains(format!("user-agent: {expected_user_agent}").as_str()));
-        assert!(!request.contains("gateway-only/1.0"));
+        assert_eq!(refreshed.refresh_token.as_deref(), Some("refreshed-token"));
+        assert!(headers.starts_with("post http://auth.test/oauth/token "));
+        assert!(headers.contains("content-type: application/json"));
+        assert!(headers.contains(format!("user-agent: {expected_user_agent}").as_str()));
+        assert!(!headers.contains("gateway-only/1.0"));
+        assert_eq!(body["client_id"], client_id);
+        assert_eq!(body["grant_type"], "refresh_token");
+        assert_eq!(body["refresh_token"], refresh_token);
+        assert!(body.get("scope").is_none());
     }
 }
 
@@ -1316,26 +1331,11 @@ fn token_refresh_does_not_replay_a_grant_after_response_connection_closes() {
                         })
                         .expect("grant content length");
                     if request.len() >= header_end + 4 + content_length {
-                        let body = &request[header_end + 4..header_end + 4 + content_length];
-                        let content_type = headers
-                            .lines()
-                            .find_map(|line| {
-                                let (name, value) = line.split_once(':')?;
-                                name.eq_ignore_ascii_case("content-type")
-                                    .then(|| value.trim())
-                            })
-                            .expect("grant content type");
-                        if content_type.starts_with("application/json") {
-                            let grant: serde_json::Value =
-                                serde_json::from_slice(body).expect("refresh JSON");
-                            assert_eq!(grant["refresh_token"], "fixture-rotating-grant");
-                        } else {
-                            assert!(content_type.starts_with("application/x-www-form-urlencoded"));
-                            let grant = std::str::from_utf8(body).expect("refresh form");
-                            assert!(grant
-                                .split('&')
-                                .any(|field| field == "refresh_token=fixture-rotating-grant"));
-                        }
+                        let grant: serde_json::Value = serde_json::from_slice(
+                            &request[header_end + 4..header_end + 4 + content_length],
+                        )
+                        .expect("refresh JSON");
+                        assert_eq!(grant["refresh_token"], "fixture-rotating-grant");
                         break;
                     }
                 }

@@ -79,8 +79,8 @@ pub use shared::{
     APP_SETTING_WEB_AUTH_MODE_KEY, WEB_ACCESS_SESSION_COOKIE_NAME,
 };
 pub(crate) use store::{
-    get_persisted_app_setting, list_app_settings_map, save_persisted_app_setting,
-    save_persisted_bool_setting,
+    get_persisted_app_setting, list_app_settings_map, list_app_settings_map_result,
+    save_persisted_app_setting, save_persisted_app_settings, save_persisted_bool_setting,
 };
 pub use ui::{
     current_auto_start_enabled_setting, current_close_to_tray_on_close_setting,

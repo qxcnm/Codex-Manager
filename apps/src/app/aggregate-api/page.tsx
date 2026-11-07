@@ -21,6 +21,7 @@ import { toast } from "sonner";
 import { PageHeader, MetricCard, PageWorkspace } from "@/components/layout/page-workspace";
 import { AggregateApiModal } from "@/components/modals/aggregate-api-modal";
 import { AggregateApiModelAssociationModal } from "@/components/modals/aggregate-api-model-association-modal";
+import { SourceModelSyncControl, SourceModelSyncDialog } from "@/components/source-model-sync";
 import { ConfirmDialog } from "@/components/modals/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -52,6 +53,8 @@ import { useDeferredDesktopActivation } from "@/hooks/useDeferredDesktopActivati
 import { useDesktopPageActive } from "@/hooks/useDesktopPageActive";
 import { usePageTransitionReady } from "@/hooks/usePageTransitionReady";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
+import { useSourceModelSync } from "@/hooks/useSourceModelSync";
+import { isAdminRole, resolveSessionRole, useAppSession } from "@/hooks/useAppSession";
 import { accountClient } from "@/lib/api/account-client";
 import { CODEX_PROFILE_CANDIDATES_QUERY_KEY } from "@/lib/api/codex-profile-client";
 import {
@@ -149,12 +152,20 @@ export default function AggregateApiPage() {
   const managedModelSelectorQueryKey =
     buildManagedModelSelectorQueryKey(serviceAddr);
   const startupSnapshotQueryKey = ["startup-snapshot", serviceAddr] as const;
-  const { canAccessManagementRpc } = useRuntimeCapabilities();
+  const { canAccessManagementRpc, isDesktopRuntime } = useRuntimeCapabilities();
+  const { data: session, isLoading: isSessionLoading } = useAppSession();
+  const role = resolveSessionRole(session, isSessionLoading, isDesktopRuntime);
+  const canManageModelSync = isDesktopRuntime || (!isSessionLoading && isAdminRole(role));
   const isServiceReady = canAccessManagementRpc && serviceStatus.connected;
   const isPageActive = useDesktopPageActive("/aggregate-api/");
   const isQueryEnabled = useDeferredDesktopActivation(
     isServiceReady && isPageActive,
   );
+  const modelSync = useSourceModelSync({
+    sourceKind: "aggregate_api",
+    serviceAddr,
+    enabled: isQueryEnabled && canManageModelSync,
+  });
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -396,7 +407,7 @@ export default function AggregateApiPage() {
         <PageHeader
           eyebrow={t("显式路由")}
           title={t("聚合 API")}
-          description={t("不会自动发现上游模型；管理员可主动拉取并选择性关联到模型目录 V2。")}
+          description={t("可手动拉取并选择关联模型，也可为每个连接开启后台同步。")}
           actions={
             <Button
               size="sm"
@@ -549,6 +560,17 @@ export default function AggregateApiPage() {
                             ) : (
                               <Badge variant="destructive">{t("路由缺失")}</Badge>
                             )}
+                            {canManageModelSync ? (
+                              <div className="mt-2">
+                                <SourceModelSyncControl
+                                  task={modelSync.tasks.get(api.id)}
+                                  loading={modelSync.isLoading}
+                                  error={Boolean(modelSync.error)}
+                                  disabled={!isServiceReady}
+                                  onClick={() => modelSync.openSource({ id: api.id, name: api.supplierName || api.id })}
+                                />
+                              </div>
+                            ) : null}
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-1">
@@ -642,6 +664,7 @@ export default function AggregateApiPage() {
         isSaving={associatingModels}
         onAssociate={associateModels}
       />
+      <SourceModelSyncDialog controller={modelSync} />
 
       <ConfirmDialog
         open={Boolean(deleteId)}

@@ -18,6 +18,7 @@ const modulePaths = [
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "gateway.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "login.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "misc.ts"),
+  path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "model-discovery.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "proxy-profiles.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "quota.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "shared.ts"),
@@ -34,6 +35,7 @@ function rewriteImports(outputText) {
     .replaceAll('./transport-web-commands/gateway', './transport-web-commands/gateway.js')
     .replaceAll('./transport-web-commands/login', './transport-web-commands/login.js')
     .replaceAll('./transport-web-commands/misc', './transport-web-commands/misc.js')
+    .replaceAll('./transport-web-commands/model-discovery', './transport-web-commands/model-discovery.js')
     .replaceAll('./transport-web-commands/proxy-profiles', './transport-web-commands/proxy-profiles.js')
     .replaceAll('./transport-web-commands/quota', './transport-web-commands/quota.js')
     .replaceAll('./transport-web-commands/shared', './transport-web-commands/shared.js')
@@ -84,6 +86,11 @@ async function loadTransportWebCommandsModule() {
 
 const transportWebCommands = await loadTransportWebCommandsModule();
 const commandMap = transportWebCommands.createWebCommandMap(async () => ({}));
+
+test("model discovery Web commands preserve the service RPC contract", () => {
+  assert.deepEqual(commandMap.service_model_discovery_list, { rpcMethod: "modelDiscovery/list" });
+  assert.deepEqual(commandMap.service_model_discovery_update, { rpcMethod: "modelDiscovery/update" });
+});
 
 test("quota reset warmup uses a dedicated batch setting RPC", () => {
   assert.deepEqual(commandMap.service_account_reset_warmup_update, {

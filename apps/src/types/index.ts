@@ -6,6 +6,7 @@ export * from "@/types/codex-project";
 export * from "@/types/codex-skills";
 export * from "@/types/dashboard";
 export * from "@/types/model";
+export * from "@/types/model-discovery";
 export * from "@/types/model-v2";
 export * from "@/types/plugin";
 export * from "@/types/proxy-profile";

@@ -9,6 +9,12 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use zip::ZipArchive;
 
+#[path = "codex_skills_external.rs"]
+mod external;
+
+#[path = "codex_skill_frontmatter.rs"]
+mod frontmatter;
+
 pub(crate) const MAX_ARCHIVE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TOTAL_UNCOMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SINGLE_FILE_BYTES: u64 = 16 * 1024 * 1024;
@@ -85,7 +91,7 @@ fn mutation_lock() -> &'static Mutex<()> {
 
 pub(crate) fn list(codex_home: Option<&str>) -> Result<CodexSkillsInventory, String> {
     let codex_home = crate::codex_profile::resolve_profile_dir(codex_home)?;
-    list_from_root(&codex_home, &codex_home.join("skills"))
+    list_for_profile(&codex_home)
 }
 
 pub(crate) fn install_zip(
@@ -127,7 +133,7 @@ pub(crate) fn install_zip(
         .lock()
         .map_err(|_| "skills mutation lock poisoned".to_string())?;
     install_zip_into_root(&skills_root, &archive)?;
-    list_from_root(&codex_home, &skills_root)
+    list_for_profile(&codex_home)
 }
 
 pub(crate) fn install_archive_bytes(
@@ -146,7 +152,7 @@ pub(crate) fn install_archive_bytes(
         .lock()
         .map_err(|_| "skills mutation lock poisoned".to_string())?;
     install_zip_into_root(&skills_root, archive)?;
-    list_from_root(&codex_home, &skills_root)
+    list_for_profile(&codex_home)
 }
 
 pub(crate) fn parse_skill_metadata_document(content: &str) -> Result<(String, String), String> {
@@ -173,7 +179,7 @@ pub(crate) fn import_directory(
         .lock()
         .map_err(|_| "skills mutation lock poisoned".to_string())?;
     import_directory_into_root(&skills_root, &source_path)?;
-    list_from_root(&codex_home, &skills_root)
+    list_for_profile(&codex_home)
 }
 
 pub(crate) fn delete(
@@ -190,7 +196,28 @@ pub(crate) fn delete(
         .lock()
         .map_err(|_| "skills mutation lock poisoned".to_string())?;
     delete_from_root(&skills_root, directory_name)?;
-    list_from_root(&codex_home, &skills_root)
+    list_for_profile(&codex_home)
+}
+
+fn list_for_profile(codex_home: &Path) -> Result<CodexSkillsInventory, String> {
+    let user_home = crate::codex_profile::user_home_dir().ok();
+    list_with_user_home(codex_home, user_home.as_deref())
+}
+
+fn list_with_user_home(
+    codex_home: &Path,
+    user_home: Option<&Path>,
+) -> Result<CodexSkillsInventory, String> {
+    let skills_root = codex_home.join("skills");
+    let mut inventory = list_from_root(codex_home, &skills_root)?;
+    if let Some(user_home) = user_home {
+        let agents_root = user_home.join(".agents").join("skills");
+        if !crate::codex_runtime::same_path(&skills_root, &agents_root) {
+            external::append_agents_skills(&agents_root, &mut inventory);
+            sort_skills(&mut inventory.items);
+        }
+    }
+    Ok(inventory)
 }
 
 fn list_from_root(codex_home: &Path, skills_root: &Path) -> Result<CodexSkillsInventory, String> {
@@ -238,6 +265,16 @@ fn list_from_root(codex_home: &Path, skills_root: &Path) -> Result<CodexSkillsIn
             ));
         }
     }
+    sort_skills(&mut items);
+    Ok(CodexSkillsInventory {
+        codex_home: codex_home.to_string_lossy().to_string(),
+        skills_root: skills_root.to_string_lossy().to_string(),
+        items,
+        warnings,
+    })
+}
+
+fn sort_skills(items: &mut [CodexSkillSummary]) {
     items.sort_by(|left, right| {
         left.source
             .cmp(&right.source)
@@ -248,12 +285,6 @@ fn list_from_root(codex_home: &Path, skills_root: &Path) -> Result<CodexSkillsIn
             })
             .then_with(|| left.directory_name.cmp(&right.directory_name))
     });
-    Ok(CodexSkillsInventory {
-        codex_home: codex_home.to_string_lossy().to_string(),
-        skills_root: skills_root.to_string_lossy().to_string(),
-        items,
-        warnings,
-    })
 }
 
 fn scan_system_skills(
@@ -404,54 +435,9 @@ fn is_regular_file_without_reparse(metadata: &fs::Metadata) -> bool {
 }
 
 fn parse_skill_metadata(content: &str) -> Result<SkillMetadata, String> {
-    let normalized = content.strip_prefix('\u{feff}').unwrap_or(content);
-    let mut lines = normalized.lines();
-    if lines.next().map(str::trim) != Some("---") {
-        return Err(format!("{SKILL_FILE_NAME} is missing YAML frontmatter"));
-    }
-    let mut name = None;
-    let mut description = None;
-    let mut closed = false;
-    for line in lines {
-        let trimmed = line.trim();
-        if trimmed == "---" {
-            closed = true;
-            break;
-        }
-        let Some((key, value)) = trimmed.split_once(':') else {
-            continue;
-        };
-        match key.trim() {
-            "name" => name = parse_frontmatter_scalar(value.trim()),
-            "description" => description = parse_frontmatter_scalar(value.trim()),
-            _ => {}
-        }
-    }
-    if !closed {
-        return Err(format!("{SKILL_FILE_NAME} frontmatter is not closed"));
-    }
-    let name = name.ok_or_else(|| format!("{SKILL_FILE_NAME} frontmatter is missing name"))?;
+    let (name, description) = frontmatter::parse(content)?;
     validate_directory_name(&name)?;
-    Ok(SkillMetadata {
-        name,
-        description: description.unwrap_or_default(),
-    })
-}
-
-fn parse_frontmatter_scalar(value: &str) -> Option<String> {
-    let value = value.trim();
-    if value.is_empty() || matches!(value, "|" | ">" | "|-" | ">-") {
-        return None;
-    }
-    let parsed = if value.starts_with('"') {
-        serde_json::from_str::<String>(value).ok()
-    } else if value.starts_with('\'') && value.ends_with('\'') && value.len() >= 2 {
-        Some(value[1..value.len() - 1].replace("''", "'"))
-    } else {
-        Some(value.split(" #").next().unwrap_or(value).trim().to_string())
-    }?;
-    let parsed = parsed.trim().to_string();
-    (!parsed.is_empty()).then_some(parsed)
+    Ok(SkillMetadata { name, description })
 }
 
 fn validate_directory_name(name: &str) -> Result<(), String> {

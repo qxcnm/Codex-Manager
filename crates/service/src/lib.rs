@@ -22,6 +22,7 @@ mod gateway;
 mod http;
 mod lifecycle;
 mod logging;
+mod model_discovery;
 mod model_groups;
 mod models_v2;
 mod plugin;

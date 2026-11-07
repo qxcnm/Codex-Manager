@@ -17,6 +17,9 @@ use toml_edit::{value as toml_value, DocumentMut, Item, Table, Value};
 
 use crate::codex_runtime::CodexRuntimeReloadResult;
 
+#[path = "codex_profile_rollout.rs"]
+mod rollout;
+
 const APP_SETTING_CODEX_HOME_KEY: &str = "codex_profile.codex_home";
 const APP_SETTING_STATE_KEY: &str = "codex_profile.state";
 const APP_SETTING_BACKUPS_KEY: &str = "codex_profile.backups";
@@ -207,11 +210,6 @@ pub(crate) struct CodexProfilePruneHistoryBackupsResult {
     pub removed_bytes: u64,
     pub retention: CodexProfileHistoryRetention,
     pub warnings: Vec<String>,
-}
-
-struct RolloutUpdate {
-    path: PathBuf,
-    content: String,
 }
 
 struct SqliteRepairPlan {
@@ -1724,13 +1722,14 @@ fn repair_history_for_provider(
         return history_repair_summary(profile_dir, target_provider, 0, 0, 0, None, warnings);
     }
 
-    let rollout_updates = match collect_rollout_updates(profile_dir, target_provider) {
-        Ok(value) => value,
-        Err(err) => {
-            warnings.push(err);
-            Vec::new()
+    let _maintenance_lock = match rollout::try_maintenance_lock(profile_dir) {
+        Ok(guard) => guard,
+        Err(error) => {
+            warnings.push(error);
+            return history_repair_summary(profile_dir, target_provider, 0, 0, 0, None, warnings);
         }
     };
+    let rollout_updates = rollout::collect_updates(profile_dir, target_provider, &mut warnings);
     let sqlite_plan = match inspect_sqlite_repair_plan(profile_dir, target_provider) {
         Ok(value) => value,
         Err(err) => {
@@ -1766,9 +1765,7 @@ fn repair_history_for_provider(
 
     if let Some(backup_dir) = backup_dir.as_ref() {
         for update in rollout_updates {
-            match backup_existing_file(profile_dir, &update.path, backup_dir)
-                .and_then(|_| write_atomic(&update.path, &update.content))
-            {
+            match update.apply(profile_dir, backup_dir) {
                 Ok(()) => changed_rollout_file_count += 1,
                 Err(err) => warnings.push(err),
             }
@@ -1860,125 +1857,6 @@ fn history_repair_summary(
         warnings,
         message,
     }
-}
-
-fn collect_rollout_updates(
-    profile_dir: &Path,
-    target_provider: &str,
-) -> Result<Vec<RolloutUpdate>, String> {
-    let mut files = Vec::new();
-    for dir_name in SESSION_DIRS {
-        collect_jsonl_files(&profile_dir.join(dir_name), &mut files)?;
-    }
-
-    let mut updates = Vec::new();
-    for path in files {
-        let content = fs::read_to_string(&path)
-            .map_err(|err| format!("read rollout failed ({}): {err}", path.display()))?;
-        if let Some(next_content) = patch_rollout_provider(&content, target_provider)? {
-            updates.push(RolloutUpdate {
-                path,
-                content: next_content,
-            });
-        }
-    }
-    Ok(updates)
-}
-
-fn collect_jsonl_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => {
-            return Err(format!(
-                "read session dir failed ({}): {err}",
-                dir.display()
-            ))
-        }
-    };
-
-    for entry in entries {
-        let entry = entry
-            .map_err(|err| format!("read session dir entry failed ({}): {err}", dir.display()))?;
-        let path = entry.path();
-        let file_type = entry
-            .file_type()
-            .map_err(|err| format!("read file type failed ({}): {err}", path.display()))?;
-        if file_type.is_dir() {
-            collect_jsonl_files(&path, files)?;
-        } else if file_type.is_file()
-            && path
-                .extension()
-                .and_then(|item| item.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("jsonl"))
-        {
-            files.push(path);
-        }
-    }
-    Ok(())
-}
-
-fn patch_rollout_provider(content: &str, target_provider: &str) -> Result<Option<String>, String> {
-    let mut changed = false;
-    let mut output = String::with_capacity(content.len());
-    for segment in content.split_inclusive('\n') {
-        let (line, suffix) = segment
-            .strip_suffix('\n')
-            .map(|line| (line, "\n"))
-            .unwrap_or((segment, ""));
-        if let Some(patched) = patch_rollout_line_provider(line, target_provider)? {
-            output.push_str(&patched);
-            output.push_str(suffix);
-            changed = true;
-        } else {
-            output.push_str(segment);
-        }
-    }
-    if content.is_empty() {
-        return Ok(None);
-    }
-    Ok(changed.then_some(output))
-}
-
-fn patch_rollout_line_provider(
-    line: &str,
-    target_provider: &str,
-) -> Result<Option<String>, String> {
-    let json_text = line.trim_end_matches('\r');
-    if json_text.trim().is_empty() {
-        return Ok(None);
-    }
-    let mut value = match serde_json::from_str::<serde_json::Value>(json_text) {
-        Ok(value) => value,
-        Err(_) => return Ok(None),
-    };
-    if value
-        .get("type")
-        .and_then(|item| item.as_str())
-        .is_none_or(|item| item != "session_meta")
-    {
-        return Ok(None);
-    }
-    let Some(payload) = value
-        .get_mut("payload")
-        .and_then(|item| item.as_object_mut())
-    else {
-        return Ok(None);
-    };
-    if payload
-        .get("model_provider")
-        .and_then(|item| item.as_str())
-        .is_some_and(|provider| provider == target_provider)
-    {
-        return Ok(None);
-    }
-    payload.insert(
-        "model_provider".to_string(),
-        serde_json::Value::String(target_provider.to_string()),
-    );
-    serde_json::to_string(&value)
-        .map(|patched| Some(format!("{patched}{}", &line[json_text.len()..])))
-        .map_err(|err| format!("serialize rollout session_meta failed: {err}"))
 }
 
 fn inspect_sqlite_repair_plan(
@@ -2775,11 +2653,15 @@ pub(crate) fn resolve_profile_dir(codex_home: Option<&str>) -> Result<PathBuf, S
 }
 
 fn default_profile_dir() -> Result<PathBuf, String> {
+    user_home_dir().map(|home| home.join(".codex"))
+}
+
+pub(crate) fn user_home_dir() -> Result<PathBuf, String> {
     for key in [ENV_USERPROFILE, ENV_HOME] {
         if let Ok(raw) = std::env::var(key) {
             let trimmed = raw.trim();
             if !trimmed.is_empty() {
-                return Ok(PathBuf::from(trimmed).join(".codex"));
+                return Ok(PathBuf::from(trimmed));
             }
         }
     }
@@ -2787,7 +2669,7 @@ fn default_profile_dir() -> Result<PathBuf, String> {
     let home_path = std::env::var(ENV_HOMEPATH).unwrap_or_default();
     let combined = format!("{home_drive}{home_path}");
     if !combined.trim().is_empty() {
-        return Ok(PathBuf::from(combined).join(".codex"));
+        return Ok(PathBuf::from(combined));
     }
     Err("unable to resolve Codex profile directory".to_string())
 }

@@ -41,6 +41,8 @@ pub(crate) struct ResponseCreateWsRequest {
     // that omit it retain the streaming behavior of the WebSocket bridge.
     #[serde(default = "default_stream")]
     pub stream: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub include: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -53,6 +55,8 @@ pub(crate) struct ResponseCreateWsRequest {
     pub generate: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_metadata: Option<HashMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_programs: Option<Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

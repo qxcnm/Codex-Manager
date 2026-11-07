@@ -2,15 +2,15 @@
 
 At the time of the original review, the stable GitHub release and npm package were both verified as **0.167.0**. This review compares pinned commit [`086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a`](https://github.com/openai/codex/tree/086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a) with the previous 0.164 baseline, `6aaac694803004a63c6f393d153c96d22521a6b9`.
 
-The original research and historical tests below cover the complete working tree at `D:\Data\Code\Codex-Manager`, including pre-existing uncommitted 0.164 compatibility changes. That tree is different from the isolated tree prepared for this commit and from an already published binary.
+The original research and historical tests below cover the complete working tree then at `D:\Data\Code\Codex-Manager`, including pre-existing 0.164 compatibility changes. A later isolated commit transferred only this review's five corrections. The current integration also includes those earlier changes and background model discovery. Each recorded result applies to its own tested source, rather than the current integrated tree or an already published binary.
 
-## Commit scope
+## Integration scope and historical evidence
 
-The isolated publication tree is based on `origin/main` at `08ccc932`, with only the five corrections described below transferred from this review. The pre-existing 0.164 changes are not included in this commit.
+The current integration starts from main at `746d938a`, retains published fixes, and includes the original workspace's previously uncommitted 0.164 compatibility changes alongside [background model discovery (#515)](model-discovery-background.md). The earlier changes are detailed in the [historical 0.164 review](gateway-vs-codex-headers-and-params.md).
 
-In particular, the publication tree retains the default Codex User-Agent version **0.155.0** and the existing `application/x-www-form-urlencoded` refresh request with its `scope` field. This commit changes refresh replay behavior, not the request encoding or scopes. Earlier changes to `stream_options`, `access_programs`, `reasoning.context`, `include`, and per-frame `client_metadata` handling were not transferred; their presence in the original research workspace is not support delivered by this commit. No client-version bump or complete 0.167 compatibility claim is made.
+The integrated default Codex User-Agent is **0.164.0**. Refresh requests use JSON without the fixed scope that could narrow the original grant. Preservation of `stream_options`, `access_programs`, `reasoning.context`, `include`, and per-frame `client_metadata`, along with skill parsing, read-only skill discovery, and compressed-history repair, is included. Updating the fallback version does not establish complete 0.167 compatibility.
 
-The 2,169-test result and six successful online generations below are historical evidence for the complete original workspace. They must not be reported as validation of the isolated publication tree. Final-tree validation has a separate section below.
+The 2,169-test result and six successful online generations for the original workspace, plus the 2,207-test result for the earlier isolated tree based on `08ccc932`, are retained below as historical evidence. They must not be presented as validation of the current integrated tree.
 
 ## Findings and corrections
 
@@ -30,16 +30,16 @@ Previously misimported accounts require reimporting the official auth file with 
 
 ## Additions and remaining boundaries
 
-The upstream findings remain applicable to the pinned tags. Unless explicitly identified as publication-tree behavior, gateway observations in this section describe the original research workspace; they do not expand the commit scope above.
+The upstream findings apply to the pinned tags. These implementation boundaries remain relevant to the current integration and do not establish support for unimplemented upstream features.
 
 - `current_workspace_id`, `login_hint`, and `connection` were added for workspace-login flows. Ordinary login must not add them indiscriminately. This change accepts switched auth files; it does not introduce a switching UI.
 - `ChatGptRoutingAffinity` adds connection-owned routing pins from `__oailb` / `__cflb` handshake cookies. This is not implemented here. Endpoint, expiration, account, proxy, reconnect, and HTTP/WS ownership need a separate design. The infrastructure-cookie allowlist already existed in 0.164; unrestricted cookie forwarding is not equivalent.
 - `guardian_recorded_items` and Guardian response assessments are new. Existing generic metadata and native event forwarding retain unknown data, but that does not establish full Guardian routing support.
-- `capabilities.cyber_access_programs` controls provider support for explicit `access_programs.cyber`; it does not grant authorization. The original workspace preserved explicit request fields without enabling capabilities automatically. Those earlier `access_programs` changes are excluded from this commit.
+- `capabilities.cyber_access_programs` controls provider support for explicit `access_programs.cyber`; it does not grant authorization. The integrated implementation preserves explicit request fields without enabling capabilities automatically.
 - GCP `project_id`, `location`, and `credential_file` are new provider settings, outside this ChatGPT account-pool correction.
 - Optional `refresh_reason` diagnostics already existed in 0.164 and remain omitted. Conditional `x-codex-guardian`, `x-openai-memgen-request`, and `x-codex-routing-hint` also predate 0.167 and remain outside the current controlled header list. Routing hints must agree with the final model/tier; request-role headers must correspond to actual behavior.
 - New account-list fields (`can_access_with_session`, `sso_connection_name`, `is_deactivated`, `is_fedramp_compliant_workspace`) support the workspace feature; no UI expansion is included.
-- Gateway User-Agent generation and npm version synchronization differ from the official compile-time client identity. The original workspace conditionally preserved the incoming HTTP originator, while native WS used the global originator. Its fallback was 0.164; the publication tree retains 0.155.0. Earlier originator changes are not part of this commit, and changing a version string does not establish protocol parity.
+- Gateway User-Agent generation and npm version synchronization differ from the official compile-time client identity. HTTP conditionally preserves the incoming originator, while native WS uses the global originator. The integrated fallback is 0.164; changing a version string does not establish protocol parity.
 - The HTTP helper still derives `thread-id` from `x-client-request-id`. Official clients normally use the same value, but custom clients can differ. Instruction promotion, model/tier overrides, Chat Completions adaptation, account selection and session recovery remain intentional gateway behavior.
 - The FedRAMP correction applies to the existing AgentIdentity path. Ordinary OAuth Bearer fallback still lacks complete FedRAMP routing; this is not full cross-mode FedRAMP support. The main plan-resolution path already prefers the access token and is unchanged.
 
@@ -69,9 +69,9 @@ New tests use local HTTP / WS fixtures and temporary or in-memory databases, inc
 
 Local fixtures cannot establish online outcomes; the authorized Free-account checks are recorded below. Production FedRAMP routing and server-side restriction behavior remain unverified. Frontend and installer builds were not run in this historical validation because the review did not modify the frontend or desktop shell. These results do not establish the final commit's test status.
 
-## Final publication-tree validation
+## Historical validation of the earlier isolated commit
 
-After integration on top of `08ccc932`, the final source tree was validated separately:
+The earlier isolated tree, based on `08ccc932` and containing only this review's five corrections, completed the following validation:
 
 | Command | Final result |
 | --- | --- |
@@ -79,9 +79,9 @@ After integration on top of `08ccc932`, the final source tree was validated sepa
 | `cargo fmt --all -- --check` | Exit 0. |
 | `git diff --check`, `git diff --cached --check` | Exit 0. |
 
-The isolated tree retains the latest main-branch fixes and adds only this review's changes. Conflict resolution preserved existing WebSocket control-frame tests; the new lost-response refresh test accepts both form and JSON encoding. Credential-pattern scanning and comparison with the actual test-account credentials found no matches in the staged files, and the original worktree file hashes remained unchanged. This commit does not build frontend/installer artifacts or create a release tag.
+That historical tree retained the then-current main-branch fixes and added only this review's corrections. Conflict resolution preserved WebSocket control-frame tests, and the new lost-response refresh test accepted both form and JSON encoding. Its staged-file credential checks found no matches, original worktree hashes remained unchanged, and no frontend/installer artifacts or release tag were produced. The current integration has a broader scope and requires its own checks.
 
-The historical online smoke test has not been repeated against a binary built from this isolated publication tree.
+The online checks below still apply only to the identified original-workspace binary; they have not been repeated against the current integrated tree.
 
 ## Historical authorized Free-account checks
 

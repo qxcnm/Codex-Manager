@@ -4,10 +4,7 @@ use codexmanager_core::rpc::types::{
     AggregateApiFetchedModel, AggregateApiSecretResult, AggregateApiSummary,
     AggregateApiTestResult,
 };
-use codexmanager_core::storage::{
-    now_ts, AggregateApi, ManagedModelV2, ManagedModelV2Upsert, ModelFastPolicyV2, ModelPriceV2,
-    ModelRouteV2,
-};
+use codexmanager_core::storage::{now_ts, AggregateApi};
 use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -17,6 +14,7 @@ use crate::apikey_profile::normalize_upstream_base_url;
 use crate::gateway;
 use crate::storage_helpers::{generate_aggregate_api_id, open_storage};
 
+mod model_association;
 mod network;
 mod operations;
 #[cfg(test)]
@@ -1719,142 +1717,7 @@ pub(crate) fn associate_aggregate_api_models(
     upstream_models: Vec<String>,
     display_names: BTreeMap<String, String>,
 ) -> Result<AggregateApiAssociateModelsResult, String> {
-    if api_id.trim().is_empty() {
-        return Err("aggregate api id required".to_string());
-    }
-    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let storage = &crate::account::remote_storage::AccountStorage::new(&storage);
-    let api = storage
-        .find_aggregate_api_by_id(api_id)
-        .map_err(|err| err.to_string())?
-        .ok_or_else(|| "aggregate api not found".to_string())?;
-    let provider_type = normalize_provider_type_value(api.provider_type.as_str());
-    let mut requested = Vec::new();
-    let mut seen = HashSet::new();
-    for raw in upstream_models {
-        let Some(model) = normalize_fetched_model_id(
-            raw.as_str(),
-            provider_type == AGGREGATE_API_PROVIDER_GEMINI,
-        ) else {
-            return Err("invalid upstream model id".to_string());
-        };
-        if seen.insert(model.to_ascii_lowercase()) {
-            requested.push(model);
-        }
-    }
-    if requested.is_empty() {
-        return Ok(AggregateApiAssociateModelsResult::default());
-    }
-    let mut models = storage
-        .list_managed_models_v2(true)
-        .map_err(|err| format!("read model catalog V2 failed: {err}"))?;
-    let next_sort = models
-        .iter()
-        .map(|model| model.sort_order)
-        .max()
-        .unwrap_or(0)
-        + 1;
-    let provider = api
-        .supplier_name
-        .clone()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| Some(provider_type.clone()));
-    let mut inputs = Vec::new();
-    let mut created_models = Vec::new();
-    let mut added_routes = Vec::new();
-    let mut unchanged_routes = Vec::new();
-    for (index, upstream_model) in requested.iter().enumerate() {
-        if let Some(model) = models
-            .iter_mut()
-            .find(|model| model.slug.eq_ignore_ascii_case(upstream_model.as_str()))
-        {
-            let exact = model.routes.iter().any(|route| {
-                route.source_kind == "aggregate_api"
-                    && route.source_id == api_id
-                    && route
-                        .upstream_model
-                        .eq_ignore_ascii_case(upstream_model.as_str())
-            });
-            if exact {
-                unchanged_routes.push(model.slug.clone());
-                continue;
-            }
-            let inherited = model
-                .routes
-                .iter()
-                .find(|route| route.source_kind == "aggregate_api" && route.source_id == api_id)
-                .map(|route| (route.priority, route.weight))
-                .unwrap_or((0, 1));
-            model.routes.push(ModelRouteV2 {
-                source_kind: "aggregate_api".to_string(),
-                source_id: api_id.to_string(),
-                upstream_model: upstream_model.clone(),
-                enabled: true,
-                priority: inherited.0,
-                weight: inherited.1.max(1),
-                ..Default::default()
-            });
-            inputs.push(ManagedModelV2Upsert {
-                model: model.clone(),
-                ..Default::default()
-            });
-            added_routes.push(model.slug.clone());
-        } else {
-            let display_name = display_names
-                .iter()
-                .find(|(key, _)| key.eq_ignore_ascii_case(upstream_model.as_str()))
-                .map(|(_, value)| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| upstream_model.clone());
-            let model = ManagedModelV2 {
-                slug: upstream_model.clone(),
-                display_name,
-                provider: provider.clone(),
-                origin: "custom".to_string(),
-                enabled: true,
-                supported_in_api: true,
-                visibility: "list".to_string(),
-                sort_order: next_sort + index as i64,
-                capabilities: json!({
-                    "supports_text_generation": true,
-                    "input_modalities": ["text"],
-                    "output_modalities": ["text"]
-                }),
-                instructions_mode: "passthrough".to_string(),
-                fast_policy: ModelFastPolicyV2::Passthrough,
-                price: ModelPriceV2 {
-                    price_status: "missing".to_string(),
-                    ..Default::default()
-                },
-                routes: vec![ModelRouteV2 {
-                    source_kind: "aggregate_api".to_string(),
-                    source_id: api_id.to_string(),
-                    upstream_model: upstream_model.clone(),
-                    enabled: true,
-                    priority: 0,
-                    weight: 1,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            };
-            inputs.push(ManagedModelV2Upsert {
-                model,
-                ..Default::default()
-            });
-            created_models.push(upstream_model.clone());
-            added_routes.push(upstream_model.clone());
-        }
-    }
-    if !inputs.is_empty() {
-        storage
-            .upsert_managed_models_v2(&inputs)
-            .map_err(|err| format!("associate models transaction failed: {err}"))?;
-    }
-    Ok(AggregateApiAssociateModelsResult {
-        created_models,
-        added_routes,
-        unchanged_routes,
-    })
+    model_association::associate(api_id, upstream_models, display_names)
 }
 
 /// 函数 `test_aggregate_api_connection`

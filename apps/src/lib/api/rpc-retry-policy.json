@@ -35,6 +35,7 @@
     "gateway/upstreamProxy/get",
     "gateway/transport/get",
     "modelGroups/list",
+    "modelDiscovery/list",
     "quota/overview",
     "quota/modelUsage",
     "quota/apiKeyUsage",

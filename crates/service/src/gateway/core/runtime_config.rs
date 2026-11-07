@@ -98,7 +98,8 @@ const DEFAULT_MODEL_FORWARD_RULES: &str = "";
 const DEFAULT_COMPACT_MODEL_FORWARD_RULES: &str = "";
 const DEFAULT_CODEX_IMAGE_MAIN_MODEL: &str = "gpt-6-luna";
 const DEFAULT_CODEX_IMAGE_TOOL_MODEL: &str = "gpt-image-2";
-const DEFAULT_CODEX_USER_AGENT_VERSION: &str = "0.155.0";
+// Protocol baseline: openai/codex rust-v0.164.0 (2026-10-23).
+const DEFAULT_CODEX_USER_AGENT_VERSION: &str = "0.164.0";
 const MAX_GATEWAY_USER_AGENT_BYTES: usize = 512;
 const MAX_UPSTREAM_PROXY_POOL_SIZE: usize = 5;
 const MAX_CANDIDATE_CLIENT_CACHE_ENTRIES: usize = 512;

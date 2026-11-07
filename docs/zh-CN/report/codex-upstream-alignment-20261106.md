@@ -6,17 +6,17 @@
 
 结论：存在需要修正的兼容性差异，但没有发现这两版之间新增的 Responses HTTP / WebSocket 顶层请求字段。HTTP 15 项、WebSocket 17 项声明保持一致。新增内容主要涉及工作区切换、连接路由、Guardian 元数据及 provider 能力配置；不能把它们全部当作每次推理必传的参数。
 
-原研究与下文历史测试的对象是 `D:\Data\Code\Codex-Manager` 完整工作区，包含本次开始前已有的 0.164 未提交兼容改动。它与本次准备提交的隔离发布树、已发布安装包均不相同。
+原研究与下文历史测试的对象是 `D:\Data\Code\Codex-Manager` 当时的完整工作区，包含此前已有的 0.164 兼容改动。后续曾只移植本轮五类修正；当前整合又纳入这些既有改动及后台模型同步。各阶段的测试结果仅对应各自被测源码，不等同于当前整合树或已发布安装包的验证。
 
 **兼容性检查不能保证不触发账号风控。** 客户端源码没有公开服务端的完整判定规则；字段差异也不能证明某次 401、403、429 或账号限制的原因。本报告不把可选诊断、审核或授权选择字段伪造成必需凭证。
 
-## 本次提交范围
+## 整合范围与历史记录
 
-隔离发布树基于 `origin/main` 的 `08ccc932`，仅移植下文列出的五类本轮修正，不包含开始前已有的 0.164 未提交改动。
+当前整合以 `746d938a` 主线为基础，保留已发布修复，并纳入原工作区此前未提交的 0.164 兼容调整及[后台模型同步（#515）](model-discovery-background.md)。0.164 调整的详细范围见[2026-10-26 历史核查](codex-upstream-alignment-20261026.md)。
 
-具体来说，发布树保留 **0.155.0** 默认 Codex User-Agent 版本，以及带 `scope` 的 `application/x-www-form-urlencoded` 刷新请求。本次只修正刷新请求的重发行为，不改变编码或 scope。此前对 `stream_options`、`access_programs`、`reasoning.context`、`include` 和逐帧 `client_metadata` 的调整均未随本次移植；原研究工作区已有这些支持，不代表本提交交付了这些功能。本次不提升客户端版本，也不宣称完整兼容 0.167。
+整合后的默认 Codex User-Agent 为 **0.164.0**；刷新请求使用 JSON，且不附加会缩减原授权范围的固定 scope。`stream_options`、`access_programs`、`reasoning.context`、`include` 和逐帧 `client_metadata` 处理，以及技能解析、只读技能目录和压缩历史修复均纳入本次整合。更新默认版本号不代表完整兼容 0.167。
 
-下文 2,169 项测试及 6 次在线生成成功，仅是原完整工作区的历史证据，不能记作隔离发布树的验证结果。最终发布树的验证单独记录。
+下文保留原完整工作区的 2,169 项测试、6 次在线生成，以及此前基于 `08ccc932` 的隔离提交树 2,207 项测试记录。这些均为历史证据，不应改写为当前整合树的验证结果。
 
 ## 本次修正
 
@@ -34,24 +34,24 @@
 
 ## 新增内容及处理边界
 
-上游变化结论对应上述固定 tag；本节未明确标为发布树的网关观察，均来自原研究工作区，不扩大本次提交范围。
+上游变化结论对应上述固定 tag；以下实现边界继续适用于当前整合，不能据此宣称支持尚未实现的上游功能。
 
 | 元素 / 参数 | 0.164 → 0.167 情况 | CodexManager 判断 |
 | --- | --- | --- |
 | `current_workspace_id`、`login_hint`、`connection` | 新增于工作区登录分支。 | 仅适用于主动切换/SSO 登录；普通登录不应无条件添加。本次兼容切换后的导入文件，未新增工作区切换 UI。 |
 | `ChatGptRoutingAffinity` | 新增连接独有的路由 Cookie pin，保留握手响应中的 `__oailb` / `__cflb`，限制原安全 origin、路径及有效期。 | 尚未实现。不能直接透传全部 Cookie，也不能跨账号/代理出口混用；需要独立设计 HTTP、WS、换号与重连生命周期。基础设施 Cookie 白名单本身在 0.164 已存在。 |
 | `guardian_recorded_items` / Guardian assessment | 新增审核请求元数据与响应证据。 | 现有元数据对象和原生响应透传保留未知内容；不主动构造审核证据或声称支持完整 Guardian 路由。 |
-| `capabilities.cyber_access_programs` | 新增 provider 能力开关；自定义 provider 默认关闭。 | 原研究工作区保留显式 `access_programs`，不自动启用能力或生成授权选择；这些旧改动未随本次提交。此开关不授予访问权限。 |
+| `capabilities.cyber_access_programs` | 新增 provider 能力开关；自定义 provider 默认关闭。 | 整合保留显式 `access_programs`，不自动启用能力或生成授权选择。此开关不授予访问权限。 |
 | `project_id`、`location`、`credential_file` | 新增 GCP provider 配置。 | 属于新增 provider 集成，不是当前 ChatGPT 账号池请求缺失字段；本轮不改配置生成器。 |
 | `can_access_with_session`、`sso_connection_name`、`is_deactivated`、`is_fedramp_compliant_workspace` | 账号列表新增工作区状态信息。 | 配合新版切换流程使用；未扩展本地工作区选择界面。 |
 | `refresh_reason` | 0.164 已有，可选诊断字段。 | 当前未发送，记录为诊断差异；没有证据表明必填或决定风控。 |
 | `x-codex-routing-hint`、`x-codex-guardian`、`x-openai-memgen-request` | 0.164 已有的条件性标识。 | 当前受控头列表未覆盖这些用途。routing hint 需匹配最终模型/等级；Guardian/memory 标识需对应真实请求角色，不能无条件补齐。 |
 
-## 原研究工作区的已有支持与剩余差异
+## 已整合的支持与剩余差异
 
-- 原研究工作区的旧调整已保留 `stream_options`、`access_programs`、`reasoning.context`、`include` 和 `client_metadata`，连续 WS 消息的每帧元数据优先于初始握手信息；这些旧调整未纳入本提交。
-- 对原工作区已有的 OAuth 登录 scope、JSON refresh 编码、AgentIdentity 核心签名/注册字段及账号/地区头，未发现需要因 0.167 全量替换的证据。这不代表发布树已采用 JSON refresh；发布树仍使用原 form 编码和 scope。
-- User-Agent 由网关设置生成；原工作区 HTTP 在条件满足时保留来访 originator，原生 WS 使用全局 originator。此前的 originator 调整不属于本提交。npm 自动同步版本仍可能先于协议验证；原工作区默认值为 0.164，隔离发布树保留 0.155.0，不把版本号更新当成完整兼容。
+- 保留 `stream_options`、`access_programs`、`reasoning.context`、`include` 和 `client_metadata`；连续 WS 消息的每帧元数据优先于初始握手信息。
+- OAuth 刷新采用 JSON 编码并去掉固定 scope；登录 scope、AgentIdentity 核心签名/注册字段及账号/地区头未发现需要因 0.167 全量替换的证据。
+- User-Agent 由网关设置生成；HTTP 在条件满足时保留来访 originator，原生 WS 使用全局 originator。npm 自动同步版本仍可能先于协议验证；整合后的默认值为 0.164，不把版本号更新当成完整兼容。
 - HTTP 路径目前由 `x-client-request-id` 派生 `thread-id`；官方通常使用同一个线程值，但任意第三方客户端提供不同值时仍有差异。
 - system/developer 输入提升为顶层 `instructions`、Chat Completions 转换、模型/等级覆盖、账号池和会话恢复是现有网关策略；请求无法声称与单账号官方客户端逐字相同。
 - 0.167 的 API key 资源选择、PAT、完整工作区切换和新增云 provider 不在现有 ChatGPT 账号导入契约的完整实现范围内。
@@ -81,9 +81,9 @@
 
 本地 fixtures 不能替代在线证据；真实 Free 账号的历史补充测试见下节。生产 FedRAMP 路由和服务端风控行为尚未验证。原研究未修改前端或桌面壳，因此该历史验证未运行前端及安装包构建。以上结果不代表最终提交树的测试状态。
 
-## 最终发布树验证
+## 此前隔离提交树的历史验证
 
-基于 `08ccc932` 完成整合后，对最终提交源码单独验证：
+此前仅移植本轮五类修正、基于 `08ccc932` 的隔离提交树曾单独完成以下验证：
 
 | 命令 | 最终结果 |
 | --- | --- |
@@ -91,9 +91,9 @@
 | `cargo fmt --all -- --check` | 退出码 0。 |
 | `git diff --check`、`git diff --cached --check` | 退出码 0。 |
 
-隔离树保留最新主分支已有修复，仅移植本轮增量；冲突解决保留已有 WebSocket 控制帧测试，新增刷新断连回归同时接受 form / JSON 编码。暂存文件的凭据模式扫描及与测试账号实际凭据的比对均未命中，原工作区文件摘要保持不变。此次提交不构建前端或安装包，也不创建版本标签。
+该历史隔离树保留当时主分支已有修复，仅移植本轮增量；冲突解决保留已有 WebSocket 控制帧测试，新增刷新断连回归同时接受 form / JSON 编码。当时的暂存文件凭据检查未命中，原工作区文件摘要保持不变，未构建前端或安装包，也未创建版本标签。当前整合范围已扩大，以上记录不替代当前整合后的检查。
 
-尚未使用隔离发布树构建的二进制重跑下文在线测试。
+下文在线测试仍只对应原工作区的指定二进制，尚未针对当前整合树重新执行。
 
 ## 用户授权的 Free 账号历史在线补测
 

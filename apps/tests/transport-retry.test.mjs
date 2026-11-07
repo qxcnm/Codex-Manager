@@ -53,7 +53,7 @@ const runtime = await import(pathToFileURL(path.join(scratch, "api/transport-run
 const retry = { retries: 3, retryDelayMs: 0, shouldRetry: () => true, shouldRetryStatus: () => true };
 
 test("outer Tauri invoke cannot override non-idempotent or unknown command protection", async () => {
-  for (const command of ["service_apikey_create", "service_usage_reset_credit_consume", "app_future_write"]) {
+  for (const command of ["service_apikey_create", "service_usage_reset_credit_consume", "service_model_discovery_update", "app_future_write"]) {
     native.setHandler(() => { throw new Error("rpc_result_unknown: response lost, not found"); });
     await assert.rejects(transport.invoke(command, {}, retry), /rpc_result_unknown:/);
     assert.equal(native.calls.length, 1, command);
@@ -61,7 +61,7 @@ test("outer Tauri invoke cannot override non-idempotent or unknown command prote
 });
 
 test("outer Tauri invoke retains caller retries for read-only and idempotent RPCs", async () => {
-  for (const command of ["service_apikey_list", "service_apikey_disable"]) {
+  for (const command of ["service_apikey_list", "service_apikey_disable", "service_model_discovery_list"]) {
     native.setHandler(() => {
       if (native.calls.length === 1) throw new Error("temporary connection failure");
       return { result: { ok: true } };
@@ -145,6 +145,26 @@ test("Web command mapping and real retry utility protect key creation centrally"
   try {
     await assert.rejects(transport.invoke("service_apikey_create", { name: "test" }, retry), /rpc_result_unknown:/);
     assert.equal(commits, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    runtime.setDesktop(true);
+  }
+});
+
+test("Web discovery updates are never replayed after a lost response", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  runtime.setDesktop(false);
+  globalThis.fetch = async (_url, init) => {
+    calls.push(JSON.parse(init.body));
+    throw new TypeError("Failed to fetch");
+  };
+  const input = { sourceKind: "aggregate_api", sourceId: "api-1", enabled: false, intervalMinutes: 5 };
+  try {
+    await assert.rejects(transport.invoke("service_model_discovery_update", input, retry), /rpc_result_unknown:/);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].method, "modelDiscovery/update");
+    assert.deepEqual(calls[0].params, input);
   } finally {
     globalThis.fetch = originalFetch;
     runtime.setDesktop(true);

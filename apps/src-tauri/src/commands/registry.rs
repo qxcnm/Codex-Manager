@@ -36,6 +36,8 @@ macro_rules! invoke_handler {
             crate::commands::codex_skills::service_codex_skills_marketplace_refresh,
             crate::commands::codex_skills::service_codex_skills_marketplace_plugin_install,
             crate::commands::startup::service_startup_snapshot,
+            crate::commands::model_discovery::service_model_discovery_list,
+            crate::commands::model_discovery::service_model_discovery_update,
             crate::commands::dashboard::service_dashboard_admin_usage_summary,
             crate::commands::dashboard::service_dashboard_member_summary,
             crate::commands::quota::service_quota_overview,
