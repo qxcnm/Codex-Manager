@@ -51,6 +51,7 @@
     "requestlog/today_summary",
     "requestlog/payload_queue_stats",
     "service/listenConfig/get",
+    "serviceHealth/summary",
     "startup/snapshot",
     "storage/spaceUsage",
     "system/proxy/list",

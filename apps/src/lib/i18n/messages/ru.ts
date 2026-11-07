@@ -16,10 +16,12 @@ import { RU_PLATFORM_MODE_MESSAGES } from "./sections/ru-platform-mode";
 import { RU_PROJECTS_MESSAGES } from "./sections/ru-projects";
 import { RU_RUNTIME_UI_MESSAGES } from "./sections/ru-runtime-ui";
 import { RU_SKILLS_MESSAGES } from "./sections/ru-skills";
+import { RU_SERVICE_HEALTH_MESSAGES } from "./sections/ru-service-health";
 
 export const RU_MESSAGES: MessageCatalog = {
   ...RU_PROJECTS_MESSAGES,
   ...RU_SKILLS_MESSAGES,
+  ...RU_SERVICE_HEALTH_MESSAGES,
   ...RU_DESKTOP_DIAGNOSTICS_MESSAGES,
   "延迟测试设置": "Настройки теста задержки",
   "速度测试设置": "Настройки теста скорости",
@@ -559,6 +561,20 @@ export const RU_MESSAGES: MessageCatalog = {
   "状态码 200-299": "Статус 200-299",
   异常请求: "Ошибочные запросы",
   "4xx / 5xx 或显式错误": "4xx / 5xx или явные ошибки",
+  请求时间线: "Хронология запросов",
+  日志视图: "Вид журнала",
+  时间线视图: "Хронологический вид",
+  表格视图: "Табличный вид",
+  时间线: "Хронология",
+  表格: "Таблица",
+  复制摘要: "Копировать сводку",
+  请求完成: "Запрос завершён",
+  请求异常: "Ошибка запроса",
+  请求已返回: "Ответ получен",
+  状态未知: "Статус неизвестен",
+  查看明细: "Подробнее",
+  用时: "Длительность",
+  输出: "Выход",
   请求明细: "Детали запроса",
   "请求明细 按": "Детали запросов по",
   请求内容: "Тело запроса",

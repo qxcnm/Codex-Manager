@@ -24,6 +24,55 @@ fn temp_db_path(name: &str) -> PathBuf {
 }
 
 #[test]
+fn login_session_proxy_migration_preserves_legacy_sessions_and_reopens() {
+    let path = temp_db_path("login-session-proxy-migration");
+    let storage = Storage::open(&path).expect("open database");
+    storage.init().expect("initialize schema");
+    storage
+        .conn
+        .execute_batch(
+            "ALTER TABLE login_sessions DROP COLUMN proxy_profile_id;
+             DELETE FROM schema_migrations WHERE version = '145_login_sessions_proxy_profile_id';
+             INSERT INTO login_sessions (login_id, code_verifier, state, status, created_at, updated_at)
+             VALUES ('legacy-login', 'legacy-verifier', 'legacy-state', 'pending', 1, 2);",
+        )
+        .expect("prepare schema from before login proxy support");
+    drop(storage);
+
+    let storage = Storage::open(&path).expect("reopen legacy database");
+    storage.init().expect("upgrade legacy database");
+    storage.init().expect("migration remains idempotent");
+    let mut session = storage
+        .get_login_session("legacy-login")
+        .expect("read legacy session")
+        .expect("legacy session remains available");
+    assert_eq!(session.proxy_profile_id, None);
+    assert_eq!(session.code_verifier, "legacy-verifier");
+    assert_eq!(session.state, "legacy-state");
+    assert_eq!(session.status, "pending");
+    session.login_id = "proxy-login".to_string();
+    session.proxy_profile_id = Some("saved-proxy-profile".to_string());
+    storage
+        .insert_login_session(&session)
+        .expect("save selected proxy profile");
+    drop(storage);
+
+    let storage = Storage::open(&path).expect("reopen upgraded database");
+    let session = storage
+        .get_login_session("proxy-login")
+        .expect("read persisted proxy selection")
+        .expect("new session remains available");
+    assert_eq!(
+        session.proxy_profile_id.as_deref(),
+        Some("saved-proxy-profile")
+    );
+    drop(storage);
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_file(path.with_extension("db-wal"));
+    let _ = fs::remove_file(path.with_extension("db-shm"));
+}
+
+#[test]
 fn open_in_memory_configures_temp_store_for_query_workloads() {
     let storage = Storage::open_in_memory().expect("open in memory");
 

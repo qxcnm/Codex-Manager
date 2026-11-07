@@ -5,6 +5,7 @@ pub(crate) mod app_manager;
 pub(crate) mod callback;
 #[path = "auth_login.rs"]
 pub(crate) mod login;
+pub(crate) mod login_proxy;
 pub(crate) mod rpc;
 #[path = "auth_tokens.rs"]
 pub(crate) mod tokens;

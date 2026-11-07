@@ -3,7 +3,7 @@ use crate::{
     SeaOrmStorage, UsageSnapshotsRepository as Usage,
 };
 use codexmanager_core::storage::*;
-use sea_orm::DatabaseConnection;
+use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 
 async fn exercise(db: &DatabaseConnection) {
     let stamp = std::time::SystemTime::now()
@@ -247,10 +247,19 @@ async fn exercise(db: &DatabaseConnection) {
         note: None,
         tags: None,
         group_name: None,
+        proxy_profile_id: Some(format!("{prefix}-proxy")),
         created_at: 1,
         updated_at: 1,
     };
     Accounts::insert_login_session(db, &session).await.unwrap();
+    assert_eq!(
+        Accounts::get_login_session(db, &prefix)
+            .await
+            .unwrap()
+            .unwrap()
+            .proxy_profile_id,
+        session.proxy_profile_id
+    );
     let mut attempts = vec![];
     for _ in 0..4 {
         let db = db.clone();
@@ -461,6 +470,63 @@ async fn sqlite_account_provider_domains() {
         .unwrap();
     storage.migrate().await.unwrap();
     exercise(storage.connection()).await;
+}
+
+#[tokio::test]
+async fn sqlite_login_proxy_migration_preserves_legacy_sessions() {
+    let storage = SeaOrmStorage::connect(StorageBackendKind::Sqlite, "sqlite::memory:")
+        .await
+        .unwrap();
+    let db = storage.connection();
+    db.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "CREATE TABLE login_sessions (
+            login_id TEXT PRIMARY KEY NOT NULL,
+            code_verifier TEXT NOT NULL,
+            state TEXT NOT NULL,
+            status TEXT NOT NULL,
+            error TEXT,
+            workspace_id TEXT,
+            note TEXT,
+            tags TEXT,
+            group_name TEXT,
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL
+        )"
+        .to_string(),
+    ))
+    .await
+    .unwrap();
+    db.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "INSERT INTO login_sessions (login_id, code_verifier, state, status, created_at, updated_at)
+         VALUES ('legacy-login', 'legacy-verifier', 'legacy-state', 'pending', 1, 2)"
+            .to_string(),
+    ))
+    .await
+    .unwrap();
+    storage.migrate().await.unwrap();
+    storage.migrate().await.unwrap();
+    let mut session = Accounts::get_login_session(db, "legacy-login")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.proxy_profile_id, None);
+    assert_eq!(session.code_verifier, "legacy-verifier");
+    assert_eq!(session.state, "legacy-state");
+    assert_eq!(session.status, "pending");
+    session.login_id = "proxy-login".into();
+    session.proxy_profile_id = Some("saved-proxy-profile".into());
+    Accounts::insert_login_session(db, &session).await.unwrap();
+    assert_eq!(
+        Accounts::get_login_session(db, "proxy-login")
+            .await
+            .unwrap()
+            .unwrap()
+            .proxy_profile_id
+            .as_deref(),
+        Some("saved-proxy-profile")
+    );
 }
 
 #[tokio::test]

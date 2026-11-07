@@ -991,6 +991,7 @@ fn storage_login_session_roundtrip() {
         note: Some("Primary account".to_string()),
         tags: Some("work,plus".to_string()),
         group_name: Some("Team A".to_string()),
+        proxy_profile_id: Some("proxy-login".to_string()),
         created_at: now_ts(),
         updated_at: now_ts(),
     };
@@ -1006,6 +1007,7 @@ fn storage_login_session_roundtrip() {
     assert_eq!(loaded.note.as_deref(), Some("Primary account"));
     assert_eq!(loaded.tags.as_deref(), Some("work,plus"));
     assert_eq!(loaded.group_name.as_deref(), Some("Team A"));
+    assert_eq!(loaded.proxy_profile_id.as_deref(), Some("proxy-login"));
 }
 
 #[test]
@@ -1025,6 +1027,7 @@ fn storage_login_session_terminal_transitions_are_guarded_and_clear_verifier() {
                 note: None,
                 tags: None,
                 group_name: None,
+                proxy_profile_id: None,
                 created_at: now_ts(),
                 updated_at: now_ts(),
             })
@@ -1113,6 +1116,7 @@ fn storage_completion_claim_wins_concurrent_callback_failure() {
             note: None,
             tags: None,
             group_name: None,
+            proxy_profile_id: None,
             created_at: now_ts(),
             updated_at: now_ts(),
         })

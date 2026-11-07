@@ -21,6 +21,7 @@ const modulePaths = [
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "model-discovery.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "proxy-profiles.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "quota.ts"),
+  path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "service-health.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "shared.ts"),
 ];
 
@@ -38,6 +39,7 @@ function rewriteImports(outputText) {
     .replaceAll('./transport-web-commands/model-discovery', './transport-web-commands/model-discovery.js')
     .replaceAll('./transport-web-commands/proxy-profiles', './transport-web-commands/proxy-profiles.js')
     .replaceAll('./transport-web-commands/quota', './transport-web-commands/quota.js')
+    .replaceAll('./transport-web-commands/service-health', './transport-web-commands/service-health.js')
     .replaceAll('./transport-web-commands/shared', './transport-web-commands/shared.js')
     .replaceAll('./shared', './shared.js')
     .replaceAll('./browser-direct', './browser-direct.js')
@@ -86,6 +88,23 @@ async function loadTransportWebCommandsModule() {
 
 const transportWebCommands = await loadTransportWebCommandsModule();
 const commandMap = transportWebCommands.createWebCommandMap(async () => ({}));
+
+test("service health Web commands keep summaries and reports on their dedicated RPCs", () => {
+  const commands = {
+    service_health_summary: "serviceHealth/summary",
+    service_health_report: "serviceHealth/report",
+    service_health_resolve: "serviceHealth/resolve",
+  };
+  for (const [command, rpcMethod] of Object.entries(commands)) {
+    assert.equal(commandMap[command].rpcMethod, rpcMethod);
+  }
+  const extra = { addr: "localhost:48760", userId: "other-member", role: "admin" };
+  assert.deepEqual(commandMap.service_health_summary.mapParams(extra), {});
+  assert.deepEqual(commandMap.service_health_report.mapParams({
+    ...extra, provider: "codex", symptom: "slow", region: "apac",
+  }), { provider: "codex", symptom: "slow", region: "apac" });
+  assert.deepEqual(commandMap.service_health_resolve.mapParams({ ...extra, id: "report-1" }), { id: "report-1" });
+});
 
 test("model discovery Web commands preserve the service RPC contract", () => {
   assert.deepEqual(commandMap.service_model_discovery_list, { rpcMethod: "modelDiscovery/list" });
@@ -173,11 +192,13 @@ test("createWebCommandMap 为登录命令补齐 Web 运行壳参数", () => {
     startLogin.mapParams({
       loginType: "chatgptDeviceCode",
       openBrowser: true,
+      proxyProfileId: "existing-proxy",
     }),
     {
       loginType: "chatgptDeviceCode",
       type: "chatgptDeviceCode",
       openBrowser: false,
+      proxyProfileId: "existing-proxy",
     },
   );
 

@@ -395,7 +395,7 @@ dependencies = [
 
 [[package]]
 name = "codexmanager-core"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "base64",
  "chrono",
@@ -411,7 +411,7 @@ dependencies = [
 
 [[package]]
 name = "codexmanager-service"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "axum",
  "base64",
@@ -462,7 +462,7 @@ dependencies = [
 
 [[package]]
 name = "codexmanager-start"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "codexmanager-service",
  "ctrlc",
@@ -473,7 +473,7 @@ dependencies = [
 
 [[package]]
 name = "codexmanager-storage-seaorm"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "codexmanager-core",
  "futures-lite",
@@ -489,7 +489,7 @@ dependencies = [
 
 [[package]]
 name = "codexmanager-web"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "axum",
  "codexmanager-service",

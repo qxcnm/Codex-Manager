@@ -94,7 +94,7 @@ pub(crate) async fn complete_login_with_redirect_async(
     let state = state.to_owned();
     let claim_state = state.clone();
     let requested_redirect = redirect_uri.map(str::to_owned);
-    let (session, redirect_uri, guard) = run_auth_storage(move || {
+    let (session, redirect_uri, proxy_url, guard) = run_auth_storage(move || {
         let storage = open_storage().ok_or_else(|| "storage unavailable".to_owned())?;
         let storage = crate::account::remote_storage::AccountStorage::new(&storage);
         let session = storage
@@ -107,6 +107,18 @@ pub(crate) async fn complete_login_with_redirect_async(
                 session.status
             ));
         }
+        let proxy_url = match crate::auth::login_proxy::resolve_login_proxy_url(
+            &storage,
+            session.proxy_profile_id.as_deref(),
+        ) {
+            Ok(proxy_url) => proxy_url,
+            Err(error) => {
+                storage
+                    .fail_pending_login_session(&claim_state, Some(&error))
+                    .map_err(|err| err.to_string())?;
+                return Err(error);
+            }
+        };
         let redirect = requested_redirect
             .or_else(resolve_redirect_uri)
             .unwrap_or_else(|| "http://localhost:1455/auth/callback".to_owned());
@@ -116,7 +128,12 @@ pub(crate) async fn complete_login_with_redirect_async(
         {
             return Err("login session is no longer pending".to_owned());
         }
-        Ok((session.clone(), redirect, CompletionGuard(Some(session))))
+        Ok((
+            session.clone(),
+            redirect,
+            proxy_url,
+            CompletionGuard(Some(session)),
+        ))
     })
     .await?;
     let issuer = std::env::var("CODEXMANAGER_ISSUER").unwrap_or_else(|_| DEFAULT_ISSUER.to_owned());
@@ -128,6 +145,7 @@ pub(crate) async fn complete_login_with_redirect_async(
         &redirect_uri,
         &session.code_verifier,
         code,
+        proxy_url.as_deref(),
     )
     .await
     {
@@ -145,9 +163,14 @@ pub(crate) async fn complete_login_with_redirect_async(
             return Err(error);
         }
     };
-    let api_key_access_token = obtain_api_key_async(&issuer, &client_id, &tokens.id_token)
-        .await
-        .ok();
+    let api_key_access_token = obtain_api_key_with_proxy_async(
+        &issuer,
+        &client_id,
+        &tokens.id_token,
+        proxy_url.as_deref(),
+    )
+    .await
+    .ok();
     run_auth_storage(move || {
         let mut guard = guard;
         let expected_session = session.clone();
@@ -194,6 +217,10 @@ fn persist_login(
         return Err("login session terminal state changed before completion".to_owned());
     }
     let claims = parse_id_token_claims(&tokens.id_token)?;
+    crate::auth::login_proxy::resolve_login_proxy_url(
+        &storage,
+        session.proxy_profile_id.as_deref(),
+    )?;
     ensure_workspace_allowed(
         session.workspace_id.as_deref(),
         &claims,
@@ -286,6 +313,11 @@ fn persist_login(
         api_key_access_token,
         last_refresh: now,
     };
+    crate::auth::login_proxy::persist_login_proxy(
+        &storage,
+        &account_key,
+        session.proxy_profile_id.as_deref(),
+    )?;
     storage
         .insert_token(&token)
         .map_err(|err| err.to_string())?;

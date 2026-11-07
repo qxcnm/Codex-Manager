@@ -41,6 +41,8 @@ mod request_log_payload_purge;
 mod request_log_payload_store;
 pub mod request_log_query;
 mod request_logs;
+mod service_health;
+pub use service_health::{service_health_sample_sql, ServiceHealthLogSample, ServiceHealthRecord};
 mod storage_space;
 pub use request_log_payload_purge::RequestLogPayloadPurgeProgress;
 use request_log_payload_purge::REQUEST_LOG_PAYLOAD_GENERATION_TABLES;
@@ -641,16 +643,17 @@ pub struct LoginSession {
     pub note: Option<String>,
     pub tags: Option<String>,
     pub group_name: Option<String>,
+    pub proxy_profile_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
 fn login_session_select_columns() -> &'static str {
-    "login_id, code_verifier, state, status, error, workspace_id, note, tags, group_name, created_at, updated_at"
+    "login_id, code_verifier, state, status, error, workspace_id, note, tags, group_name, created_at, updated_at, proxy_profile_id"
 }
 
 fn insert_login_session_sql() -> &'static str {
-    "INSERT INTO login_sessions (login_id, code_verifier, state, status, error, workspace_id, note, tags, group_name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+    "INSERT INTO login_sessions (login_id, code_verifier, state, status, error, workspace_id, note, tags, group_name, created_at, updated_at, proxy_profile_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"
 }
 
 fn login_session_by_id_sql() -> String {
@@ -2400,6 +2403,15 @@ impl Storage {
             "144_model_display_order",
             include_str!("../../migrations/144_model_display_order.sql"),
         )?;
+        self.apply_sql_or_compat_migration(
+            "145_login_sessions_proxy_profile_id",
+            include_str!("../../migrations/145_login_sessions_proxy_profile_id.sql"),
+            |storage| storage.ensure_column("login_sessions", "proxy_profile_id", "TEXT"),
+        )?;
+        self.apply_sql_migration(
+            "146_service_health",
+            include_str!("../../migrations/146_service_health.sql"),
+        )?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_api_key_account_group_filter_column()?;
         self.ensure_aggregate_apis_table()?;
@@ -2531,6 +2543,7 @@ impl Storage {
                 &session.group_name,
                 session.created_at,
                 session.updated_at,
+                &session.proxy_profile_id,
             ),
         )?;
         Ok(())
@@ -2564,6 +2577,7 @@ impl Storage {
                 group_name: row.get(8)?,
                 created_at: row.get(9)?,
                 updated_at: row.get(10)?,
+                proxy_profile_id: row.get(11)?,
             }))
         } else {
             Ok(None)

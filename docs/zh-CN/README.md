@@ -222,7 +222,8 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
 | 不登陆 Codex，使用 ChatGPT `/api/auth/session` 导入账号 | [不登陆 Codex 使用 ChatGPT 的 /api/auth/session 在软件中的使用](report/不登陆Codex使用ChatGPT-auth-session导入账号.md) |
 | 配置端口、代理、数据库、Web 密码、环境变量 | [环境变量与运行配置](report/环境变量与运行配置说明.md) |
 | 排查账号不命中、导入失败、挑战拦截、请求异常 | [FAQ 与账号命中规则](report/FAQ与账号命中规则.md) |
-| 排查后台任务账号跳过、禁用与停用原因 | [后台任务账号跳过说明](report/后台任务账号跳过说明.md) |
+| 排查后台任务账号跳过、禁用与停用原因 | [服务健康展板](report/服务健康展板.md) | 本服务共享请求统计、异常反馈与隐私范围 |
+| [后台任务账号跳过说明](report/后台任务账号跳过说明.md) |
 | 管理模型、价格、路由、instructions policy 与 Codex 模型目录应用 | [模型目录 V2 管理与计费说明](report/模型目录V2管理与计费说明.md) |
 | 插件中心最小接入、快速对接 | [插件中心最小接入说明](report/插件中心最小接入说明.md) |
 | 对接插件中心、查看接口清单、市场模式与 Rhai 接口 | [插件中心对接与接口清单](report/插件中心对接与接口清单.md) |
@@ -274,7 +275,7 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
 界面语言默认采用“自动（Auto）”，根据桌面 WebView 或浏览器的 `navigator.language` 匹配中文、英文、俄文或韩文；无法匹配时回退为英文。已保存的语言选择会继续生效，也可在设置中切换。
 
 1. 从 [GitHub Releases](https://github.com/qxcnm/Codex-Manager/releases/latest) 下载对应平台的安装包，启动桌面端，点击“启动服务”。
-2. 进入“账号管理”，选择浏览器授权或 Device Code 完成 `chatgpt.com` 登录。
+2. 进入“账号管理”，选择浏览器授权或 Device Code 完成 `chatgpt.com` 登录。可先选择已启用的代理配置，服务端登录请求会使用该代理，并在登录成功后保存为账号代理；浏览器授权页面仍使用浏览器自身的网络设置。
 3. 浏览器授权如回调失败，可粘贴回调链接手动完成解析。
 4. 刷新用量并确认账号状态。
 

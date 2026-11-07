@@ -163,6 +163,7 @@ export interface LoginStartPayload {
   tags?: string[] | string | null;
   groupName?: string | null;
   workspaceId?: string | null;
+  proxyProfileId?: string | null;
 }
 
 interface AccountUpdatePayload {
@@ -794,6 +795,7 @@ export const accountClient = {
           : params?.tags || null,
         groupName: params?.groupName || null,
         workspaceId: params?.workspaceId || null,
+        proxyProfileId: params?.proxyProfileId || null,
       })
     );
     return normalizeLoginStartResult(result);

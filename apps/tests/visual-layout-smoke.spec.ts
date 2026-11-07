@@ -65,7 +65,7 @@ async function mockVisualRuntime(page: Page, theme: string) {
       "appSettings/get": { serviceAddr: "localhost:48760", theme, appearancePreset: "modern",
         locale: "zh-CN", lowTransparency: false, codexCliGuideDismissed: true, webAuthMode: "none",
         accountsAutoRefreshEnabled: false, envOverrides: {}, envOverrideCatalog: [] },
-      initialize: { version: "0.7.0", userAgent: "codex_cli_rs/fixture", codexHome: "C:/VisualFixture/.codex",
+      initialize: { version: "0.7.1", userAgent: "codex_cli_rs/fixture", codexHome: "C:/VisualFixture/.codex",
         platformFamily: "windows", platformOs: "windows" },
       "accountManager/session/current": { mode: "none", currentUser: null, role: "system_admin",
         permissions: [], distributionEnabled: false },

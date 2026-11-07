@@ -24,6 +24,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { accountClient } from "@/lib/api/account-client";
+import { AccountLoginProxySelect } from "@/components/accounts/account-login-proxy-select";
+import { PROXY_PROFILES_QUERY_KEY } from "@/lib/api/proxy-profiles";
 import {
   buildAccountListQueryKey,
   buildAccountLookupQueryKey,
@@ -266,6 +268,7 @@ export function AddAccountModal({ open, onOpenChange }: AddAccountModalProps) {
 
   // Login Form
   const [loginType, setLoginType] = useState<LoginType>("chatgpt");
+  const [proxyProfileId, setProxyProfileId] = useState("");
   const [groupName, setGroupName] = useState("");
   const [tags, setTags] = useState("");
   const [note, setNote] = useState("");
@@ -301,6 +304,7 @@ export function AddAccountModal({ open, onOpenChange }: AddAccountModalProps) {
     setIsLoading(false);
     setLoginHint("");
     setLoginType("chatgpt");
+    setProxyProfileId("");
     setGroupName("");
     setTags("");
     setNote("");
@@ -354,6 +358,7 @@ export function AddAccountModal({ open, onOpenChange }: AddAccountModalProps) {
         queryKey: buildAccountUsageListQueryKey(serviceStatus.addr),
       }),
       queryClient.invalidateQueries({ queryKey: ["startup-snapshot"] }),
+      queryClient.invalidateQueries({ queryKey: PROXY_PROFILES_QUERY_KEY }),
       queryClient.invalidateQueries({
         queryKey: CODEX_PROFILE_CANDIDATES_QUERY_KEY,
       }),
@@ -625,6 +630,7 @@ export function AddAccountModal({ open, onOpenChange }: AddAccountModalProps) {
     try {
       const result = await accountClient.startLogin({
         loginType: requestedLoginType,
+        proxyProfileId: proxyProfileId || null,
         openBrowser: requestedLoginType === "chatgpt",
         tags: tags
           .split(",")
@@ -951,6 +957,21 @@ export function AddAccountModal({ open, onOpenChange }: AddAccountModalProps) {
                     : t("在当前设备的浏览器中完成 ChatGPT 授权。")}
                 </p>
               </div>
+              <AccountLoginProxySelect
+                enabled={open && activeTab === "login" && isServiceReady}
+                disabled={!isServiceReady || isLoading}
+                serviceAddr={serviceStatus.addr}
+                value={proxyProfileId}
+                onValueChange={(value) => {
+                  if (value === proxyProfileId) return;
+                  stopActiveLogin();
+                  setProxyProfileId(value);
+                  setLoginHint("");
+                  setLoginUrl("");
+                  setDeviceUserCode("");
+                  setManualCallback("");
+                }}
+              />
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <Label>{t("账号分组")}</Label>

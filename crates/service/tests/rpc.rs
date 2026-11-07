@@ -2971,6 +2971,7 @@ fn rpc_login_cancel_marks_pending_session_cancelled_and_clears_verifier() {
             note: None,
             tags: None,
             group_name: None,
+            proxy_profile_id: None,
             created_at: now_ts(),
             updated_at: now_ts(),
         })
@@ -3020,6 +3021,7 @@ fn rpc_login_status_expires_stale_pending_session_and_clears_verifier() {
             note: None,
             tags: None,
             group_name: None,
+            proxy_profile_id: None,
             created_at: stale_at,
             updated_at: stale_at,
         })
@@ -3065,6 +3067,7 @@ fn rpc_login_status_expires_abandoned_completion_and_clears_verifier() {
             note: None,
             tags: None,
             group_name: None,
+            proxy_profile_id: None,
             created_at: stale_at,
             updated_at: stale_at,
         })

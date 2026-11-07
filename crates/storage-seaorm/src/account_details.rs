@@ -469,6 +469,8 @@ pub(crate) mod login_sessions {
         pub tags: Option<String>,
         #[sea_orm(column_type = "Text", nullable)]
         pub group_name: Option<String>,
+        #[sea_orm(column_type = "Text", nullable)]
+        pub proxy_profile_id: Option<String>,
         pub created_at: i64,
         pub updated_at: i64,
     }
@@ -488,6 +490,7 @@ impl From<login_sessions::Model> for codexmanager_core::storage::LoginSession {
             note: row.note,
             tags: row.tags,
             group_name: row.group_name,
+            proxy_profile_id: row.proxy_profile_id,
             created_at: row.created_at,
             updated_at: row.updated_at,
         }
@@ -505,6 +508,7 @@ impl From<codexmanager_core::storage::LoginSession> for login_sessions::ActiveMo
             note: sea_orm::Set(row.note),
             tags: sea_orm::Set(row.tags),
             group_name: sea_orm::Set(row.group_name),
+            proxy_profile_id: sea_orm::Set(row.proxy_profile_id),
             created_at: sea_orm::Set(row.created_at),
             updated_at: sea_orm::Set(row.updated_at),
         }

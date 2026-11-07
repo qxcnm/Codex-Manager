@@ -26,6 +26,7 @@ pub async fn service_login_start(
     tags: Option<String>,
     group_name: Option<String>,
     workspace_id: Option<String>,
+    proxy_profile_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let params = serde_json::json!({
       "type": login_type,
@@ -33,7 +34,8 @@ pub async fn service_login_start(
       "note": note,
       "tags": tags,
       "groupName": group_name,
-      "workspaceId": workspace_id
+      "workspaceId": workspace_id,
+      "proxyProfileId": proxy_profile_id
     });
     rpc_call_in_background("account/login/start", addr, Some(params)).await
 }

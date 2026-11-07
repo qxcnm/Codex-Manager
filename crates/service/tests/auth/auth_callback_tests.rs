@@ -250,6 +250,7 @@ fn callback_error_does_not_override_claimed_login_completion() {
             note: None,
             tags: None,
             group_name: None,
+            proxy_profile_id: None,
             created_at: now_ts(),
             updated_at: now_ts(),
         })

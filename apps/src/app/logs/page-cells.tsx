@@ -94,12 +94,9 @@ export function AccountKeyInfoCell({
     log.actualSourceKind === "aggregate_api" && log.actualSourceId
       ? log.actualSourceId
       : aggregateApi?.id || "";
-  const isAggregateApi = Boolean(
-    log.actualSourceKind === "aggregate_api" ||
-      log.aggregateApiSupplierName ||
-      log.aggregateApiUrl ||
-      aggregateApi,
-  );
+  const isAggregateApi = log.actualSourceKind
+    ? log.actualSourceKind === "aggregate_api"
+    : Boolean(log.aggregateApiSupplierName || log.aggregateApiUrl || aggregateApi);
   const aggregateApiDisplayName = resolveAggregateApiDisplayName(log, aggregateApi, apiKey);
   const aggregateApiDisplayUrl = resolveAggregateApiTooltipUrl(log, aggregateApi, apiKey);
   const showAttemptHint =

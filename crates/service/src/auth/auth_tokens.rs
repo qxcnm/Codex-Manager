@@ -27,6 +27,10 @@ use crate::account_identity::{
 use crate::auth_callback::resolve_redirect_uri;
 use crate::storage_helpers::open_storage;
 
+#[cfg(test)]
+#[path = "tests/login_proxy_tests.rs"]
+mod login_proxy_tests;
+
 #[path = "auth_login_completion.rs"]
 mod completion;
 pub(crate) use completion::{
@@ -839,6 +843,21 @@ fn auth_http_client_for_issuer(issuer: &str) -> Client {
     openai_auth_http_client().clone()
 }
 
+fn auth_http_client_with_proxy(issuer: &str, proxy_url: Option<&str>) -> Result<Client, String> {
+    let Some(proxy_url) = proxy_url else {
+        return Ok(auth_http_client_for_issuer(issuer));
+    };
+    let proxy_url = crate::account_proxy::normalize_supported_proxy_url(proxy_url)?;
+    // An explicit login proxy must never fall back to system proxy or direct egress.
+    Client::builder()
+        .connect_timeout(OPENAI_AUTH_CONNECT_TIMEOUT)
+        .timeout(OPENAI_AUTH_TOTAL_TIMEOUT)
+        .no_proxy()
+        .proxy(reqwest::Proxy::all(&proxy_url).map_err(|_| "invalid login proxy".to_owned())?)
+        .build()
+        .map_err(|_| "build login proxy client failed".to_owned())
+}
+
 #[derive(serde::Deserialize)]
 struct DeviceUserCodeResponse {
     device_auth_id: String,
@@ -1001,8 +1020,9 @@ pub(crate) async fn drain_device_login_tasks() {
 pub(crate) async fn request_device_code_async(
     issuer: &str,
     client_id: &str,
+    proxy_url: Option<&str>,
 ) -> Result<DeviceCodeStartResult, String> {
-    let client = auth_http_client_for_issuer(issuer);
+    let client = auth_http_client_with_proxy(issuer, proxy_url)?;
     let url = device_usercode_url(issuer);
     let resp = client
         .post(url)
@@ -1116,6 +1136,7 @@ impl Drop for DeviceLoginTaskGuard {
 ///
 /// # 返回
 /// 返回函数执行结果
+#[cfg(test)]
 async fn poll_device_auth_token_async_with_timeout(
     issuer: &str,
     device_auth_id: &str,
@@ -1124,7 +1145,29 @@ async fn poll_device_auth_token_async_with_timeout(
     max_wait: Duration,
     cancel: Arc<AtomicBool>,
 ) -> Result<DeviceAuthTokenResponse, DeviceLoginError> {
-    let client = auth_http_client_for_issuer(issuer);
+    poll_device_auth_token_with_proxy(
+        issuer,
+        device_auth_id,
+        user_code,
+        interval,
+        max_wait,
+        cancel,
+        None,
+    )
+    .await
+}
+
+async fn poll_device_auth_token_with_proxy(
+    issuer: &str,
+    device_auth_id: &str,
+    user_code: &str,
+    interval: u64,
+    max_wait: Duration,
+    cancel: Arc<AtomicBool>,
+    proxy_url: Option<&str>,
+) -> Result<DeviceAuthTokenResponse, DeviceLoginError> {
+    let client =
+        auth_http_client_with_proxy(issuer, proxy_url).map_err(DeviceLoginError::Failed)?;
     let url = device_token_url(issuer);
     let started_at = tokio::time::Instant::now();
     let interval = normalized_device_poll_interval(interval);
@@ -1231,13 +1274,26 @@ async fn complete_device_code_login_with_cancel(
     device_code: DeviceCodeStartResult,
     cancel: Arc<AtomicBool>,
 ) -> Result<(), DeviceLoginError> {
-    let code = poll_device_auth_token_async_with_timeout(
+    let proxy_login_id = login_id.clone();
+    let proxy_url = run_auth_storage(move || {
+        let storage = open_storage().ok_or_else(|| "storage unavailable".to_owned())?;
+        let accounts = crate::account::remote_storage::AccountStorage::new(&storage);
+        let session = accounts
+            .get_login_session(&proxy_login_id)
+            .map_err(|err| err.to_string())?
+            .ok_or_else(|| "unknown login session".to_owned())?;
+        super::login_proxy::resolve_login_proxy_url(&storage, session.proxy_profile_id.as_deref())
+    })
+    .await
+    .map_err(DeviceLoginError::Failed)?;
+    let code = poll_device_auth_token_with_proxy(
         &issuer,
         &device_code.device_auth_id,
         &device_code.user_code,
         device_code.interval,
         Duration::from_secs(15 * 60),
         Arc::clone(&cancel),
+        proxy_url.as_deref(),
     )
     .await?;
 
@@ -1368,9 +1424,10 @@ async fn exchange_code_for_tokens_async(
     redirect_uri: &str,
     code_verifier: &str,
     code: &str,
+    proxy_url: Option<&str>,
 ) -> Result<TokenResponse, String> {
     // 请求 token 接口
-    let client = auth_http_client_for_issuer(issuer);
+    let client = auth_http_client_with_proxy(issuer, proxy_url)?;
     let request = build_exchange_code_request(
         &client,
         issuer,
@@ -1416,13 +1473,22 @@ pub(crate) async fn obtain_api_key_async(
     client_id: &str,
     id_token: &str,
 ) -> Result<String, String> {
+    obtain_api_key_with_proxy_async(issuer, client_id, id_token, None).await
+}
+
+async fn obtain_api_key_with_proxy_async(
+    issuer: &str,
+    client_id: &str,
+    id_token: &str,
+    proxy_url: Option<&str>,
+) -> Result<String, String> {
     #[derive(serde::Deserialize)]
     struct ExchangeResp {
         access_token: String,
     }
 
     // 兑换平台 API Key
-    let client = auth_http_client_for_issuer(issuer);
+    let client = auth_http_client_with_proxy(issuer, proxy_url)?;
     let request = build_api_key_exchange_request(&client, issuer, client_id, id_token)?;
     let resp = client
         .execute(request)

@@ -115,6 +115,13 @@ export const TOP_LEVEL_ROUTE_CONFIG = [
     roles: ["system_admin", "admin"],
   },
   {
+    path: "/service-health",
+    label: "服务健康",
+    section: "monitoring",
+    memberSection: "member-usage",
+    roles: ["system_admin", "admin", "member"],
+  },
+  {
     path: "/logs",
     label: "请求日志",
     memberLabel: "使用记录",

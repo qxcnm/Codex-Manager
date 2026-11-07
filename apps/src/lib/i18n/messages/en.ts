@@ -16,10 +16,12 @@ import { EN_PLATFORM_MODE_MESSAGES } from "./sections/en-platform-mode";
 import { EN_PROJECTS_MESSAGES } from "./sections/en-projects";
 import { EN_RUNTIME_UI_MESSAGES } from "./sections/en-runtime-ui";
 import { EN_SKILLS_MESSAGES } from "./sections/en-skills";
+import { EN_SERVICE_HEALTH_MESSAGES } from "./sections/en-service-health";
 
 export const EN_MESSAGES: MessageCatalog = {
   ...EN_PROJECTS_MESSAGES,
   ...EN_SKILLS_MESSAGES,
+  ...EN_SERVICE_HEALTH_MESSAGES,
   ...EN_DESKTOP_DIAGNOSTICS_MESSAGES,
   "延迟测试设置": "Latency test settings",
   "速度测试设置": "Speed test settings",
@@ -640,6 +642,20 @@ export const EN_MESSAGES: MessageCatalog = {
   "状态码 200-299": "Status 200-299",
   异常请求: "Failed requests",
   "4xx / 5xx 或显式错误": "4xx / 5xx or explicit errors",
+  请求时间线: "Request timeline",
+  日志视图: "Log view",
+  时间线视图: "Timeline view",
+  表格视图: "Table view",
+  时间线: "Timeline",
+  表格: "Table",
+  复制摘要: "Copy summary",
+  请求完成: "Request completed",
+  请求异常: "Request failed",
+  请求已返回: "Request returned",
+  状态未知: "Unknown status",
+  查看明细: "View details",
+  用时: "Duration",
+  输出: "Output",
   请求明细: "Request details",
   "请求明细 按": "Request details by",
   请求内容: "Request payload",

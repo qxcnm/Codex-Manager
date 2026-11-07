@@ -18,6 +18,7 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<(), DbErr> {
         schema.create_table_from_entity(crate::aggregate_apis::secrets::Entity),
         schema.create_table_from_entity(crate::aggregate_apis::balance_secrets::Entity),
         schema.create_table_from_entity(crate::settings::Entity),
+        schema.create_table_from_entity(crate::service_health::Entity),
         schema.create_table_from_entity(crate::plugins::installs::Entity),
         schema.create_table_from_entity(crate::plugins::tasks::Entity),
         schema.create_table_from_entity(crate::plugins::logs::Entity),
@@ -68,9 +69,33 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<(), DbErr> {
         db.execute(backend.build(&table)).await?;
     }
 
+    for (name, columns) in [
+        (
+            "idx_service_health_kind_expiry",
+            vec![
+                crate::service_health::Column::Kind,
+                crate::service_health::Column::ExpiresAt,
+            ],
+        ),
+        (
+            "idx_service_health_owner_kind",
+            vec![
+                crate::service_health::Column::Owner,
+                crate::service_health::Column::Kind,
+            ],
+        ),
+    ] {
+        let mut index = Index::create();
+        index.name(name).table(crate::service_health::Entity);
+        for column in columns {
+            index.col(column);
+        }
+        ensure_index(db, "service_health_records", name, index).await?;
+    }
     ensure_request_log_clear_column(db).await?;
     ensure_request_stat_legacy_id_column(db).await?;
     ensure_account_preferred_column(db).await?;
+    ensure_login_session_proxy_profile_column(db).await?;
     crate::users::initialize_domain_locks(db).await?;
     let mut index = Index::create();
     index
@@ -352,6 +377,46 @@ async fn ensure_request_stat_legacy_id_column(db: &DatabaseConnection) -> Result
         db.execute(Statement::from_string(
             backend,
             "ALTER TABLE request_token_stats ADD COLUMN id BIGINT NULL".to_string(),
+        ))
+        .await?;
+    }
+    Ok(())
+}
+
+async fn ensure_login_session_proxy_profile_column(db: &DatabaseConnection) -> Result<(), DbErr> {
+    let backend = db.get_database_backend();
+    let exists = match backend {
+        DatabaseBackend::Sqlite => db
+            .query_all(Statement::from_string(
+                backend,
+                "PRAGMA table_info(login_sessions)".to_string(),
+            ))
+            .await?
+            .iter()
+            .any(|row| {
+                row.try_get::<String>("", "name")
+                    .is_ok_and(|name| name == "proxy_profile_id")
+            }),
+        DatabaseBackend::MySql | DatabaseBackend::Postgres => {
+            let schema = if backend == DatabaseBackend::MySql {
+                "DATABASE()"
+            } else {
+                "current_schema()"
+            };
+            let row = db
+                .query_one(Statement::from_string(
+                    backend,
+                    format!("SELECT COUNT(*) AS count FROM information_schema.columns WHERE table_schema={schema} AND table_name='login_sessions' AND column_name='proxy_profile_id'"),
+                ))
+                .await?
+                .ok_or_else(|| DbErr::Custom("column catalog returned no row".into()))?;
+            row.try_get::<i64>("", "count")? > 0
+        }
+    };
+    if !exists {
+        db.execute(Statement::from_string(
+            backend,
+            "ALTER TABLE login_sessions ADD COLUMN proxy_profile_id TEXT NULL".to_string(),
         ))
         .await?;
     }

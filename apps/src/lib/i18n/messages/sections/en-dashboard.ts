@@ -3,6 +3,8 @@
 import type { MessageCatalog } from "../types";
 
 export const EN_DASHBOARD_MESSAGES: MessageCatalog = {
+  "所选区间暂无请求": "No requests in this range",
+  "请求产生后，用量趋势会显示在这里。": "Usage trends will appear here after requests are recorded.",
   "本机 Codex 的直连请求不会经过网关；下方仍展示 CodexManager 已记录的网关流量。":
     "Direct requests from Codex on this machine bypass the gateway; the data below still shows gateway traffic recorded by CodexManager.",
   "OpenAI 账号今日消耗": "OpenAI account usage today",

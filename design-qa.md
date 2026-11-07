@@ -1,230 +1,56 @@
-# Skills Repository UI Design QA
+# 请求日志时间线 UI 验证
 
-## Evidence
+日期：2026-11-07。范围：现有请求日志页的布局与交互；本轮未变更服务端协议、账号凭据或数据库。
 
-- Source visual truth:
-  - `/tmp/codex-clipboard-N72mW9.png` — cc-switch repository catalog.
-  - `/tmp/codex-clipboard-0Yn2wn.png` — cc-switch repository management.
-  - `/tmp/codex-clipboard-6YiNS8.png` — user-reported wide-screen filter collision.
-- Browser-rendered implementation:
-  - `/tmp/codex-skills-layout-qa.ac7m5E/skills-repository-catalog.png`.
-  - `/tmp/codex-design-qa/skills-repository-management-final3.png`.
-- Viewport: 2048 × 1189 for final visual captures; the same flow and filter geometry assertions also passed at the tighter 1280 × 800 desktop viewport (and the earlier 1440 × 900 pass).
-- State: Simplified Chinese, `tech` theme with classic appearance, connected service, Skills installation selected, repository catalog populated with the four built-in repositories. The management capture shows the repository dialog open.
-- Full-view comparison evidence:
-  - `/tmp/codex-design-qa/comparison-final-catalog-full.png`.
-  - `/tmp/codex-design-qa/comparison-final-management-full.png`.
-  - `/tmp/codex-skills-layout-qa.ac7m5E/comparison-full.png` — reported layout beside the corrected browser render.
-- Focused comparison evidence:
-  - `/tmp/codex-design-qa/comparison-final-catalog-focus.png` — search, filters, grid density, cards, and actions.
-  - `/tmp/codex-design-qa/comparison-final-management-focus.png` — add-repository form and synchronized repository rows.
-  - `/tmp/codex-skills-layout-qa.ac7m5E/comparison-filter-focus.png` — before/after filter geometry at wide desktop size.
+## 视觉依据与截图
 
-## Findings
+- 来源：用户提供的 GitHub 图片 `599148024-685cd051-4f8e-4eb9-b413-7df3f2a2b473.png`，原始图像 3272 × 1896。已在浏览器成功打开；临时签名 URL 不写入仓库。
+- 来源捕获：`.artifacts/logs-ui/reference.jpg`，1280 × 720，包含源应用外框及浏览器缩放后的图像。
+- 实现：`.artifacts/logs-ui/timeline-desktop.jpg`，1280 × 720 CSS/图像像素，1 倍密度；浅色、管理员、10 条当前页测试记录、筛选收起。
+- 同屏整体对比：`.artifacts/logs-ui/comparison-full.jpg`，2560 × 720，左参考、右实现。
+- 局部对比：`.artifacts/logs-ui/comparison-focused.jpg`，1908 × 160，左右均归一为 954 × 160 的单条记录区域，保留纵横比。用于检查时间栏、标题、标签、复制入口和展开条。
+- 窄屏：`.artifacts/logs-ui/timeline-mobile.jpg` 与 `timeline-mobile-expanded.jpg`，390 × 844；深色、低透明度、普通成员、超长路径/模型/错误文本。
+- 中等窗口：`.artifacts/logs-ui/timeline-tablet-dark.jpg`，820 × 900；深色、低透明度、管理员。
+- 截图仅为本地检查资料，已通过该目录内的 `.gitignore` 排除。实现截图均使用模拟日志，不包含真实账号或凭据。
 
-No actionable P0, P1, or P2 differences remain.
+源图是旧版后端事件列表，当前接口提供每条请求的最终记录。因此本次将布局应用到“请求时间线”，展示真实状态、来源、路径、用时、首响和 Token；不生成源图中的步骤事件。现有产品的导航、标识和主题保持一致。源图窗口外框、缩放密度及内容状态不同，比较以日志内容的层级与布局为准，不宣称逐像素复刻。
 
-- Fonts and typography: both targets use a compact system sans-serif hierarchy. CodexManager keeps its existing Segoe UI/PingFang SC stack, weights, monospaced paths, truncation, and line heights; all labels remain readable without collision.
-- Spacing and layout rhythm: the final wide layout uses three catalog columns, consistent card heights, and a wider repository dialog. The filter toolbar now uses explicit `minmax(0,1fr) / 14rem / 10rem / auto` tracks, so the search field retains the available width while repository, status, and refresh controls remain separate. The 1440 × 900 run correctly falls back to the denser two-column catalog layout.
-- Colors and visual tokens: the implementation intentionally retains CodexManager's blue primary and glass-console tokens instead of copying cc-switch's green accent. Contrast, selected tabs, status badges, and destructive actions remain semantically clear.
-- Image and icon fidelity: the reference contains no required raster product imagery. All visible actions use the repository's Lucide icon system; no placeholder imagery, CSS drawings, emoji, or hand-authored SVG substitutes were introduced.
-- Copy and content: the menu is “Skills 与插件”, the outer tabs distinguish “Skills 安装” from “Codex 插件安装”, and repository/status filters now render localized labels rather than raw `all` values. The four built-in repositories match the source behavior.
-- Interaction and accessibility: tabs, search, repository dialog open/close, built-in delete protection, plugin scrolling, install confirmation, and long error-toast scrolling were exercised. Controls have role/name coverage in Playwright, and the final run recorded no page or console errors.
-- Intentional adaptation: repository management is a modal instead of a dedicated page, and the CodexManager shell remains visible. This follows the existing app navigation and dialog system while preserving the source workflow and information architecture.
+## 发现与修正记录
 
-## Comparison History
+1. P2：初版沿用全局卡片阴影，比参考图的平整面板更重。为日志页两个主面板去除阴影；最终整体对比确认边界清晰、没有厚重投影。
+2. P2：390 px 窗口中的超长路径虽不横向溢出，但占用过多垂直空间。摘要路径限制为两行，完整路径仍可通过详情查看；修正前后见 `timeline-mobile-before.jpg` 与 `timeline-mobile.jpg`。展开后仍无横向溢出。
+3. P2：深色主题由 `data-theme` 管理，初版成功徽标的普通 `dark:` 样式未生效。改用现有 `--metric-emerald` 主题变量，最终深色文字计算值为 `rgb(52, 211, 153)`，见最终中等窗口截图。
 
-1. Initial capture: `/tmp/codex-design-qa/skills-repository-catalog.png` showed the workspace stuck at the fade animation's zero-opacity state in the static-export browser. Removed the redundant PageWorkspace entrance animation; the post-fix catalog is fully opaque in `skills-repository-catalog-final3.png`.
-2. First post-opacity pass: filters exposed raw `all` values, the wide catalog stayed at two columns, and repository management was cramped. Added localized selected-value rendering, a three-column 2XL grid, four representative built-in repository rows, and a responsive 980px dialog.
-3. First final comparison: the original full and focused comparison images showed no remaining P0/P1/P2 mismatch in the mocked catalog.
-4. User wide-screen report: both Select triggers retained `w-full` inside a flex row, consumed half of the toolbar each, and collapsed the flexible search field to zero width. Replaced the row with explicit responsive grid tracks and added browser geometry assertions for search width, fixed filter widths, and non-overlap. The latest full and focused comparison images show the search field restored with all four controls aligned; the Playwright flow passed with zero page or console errors.
+## 最终视觉检查
 
-## Implementation Checklist
+- 字体与层级：沿用产品字体；14 px 请求标题、11 px 时间/摘要与等宽追踪信息。标题、信息标签、展开入口层次可辨；长模型名称截断且保留悬停文本。
+- 间距与布局：左时间/状态、右内容；细分隔线、低对比标签、右侧复制入口。窄屏转单列；390、820、1280 px 检查无页面横向溢出。表格模式保留必要的横向滚动。
+- 颜色与主题：使用现有语义变量与玻璃面板；错误使用 destructive，成功使用主题可读的 emerald。深色低透明度下文字可辨。
+- 图像与图标：保留现有产品标识与 Lucide 图标；没有新增图像替代品或手绘 SVG。
+- 文案：新增文案已覆盖中、英、韩、俄；数据列表准确命名为请求时间线。复制功能仅复制显式请求元数据，不包含 API key 对象或请求体。
+- 未发现剩余 P0/P1/P2 问题。
 
-- [x] Preserve the existing CodexManager design system and navigation shell.
-- [x] Match the repository / skills.sh discovery structure and searchable card catalog.
-- [x] Show all four built-in repositories with sync state and refresh controls.
-- [x] Separate standalone Skills installation from full Codex plugin installation.
-- [x] Keep search, repository filter, status filter, and refresh controls in independent non-overlapping grid tracks.
-- [x] Verify primary interactions and browser console state.
+## 交互与工程验证
 
-## Follow-up Polish
+- 通过浏览器实际验证：默认时间线、表格切换、用时/首响、分页与越界跳页回到第 3 页、返回首页、状态筛选、时间预设与清除、搜索无结果、恢复列表、详情展开与收起、完整请求弹窗、复制摘要及剪贴板内容。
+- 展开摘要前后请求体读取次数为 0；点击“查看请求内容”才获取请求体。
+- HTTP 200 但有显式流错误的记录显示“请求异常 / HTTP 502”。
+- 实际来源为账号时，即使密钥绑定聚合渠道，摘要和展开内容均显示实际账号。
+- 普通成员看不到清空入口；无新增权限放宽。
+- 深色/窄屏展开态无横向溢出；浏览器控制台错误列表为空。
+- 已刷新并通过桌面端可访问树确认新版时间线加载，现有两条真实日志可见；本轮未发起额外模型请求。
+- `pnpm -C apps run build:desktop`：最终构建通过。
+- `pnpm -C apps run test:runtime`：332 项通过。
+- 日志相关 4 个组件与 `tests/request-logs-duration.spec.ts` 的 ESLint：通过。
+- `git diff --check`：通过。
+- Playwright 文件新增/更新 5 个回归场景。`pnpm -C apps exec playwright test tests/request-logs-duration.spec.ts` 本轮未运行：当前浏览器操作使用 CUA，等价交互已在该浏览器中执行，不把新增测试文件视为已运行的自动化结果。
 
-- P3: a future iteration may add optional compact/list density controls for repositories containing hundreds of Skills. This is not required for the current workflow.
+## 交付检查
 
-final result: passed
-
-# Sidebar Navigation Spacing Design QA
-
-## Evidence
-
-- Source visual truth: `C:/Users/qxnm/AppData/Local/Temp/codex-clipboard-912dfd64-564f-463c-a260-8b226e3d45a7.png`.
-- Browser-rendered implementation: `C:/Users/qxnm/AppData/Local/Temp/codex-manager-sidebar-spacing-admin-after.png`.
-- Side-by-side comparison: `C:/Users/qxnm/AppData/Local/Temp/codex-manager-sidebar-spacing-comparison.png`.
-- Viewport: 1920 x 1260 CSS pixels for the reference comparison and 1920 x 800 CSS pixels for the low-height fallback.
-- State: real `codexmanager-web` runtime, administrator navigation, Simplified Chinese, expanded sidebar.
-
-## Findings
-
-No actionable P0, P1, or P2 differences remain for the requested spacing change.
-
-- Web mode keeps its existing 6px / 8px navigation-row gaps.
-- Desktop mode now uses 8px / 10px gaps on normal-height windows and 6px at 800px viewport height, while keeping the existing compact item treatment. All currently allowed administrator routes remain reachable without page overflow.
-- Sidebar width, item padding, icon sizing, typography, active state, and collapse control are unchanged.
-- The reference includes one additional mode-dependent route (`项目启动`); route visibility remains controlled by the existing permission/mode logic and was not altered for this visual adjustment.
-
-## Implementation Checklist
-
-- [x] Add a small amount of vertical breathing room between navigation items.
-- [x] Preserve the existing dense fallback for short windows.
-- [x] Verify the real administrator navigation at both target heights.
-- [x] Confirm no horizontal or vertical page overflow.
-
-final result: passed
-
-# Dashboard Pool, Header Controls, and 90% Scale Design QA
-
-## Evidence
-
-- Source visual truth:
-  - `C:/Users/qxnm/AppData/Local/Temp/codex-clipboard-23a2aaa0-d6a3-4943-8ac9-1d95b953e08e.png` — account-pool remaining bar structure.
-  - `C:/Users/qxnm/AppData/Local/Temp/codex-clipboard-d028c403-7de3-4319-990d-43da26364072.png` — requested 90% right-side workspace density.
-  - `C:/Users/qxnm/AppData/Local/Temp/codex-clipboard-3e7e1ba9-f7c8-4343-8e35-f0b696e08575.png` — desktop header service switch and language-control reference.
-- Browser-rendered implementation: `C:/Users/qxnm/AppData/Local/Temp/codexmanager-dashboard-scale-90-final.png`.
-- Focused implementation crop: `C:/Users/qxnm/AppData/Local/Temp/codexmanager-dashboard-pool-scale-90-normalized.png`.
-- Full-view comparison evidence: the source density screenshot and `codexmanager-dashboard-scale-90-final.png` were inspected at the same wide desktop state.
-- Focused region comparison evidence: `C:/Users/qxnm/AppData/Local/Temp/codexmanager-dashboard-pool-scale-90-comparison.png`.
-- Viewport: 2048 × 900 CSS pixels.
-- State: real `codexmanager-web` runtime, connected local service, administrator dashboard, Simplified Chinese, expanded sidebar, truthful zero-account/zero-usage data, 90% wide-screen main-surface scale.
-
-## Findings
-
-No actionable P0, P1, or P2 differences remain.
-
-- Fonts and typography: the 90% main-surface scale preserves the existing system font stack, weights, monospaced metrics, line heights, and readable control labels. “账号池剩余” no longer truncates; its rendered width equals its content width.
-- Spacing and layout rhythm: the sidebar remains at its existing size while the header and page workspace use a 90% visual scale on `xl` screens. Compensating 111.111111% width and height keep the scaled surface flush with the available right-side viewport without blank edges or horizontal overflow.
-- Colors and visual tokens: the pool bar keeps theme-aware card, border, emerald, and blue tokens. The reference green tint is treated as a theme-state difference rather than hard-coded into every theme.
-- Image quality and asset fidelity: the production logo and existing Lucide/Recharts assets remain sharp. No reference asset was replaced with placeholder imagery, emoji, CSS drawing, or handcrafted SVG.
-- Copy and content: the gateway metric reads “今日/缓存/推理 用量” with three compact values; the pool block includes 5-hour and 7-day values/counts. The rebuilt Web menu includes every route allowed by the current non-account-system administrator mode; account-system-only routes remain dynamically hidden until `mode === "accounts"`.
-- Header controls: the language selector is visible on the dashboard. The service switch is no longer conditionally hidden on the administrator dashboard and remains capability-gated, so it appears in desktop mode while Web mode does not expose an unsupported service-process control.
-- Interaction and accessibility: the real Web DOM contains the complete allowed navigation, language combobox, token label, both progress bars, analytics controls, and chart. The dashboard has no page-level horizontal overflow. Runtime and navigation regression suites passed.
-
-## Comparison History
-
-1. The first Web capture came from a stale `codexmanager-web.exe` and showed the earlier fixed menu set. Stopped the exact workspace Web process, rebuilt `apps/out`, rebuilt `codexmanager-web`, restarted service + Web, and confirmed the dynamic allowed-route menu.
-2. The first focused pool comparison found “账号池剩余” truncated at the 2048px viewport. Increased the responsive title grid track from 170/190px to 210/220px; the post-fix DOM reports `clientWidth === scrollWidth` for the full title.
-3. The dashboard header intentionally hid both the desktop service switch and language selector on `/`. Removed those route-specific conditions and added regression coverage while retaining runtime capability checks.
-4. The user requested a 90% workspace density. Added an `xl`-only main-surface scale with inverse width/height compensation, rebuilt both desktop and Web outputs, and captured the final full view. The scaled surface fills the right-side viewport and keeps all requested dashboard content visible.
-
-## Implementation Checklist
-
-- [x] Add the account-pool remaining bar with two real quota windows.
-- [x] Display today/cache/reasoning token usage in one metric.
-- [x] Restore the full dynamic Web menu for the current role and mode.
-- [x] Keep account-system-only entries dynamic instead of hard-coding them.
-- [x] Restore the dashboard language selector and desktop service switch.
-- [x] Scale the wide-screen right-side workspace to 90% with layout compensation.
-- [x] Rebuild and restart the real local Web runtime.
-- [x] Verify the rendered DOM, focused comparison, runtime tests, and navigation flow.
-
-## Follow-up Polish
-
-- No P3 follow-up is required for the requested density change.
-
-final result: passed
-
-# Modern Web Dashboard Design QA
-
-## Evidence
-
-- Source visual truth:
-  - `C:/Users/qxnm/AppData/Local/Temp/codex-clipboard-cac18d53-3173-41b0-a42b-f13730484e20.png` — selected gateway status block.
-  - `C:/Users/qxnm/AppData/Local/Temp/codex-clipboard-7062d046-914c-48fb-8f7f-ed5b13f775fb.png` — selected administrator usage-analysis block.
-- Browser-rendered Web implementation:
-  - `C:/Users/qxnm/AppData/Local/Temp/codexmanager-modern-web-status.png` — gateway and upper analytics view.
-  - `C:/Users/qxnm/AppData/Local/Temp/codexmanager-modern-web-analytics.png` — chart and interval summaries.
-- Full and focused comparison evidence: `C:/Users/qxnm/AppData/Local/Temp/codexmanager-modern-web-comparison.png`.
-- Viewport: 1280 × 720 CSS pixels.
-- State: real `codexmanager-web` gateway at `http://127.0.0.1:48761/`, connected local service, administrator dashboard, Simplified Chinese, `mint` theme, `modern` appearance, truthful zero-account and zero-usage data.
-
-## Findings
-
-No actionable P0, P1, or P2 differences remain.
-
-- Fonts and typography: the Web render uses the same Segoe UI Variable/PingFang SC stack as the desktop shell. The hierarchy, compact control labels, monospaced metrics, line heights, wrapping, and truncation remain readable at the 1280px viewport.
-- Spacing and layout rhythm: the dashboard keeps exactly two primary surfaces. Modern appearance now reduces both surfaces to a translucent 72% card mix, an approximately 8% visible neutral border, and very low-amplitude shadows. The analytics chart and four summary regions use a 34% nested surface mix, so they no longer read as heavy cards stacked inside another card. Responsive density is intentionally more compact than the source crop; no content or persistent controls are clipped.
-- Colors and visual tokens: the source composition's structural hierarchy is preserved while the active `mint` theme supplies the accent. Green remains semantic for connected/available states. Ambient gradients, panel fills, borders, header, and sidebar now blend into one continuous background instead of forming abrupt rectangular blocks.
-- Image quality and asset fidelity: the production CodexManager logo and existing Lucide/Recharts assets remain sharp. No source logo, icon, chart, or decorative asset was replaced by placeholder imagery, CSS drawings, emoji, or handcrafted SVG.
-- Copy and content: the header is “仪表盘”; gateway status, six truthful metrics, administrator date controls, granularity/metric toggles, chart, and all four interval summaries are present. Removed dashboard sections do not return in Web mode.
-- Interaction and accessibility: Dashboard → OpenAI Accounts → Dashboard was exercised in the Web gateway. `modern + mint`, the shared command-center shell, and both primary panels remained active after the route return. The accessibility snapshot contains the gateway heading, analytics controls, chart label, and summaries. Browser warnings/errors checked: none.
-
-## Comparison History
-
-1. The first Web capture confirmed the shared two-block layout but the two large surfaces and nested analytics regions still read as distinct frosted cards.
-2. Added dashboard-specific modern-appearance hooks, reduced main-panel fill/border/shadow intensity, and reduced the nested chart/summary surface intensity without changing classic appearance.
-3. Rebuilt `apps/out`, reloaded the real Web gateway, captured both dashboard regions, and compared them together with the selected source crops. The revised Web render has no remaining P0/P1/P2 issue.
-
-## Implementation Checklist
-
-- [x] Serve the same rebuilt `apps/out` through `codexmanager-web`.
-- [x] Keep exactly the gateway status and administrator analytics surfaces.
-- [x] Soften modern main panels without weakening classic appearance.
-- [x] Reduce nested chart and summary block contrast.
-- [x] Preserve theme and shell state across Web route changes.
-- [x] Verify the real Web render and browser console.
-
-## Follow-up Polish
-
-- No P3 follow-up is required for the requested reduction in block prominence.
-
-final result: passed
-
-# Two-Block Dashboard Design QA
-
-## Evidence
-
-- Source visual truth:
-  - `C:/Users/qxnm/AppData/Local/Temp/codex-clipboard-cac18d53-3173-41b0-a42b-f13730484e20.png` — gateway status block.
-  - `C:/Users/qxnm/AppData/Local/Temp/codex-clipboard-7062d046-914c-48fb-8f7f-ed5b13f775fb.png` — administrator usage analysis block.
-- Source composite: `C:/Users/qxnm/.codex/visualizations/2026/07/24/019f931c-208a-7213-ae1e-baf23b91c737/dashboard-two-block-reference-composite.png`.
-- Real Tauri implementation: `C:/Users/qxnm/.codex/visualizations/2026/07/24/019f931c-208a-7213-ae1e-baf23b91c737/dashboard-after-route-return.png`.
-- Full-view comparison evidence: `C:/Users/qxnm/.codex/visualizations/2026/07/24/019f931c-208a-7213-ae1e-baf23b91c737/dashboard-two-blocks-comparison.png`.
-- Focused status comparison: `C:/Users/qxnm/.codex/visualizations/2026/07/24/019f931c-208a-7213-ae1e-baf23b91c737/dashboard-status-focused-comparison.png`.
-- Route-switch comparison: `C:/Users/qxnm/.codex/visualizations/2026/07/24/019f931c-208a-7213-ae1e-baf23b91c737/route-switch-shell-consistency.png`.
-- Viewport: 1949 × 1324 physical pixels at Windows/WebView scale 1.75, approximately 1114 × 757 logical pixels.
-- State: Simplified Chinese, expanded sidebar, connected gateway, zero accounts and zero usage. The dashboard was captured after navigating Dashboard → OpenAI Accounts → Dashboard in the real Tauri window.
-
-## Findings
-
-No actionable P0, P1, or P2 differences remain.
-
-- Fonts and typography: the Segoe UI/PingFang SC system stack, heading weights, metric monospace values, and compact control labels preserve the supplied component hierarchy. The page title now reads “仪表盘”; “路由指挥中心” no longer appears in the header.
-- Spacing and layout rhythm: the dashboard contains exactly two primary surfaces: the gateway status card and administrator usage analysis. Attention alerts, account-pool health, and recent-activity cards are removed. The two retained blocks use the reference radii, internal grid rhythm, and compact real-Tauri spacing.
-- Colors and visual tokens: violet remains the shell/action accent while green is reserved for connected state and usage-chart semantics. The same light violet shell remains visible on the Accounts route and after returning to Dashboard.
-- Image and icon fidelity: the production CodexManager logo is preserved, and standard UI symbols use the existing Lucide/Recharts libraries. No placeholder raster, emoji, CSS drawing, or handcrafted SVG was introduced.
-- Copy and content: gateway metrics remain truthful, with zero values shown instead of fabricated sample data. The complete administrator filters, date range, Token/request switch, granularity controls, zoom reset, chart, and summary metrics remain intact.
-- Navigation consistency: the dashboard compact shell is now global rather than conditional on `/`. The flat eight-item administrator navigation and violet active state remain stable on Accounts and after returning to Dashboard; grouped legacy navigation no longer reappears.
-- Accessibility and interaction: the retained controls preserve existing accessible names and keyboard semantics. The route-switch regression was exercised in the real Tauri accessibility tree without moving the user's pointer.
-
-## Comparison History
-
-1. The earlier command-center version contained a gateway hero, attention list, account-pool health, recent activity, compact trend, and full administrator analytics, which created excessive density.
-2. The user selected only the gateway status and administrator analytics blocks and requested the neutral “仪表盘” title. The extra dashboard regions and their request-log preload were removed.
-3. The reported style reversion was traced to two route conditionals: `data-command-center` only existed on `/`, and the flat sidebar only rendered on `/`. Both conditions were removed so the same shell persists across routes.
-4. Real-Tauri capture confirmed the two-block dashboard at the actual DPI. A second capture after Dashboard → OpenAI Accounts → Dashboard confirmed the shell and navigation no longer revert.
-
-## Implementation Checklist
-
-- [x] Keep only gateway status and administrator usage analysis on the admin dashboard.
-- [x] Rename the dashboard header to “仪表盘”.
-- [x] Remove attention, account health, recent activity, and compact duplicate trend regions.
-- [x] Stop preloading dashboard request logs that no longer have a visible consumer.
-- [x] Apply the violet shell and flat navigation consistently across top-level pages.
-- [x] Verify Dashboard → OpenAI Accounts → Dashboard in the real Tauri window.
-- [x] Preserve the full administrator analytics interaction set and truthful zero-data state.
-
-## Follow-up Polish
-
-- No P3 follow-up is required for the requested reduction.
+- [x] 参考图与实现整体/局部对比
+- [x] 修正明显布局与深色可读性问题并重新截图
+- [x] 保留筛选、分页、请求详情与表格模式
+- [x] 构建、运行时检查及实际 UI 操作验证
+- [x] 保留此前所有未提交改动，未提交或推送
 
 final result: passed

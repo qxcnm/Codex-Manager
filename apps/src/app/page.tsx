@@ -118,6 +118,16 @@ type AdminUsageRangePreset =
   | "30d"
   | "custom";
 
+const ADMIN_USAGE_RANGE_LABELS: Record<AdminUsageRangePreset, string> = {
+  today: "当天",
+  "1d": "最近 1 天",
+  "3d": "最近 3 天",
+  "7d": "最近 7 天",
+  "14d": "最近 14 天",
+  "30d": "最近 30 天",
+  custom: "自定义区间",
+};
+
 interface AdminUsageRangeValue {
   startTs: number | null;
   endTs: number | null;
@@ -678,11 +688,11 @@ function AdminUsageAnalyticsCard({
   return (
     <Card
       id="admin-usage-analytics"
-      className="dashboard-analytics-card dashboard-primary-panel glass-card mission-panel scroll-mt-4 overflow-hidden shadow-sm"
+      className="usage-analytics-card dashboard-analytics-card dashboard-primary-panel glass-card mission-panel scroll-mt-4 overflow-hidden shadow-sm"
     >
-      <CardHeader className="flex flex-col gap-1.5">
-        <div className="flex flex-col gap-1.5 md:flex-row md:items-center md:justify-between">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <CardHeader className="flex flex-col gap-2">
+        <div className="usage-analytics-header flex w-full flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-1">
             <CardTitle className="flex items-center gap-2 text-base font-semibold">
               <LineChart className="h-4 w-4 text-primary" />
               {t("管理员用量分析")}
@@ -691,7 +701,7 @@ function AdminUsageAnalyticsCard({
               {t("当前区间")} {formatShortDateRange(summary.rangeStartTs, summary.rangeEndTs, locale)}
             </span>
           </div>
-          <div className="flex flex-wrap items-center gap-2 md:justify-end">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <div className="flex flex-wrap items-center gap-2">
               <Select
                 value={rangePreset}
@@ -699,8 +709,8 @@ function AdminUsageAnalyticsCard({
                   onRangePresetChange(value as AdminUsageRangePreset)
                 }
               >
-                <SelectTrigger className="h-8 w-[120px] bg-background/40">
-                  <SelectValue />
+                <SelectTrigger className="w-[132px]" aria-label={t("当前区间")}>
+                  <SelectValue>{t(ADMIN_USAGE_RANGE_LABELS[rangePreset])}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
@@ -718,13 +728,13 @@ function AdminUsageAnalyticsCard({
                 <>
                   <Input
                     type="date"
-                    className="h-8 w-[144px] bg-background/40 text-xs"
+                    className="w-[144px]"
                     value={rangeStartInput}
                     onChange={(event) => onRangeStartInputChange(event.target.value)}
                   />
                   <Input
                     type="date"
-                    className="h-8 w-[144px] bg-background/40 text-xs"
+                    className="w-[144px]"
                     value={rangeEndInput}
                     onChange={(event) => onRangeEndInputChange(event.target.value)}
                   />
@@ -756,7 +766,32 @@ function AdminUsageAnalyticsCard({
           </div>
         </div>
       </CardHeader>
-      <CardContent className="space-y-2">
+      <CardContent className="flex flex-col gap-3">
+        <dl className="usage-summary-grid">
+          <div>
+            <dt>{rangeBadgeLabel} · Token</dt>
+            <dd className="usage-summary-value">{rangeUsage.totalTokens === 0 ? "0" : formatCompactTokenAmount(rangeUsage.totalTokens)}</dd>
+            <dd className="usage-summary-detail">{formatUsd(rangeUsage.estimatedCostUsd)}</dd>
+          </div>
+          <div>
+            <dt>{isTodayOnlyRange ? t("今日请求") : t("区间请求")}</dt>
+            <dd className="usage-summary-value">{rangeUsage.requestCount.toLocaleString(intlLocaleFromAppLocale(locale))}</dd>
+            <dd className="usage-summary-detail">{t("成功")} {rangeUsage.successCount.toLocaleString(intlLocaleFromAppLocale(locale))}</dd>
+          </div>
+          <div>
+            <dt>{isTodayOnlyRange ? t("输入 / 输出") : t("区间输入 / 输出")}</dt>
+            <dd className="usage-summary-value usage-summary-pair">
+              {formatCompactTokenAmount(rangeUsage.inputTokens - rangeUsage.cachedInputTokens)} / {formatCompactTokenAmount(rangeUsage.outputTokens)}
+            </dd>
+          </div>
+          <div>
+            <dt>{isTodayOnlyRange ? t("缓存 / 推理") : t("区间缓存 / 推理")}</dt>
+            <dd className="usage-summary-value usage-summary-pair">
+              {formatCompactTokenAmount(rangeUsage.cachedInputTokens)} / {formatCompactTokenAmount(rangeUsage.reasoningOutputTokens)}
+            </dd>
+            <dd className="usage-summary-detail">{t("缓存命中率")} {formatPercent(rangeCacheHitRate)}</dd>
+          </div>
+        </dl>
         {summary.seriesUsage.length > 0 ? (
           <AdminUsageTrendChart
             summary={summary}
@@ -767,53 +802,21 @@ function AdminUsageAnalyticsCard({
             }
             isRefreshing={isRefreshing}
           />
-        ) : (
+        ) : rangeUsage.requestCount > 0 || rangeUsage.totalTokens > 0 ? (
           <DailyTokenLineChart
             points={summary.dailyUsage}
             zoomWindow={zoomWindow}
             onZoomWindowChange={setZoomWindow}
           />
+        ) : (
+          <Empty data-slot="usage-chart-empty" className="min-h-40 rounded-lg border border-dashed py-6">
+            <EmptyHeader>
+              <EmptyMedia variant="icon"><LineChart /></EmptyMedia>
+              <EmptyTitle>{t("所选区间暂无请求")}</EmptyTitle>
+              <EmptyDescription>{t("请求产生后，用量趋势会显示在这里。")}</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         )}
-        <div className="grid gap-3 text-xs sm:grid-cols-2 xl:grid-cols-4">
-          <div className="min-w-0 border-t border-border/60 pt-3">
-            <div className="text-muted-foreground">{rangeBadgeLabel}</div>
-            <div className="mt-1 font-mono font-semibold text-primary">
-              {formatCompactTokenAmount(rangeUsage.totalTokens)}
-            </div>
-            <div className="text-muted-foreground">
-              {formatUsd(rangeUsage.estimatedCostUsd)}
-            </div>
-          </div>
-          <div className="min-w-0 border-t border-border/60 pt-3">
-            <div className="text-muted-foreground">
-              {isTodayOnlyRange ? t("今日请求") : t("区间请求")}
-            </div>
-            <div className="mt-1 font-mono font-semibold">
-              {rangeUsage.requestCount} · {t("成功")} {rangeUsage.successCount}
-            </div>
-          </div>
-          <div className="min-w-0 border-t border-border/60 pt-3">
-            <div className="text-muted-foreground">
-              {isTodayOnlyRange ? t("输入 / 输出") : t("区间输入 / 输出")}
-            </div>
-            <div className="mt-1 font-mono font-semibold">
-              {formatCompactTokenAmount(rangeUsage.inputTokens - rangeUsage.cachedInputTokens)} /{" "}
-              {formatCompactTokenAmount(rangeUsage.outputTokens)}
-            </div>
-          </div>
-          <div className="min-w-0 border-t border-border/60 pt-3">
-            <div className="text-muted-foreground">
-              {isTodayOnlyRange ? t("缓存 / 推理") : t("区间缓存 / 推理")}
-            </div>
-            <div className="mt-1 font-mono font-semibold">
-              {formatCompactTokenAmount(rangeUsage.cachedInputTokens)} /{" "}
-              {formatCompactTokenAmount(rangeUsage.reasoningOutputTokens)}
-            </div>
-            <div className="text-muted-foreground">
-              {t("缓存命中率")} {formatPercent(rangeCacheHitRate)}
-            </div>
-          </div>
-        </div>
       </CardContent>
     </Card>
   );

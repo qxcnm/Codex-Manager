@@ -39,6 +39,7 @@ mod model_groups;
 mod quota;
 mod requestlog;
 mod service_config;
+mod service_health;
 mod startup;
 mod storage_space;
 mod system;
@@ -217,6 +218,9 @@ fn permission_denied(method: &str) -> String {
 }
 
 const MEMBER_METHOD_ALLOWLIST: &[&str] = &[
+    "serviceHealth/summary",
+    "serviceHealth/report",
+    "serviceHealth/resolve",
     "account/chatgptAuthTokens/refresh",
     "account/chatgptAuthTokens/refreshAll",
     "account/list",
@@ -388,6 +392,9 @@ pub(crate) fn handle_request_with_actor(req: JsonRpcRequest, actor: RpcActor) ->
         return JsonRpcMessage::Response(resp);
     }
     if let Some(resp) = crate::plugin::try_handle(&req) {
+        return JsonRpcMessage::Response(resp);
+    }
+    if let Some(resp) = service_health::try_handle(&req, &actor) {
         return JsonRpcMessage::Response(resp);
     }
     if let Some(resp) = requestlog::try_handle(&req, &actor) {

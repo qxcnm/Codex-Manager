@@ -445,6 +445,7 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                     tags,
                     group_name,
                     workspace_id,
+                    super::string_param(req, "proxyProfileId"),
                 ))
             }
         }

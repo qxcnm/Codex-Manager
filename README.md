@@ -208,7 +208,8 @@ If this project has helped you, donations are welcome!
 | Import an account from ChatGPT `/api/auth/session` without logging in through Codex | [Chinese guide: Import ChatGPT auth session](docs/zh-CN/report/不登陆Codex使用ChatGPT-auth-session导入账号.md) |
 | Configure ports, proxy, database, Web password, and environment variables | [Environment and Runtime Configuration](docs/en/report/environment-and-runtime-config.md) |
 | Troubleshoot account routing, import failures, challenge interception, or request errors | [FAQ and Account Routing Rules](docs/en/report/faq-and-account-routing-rules.md) |
-| Understand why background jobs skip, disable, or deactivate accounts | [Background Task Account Skip Notes](docs/en/report/background-task-account-skip-notes.md) |
+| Understand why background jobs skip, disable, or deactivate accounts | [Service Health Dashboard](docs/en/report/service-health-dashboard.md) | Shared local request statistics and private incident reports |
+| [Background Task Account Skip Notes](docs/en/report/background-task-account-skip-notes.md) |
 | Manage models, pricing, routes, instructions policy, and Codex model catalogs | [Chinese guide: Model Catalog V2 Management and Billing](docs/zh-CN/report/模型目录V2管理与计费说明.md) |
 | Minimal plugin center integration and quick onboarding | [Plugin Center Minimal Integration](docs/en/report/plugin-center-minimal-integration.md) |
 | Integrate with the plugin center, view interfaces, marketplace modes, and Rhai APIs | [Plugin Center Integration and Interfaces](docs/en/report/plugin-center-integration-and-interfaces.md) |
@@ -259,7 +260,7 @@ If this project has helped you, donations are welcome!
 ## Quick Start
 
 1. Download a package for your platform from [GitHub Releases](https://github.com/qxcnm/Codex-Manager/releases/latest), launch the desktop app, and click **Start Service**.
-2. Open **Account Management** and choose browser authorization or Device Code login for `chatgpt.com`.
+2. Open **Account Management** and choose browser authorization or Device Code login for `chatgpt.com`. You can first select an enabled proxy profile for server-side login requests; it is saved as the account proxy after successful login. Browser authorization pages continue to use the browser's network settings.
 3. If the browser callback fails, paste the callback URL to complete parsing manually.
 4. Refresh usage and verify account status.
 

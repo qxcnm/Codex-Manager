@@ -36,6 +36,8 @@ mod model_groups;
 mod real_database_tests;
 mod request_log_retention;
 mod request_logs;
+mod service_health;
+pub use service_health::ServiceHealthRepository;
 mod request_token_stats;
 mod request_usage_summary;
 mod reset_credit_operations;

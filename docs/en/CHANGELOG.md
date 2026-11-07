@@ -5,18 +5,26 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-07
+
 ### Added
 
+- Add a service-local health dashboard with shared Codex/Claude request samples, latency, error categories, expiring incident reports and owner-only resolution; no external reporting (#509).
+- Allow choosing an enabled proxy before adding an account, use it for server-side browser/device-code login requests, and retain it as the account proxy after successful login (#521).
 - Add optional background model discovery for individual accounts and aggregate APIs, with start/stop controls, configurable intervals, persistent status, and append-only model/route updates (#515).
 
 ### Changed
 
+- Request logs now default to a timeline with timestamps, status, and request summaries, expandable details, summary copying, and a switch to the existing table view.
+- Updated README Star History charts and links to the project's live statistics.
+- Refined dashboard usage summaries, date filters, and chart layout; added an empty state for ranges without requests, reduced the timeline brush, and restored the total curve when no model breakdown is available.
 - Refined page headings, metric cards, table separators, and form controls; aligned the sidebar and header, improved keyboard focus and dark-theme clarity, and polished narrow-window and low-transparency layouts.
 - Updated the frontend and backend default client version against Codex 0.164.0, with pinned upstream evidence and documented integration boundaries.
 - Added read-only discovery of skills in the service user's `~/.agents/skills`, preserving the existing installation and removal scope.
 
 ### Fixed
 
+- Prefer a request's explicitly recorded account source over the API key's aggregate API binding, so account fallback requests are no longer mislabeled as aggregate traffic.
 - Improved checkbox visibility across all themes and glass surfaces, with clearer hover, keyboard focus and disabled states, plus partial-selection indicators for account and model lists.
 - Preserved stream options and access-program selections in Codex Responses requests, and stopped stale WebSocket handshake metadata from overriding later frames.
 - Aligned token refresh with Codex's JSON request encoding and removed the fixed scope that could reduce the original grant, preserving proxy handling, error classification, and rotated credentials.

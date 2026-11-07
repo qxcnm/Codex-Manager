@@ -3,6 +3,8 @@
 import type { MessageCatalog } from "../types";
 
 export const KO_DASHBOARD_MESSAGES: MessageCatalog = {
+  "所选区间暂无请求": "선택한 기간에 요청이 없습니다",
+  "请求产生后，用量趋势会显示在这里。": "요청이 기록되면 여기에 사용량 추이가 표시됩니다.",
   "本机 Codex 的直连请求不会经过网关；下方仍展示 CodexManager 已记录的网关流量。":
     "이 컴퓨터의 Codex 직결 요청은 게이트웨이를 거치지 않습니다. 아래에는 CodexManager가 기록한 게이트웨이 트래픽이 계속 표시됩니다.",
   "OpenAI 账号今日消耗": "오늘 OpenAI 계정 사용량",

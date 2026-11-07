@@ -57,7 +57,7 @@ test("accounts 模式管理员菜单按任务域分组并保留账号体系入�
       ["/platform-mode", "/apikeys"],
       ["/models", "/model-groups"],
       ["/account-manager"],
-      ["/logs"],
+      ["/service-health", "/logs"],
       ["/settings", "/proxy-settings", "/plugins", "/skills", "/author"],
     ]
   );
@@ -87,6 +87,7 @@ test("none/password 单人管理员模式隐藏账号体系入口但保留单人
         "/platform-mode",
         "/apikeys",
         "/models",
+        "/service-health",
         "/logs",
         "/settings",
         "/proxy-settings",
@@ -150,7 +151,7 @@ test("accounts 模式成员菜单只保留自助入口", () => {
   );
   assert.deepEqual(
     sections.map((section) => section.routes.map((route) => route.path)),
-    [["/"], ["/apikeys"], ["/models"], ["/logs"], ["/settings"]]
+    [["/"], ["/apikeys"], ["/models"], ["/service-health", "/logs"], ["/settings"]]
   );
   assert.equal(routes.getTopLevelRouteLabel("/apikeys", access), "我的密钥");
   assert.equal(routes.getTopLevelRouteLabel("/models", access), "可用模型");
@@ -160,4 +161,18 @@ test("accounts 模式成员菜单只保留自助入口", () => {
     false
   );
   assert.equal(routes.isTopLevelRouteAllowedForRole("/model-groups", access), false);
+});
+
+test("服务健康在桌面和 Web 中向所有角色开放", () => {
+  for (const role of ["system_admin", "admin", "member"]) {
+    for (const isDesktopRuntime of [false, true]) {
+      const access = { role, mode: "accounts", isDesktopRuntime };
+      assert.equal(routes.isTopLevelRouteAllowedForRole("/service-health/", access), true);
+      assert.equal(routes.getTopLevelRouteLabel("/service-health", access), "服务健康");
+      const section = routes.getAllowedTopLevelRouteSections(access).find((entry) =>
+        entry.routes.some((route) => route.path === "/service-health"),
+      );
+      assert.equal(section?.id, role === "member" ? "member-usage" : "monitoring");
+    }
+  }
 });

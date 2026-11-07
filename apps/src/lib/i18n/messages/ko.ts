@@ -16,10 +16,12 @@ import { KO_PLATFORM_MODE_MESSAGES } from "./sections/ko-platform-mode";
 import { KO_PROJECTS_MESSAGES } from "./sections/ko-projects";
 import { KO_RUNTIME_UI_MESSAGES } from "./sections/ko-runtime-ui";
 import { KO_SKILLS_MESSAGES } from "./sections/ko-skills";
+import { KO_SERVICE_HEALTH_MESSAGES } from "./sections/ko-service-health";
 
 export const KO_MESSAGES: MessageCatalog = {
   ...KO_PROJECTS_MESSAGES,
   ...KO_SKILLS_MESSAGES,
+  ...KO_SERVICE_HEALTH_MESSAGES,
   ...KO_DESKTOP_DIAGNOSTICS_MESSAGES,
   仪表盘: "대시보드",
   概览: "개요",
@@ -602,6 +604,20 @@ export const KO_MESSAGES: MessageCatalog = {
   "状态码 200-299": "상태 코드 200-299",
   异常请求: "오류 요청",
   "4xx / 5xx 或显式错误": "4xx / 5xx 또는 명시적 오류",
+  请求时间线: "요청 타임라인",
+  日志视图: "로그 보기",
+  时间线视图: "타임라인 보기",
+  表格视图: "표 보기",
+  时间线: "타임라인",
+  表格: "표",
+  复制摘要: "요약 복사",
+  请求完成: "요청 완료",
+  请求异常: "요청 실패",
+  请求已返回: "응답 수신",
+  状态未知: "상태 알 수 없음",
+  查看明细: "상세 보기",
+  用时: "소요 시간",
+  输出: "출력",
   请求明细: "요청 상세",
   "请求明细 按": "요청 상세 -",
   请求内容: "요청 본문",

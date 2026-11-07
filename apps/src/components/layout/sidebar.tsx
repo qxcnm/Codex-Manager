@@ -4,6 +4,7 @@ import Image from "next/image";
 import {
   Cable,
   House,
+  HeartPulse,
   Users,
   UserCog,
   Key,
@@ -56,6 +57,7 @@ const NAV_ITEM_BY_PATH = new Map<TopLevelRoutePath, { icon: LucideIcon }>([
   ["/plugins", { icon: Puzzle }],
   ["/skills", { icon: WandSparkles }],
   ["/logs", { icon: FileText }],
+  ["/service-health", { icon: HeartPulse }],
   ["/settings", { icon: Settings }],
   ["/proxy-settings", { icon: Globe }],
   ["/author", { icon: UserRound }],

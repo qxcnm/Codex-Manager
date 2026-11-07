@@ -786,6 +786,68 @@ body.low-transparency .command-center-primary-action {
   isolation: isolate;
 }
 
+.usage-analytics-card {
+  container-name: usage-analytics;
+  container-type: inline-size;
+}
+
+.usage-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.usage-summary-grid > div {
+  min-width: 0;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--background) 55%, var(--card-solid));
+}
+
+.usage-summary-grid dt,
+.usage-summary-detail {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+}
+
+.usage-summary-value {
+  margin-block: 0.25rem;
+  color: var(--foreground);
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.5rem;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.usage-summary-pair {
+  font-size: 0.875rem;
+}
+
+.usage-analytics-card [data-slot="toggle-group-item"][aria-pressed="true"] {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, var(--card-solid));
+}
+
+.usage-analytics-card [data-slot="toggle-group-item"]:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+@container usage-analytics (min-width: 640px) {
+  .usage-summary-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@container usage-analytics (max-width: 420px) {
+  .usage-analytics-header > div:last-child {
+    width: 100%;
+  }
+}
+
 .metric-icon {
   color: var(--metric-color);
   background: color-mix(in srgb, var(--metric-color) 9%, var(--card-solid));

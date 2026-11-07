@@ -289,6 +289,7 @@ async fn seed_session(id: &'static str) {
                 note: None,
                 tags: None,
                 group_name: None,
+                proxy_profile_id: None,
                 created_at: now_ts(),
                 updated_at: now_ts(),
             })

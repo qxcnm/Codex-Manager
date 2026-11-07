@@ -6,7 +6,7 @@ import {
   useState,
   type WheelEvent as ReactWheelEvent,
 } from "react";
-import { Check, LoaderCircle, RotateCcw } from "lucide-react";
+import { ChartNoAxesCombined, Check, LoaderCircle, RotateCcw } from "lucide-react";
 import {
   Brush,
   CartesianGrid,
@@ -16,6 +16,14 @@ import {
   YAxis,
 } from "recharts";
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   ChartContainer,
   ChartTooltip,
@@ -167,11 +175,19 @@ export function AdminUsageTrendChart({
       }),
     [activeModels, stableModelIndexByName],
   );
+  const shouldShowTotal = showTotal || modelDefinitions.length === 0;
+  const hasUsageActivity =
+    fallbackSeries(summary).some(
+      ({ usage }) => usage.requestCount > 0 || usage.totalTokens > 0,
+    ) ||
+    summary.modelUsage.some(
+      ({ usage }) => usage.requestCount > 0 || usage.totalTokens > 0,
+    );
   const chartConfig = useMemo(() => {
     const config: ChartConfig = {
       total: {
         label: t("全部模型"),
-        color: "var(--usage-total-line)",
+        color: modelDefinitions.length === 0 ? "var(--primary)" : "var(--usage-total-line)",
       },
     };
     for (const definition of modelDefinitions) {
@@ -273,7 +289,7 @@ export function AdminUsageTrendChart({
     [
       0,
       ...visibleChartData.flatMap((row) => [
-        ...(showTotal ? [Number(row.total)] : []),
+        ...(shouldShowTotal ? [Number(row.total)] : []),
         ...modelDefinitions.map((definition) => Number(row[definition.key] ?? 0)),
       ]),
     ],
@@ -326,54 +342,51 @@ export function AdminUsageTrendChart({
   );
 
   return (
-    <div className="space-y-2">
+    <div className="flex min-w-0 flex-col gap-3">
       <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex flex-wrap items-center gap-2">
-          <div
-            className="inline-flex rounded-md border border-border/70 bg-background/40 p-0.5"
-            role="group"
+          <ToggleGroup
+            value={[granularity]}
+            variant="outline"
+            spacing={0}
             aria-label={t("时间粒度")}
             title={
               hourlyAvailable ? undefined : t("小时曲线最多支持 31 天区间")
             }
+            onValueChange={([value]) => {
+              if (value !== "day" && value !== "hour") return;
+              setZoomWindow(null);
+              onGranularityChange(value);
+            }}
           >
             {(["day", "hour"] as const).map((value) => (
-              <Button
+              <ToggleGroupItem
                 key={value}
-                type="button"
-                size="sm"
-                variant={granularity === value ? "default" : "ghost"}
-                className="h-7 px-2.5 text-xs"
-                aria-pressed={granularity === value}
+                value={value}
                 disabled={value === "hour" && !hourlyAvailable}
-                onClick={() => {
-                  setZoomWindow(null);
-                  onGranularityChange(value);
-                }}
               >
                 {value === "day" ? t("按天") : t("按小时")}
-              </Button>
+              </ToggleGroupItem>
             ))}
-          </div>
-          <div
-            className="inline-flex rounded-md border border-border/70 bg-background/40 p-0.5"
-            role="group"
+          </ToggleGroup>
+          <ToggleGroup
+            value={[metric]}
+            variant="outline"
+            spacing={0}
             aria-label={t("指标")}
+            onValueChange={([value]) => {
+              if (value === "tokens" || value === "requests") setMetric(value);
+            }}
           >
             {(["tokens", "requests"] as const).map((value) => (
-              <Button
+              <ToggleGroupItem
                 key={value}
-                type="button"
-                size="sm"
-                variant={metric === value ? "default" : "ghost"}
-                className="h-7 px-2.5 text-xs"
-                aria-pressed={metric === value}
-                onClick={() => setMetric(value)}
+                value={value}
               >
                 {value === "tokens" ? t("Token") : t("请求数")}
-              </Button>
+              </ToggleGroupItem>
             ))}
-          </div>
+          </ToggleGroup>
           {hasZoomWindow ? (
             <Button
               type="button"
@@ -382,7 +395,7 @@ export function AdminUsageTrendChart({
               className="h-8 gap-1.5 text-xs"
               onClick={() => setZoomWindow(null)}
             >
-              <RotateCcw className="size-3.5" />
+              <RotateCcw data-icon="inline-start" />
               {t("重置缩放")}
             </Button>
           ) : null}
@@ -395,8 +408,8 @@ export function AdminUsageTrendChart({
         ) : null}
       </div>
 
-      {availableModelNames.length > 0 ? (
-        <div className="mission-panel flex flex-wrap items-center gap-2 rounded-lg border border-primary/15 bg-background/25 px-2 py-1.5 shadow-[inset_0_1px_0_rgb(255_255_255/0.05)]">
+      {hasUsageActivity && availableModelNames.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-2">
           <div className="flex shrink-0 items-center gap-2">
             <div className="text-[11px] font-medium text-foreground">
               {t("模型曲线")} · {t("已选 {selected}/{max}", {
@@ -409,10 +422,10 @@ export function AdminUsageTrendChart({
                 type="button"
                 size="sm"
                 variant="outline"
-                className="h-7 gap-1.5 border-primary/25 bg-background/45 px-2 text-xs shadow-sm"
+                className="h-7 gap-1.5 px-2 text-xs"
                 onClick={() => setSelectedModels([])}
               >
-                <RotateCcw className="size-3" />
+                <RotateCcw data-icon="inline-start" />
                 {t("恢复默认")}
               </Button>
             ) : null}
@@ -469,7 +482,6 @@ export function AdminUsageTrendChart({
                       ? {
                           borderColor: color,
                           background: `color-mix(in srgb, ${color} 11%, var(--background))`,
-                          boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${color} 28%, transparent), 0 3px 10px rgb(15 23 42 / 0.08)`,
                         }
                       : undefined
                   }
@@ -522,21 +534,27 @@ export function AdminUsageTrendChart({
       ) : null}
 
       <div
-        className="mission-panel overflow-hidden rounded-lg border border-primary/20 bg-gradient-to-b from-background/45 to-background/20 shadow-[inset_0_1px_0_rgb(255_255_255/0.06)]"
-        onWheel={handleWheelZoom}
+        className="overflow-hidden rounded-lg border border-border"
+        onWheel={hasUsageActivity ? handleWheelZoom : undefined}
       >
         <p id="usage-chart-range-help" className="sr-only">
           {t("拖动底部时间滑块调整范围，滚轮可快速缩放")}
         </p>
-        {chartData.length === 0 ? (
-          <div className="flex h-64 items-center justify-center text-sm text-muted-foreground">
-            {t("暂无模型用量数据")}
-          </div>
+        {!hasUsageActivity || chartData.length === 0 ? (
+          <Empty data-slot="usage-chart-empty" className="min-h-44 py-7">
+            <EmptyHeader>
+              <EmptyMedia variant="icon"><ChartNoAxesCombined /></EmptyMedia>
+              <EmptyTitle>{t(hasUsageActivity ? "暂无模型用量数据" : "所选区间暂无请求")}</EmptyTitle>
+              {!hasUsageActivity ? (
+                <EmptyDescription>{t("请求产生后，用量趋势会显示在这里。")}</EmptyDescription>
+              ) : null}
+            </EmptyHeader>
+          </Empty>
         ) : (
           <ChartContainer
             config={chartConfig}
-            className="h-80 w-full rounded-md bg-transparent p-3"
-            initialDimension={{ width: 720, height: 320 }}
+            className="h-64 w-full rounded-md bg-transparent p-2"
+            initialDimension={{ width: 720, height: 256 }}
             aria-label={t("模型用量趋势图")}
             aria-describedby="usage-chart-range-help usage-chart-visible-range"
           >
@@ -544,15 +562,16 @@ export function AdminUsageTrendChart({
               key={chartInstanceKey}
               accessibilityLayer
               data={chartData}
-              margin={{ top: 18, right: 14, left: 10, bottom: 8 }}
+              margin={{ top: 14, right: 20, left: 6, bottom: 6 }}
             >
               <CartesianGrid
                 vertical={false}
-                stroke="rgb(var(--primary-rgb) / 0.16)"
-                strokeDasharray="4 8"
+                stroke="var(--border)"
+                strokeDasharray="3 5"
               />
               <XAxis
                 dataKey="label"
+                padding={{ left: 8, right: 24 }}
                 tick={{ fill: "var(--muted-foreground)" }}
                 tickLine={false}
                 axisLine={false}
@@ -589,21 +608,23 @@ export function AdminUsageTrendChart({
                   />
                 }
               />
-              {showTotal ? (
+              {shouldShowTotal ? (
                 <Line
                   dataKey="total"
+                  isAnimationActive={false}
                   name="total"
                   type="monotone"
                   stroke="var(--color-total)"
-                  strokeWidth={1.5}
-                  strokeDasharray="7 5"
-                  dot={false}
+                  strokeWidth={modelDefinitions.length > 0 ? 1.5 : 2.25}
+                  strokeDasharray={modelDefinitions.length > 0 ? "7 5" : undefined}
+                  dot={chartData.length === 1 ? { r: 3 } : false}
                   activeDot={{ r: 4, strokeWidth: 2 }}
                 />
               ) : null}
               {modelDefinitions.map((definition) => (
                 <Line
                   key={definition.model}
+                  isAnimationActive={false}
                   dataKey={definition.key}
                   name={definition.model}
                   type="monotone"
@@ -614,19 +635,20 @@ export function AdminUsageTrendChart({
                       ? 1
                       : 0.18
                   }
-                  dot={false}
+                  dot={chartData.length === 1 ? { r: 3 } : false}
                   activeDot={{ r: 4, strokeWidth: 2 }}
                   connectNulls
                 />
               ))}
-              <Brush
+              {chartData.length > 2 ? <Brush
                 dataKey="label"
-                height={28}
-                travellerWidth={16}
+                height={18}
+                travellerWidth={10}
+                tickFormatter={() => ""}
                 startIndex={visibleStartIndex}
                 endIndex={visibleEndIndex}
-                stroke="rgb(var(--primary-rgb) / 0.55)"
-                fill="var(--card)"
+                stroke="var(--border)"
+                fill="var(--card-solid)"
                 onChange={(nextWindow) => {
                   if (
                     typeof nextWindow.startIndex === "number" &&
@@ -640,12 +662,12 @@ export function AdminUsageTrendChart({
                     });
                   }
                 }}
-              />
+              /> : null}
             </ComposedChart>
           </ChartContainer>
         )}
       </div>
-      {visibleRangeLabel ? (
+      {hasUsageActivity && visibleRangeLabel ? (
         <div
           id="usage-chart-visible-range"
           className="text-right text-[11px] text-muted-foreground"

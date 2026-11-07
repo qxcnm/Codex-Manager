@@ -32,6 +32,7 @@ mod requestlog;
 mod rpc_actor;
 mod rpc_dispatch;
 mod runtime;
+mod service_health;
 mod startup_snapshot;
 mod storage;
 mod time_bounds;

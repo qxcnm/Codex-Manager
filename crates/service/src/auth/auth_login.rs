@@ -65,6 +65,7 @@ pub(crate) fn login_start(
     tags: Option<String>,
     group_name: Option<String>,
     workspace_id: Option<String>,
+    proxy_profile_id: Option<String>,
 ) -> Result<LoginStartResult, String> {
     crate::auth_tokens::run_auth_future(login_start_async(
         login_type,
@@ -73,6 +74,7 @@ pub(crate) fn login_start(
         tags,
         group_name,
         workspace_id,
+        proxy_profile_id,
     ))
 }
 
@@ -83,13 +85,34 @@ pub(crate) async fn login_start_async(
     tags: Option<String>,
     group_name: Option<String>,
     workspace_id: Option<String>,
+    proxy_profile_id: Option<String>,
 ) -> Result<LoginStartResult, String> {
+    let proxy_profile_id = proxy_profile_id
+        .map(|id| id.trim().to_owned())
+        .filter(|id| !id.is_empty());
+    let profile_id = proxy_profile_id.clone();
+    let proxy_url = if profile_id.is_some() {
+        crate::auth_tokens::run_auth_storage(move || {
+            let storage = open_storage().ok_or_else(|| "storage unavailable".to_owned())?;
+            super::login_proxy::resolve_login_proxy_url(&storage, profile_id.as_deref())
+        })
+        .await?
+    } else {
+        None
+    };
     let device = if is_device_login_type(login_type.trim()) {
         let issuer =
             std::env::var("CODEXMANAGER_ISSUER").unwrap_or_else(|_| DEFAULT_ISSUER.to_owned());
         let client_id = std::env::var("CODEXMANAGER_CLIENT_ID")
             .unwrap_or_else(|_| DEFAULT_CLIENT_ID.to_owned());
-        Some(crate::auth_tokens::request_device_code_async(&issuer, &client_id).await?)
+        Some(
+            crate::auth_tokens::request_device_code_async(
+                &issuer,
+                &client_id,
+                proxy_url.as_deref(),
+            )
+            .await?,
+        )
     } else {
         None
     };
@@ -102,6 +125,7 @@ pub(crate) async fn login_start_async(
             tags,
             group_name,
             workspace_id,
+            proxy_profile_id,
             device,
         )
     })
@@ -115,6 +139,7 @@ fn login_start_prepared(
     tags: Option<String>,
     group_name: Option<String>,
     workspace_id: Option<String>,
+    proxy_profile_id: Option<String>,
     device: Option<crate::auth_tokens::DeviceCodeStartResult>,
 ) -> Result<LoginStartResult, String> {
     // 读取登录相关配置
@@ -161,6 +186,7 @@ fn login_start_prepared(
                 status: "pending".to_string(),
                 error: None,
                 workspace_id: workspace_id.clone(),
+                proxy_profile_id,
                 note,
                 tags,
                 group_name,
@@ -205,6 +231,7 @@ fn login_start_prepared(
             status: "pending".to_string(),
             error: None,
             workspace_id: workspace_id.clone(),
+            proxy_profile_id,
             note,
             tags,
             group_name,

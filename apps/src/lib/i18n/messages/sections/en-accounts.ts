@@ -3,6 +3,11 @@
 import type { MessageCatalog } from "../types";
 
 export const EN_ACCOUNTS_MESSAGES: MessageCatalog = {
+  "登录与账号代理": "Login and account proxy",
+  "不指定（沿用默认网络）": "Unspecified (use default network)",
+  "所选代理用于服务端登录请求，登录成功后保存为账号代理。浏览器授权页面仍使用浏览器自身的网络设置。": "The selected proxy is used for server-side login requests and saved as the account proxy after login. The browser authorization page still uses the browser's own network settings.",
+  "加载代理配置失败，请稍后重新打开弹窗。": "Failed to load proxy profiles. Reopen this dialog to retry.",
+  "暂无可用代理配置，请先在设置中添加。": "No proxy profiles available. Add one in Settings first.",
   "额度重置自动唤醒": "Auto wake on quota reset",
   "自动唤醒：开": "Auto wake: on",
   "自动唤醒：关": "Auto wake: off",

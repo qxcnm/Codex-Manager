@@ -9,6 +9,7 @@ import { createMiscWebCommands } from "./transport-web-commands/misc";
 import { createModelDiscoveryWebCommands } from "./transport-web-commands/model-discovery";
 import { createProxyProfilesWebCommands } from "./transport-web-commands/proxy-profiles";
 import { createQuotaWebCommands } from "./transport-web-commands/quota";
+import { createServiceHealthWebCommands } from "./transport-web-commands/service-health";
 import type { WebCommandDescriptor, WebRpcCaller } from "./transport-web-commands/shared";
 
 export type { InvokeParams, WebCommandDescriptor } from "./transport-web-commands/shared";
@@ -22,6 +23,7 @@ export function createWebCommandMap(postWebRpc: WebRpcCaller): Record<string, We
     ...createAccountWebCommands(postWebRpc),
     ...createProxyProfilesWebCommands(),
     ...createQuotaWebCommands(),
+    ...createServiceHealthWebCommands(),
     ...createAggregateApiWebCommands(),
     ...createLoginWebCommands(),
     ...createApiKeyWebCommands(),

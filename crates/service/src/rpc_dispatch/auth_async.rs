@@ -45,6 +45,7 @@ pub(crate) async fn try_handle_auth_request_async(
                 super::string_param(req, "tags"),
                 super::string_param(req, "groupName"),
                 super::string_param(req, "workspaceId").filter(|value| !value.trim().is_empty()),
+                super::string_param(req, "proxyProfileId"),
             )
             .await,
         )
