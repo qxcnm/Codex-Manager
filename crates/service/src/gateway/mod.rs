@@ -168,6 +168,7 @@ mod local_models;
 #[path = "request/local_response.rs"]
 mod local_response;
 mod local_validation;
+pub(crate) use local_validation::is_native_codex_client_request;
 #[path = "observability/metrics.rs"]
 mod metrics;
 #[path = "request/official_responses_http.rs"]
@@ -187,6 +188,7 @@ mod request_log;
 mod request_log_payload;
 #[path = "request/request_rewrite.rs"]
 mod request_rewrite;
+pub(crate) mod responses_event_compat;
 #[path = "routing/route_hint.rs"]
 mod route_hint;
 #[path = "routing/route_quality.rs"]
@@ -1216,6 +1218,18 @@ pub(crate) fn gateway_supports_official_responses_websocket(
         return false;
     }
     upstream::config::is_chatgpt_backend_base(&gateway_resolve_effective_upstream_base(api_key))
+}
+
+/// The Responses WebSocket frontend can also use the regular HTTP gateway.
+/// Keep native upstream capability separate so aggregate/hybrid routing is
+/// resolved for each turn by the same policy as POST /v1/responses.
+pub(crate) fn gateway_supports_responses_websocket(
+    api_key: &codexmanager_core::storage::ApiKey,
+) -> bool {
+    crate::apikey_profile::resolve_gateway_protocol_type(
+        api_key.protocol_type.as_str(),
+        "/v1/responses",
+    ) == crate::apikey_profile::PROTOCOL_OPENAI_COMPAT
 }
 
 /// 函数 `gateway_collect_routed_candidates`

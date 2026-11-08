@@ -30,6 +30,7 @@ pub(super) struct LocalResponseContext<'a> {
 /// 无
 pub(super) fn record_local_result(
     ctx: &LocalResponseContext<'_>,
+    request_type: &'static str,
     status_code: u16,
     usage: super::request_log::RequestLogUsage,
     error: Option<&str>,
@@ -41,6 +42,7 @@ pub(super) fn record_local_result(
         ctx.storage,
         super::request_log::RequestLogTraceContext {
             trace_id: Some(ctx.trace_id),
+            request_type: Some(request_type),
             original_path: Some(ctx.original_path),
             adapted_path: Some(ctx.path),
             response_adapter: Some(ctx.response_adapter),
@@ -90,7 +92,7 @@ pub(super) fn respond_local_json_with_headers(
     usage: super::request_log::RequestLogUsage,
     extra_headers: Vec<crate::http::gateway_response::Header>,
 ) -> Result<(), String> {
-    record_local_result(ctx, 200, usage, None);
+    record_local_result(ctx, request.request_type(), 200, usage, None);
     let mut response = super::error_response::with_trace_id_header(
         Response::from_string(body)
             .with_status_code(200)
@@ -132,6 +134,7 @@ pub(super) fn respond_local_terminal_error(
 ) -> Result<(), String> {
     record_local_result(
         ctx,
+        request.request_type(),
         status_code,
         super::request_log::RequestLogUsage::default(),
         Some(message.as_str()),

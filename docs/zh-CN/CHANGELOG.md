@@ -5,6 +5,37 @@
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-11-08
+
+### Added
+
+- 为聚合 API 和混合路由增加 Responses WebSocket 兼容接入，复用现有 HTTP/SSE 网关的认证、模型路由、配额、并发限制和日志，保留官方 Codex 账号的原生 WebSocket 路径。
+- 兼容接入支持 `generate:false` 本地预热、同连接 `previous_response_id` 连续对话、工具结果回传和中断，并同步网关 WebSocket 能力与客户端配置。
+- 增加 Responses 客户端到 Chat Completions 聚合上游的请求与响应转换，覆盖 JSON、SSE、函数工具、用量和错误。
+
+### Fixed
+
+- 修复原生 Responses WebSocket 将 tool_choice 限定为字符串、拒绝合法指定函数对象的问题，统一保留 auto/required/none 和命名函数选择，并继续校验错误形状。
+
+- 修复 OpenAI SDK 仅携带通用请求追踪头时被误判为 Codex 原生客户端，导致 Chat 路径未转换、Responses 非流式请求被上游拒绝的问题。
+- 为标准 Responses 客户端处理 Codex 专有附加事件和旧版结束事件，避免 SDK 解析失败后提前断开；原生 Codex 客户端保留专有事件。
+
+- 修复完整终态已交付后，客户端结束读取仍被记录为 `499 / broken pipe` 的问题；终态交付后及时结束流，不再等待上游关闭连接。真实取消、未完整交付和上游失败继续保留错误状态。
+- 修复上游仅在 `response.completed` 提供完整助手正文时，Codex 客户端收不到可显示回复的问题；补齐消息时保留原始 ID 和输出位置，避免重复消息。
+- 修复末帧缺少 SSE 分隔符、CR/CRLF 换行及分块边界导致回复不能正常结束的问题；最终正文仅在与已发送内容严格前缀匹配时补齐缺失后缀。
+- 修复 Codex 上游转换到 Responses、Chat Completions 和 Messages 客户端时的终态、错误及长度限制处理；保留可用部分正文和用量，不将失败或工具参数截断当作成功。
+- 修复 Messages 多轮历史中的 assistant 正文类型，保留工具选择策略、调用 ID、参数和结果；补齐仅出现在最终 Responses 快照中的工具调用并按 ID 去重。
+- 修复 Responses 转 Chat 时工具调用先于正文到达造成的历史顺序问题；保留完整函数定义和可见历史，跳过无法跨厂商恢复的 reasoning 元数据，不将加密内容或推理摘要写入正文。
+- 修复 Responses 转 Messages 时图片输入被丢弃的问题，保留 HTTP(S) URL 和受支持的 base64 图片；非法来源、不支持的格式及系统消息中的图片明确报错。
+- 修复显式配置的 Claude 模型路由无法被 Responses 聚合/混合请求选中的问题，继续排除禁用或未映射渠道。
+- 保留上游原始错误，停止尝试官方 Codex 不存在的 `/backend-api/codex/v1/responses` 地址，避免将原错误覆盖为 404。
+- WebSocket 兼容接入在客户端断开或中断时取消对应上游处理，不自动重放已提交的生成请求；修正 Windows 重连回归中的 TCP 重置模拟与握手时序。
+
+### Changed
+
+- WebSocket 历史缓存仅限同一连接且有容量限制；新连接或未知历史 ID 需要完整输入。标准函数工具可在支持的协议间转换，Chat 上游无法表示的自定义工具及专有历史引用明确报错。
+- 桌面、服务端和容器部署均需更新实际承载请求的 CM 实例并重启；仅升级客户端不会改变远端旧版网关的能力。
+
 ## [0.7.1] - 2026-11-07
 
 ### Added

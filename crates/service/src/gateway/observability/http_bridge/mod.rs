@@ -12,6 +12,7 @@ mod metadata;
 #[cfg(test)]
 mod openai;
 mod response_helpers;
+mod response_outcome;
 use aggregate::openai_responses_event::{OpenAIResponsesEvent, OpenAIResponsesOutputTextState};
 pub(crate) use aggregate::PassthroughSseProtocol;
 pub(crate) use aggregate::UpstreamResponseBridgeResult;

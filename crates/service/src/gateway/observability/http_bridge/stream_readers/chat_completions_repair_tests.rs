@@ -29,6 +29,73 @@ fn no_false_success(body: &str) {
 }
 
 #[test]
+fn completion_snapshot_repairs_only_a_matching_delivered_text_prefix() {
+    for (prefix, snapshot, expected) in [
+        ("上海", "上海23°C", "上海23°C"),
+        ("same", "same", "same"),
+        ("first", "different", "first"),
+    ] {
+        let sse = [serde_json::json!({"type":"response.output_text.delta","delta":prefix}),
+            serde_json::json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":snapshot}]}]}})]
+            .iter().map(|v| format!("data: {v}\n\n")).collect::<String>();
+        let (body, _) = run_fixture(&sse);
+        let text = body
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter(|line| *line != "[DONE]")
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter_map(|v| {
+                v.pointer("/choices/0/delta/content")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect::<String>();
+        assert_eq!(text, expected);
+        assert_eq!(body.matches("data: [DONE]").count(), 1);
+    }
+}
+
+#[test]
+fn output_limit_uses_length_and_preserves_text_without_partial_tool_calls() {
+    let event = serde_json::json!({"type":"response.incomplete","response":{
+        "status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},
+        "output":[{"type":"message","content":[{"type":"output_text","text":"上海23°C"}]},
+            {"type":"function_call","call_id":"call_truncated","name":"lookup","arguments":"{\"city\":"}],
+        "usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}
+    }});
+    let sse = format!(
+        "data: {{\"type\":\"response.output_text.delta\",\"delta\":\"上海\"}}\n\ndata: {event}\n\n"
+    );
+    let (body, state) = run_fixture(&sse);
+    assert!(body.contains("\"finish_reason\":\"length\""));
+    assert!(body.contains("23°C"));
+    assert!(!body.contains("\"tool_calls\""));
+    assert!(!body.contains("\"error\""));
+    assert_eq!(body.matches("data: [DONE]").count(), 1);
+    assert_eq!(state.usage.output_tokens, Some(7));
+    assert!(!state.usage.explicit_failure);
+    assert!(!state.usage.completed_successfully);
+}
+
+#[test]
+fn output_limit_does_not_replay_an_already_delivered_chat_tool() {
+    let tool = serde_json::json!({"type":"function_call","id":"fc_done","call_id":"call_done","name":"lookup","arguments":"{}"});
+    let events = [
+        serde_json::json!({"type":"response.output_item.done","output_index":0,"item":tool}),
+        serde_json::json!({"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[tool,{"type":"message","content":[{"type":"output_text","text":"partial"}]}]}}),
+    ];
+    let (body, _) = run_fixture(
+        &events
+            .iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>(),
+    );
+    assert_eq!(body.matches("\"id\":\"call_done\"").count(), 1);
+    assert!(body.contains("\"finish_reason\":\"length\""));
+    assert_eq!(body.matches("data: [DONE]").count(), 1);
+}
+
+#[test]
 fn repair_eof_emits_error_without_fabricating_success() {
     let (body, state) =
         run_fixture("data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n");

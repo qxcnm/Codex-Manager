@@ -57,6 +57,7 @@ pub(in super::super) fn prepare_candidates_for_proxy(
                 storage,
                 super::super::super::request_log::RequestLogTraceContext {
                     trace_id: Some(trace_id),
+                    request_type: Some(request.request_type()),
                     original_path: Some(original_path),
                     adapted_path: Some(path),
                     response_adapter: Some(response_adapter),
@@ -104,6 +105,7 @@ pub(in super::super) fn prepare_candidates_for_proxy(
             storage,
             super::super::super::request_log::RequestLogTraceContext {
                 trace_id: Some(trace_id),
+                request_type: Some(request.request_type()),
                 original_path: Some(original_path),
                 adapted_path: Some(path),
                 response_adapter: Some(response_adapter),

@@ -1432,7 +1432,9 @@ fn should_derive_compat_conversation_anchor(protocol_type: &str, normalized_path
 ///
 /// # 返回
 /// 返回函数执行结果
-fn is_native_codex_client_request(incoming_headers: &super::super::IncomingHeaderSnapshot) -> bool {
+pub(crate) fn is_native_codex_client_request(
+    incoming_headers: &super::super::IncomingHeaderSnapshot,
+) -> bool {
     let user_agent = incoming_headers
         .user_agent()
         .unwrap_or_default()
@@ -1442,8 +1444,10 @@ fn is_native_codex_client_request(incoming_headers: &super::super::IncomingHeade
         .unwrap_or_default()
         .to_ascii_lowercase();
 
-    let has_codex_header_signals = incoming_headers.client_request_id().is_some()
-        || incoming_headers.subagent().is_some()
+    // x-client-request-id is a general API tracing header, including in the
+    // OpenAI SDK. It cannot declare the caller's wire protocol or disable
+    // compatibility conversion. Keep only Codex-specific header signals.
+    let has_codex_header_signals = incoming_headers.subagent().is_some()
         || incoming_headers.beta_features().is_some()
         || incoming_headers.window_id().is_some()
         || incoming_headers.turn_metadata().is_some()

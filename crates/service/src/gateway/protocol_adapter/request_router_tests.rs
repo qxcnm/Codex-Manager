@@ -35,6 +35,38 @@ fn anthropic_messages_are_rewritten_to_responses() {
 }
 
 #[test]
+fn anthropic_assistant_history_string_and_blocks_use_output_text() {
+    for content in [
+        json!("白鹭8，每日90分钟"),
+        json!([{"type": "text", "text": "白鹭8，每日90分钟"}]),
+    ] {
+        let body = json!({
+            "model": "test-model",
+            "messages": [
+                {"role": "user", "content": "记住项目白鹭8"},
+                {"role": "assistant", "content": content},
+                {"role": "user", "content": "改为60分钟，减少多少？"}
+            ]
+        });
+        let adapted = adapt_request_for_protocol(
+            PROTOCOL_ANTHROPIC_NATIVE,
+            "/v1/messages",
+            serde_json::to_vec(&body).unwrap(),
+        )
+        .expect("adapt multi-turn messages");
+        let payload: Value = serde_json::from_slice(&adapted.body).unwrap();
+        assert_eq!(payload["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(payload["input"][1]["role"], "assistant");
+        assert_eq!(payload["input"][1]["content"][0]["type"], "output_text");
+        assert_eq!(
+            payload["input"][1]["content"][0]["text"],
+            "白鹭8，每日90分钟"
+        );
+        assert_eq!(payload["input"][2]["content"][0]["type"], "input_text");
+    }
+}
+
+#[test]
 fn anthropic_mid_conversation_system_messages_map_to_developer() {
     let body = serde_json::json!({
         "model": "claude-sonnet",
@@ -546,11 +578,50 @@ fn anthropic_disable_parallel_tool_use_and_unique_short_names_follow_cpa_shape()
         serde_json::from_slice(&adapted.body).expect("parse adapted body");
     assert_eq!(payload["parallel_tool_calls"], false);
     assert_ne!(payload["tools"][0]["name"], payload["tools"][1]["name"]);
-    assert_eq!(payload["tool_choice"], "auto");
+    assert_eq!(payload["tool_choice"]["type"], "function");
+    assert_eq!(payload["tool_choice"]["name"], payload["tools"][1]["name"]);
     assert_eq!(payload["input"][0]["name"], payload["tools"][1]["name"]);
     assert_eq!(payload["tools"][0]["parameters"]["type"], "object");
     assert!(payload["tools"][0]["parameters"]["properties"].is_object());
     assert!(payload["tools"][1]["parameters"].get("$schema").is_none());
+}
+
+#[test]
+fn anthropic_tool_choice_preserves_required_none_and_auto() {
+    for (source, expected) in [("any", "required"), ("none", "none"), ("auto", "auto")] {
+        let body = json!({
+            "model": "test-model",
+            "tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
+            "tool_choice": {"type": source, "disable_parallel_tool_use": true},
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+        let adapted = adapt_request_for_protocol(
+            PROTOCOL_ANTHROPIC_NATIVE,
+            "/v1/messages",
+            serde_json::to_vec(&body).unwrap(),
+        )
+        .expect("adapt tool choice");
+        let payload: Value = serde_json::from_slice(&adapted.body).unwrap();
+        assert_eq!(payload["tool_choice"], expected, "{source}");
+        assert_eq!(payload["parallel_tool_calls"], false);
+    }
+}
+
+#[test]
+fn anthropic_named_tool_choice_requires_name_instead_of_silently_using_auto() {
+    let body = json!({
+        "model": "test-model",
+        "tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
+        "tool_choice": {"type": "tool"},
+        "messages": [{"role": "user", "content": "hello"}]
+    });
+    let error = adapt_request_for_protocol(
+        PROTOCOL_ANTHROPIC_NATIVE,
+        "/v1/messages",
+        serde_json::to_vec(&body).unwrap(),
+    )
+    .expect_err("missing selected tool name must be rejected");
+    assert!(error.contains("requires a name"));
 }
 
 #[test]
@@ -794,7 +865,7 @@ fn responses_reasoning_budget_stays_below_max_tokens() {
 }
 
 #[test]
-fn responses_request_drops_images_for_deepseek_anthropic_bridge() {
+fn responses_request_preserves_image_urls_and_base64_for_anthropic_bridge() {
     let body = json!({
         "model": "gpt-5.3",
         "input": [{
@@ -802,7 +873,12 @@ fn responses_request_drops_images_for_deepseek_anthropic_bridge() {
             "role": "user",
             "content": [
                 { "type": "input_text", "text": "describe this" },
-                { "type": "input_image", "image_url": "data:image/png;base64,aGVsbG8=" }
+                { "type": "input_image", "image_url": "data:image/png;base64,aGVsbG8=" },
+                { "type": "input_image", "image_url": "https://images.example.test/photo.png?token=preserve%2Fexact" },
+                { "type": "input_image", "image_url": "http://images.example.test/photo.jpg" },
+                { "type": "input_image", "image_url": "data:image/jpeg;base64,AQID" },
+                { "type": "input_image", "image_url": "data:image/gif;base64,AQID" },
+                { "type": "input_image", "image_url": "data:image/webp;base64,AQID" }
             ]
         }]
     });
@@ -816,9 +892,74 @@ fn responses_request_drops_images_for_deepseek_anthropic_bridge() {
 
     assert_eq!(
         payload["messages"][0]["content"].as_array().unwrap().len(),
-        1
+        7
     );
     assert_eq!(payload["messages"][0]["content"][0]["type"], "text");
+    assert_eq!(
+        payload["messages"][0]["content"][1],
+        json!({"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}})
+    );
+    assert_eq!(
+        payload["messages"][0]["content"][2],
+        json!({"type":"image","source":{"type":"url","url":"https://images.example.test/photo.png?token=preserve%2Fexact"}})
+    );
+    assert_eq!(
+        payload["messages"][0]["content"][3]["source"],
+        json!({"type":"url","url":"http://images.example.test/photo.jpg"})
+    );
+    for (index, media_type) in [(4, "image/jpeg"), (5, "image/gif"), (6, "image/webp")] {
+        assert_eq!(
+            payload["messages"][0]["content"][index]["source"],
+            json!({"type":"base64","media_type":media_type,"data":"AQID"})
+        );
+    }
+}
+
+#[test]
+fn responses_anthropic_image_bridge_rejects_unsupported_or_invalid_sources() {
+    for image in [
+        json!({"type":"input_image","file_id":"file_private"}),
+        json!({"type":"input_image","image_url":""}),
+        json!({"type":"input_image","image_url":{"url":"https://images.example.test/a.png"}}),
+        json!({"type":"input_image","image_url":"file:///private/photo.png"}),
+        json!({"type":"input_image","image_url":"/private/photo.png"}),
+        json!({"type":"input_image","image_url":"data:image/svg+xml;base64,AQID"}),
+        json!({"type":"input_image","image_url":"data:application/pdf;base64,AQID"}),
+        json!({"type":"input_image","image_url":"data:image/png,private_image_bytes"}),
+        json!({"type":"input_image","image_url":"data:image/png;base64"}),
+        json!({"type":"input_image","image_url":"data:image/png;base64,"}),
+        json!({"type":"input_image","image_url":"data:image/png;base64,private_image_bytes!"}),
+        json!({"type":"image","source":{"type":"base64","data":"private_image_bytes"}}),
+    ] {
+        let body = json!({
+            "model":"gpt-5.3",
+            "input":[{"role":"user","content":[{"type":"input_text","text":"describe"},image]}]
+        });
+        let error = adapt_openai_responses_to_anthropic_messages(
+            &serde_json::to_vec(&body).unwrap(),
+            Some("claude-sonnet-4"),
+        )
+        .unwrap_err();
+        assert!(error.contains("Anthropic image"));
+        assert!(!error.contains("private_image_bytes"));
+        assert!(!error.contains("file_private"));
+    }
+}
+
+#[test]
+fn responses_anthropic_image_bridge_rejects_system_images_instead_of_dropping_them() {
+    for role in ["system", "developer"] {
+        let body = json!({
+            "model":"gpt-5.3",
+            "input":[{"role":role,"content":[{"type":"input_image","image_url":"https://images.example.test/a.png"}]}]
+        });
+        let error = adapt_openai_responses_to_anthropic_messages(
+            &serde_json::to_vec(&body).unwrap(),
+            Some("claude-sonnet-4"),
+        )
+        .unwrap_err();
+        assert_eq!(error, "Anthropic system instructions cannot contain images");
+    }
 }
 
 #[test]

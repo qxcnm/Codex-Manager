@@ -24,15 +24,17 @@ use tokio_tungstenite::tungstenite::Message as UpstreamMessage;
 use tokio_tungstenite::{client_async_tls_with_config, connect_async_tls_with_config};
 
 use crate::http::codex_source::{
-    response_create_client_metadata, ResponseCreateWsRequest, ResponsesWsRequest,
-    RESPONSES_ENDPOINT, X_CODEX_PARENT_THREAD_ID_HEADER, X_CODEX_TURN_METADATA_HEADER,
-    X_CODEX_WINDOW_ID_HEADER, X_OPENAI_SUBAGENT_HEADER,
+    response_create_client_metadata, ResponseCreateWsRequest, ResponseToolChoice,
+    ResponsesWsRequest, RESPONSES_ENDPOINT, X_CODEX_PARENT_THREAD_ID_HEADER,
+    X_CODEX_TURN_METADATA_HEADER, X_CODEX_WINDOW_ID_HEADER, X_OPENAI_SUBAGENT_HEADER,
 };
 use crate::http::proxy_response::{text_error_response, text_response};
 use crate::storage_helpers::open_storage;
 
 #[path = "responses_websocket_control.rs"]
 mod responses_websocket_control;
+#[path = "responses_websocket_http_bridge.rs"]
+mod responses_websocket_http_bridge;
 #[path = "responses_websocket_rebase.rs"]
 mod responses_websocket_rebase;
 
@@ -338,6 +340,7 @@ pub(super) fn is_websocket_upgrade_request(headers: &HeaderMap) -> bool {
 
 pub(super) async fn upgrade_responses_websocket(request: HttpRequest<Body>) -> Response<Body> {
     let (mut parts, _) = request.into_parts();
+    let bridge_context = responses_websocket_http_bridge::BridgeContext::from_parts(&parts);
 
     let permit = match RESPONSES_WS_AUTH_WORKERS.try_acquire() {
         Ok(permit) => permit,
@@ -379,7 +382,11 @@ pub(super) async fn upgrade_responses_websocket(request: HttpRequest<Body>) -> R
     ws.max_message_size(RESPONSES_WS_MAX_MESSAGE_BYTES)
         .max_frame_size(RESPONSES_WS_MAX_MESSAGE_BYTES)
         .on_upgrade(move |socket| async move {
-            run_responses_websocket_session(socket, context).await;
+            if crate::gateway::gateway_supports_official_responses_websocket(&context.api_key) {
+                run_responses_websocket_session(socket, context).await;
+            } else {
+                responses_websocket_http_bridge::run_session(socket, context, bridge_context).await;
+            }
         })
 }
 
@@ -1126,6 +1133,9 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
                 };
                 match upstream_result {
                     Ok(UpstreamMessage::Text(text)) => {
+                        let Some(text) = crate::gateway::responses_event_compat::responses_event_text_for_client(
+                            text.as_str(), crate::gateway::is_native_codex_client_request(&context.incoming_headers),
+                        ) else { continue; };
                         completed_tool_calls.observe_upstream_event(text.as_str());
                         if let Some(pending) = pending_request.as_ref() {
                             remember_ws_tool_calls_from_upstream_event(
@@ -1585,13 +1595,13 @@ fn authorize_websocket_request(headers: &HeaderMap) -> Result<WsRequestContext, 
                 )
             })?;
 
-    if !crate::gateway::gateway_supports_official_responses_websocket(&api_key) {
+    if !crate::gateway::gateway_supports_responses_websocket(&api_key) {
         return Err(upgrade_required_response(
             crate::gateway::error_message_for_client(
                 prefer_raw_errors,
                 crate::gateway::bilingual_error(
-                    "Responses WebSocket 仅支持官方 Codex 上游",
-                    "responses websocket is only available for official Codex upstream",
+                    "当前平台密钥不支持 Responses WebSocket",
+                    "the selected platform key does not support Responses WebSocket",
                 ),
             ),
         ));
@@ -1852,6 +1862,18 @@ fn rewrite_response_create(
         ));
     };
     object.remove("type");
+
+    // Validate explicit choices before the shared HTTP rewrite can replace an
+    // invalid scalar with its default. A legitimate named choice remains an
+    // object all the way to the official WebSocket request serializer.
+    if let Some(choice) = object.get("tool_choice") {
+        serde_json::from_value::<ResponseToolChoice>(choice.clone()).map_err(|error| {
+            WsSessionError::bad_request_bilingual(
+                "WebSocket tool_choice 形状无效",
+                format!("invalid WebSocket tool_choice: {error}"),
+            )
+        })?;
+    }
 
     let service_tier_diagnostic =
         crate::gateway::inspect_service_tier_value(object.get("service_tier"));

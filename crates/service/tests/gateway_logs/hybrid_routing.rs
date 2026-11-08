@@ -366,7 +366,13 @@ fn hybrid_aggregate_only_streaming_responses_forces_identity_and_logs_success() 
     assert!(response_body.contains("aggregate ok"));
     assert!(response_body.contains("resp_aggregate_identity"));
     assert!(response_body.contains("response.completed"));
-    assert!(response_body.contains("data: [DONE]"));
+    assert_eq!(
+        response_body,
+        aggregate_sse
+            .strip_suffix("data: [DONE]\n\n")
+            .expect("fixture contains an optional post-completion marker"),
+        "native Responses preserves the complete response and stops at completed"
+    );
     assert_eq!(
         local_rx.try_iter().count(),
         0,

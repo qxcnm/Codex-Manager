@@ -1456,6 +1456,42 @@ fn websocket_upstream_request_text_streams_even_for_non_streaming_http_clients()
 }
 
 #[test]
+fn websocket_upstream_http_conversion_preserves_valid_tool_choices() {
+    for choice in [
+        serde_json::json!("auto"),
+        serde_json::json!("required"),
+        serde_json::json!("none"),
+        serde_json::json!({"type":"function","name":"cm_lookup"}),
+    ] {
+        let body =
+            serde_json::json!({"model":"codex","input":[],"tool_choice":choice,"stream":false});
+        let text = super::websocket_upstream_request_text_from_http_body(&Bytes::from(
+            serde_json::to_vec(&body).unwrap(),
+        ))
+        .unwrap()
+        .unwrap();
+        let converted: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(converted["tool_choice"], choice);
+        assert_eq!(converted["stream"], true);
+        assert_eq!(converted["type"], "response.create");
+    }
+    for choice in [
+        serde_json::json!(17),
+        serde_json::json!([]),
+        serde_json::json!({"type":"function"}),
+        serde_json::json!({"type":"function","name":""}),
+    ] {
+        let body = serde_json::json!({"model":"codex","input":[],"tool_choice":choice});
+        assert!(
+            super::websocket_upstream_request_text_from_http_body(&Bytes::from(
+                serde_json::to_vec(&body).unwrap()
+            ))
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn websocket_upstream_request_text_from_http_body_rejects_invalid_payload() {
     let body = Bytes::from_static(br#"{"model":"codex"}"#);
 

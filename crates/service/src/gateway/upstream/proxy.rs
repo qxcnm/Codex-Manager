@@ -294,6 +294,7 @@ fn respond_model_route_error(
         storage,
         super::super::request_log::RequestLogTraceContext {
             trace_id: Some(trace_id),
+            request_type: Some(request.request_type()),
             original_path: Some(original_path),
             adapted_path: Some(path),
             gateway_mode: gateway_mode_for_log,
@@ -337,11 +338,14 @@ fn respond_model_route_error(
 fn resolve_aggregate_candidates_for_route(
     storage: &codexmanager_core::storage::Storage,
     protocol_type: &str,
+    original_path: &str,
     aggregate_api_id: Option<&str>,
     model_for_log: Option<&str>,
 ) -> Result<Vec<codexmanager_core::storage::AggregateApi>, String> {
     let explicit_candidate =
         resolve_active_explicit_aggregate_candidate(storage, aggregate_api_id)?;
+    let response_bridge_candidates =
+        resolve_responses_anthropic_route_candidates(storage, original_path, model_for_log)?;
     let mut candidates =
         match super::protocol::aggregate_api::resolve_aggregate_api_rotation_candidates(
             storage,
@@ -349,14 +353,72 @@ fn resolve_aggregate_candidates_for_route(
             aggregate_api_id,
         ) {
             Ok(candidates) => candidates,
-            Err(_) if explicit_candidate.is_some() => Vec::new(),
+            Err(_) if explicit_candidate.is_some() || !response_bridge_candidates.is_empty() => {
+                Vec::new()
+            }
             Err(err) => return Err(err),
         };
+    for candidate in response_bridge_candidates {
+        if !candidates
+            .iter()
+            .any(|existing| existing.id == candidate.id)
+        {
+            candidates.push(candidate);
+        }
+    }
     if let Some(explicit_candidate) = explicit_candidate {
         candidates.retain(|candidate| candidate.id != explicit_candidate.id);
         candidates.insert(0, explicit_candidate);
     }
     apply_aggregate_model_filter(storage, candidates, model_for_log)
+}
+
+fn resolve_responses_anthropic_route_candidates(
+    storage: &codexmanager_core::storage::Storage,
+    original_path: &str,
+    model: Option<&str>,
+) -> Result<Vec<codexmanager_core::storage::AggregateApi>, String> {
+    // The outer protocol matters: /chat/completions and /images may already
+    // have an adapted Responses path, but their response adapter must survive.
+    if original_path.split('?').next() != Some("/v1/responses") {
+        return Ok(Vec::new());
+    }
+    let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) else {
+        return Ok(Vec::new());
+    };
+    let Some(model) =
+        crate::models_v2::enabled_model(storage, crate::models_v2::policy_catalog_slug(model))
+            .map_err(|error| format!("read Responses aggregate model routes failed: {error}"))?
+    else {
+        return Ok(Vec::new());
+    };
+    let allowed = model
+        .routes
+        .iter()
+        .filter(|route| route.enabled && route.source_kind == "aggregate_api")
+        .map(|route| route.source_id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    // A configured model route authorizes this conversion. Do not add arbitrary
+    // Claude providers just because the client uses the Responses endpoint.
+    let mut candidates = crate::account::remote_storage::AccountStorage::new(storage)
+        .list_active_aggregate_apis_by_provider_type("claude")
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|candidate| {
+            allowed.contains(candidate.id.as_str())
+                && candidate
+                    .provider_type
+                    .trim()
+                    .eq_ignore_ascii_case("claude")
+                && candidate.status.trim().eq_ignore_ascii_case("active")
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        left.sort
+            .cmp(&right.sort)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(candidates)
 }
 
 fn resolve_active_explicit_aggregate_candidate(
@@ -534,6 +596,7 @@ fn respond_aggregate_route_error(
         storage,
         super::super::request_log::RequestLogTraceContext {
             trace_id: Some(trace_id),
+            request_type: Some(request.request_type()),
             original_path: Some(original_path),
             adapted_path: Some(path),
             gateway_mode: gateway_mode_for_log,
@@ -654,6 +717,7 @@ async fn proxy_with_aggregate_candidates(
 fn resolve_hybrid_aggregate_candidates_for_prepare(
     storage: &codexmanager_core::storage::Storage,
     protocol_type: &str,
+    original_path: &str,
     aggregate_api_id: Option<&str>,
     key_id: &str,
     model_for_log: Option<&str>,
@@ -662,6 +726,7 @@ fn resolve_hybrid_aggregate_candidates_for_prepare(
     let candidates = resolve_aggregate_candidates_for_route(
         storage,
         protocol_type,
+        original_path,
         aggregate_api_id,
         model_for_log,
     )?;
@@ -683,13 +748,20 @@ fn take_or_resolve_aggregate_candidates(
     prepared: &mut Option<Result<Vec<codexmanager_core::storage::AggregateApi>, String>>,
     storage: &codexmanager_core::storage::Storage,
     protocol_type: &str,
+    original_path: &str,
     aggregate_api_id: Option<&str>,
     model_for_log: Option<&str>,
 ) -> Result<Vec<codexmanager_core::storage::AggregateApi>, String> {
     if let Some(result) = prepared.take() {
         return result;
     }
-    resolve_aggregate_candidates_for_route(storage, protocol_type, aggregate_api_id, model_for_log)
+    resolve_aggregate_candidates_for_route(
+        storage,
+        protocol_type,
+        original_path,
+        aggregate_api_id,
+        model_for_log,
+    )
 }
 
 /// 函数 `proxy_validated_request`
@@ -708,6 +780,7 @@ pub(in super::super) async fn proxy_validated_request(
     validated: LocalValidationResult,
     debug: bool,
 ) -> Result<(), String> {
+    let request_type = request.request_type();
     let LocalValidationResult {
         trace_id,
         incoming_headers,
@@ -763,7 +836,7 @@ pub(in super::super) async fn proxy_validated_request(
         reasoning_for_log.as_deref(),
         service_tier_for_log.as_deref(),
         client_is_stream,
-        "http",
+        request_type,
         protocol_type.as_str(),
     );
     super::super::trace_log::log_request_body_preview(trace_id.as_str(), body.as_ref());
@@ -846,6 +919,7 @@ pub(in super::super) async fn proxy_validated_request(
         match resolve_aggregate_candidates_for_route(
             &storage,
             protocol_type.as_str(),
+            original_path.as_str(),
             aggregate_api_id.as_deref(),
             model_for_log.as_deref(),
         ) {
@@ -957,6 +1031,7 @@ pub(in super::super) async fn proxy_validated_request(
                 &mut prepared_hybrid_aggregate_candidates,
                 &storage,
                 protocol_type.as_str(),
+                original_path.as_str(),
                 aggregate_api_id.as_deref(),
                 model_for_log.as_deref(),
             ) {
@@ -1047,6 +1122,7 @@ pub(in super::super) async fn proxy_validated_request(
             Some(resolve_hybrid_aggregate_candidates_for_prepare(
                 &storage,
                 protocol_type.as_str(),
+                original_path.as_str(),
                 aggregate_api_id.as_deref(),
                 key_id.as_str(),
                 model_for_log.as_deref(),
@@ -1085,7 +1161,8 @@ pub(in super::super) async fn proxy_validated_request(
         super::super::request_log::estimate_input_tokens_from_body(body.as_ref()),
         setup.candidate_count,
         setup.account_max_inflight,
-    );
+    )
+    .with_request_type(request_type);
     let allow_openai_fallback = setup.upstream_fallback_base.is_some();
     let disable_challenge_stateless_retry = !(protocol_type == PROTOCOL_ANTHROPIC_NATIVE
         && body.len() <= 2 * 1024)
@@ -1166,6 +1243,7 @@ pub(in super::super) async fn proxy_validated_request(
             &mut prepared_hybrid_aggregate_candidates,
             &storage,
             protocol_type.as_str(),
+            original_path.as_str(),
             aggregate_api_id.as_deref(),
             model_for_log.as_deref(),
         ) {

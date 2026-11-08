@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use rand::{distributions::Alphanumeric, Rng};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, VecDeque};
@@ -138,7 +139,10 @@ fn adapt_anthropic_messages_request(
         &mut tool_name_restore_map,
     )? {
         rewritten.insert("tools".to_string(), tools);
-        rewritten.insert("tool_choice".to_string(), Value::String("auto".to_string()));
+        rewritten.insert(
+            "tool_choice".to_string(),
+            anthropic_tool_choice_to_responses(obj.get("tool_choice"), &short_name_map)?,
+        );
     }
     rewritten.insert(
         "parallel_tool_calls".to_string(),
@@ -464,6 +468,9 @@ fn responses_input_item_to_anthropic(
                 .unwrap_or("user");
             let content = responses_message_content_to_anthropic(obj.get("content"))?;
             if matches!(role, "developer" | "system") {
+                if content.iter().any(|part| part["type"] == "image") {
+                    return Err("Anthropic system instructions cannot contain images".to_string());
+                }
                 let text = anthropic_content_to_text(&content);
                 if !text.trim().is_empty() {
                     system_parts.push(text);
@@ -557,9 +564,57 @@ fn responses_content_part_to_anthropic(part: &Value) -> Result<Option<Value>, St
             .get("text")
             .and_then(Value::as_str)
             .map(anthropic_text_block)),
-        "input_image" | "image" => Ok(None),
+        "input_image" | "image" => responses_image_part_to_anthropic(obj).map(Some),
         _ => Ok(None),
     }
+}
+
+fn responses_image_part_to_anthropic(part: &Map<String, Value>) -> Result<Value, String> {
+    let image_url = part
+        .get("image_url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            "Anthropic image input requires an image_url string; file_id images are unsupported"
+                .to_string()
+        })?;
+    let source = if let Some(data_url) = image_url.strip_prefix("data:") {
+        let (metadata, data) = data_url
+            .split_once(',')
+            .ok_or_else(|| "Anthropic image data URL is missing its data separator".to_string())?;
+        let (media_type, encoding) = metadata.split_once(';').ok_or_else(|| {
+            "Anthropic image data URL must use an explicit image media type and base64 encoding"
+                .to_string()
+        })?;
+        let media_type = media_type.to_ascii_lowercase();
+        if !matches!(
+            media_type.as_str(),
+            "image/jpeg" | "image/png" | "image/gif" | "image/webp"
+        ) {
+            return Err(
+                "Anthropic image data URL supports only JPEG, PNG, GIF or WebP media types"
+                    .to_string(),
+            );
+        }
+        if !encoding.eq_ignore_ascii_case("base64") {
+            return Err("Anthropic image data URL must use base64 encoding".to_string());
+        }
+        if data.is_empty() || BASE64_STANDARD.decode(data).is_err() {
+            return Err(
+                "Anthropic image data URL contains invalid or empty base64 data".to_string(),
+            );
+        }
+        json!({"type":"base64","media_type":media_type,"data":data})
+    } else {
+        let url = url::Url::parse(image_url)
+            .map_err(|_| "Anthropic image URL must be an absolute HTTP or HTTPS URL".to_string())?;
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+            return Err("Anthropic image URL must use HTTP or HTTPS".to_string());
+        }
+        json!({"type":"url","url":image_url})
+    };
+    Ok(json!({"type":"image","source":source}))
 }
 
 fn anthropic_message(role: &str, content: Vec<Value>) -> Value {
@@ -774,7 +829,7 @@ fn anthropic_messages_to_input(
                 if let Some(text) = non_empty_text_verbatim(text) {
                     out.push(responses_message(
                         response_role,
-                        json!([{ "type": "input_text", "text": text }]),
+                        json!([{ "type": text_content_type_for_role(response_role), "text": text }]),
                     ));
                 }
             }
@@ -990,6 +1045,32 @@ fn anthropic_tools_to_responses(
         out.push(Value::Object(mapped));
     }
     Ok((!out.is_empty()).then(|| Value::Array(out)))
+}
+
+fn anthropic_tool_choice_to_responses(
+    tool_choice: Option<&Value>,
+    short_name_map: &BTreeMap<String, String>,
+) -> Result<Value, String> {
+    let Some(choice) = tool_choice.and_then(Value::as_object) else {
+        return Ok(json!("auto"));
+    };
+    match choice.get("type").and_then(Value::as_str).unwrap_or("auto") {
+        "auto" => Ok(json!("auto")),
+        "any" => Ok(json!("required")),
+        "none" => Ok(json!("none")),
+        "tool" => {
+            let name = choice
+                .get("name")
+                .and_then(Value::as_str)
+                .and_then(normalize_text)
+                .ok_or_else(|| "anthropic tool_choice tool requires a name".to_string())?;
+            Ok(json!({
+                "type": "function",
+                "name": resolve_short_tool_name(&name, short_name_map),
+            }))
+        }
+        other => Err(format!("unsupported anthropic tool_choice type: {other}")),
+    }
 }
 
 fn anthropic_parallel_tool_calls(tool_choice: Option<&Value>) -> bool {

@@ -40,6 +40,7 @@ async fn handle_gateway_request_inner(mut request: Request) -> Result<(), String
     let trace_id = super::trace_log::next_trace_id();
     let request_path_for_log = super::normalize_models_path(request.url());
     let request_method_for_log = request.method().as_str().to_string();
+    let request_type_for_log = request.request_type();
     let validated =
         match super::local_validation::prepare_local_request(&mut request, trace_id.clone(), debug)
         {
@@ -54,7 +55,7 @@ async fn handle_gateway_request_inner(mut request: Request) -> Result<(), String
                     None,
                     None,
                     false,
-                    "http",
+                    request_type_for_log,
                     "-",
                 );
                 super::trace_log::log_request_final(
@@ -78,6 +79,7 @@ async fn handle_gateway_request_inner(mut request: Request) -> Result<(), String
                             original_path: Some(request_path_for_log.as_str()),
                             adapted_path: Some(request_path_for_log.as_str()),
                             response_adapter: None,
+                            request_type: Some(request_type_for_log),
                             ..Default::default()
                         },
                         err.key_id.as_deref(),

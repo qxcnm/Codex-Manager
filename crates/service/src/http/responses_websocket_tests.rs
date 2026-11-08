@@ -1571,6 +1571,55 @@ fn websocket_frame_metadata_overrides_initial_handshake_on_each_turn() {
 }
 
 #[test]
+fn websocket_response_create_preserves_named_function_tool_choice_and_rejects_malformed_choices() {
+    let _guard = crate::test_env_guard();
+    let context = WsRequestContext {
+        api_key: sample_api_key(),
+        incoming_headers: sample_incoming_headers_with_metadata(),
+        prompt_cache_key: None,
+        cache_affinity_key: None,
+        route_conversation_id: None,
+        route_conversation_source: None,
+        effective_upstream_base: "https://chatgpt.com/backend-api/codex".into(),
+        prefer_raw_errors: false,
+    };
+    for choice in [
+        json!("auto"),
+        json!("required"),
+        json!("none"),
+        json!({"type":"function","name":"cm_lookup"}),
+    ] {
+        let request = json!({
+            "type":"response.create", "model":"gpt-6-luna", "input":"look up Shanghai",
+            "tools":[{"type":"function","name":"cm_lookup","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}],
+            "tool_choice":choice, "parallel_tool_calls":false
+        });
+        let prepared = rewrite_client_frame(&request.to_string(), &context).unwrap();
+        let value: Value = serde_json::from_str(&prepared.text).unwrap();
+        assert_eq!(value["type"], "response.create");
+        assert_eq!(value["tool_choice"], choice);
+        assert_eq!(value["tools"], request["tools"]);
+    }
+    for choice in [
+        json!(null),
+        json!(1),
+        json!([]),
+        json!("unexpected"),
+        json!({"type":"function"}),
+        json!({"type":"function","name":""}),
+        json!({"type":"function","name":false}),
+        json!({"type":"function","function":{"name":"cm_lookup"}}),
+    ] {
+        let result = rewrite_client_frame(&json!({"type":"response.create","model":"gpt-6-luna","input":"hello","tool_choice":choice}).to_string(), &context);
+        let error = result
+            .err()
+            .unwrap_or_else(|| panic!("accepted malformed choice {choice}"));
+        assert_eq!(error.status, 400);
+        assert!(error.message.contains("tool_choice"));
+    }
+}
+
+#[test]
 fn websocket_response_create_keeps_codex_field_snapshot() {
     let _guard = crate::test_env_guard();
     let context = WsRequestContext {

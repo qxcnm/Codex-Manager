@@ -583,6 +583,10 @@ fn native_codex_responses_does_not_inject_image_generation_tool() {
         ),
         result_b64 = result_b64
     );
+    let expected_sse = codex_sse
+        .strip_suffix("data: [DONE]\n\n")
+        .expect("fixture contains an optional post-completion marker")
+        .to_owned();
     let (upstream_addr, upstream_rx, upstream_join) =
         start_mock_upstream_sequence_lenient_with_content_types(
             vec![(200, codex_sse, "text/event-stream".to_string())],
@@ -692,7 +696,10 @@ fn native_codex_responses_does_not_inject_image_generation_tool() {
     assert_eq!(upstream_body["model"], "gpt-5.4");
     assert!(response_body.contains("event: response.output_item.done"));
     assert!(response_body.contains(result_b64));
-    assert!(response_body.contains("data: [DONE]"));
+    assert_eq!(
+        response_body, expected_sse,
+        "native Responses preserves image output through response.completed"
+    );
 }
 
 #[test]
@@ -719,6 +726,10 @@ fn native_codex_image_generation_responses_request_passthroughs_tool_and_sse() {
         partial_b64 = partial_b64,
         result_b64 = result_b64
     );
+    let expected_sse = codex_sse
+        .strip_suffix("data: [DONE]\n\n")
+        .expect("fixture contains an optional post-completion marker")
+        .to_owned();
     let (upstream_addr, upstream_rx, upstream_join) =
         start_mock_upstream_sequence_lenient_with_content_types(
             vec![(200, codex_sse, "text/event-stream".to_string())],
@@ -869,5 +880,8 @@ fn native_codex_image_generation_responses_request_passthroughs_tool_and_sse() {
     assert!(response_body.contains(partial_b64));
     assert!(response_body.contains(result_b64));
     assert!(response_body.contains("\"result\":\"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=\""));
-    assert!(response_body.contains("data: [DONE]"));
+    assert_eq!(
+        response_body, expected_sse,
+        "native Responses preserves partial and final image output through response.completed"
+    );
 }

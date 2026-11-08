@@ -1,3 +1,4 @@
+use super::responses_output_repair::ResponsesOutputRepair;
 use super::{
     classify_upstream_stream_read_error, mark_first_response_ms, mark_terminal_delivered,
     stream_idle_timed_out, stream_idle_timeout_message, stream_reader_disconnected_message,
@@ -14,10 +15,12 @@ pub(crate) struct OpenAIResponsesPassthroughSseReader {
     out_cursor: Cursor<Vec<u8>>,
     usage_collector: Arc<Mutex<PassthroughSseCollector>>,
     usage_text_state: OpenAIResponsesOutputTextState,
+    output_repair: ResponsesOutputRepair,
     keepalive_frame: SseKeepAliveFrame,
     request_started_at: Instant,
     pending_separator: bool,
     finished: bool,
+    compatibility_events: bool,
 }
 
 impl OpenAIResponsesPassthroughSseReader {
@@ -47,11 +50,18 @@ impl OpenAIResponsesPassthroughSseReader {
             out_cursor: Cursor::new(Vec::new()),
             usage_collector,
             usage_text_state: OpenAIResponsesOutputTextState::default(),
+            output_repair: ResponsesOutputRepair::default(),
             keepalive_frame,
             request_started_at,
             pending_separator: false,
             finished: false,
+            compatibility_events: false,
         }
+    }
+
+    pub(crate) fn with_compatibility_events(mut self, enabled: bool) -> Self {
+        self.compatibility_events = enabled;
+        self
     }
 
     fn update_usage_from_event(&mut self, event: OpenAIResponsesEvent) {
@@ -74,17 +84,21 @@ impl OpenAIResponsesPassthroughSseReader {
 
     fn update_usage_from_frame(&mut self, frame: &[String]) -> Option<bool> {
         let event = OpenAIResponsesEvent::parse(frame)?;
+        let terminal_delivered = Self::is_delivered_terminal(&event);
+        self.update_usage_from_event(event);
+        Some(terminal_delivered)
+    }
+
+    fn is_delivered_terminal(event: &OpenAIResponsesEvent) -> bool {
         // Use the parsed top-level type, never terminal words inside ordinary
         // deltas or nested tool data. Generic errors still need normalization to
         // response.failed even though they are semantic upstream failures.
-        let terminal_delivered = matches!(
+        matches!(
             event.event_type.as_deref(),
             Some(
                 "response.completed" | "response.failed" | "response.incomplete" | "response.done"
             )
-        );
-        self.update_usage_from_event(event);
-        Some(terminal_delivered)
+        )
     }
 
     fn is_standalone_done_frame(frame: &[String]) -> bool {
@@ -126,6 +140,13 @@ impl OpenAIResponsesPassthroughSseReader {
         // Cancel network input before draining. The pump finishes parsing only
         // bytes already received, retaining late usage even after client close.
         self.upstream.stop_input().await;
+        // A response terminal ends the protocol, even when the provider keeps
+        // HTTP open or appends [DONE]/comments. Its usage was already observed;
+        // trailing bytes must not turn a completed response into a read error.
+        // On an earlier client cancellation, still drain buffered observations.
+        if self.finished {
+            return;
+        }
         loop {
             match self.upstream.recv_async().await {
                 Some(UpstreamSseFramePumpItem::Frame(frame)) => {
@@ -196,20 +217,106 @@ impl OpenAIResponsesPassthroughSseReader {
         {
             Ok(UpstreamSseFramePumpItem::Frame(frame)) => {
                 mark_first_response_ms(&self.usage_collector, self.request_started_at);
-                let parsed_terminal = self.update_usage_from_frame(&frame);
-                let terminal_delivered =
-                    parsed_terminal.unwrap_or_else(|| Self::is_standalone_done_frame(&frame));
+                let mut compatible_frame = None;
+                let (terminal_delivered, ends_response, mut bytes) =
+                    match OpenAIResponsesEvent::parse_with_payload(&frame) {
+                        Some((mut event, mut payload)) => {
+                            if self.compatibility_events {
+                                use crate::gateway::responses_event_compat::{
+                                    normalize_compatible_responses_event, CompatibleResponsesEvent,
+                                };
+                                match normalize_compatible_responses_event(&mut payload) {
+                                    CompatibleResponsesEvent::Omit => {
+                                        self.update_usage_from_event(event);
+                                        return Ok(Vec::new());
+                                    }
+                                    CompatibleResponsesEvent::Rewrite => {
+                                        let kind =
+                                            payload["type"].as_str().unwrap_or("response.failed");
+                                        event = OpenAIResponsesEvent::parse(&[format!(
+                                            "data: {payload}\n"
+                                        )])
+                                        .unwrap_or(event);
+                                        compatible_frame = Some(
+                                            format!("event: {kind}\ndata: {payload}\n\n")
+                                                .into_bytes(),
+                                        );
+                                    }
+                                    CompatibleResponsesEvent::Preserve => {}
+                                }
+                            }
+                            let successful_completion =
+                                matches!(event.terminal, Some(SseTerminal::Ok))
+                                    && !event.usage.explicit_failure
+                                    && event.upstream_error_hint.is_none();
+                            let terminal_delivered = Self::is_delivered_terminal(&event);
+                            self.update_usage_from_event(event);
+                            let can_repair = successful_completion
+                                && self.usage_collector.lock().is_ok_and(|collector| {
+                                    collector.terminal_error.is_none()
+                                        && collector.upstream_error_hint.is_none()
+                                        && !collector.usage.explicit_failure
+                                });
+                            // Codex commits text from output_item.done, not the
+                            // output snapshot inside response.completed. Repair
+                            // missing text items only on this delivery path;
+                            // cancellation cleanup must never synthesize output.
+                            let repaired = self.output_repair.process(&payload, can_repair);
+                            (terminal_delivered, terminal_delivered, repaired)
+                        }
+                        // A bare [DONE] is not a Responses completion. Preserve
+                        // the existing incomplete-stream/error diagnostics.
+                        None => (Self::is_standalone_done_frame(&frame), false, Vec::new()),
+                    };
                 // Parsing and delivery share the bounded complete frame. No raw
                 // tee may forward a partial oversized JSON/base64 event first.
                 self.pending_separator = !frame
                     .last()
                     .is_some_and(|line| line == "\n" || line == "\r" || line == "\r\n");
-                let bytes = frame.concat().into_bytes();
+                // The inserted event is now the stream prefix. Omit the optional
+                // upstream BOM on this repaired path: in the middle of the stream
+                // it would hide the terminal's data/event field. Ordinary raw
+                // streams, including their BOM, remain byte-for-byte unchanged.
+                let strip_bom = !bytes.is_empty()
+                    && frame
+                        .first()
+                        .is_some_and(|line| line.starts_with('\u{feff}'));
+                bytes.reserve(frame.iter().map(String::len).sum());
+                for (index, line) in frame.iter().enumerate() {
+                    if compatible_frame.is_some() {
+                        break;
+                    }
+                    let line = if strip_bom && index == 0 {
+                        line.strip_prefix('\u{feff}').unwrap_or(line)
+                    } else {
+                        line
+                    };
+                    bytes.extend_from_slice(line.as_bytes());
+                }
+                if let Some(frame) = compatible_frame {
+                    bytes.extend_from_slice(&frame);
+                    self.pending_separator = false;
+                }
+                if ends_response {
+                    // Codex's SSE decoder needs a complete delimiter at EOF.
+                    // The pump emits a CR-terminated frame immediately, before
+                    // an optional LF arrives; supply that LF ourselves instead
+                    // of waiting on an already completed provider response.
+                    if self.pending_separator {
+                        bytes.extend_from_slice(b"\n\n");
+                    } else if bytes.last() == Some(&b'\r') {
+                        bytes.push(b'\n');
+                    }
+                    self.pending_separator = false;
+                }
                 if terminal_delivered {
                     if let Ok(mut collector) = self.usage_collector.lock() {
                         collector.terminal_delivered = true;
                     }
                 }
+                // read_async must drain every byte in this frame (including
+                // any repaired output items) before advertising end-of-stream.
+                self.finished = ends_response;
                 Ok(bytes)
             }
             Ok(UpstreamSseFramePumpItem::Eof) => {
@@ -268,6 +375,10 @@ impl OpenAIResponsesPassthroughSseReader {
 impl crate::http::gateway_response_body::GatewayResponseBody
     for OpenAIResponsesPassthroughSseReader
 {
+    fn is_end_stream(&self) -> bool {
+        self.finished && self.out_cursor.position() >= self.out_cursor.get_ref().len() as u64
+    }
+
     fn finish_async(
         &mut self,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
@@ -623,10 +734,16 @@ mod async_finish_tests {
 
     #[test]
     fn native_split_utf8_and_crlf_are_preserved_by_the_shared_pump() {
+        use eventsource_stream::Eventsource;
+        use futures_util::StreamExt;
+
         let lock = crate::test_env_guard();
         let _wire = ExactWireKeepaliveGuard::enter(&lock);
         crate::gateway::response_test_runtime().unwrap().block_on(async {
-            let upstream = "event: response.completed\r\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_split\",\"status\":\"completed\",\"output_text\":\"你好\",\"usage\":{\"input_tokens\":3}}}\r\n\r\n";
+            let upstream = concat!(
+                "event: response.output_text.delta\r\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"你好\"}\r\n\r\n",
+                "event: response.completed\r\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_split\",\"status\":\"completed\",\"output_text\":\"你好\",\"usage\":{\"input_tokens\":3}}}\r\n\r\n",
+            );
             let (provider, input) = tokio::sync::mpsc::channel(1);
             let producer = tokio::spawn(async move {
                 for &byte in upstream.as_bytes() {
@@ -658,7 +775,14 @@ mod async_finish_tests {
                 }
             }).await.expect("split UTF-8/CRLF frame must complete");
             producer.await.unwrap();
+            // Complete the final CRLF locally without waiting for the optional
+            // upstream LF. Earlier CRLF/UTF-8 bytes remain exact as well.
             assert_eq!(body, upstream.as_bytes());
+            let chunks = body.into_iter().map(|byte| Ok::<_, std::io::Error>(Bytes::from(vec![byte])));
+            let events = futures_util::stream::iter(chunks).eventsource().collect::<Vec<_>>().await;
+            assert_eq!(events.len(), 2);
+            assert_eq!(events[0].as_ref().unwrap().event, "response.output_text.delta");
+            assert_eq!(events[1].as_ref().unwrap().event, "response.completed");
             let collected = usage.lock().unwrap();
             assert_eq!(collected.usage.input_tokens, Some(3));
             assert_eq!(collected.usage.output_text.as_deref(), Some("你好"));
@@ -687,7 +811,7 @@ mod async_finish_tests {
             );
             let bytes = tokio::time::timeout(Duration::from_secs(2), reader.next_chunk())
                 .await.expect("CR-only terminal cannot wait for provider close").unwrap();
-            assert_eq!(bytes, upstream.as_bytes());
+            assert_eq!(bytes, format!("{upstream}\n").as_bytes());
             assert!(!provider.is_closed());
             {
                 let collected = usage.lock().unwrap();
@@ -709,6 +833,13 @@ mod terminal_error_tests {
     use bytes::Bytes;
 
     fn read_fixture(sse: &[u8]) -> (String, PassthroughSseCollector) {
+        read_fixture_with_compatibility(sse, false)
+    }
+
+    fn read_fixture_with_compatibility(
+        sse: &[u8],
+        compatible: bool,
+    ) -> (String, PassthroughSseCollector) {
         let lock = crate::test_env_guard();
         let _wire = ExactWireKeepaliveGuard::enter(&lock);
         let usage = Arc::new(Mutex::new(PassthroughSseCollector::default()));
@@ -722,11 +853,103 @@ mod terminal_error_tests {
             usage.clone(),
             SseKeepAliveFrame::Comment,
             Instant::now(),
-        );
+        )
+        .with_compatibility_events(compatible);
         let mut body = String::new();
         reader.read_to_string(&mut body).unwrap();
         let collected = usage.lock().unwrap().clone();
         (body, collected)
+    }
+
+    #[test]
+    fn compatible_native_responses_filters_metadata_and_normalizes_done_for_sdk() {
+        let message = serde_json::json!({"id":"msg_sdk_compat","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"compatibility ok","annotations":[]}]});
+        let response = serde_json::json!({"id":"resp_sdk_compat","object":"response","created_at":1,"model":"test","status":"completed","output":[message],"error":null,"incomplete_details":null,"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}});
+        let mut created = response.clone();
+        created["status"] = serde_json::json!("in_progress");
+        created["output"] = serde_json::json!([]);
+        let events = [
+            serde_json::json!({"type":"response.created","sequence_number":0,"response":created}),
+            serde_json::json!({"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"msg_sdk_compat","type":"message","role":"assistant","status":"in_progress","content":[]}}),
+            serde_json::json!({"type":"response.content_part.added","sequence_number":2,"item_id":"msg_sdk_compat","output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}),
+            serde_json::json!({"type":"response.output_text.delta","sequence_number":3,"item_id":"msg_sdk_compat","output_index":0,"content_index":0,"delta":"compatibility ok"}),
+            serde_json::json!({"type":"response.metadata","sequence_number":4,"metadata":{"fixture":true}}),
+            serde_json::json!({"type":"response.done","sequence_number":5,"response":response}),
+        ];
+        let wire = events
+            .iter()
+            .map(|event| {
+                format!(
+                    "event: {}\ndata: {event}\n\n",
+                    event["type"].as_str().unwrap()
+                )
+            })
+            .collect::<String>();
+        let (body, collector) = read_fixture_with_compatibility(wire.as_bytes(), true);
+        assert!(!body.contains("response.metadata"));
+        assert!(!body.contains("response.done"));
+        assert!(body.contains("event: response.completed\n"));
+        assert!(body.contains("compatibility ok"));
+        assert!(collector.saw_terminal && collector.terminal_error.is_none());
+        assert_eq!(collector.usage.input_tokens, Some(3));
+        if let Some(directory) = std::env::var_os("CM_REPAIR_FIXTURE_DIR") {
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                std::path::Path::new(&directory).join("responses-sdk-compat-http.sse"),
+                &body,
+            )
+            .unwrap();
+        }
+        let (native, _) = read_fixture(wire.as_bytes());
+        assert!(native.contains("response.metadata"));
+        assert!(native.contains("response.done"));
+    }
+
+    #[test]
+    fn compatible_native_done_failure_stays_a_semantic_failure() {
+        let wire = b"event: response.done\ndata: {\"type\":\"response.done\",\"response\":{\"id\":\"resp_failed\",\"status\":\"failed\",\"output\":[],\"error\":{\"code\":\"quota_exceeded\",\"message\":\"quota exhausted\"}}}\n\n";
+        let (body, collector) = read_fixture_with_compatibility(wire, true);
+        assert!(body.contains("event: response.failed\n"));
+        assert!(!body.contains("response.completed"));
+        assert!(body.contains("quota_exceeded"));
+        assert!(collector.usage.explicit_failure);
+        assert!(collector.terminal_error.is_some());
+    }
+
+    #[test]
+    fn compatible_metadata_usage_is_observed_before_omitting_wire_event() {
+        let wire = b"data: {\"type\":\"response.metadata\",\"usage\":{\"input_tokens\":9,\"output_tokens\":4}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_usage\",\"status\":\"completed\",\"output\":[]}}\n\n";
+        let (body, collector) = read_fixture_with_compatibility(wire, true);
+        assert!(!body.contains("response.metadata"));
+        assert_eq!(collector.usage.input_tokens, Some(9));
+        assert_eq!(collector.usage.output_tokens, Some(4));
+    }
+
+    #[test]
+    fn native_terminal_delimiter_reaches_the_client_decoder_before_eof() {
+        use eventsource_stream::Eventsource;
+        use futures_util::StreamExt;
+
+        let terminal = "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_eof\",\"status\":\"completed\",\"output\":[]}}";
+        for ending in ["", "\n", "\r", "\r\n", "\r\r", "\n\n"] {
+            let (body, collected) = read_fixture(format!("{terminal}{ending}").as_bytes());
+            let chunks = body
+                .into_bytes()
+                .into_iter()
+                .map(|byte| Ok::<_, std::io::Error>(Bytes::from(vec![byte])));
+            let events = crate::gateway::response_test_runtime().unwrap().block_on(
+                futures_util::stream::iter(chunks)
+                    .eventsource()
+                    .collect::<Vec<_>>(),
+            );
+            assert_eq!(events.len(), 1, "terminal ending {ending:?}");
+            let event = events[0].as_ref().unwrap();
+            assert_eq!(event.event, "response.completed");
+            let value: serde_json::Value = serde_json::from_str(&event.data).unwrap();
+            assert_eq!(value["response"]["id"], "resp_eof");
+            assert!(collected.saw_terminal);
+            assert!(collected.terminal_error.is_none());
+        }
     }
 
     #[test]
@@ -862,10 +1085,12 @@ mod terminal_error_tests {
             out_cursor: Cursor::new(Vec::new()),
             usage_collector: usage.clone(),
             usage_text_state: OpenAIResponsesOutputTextState::default(),
+            output_repair: ResponsesOutputRepair::default(),
             keepalive_frame: SseKeepAliveFrame::Comment,
             request_started_at: Instant::now(),
             pending_separator: false,
             finished: false,
+            compatibility_events: false,
         };
         let mut body = String::new();
         reader.read_to_string(&mut body).unwrap();

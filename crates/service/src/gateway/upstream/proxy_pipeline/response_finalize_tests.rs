@@ -182,10 +182,22 @@ fn responses_mcp_local_errors_can_recover_but_response_failures_keep_qualificati
                 ] {
                     let local = serde_json::json!({"type": event_type, "status": "failed", "error": error});
                     let mut body = format!("event: {event_type}\ndata: {local}\n\n");
+                    let mut terminal_prefix = None;
                     if let Some(failure) = failure {
                         body.push_str(&format!("data: {failure}\n\n"));
+                        // A canonical Responses terminal ends delivery even
+                        // when the provider appends a contradictory completion.
+                        // Generic errors and response.error still follow the
+                        // existing error normalization/qualification path.
+                        if matches!(
+                            failure.get("type").and_then(serde_json::Value::as_str),
+                            Some("response.failed" | "response.completed")
+                        ) {
+                            terminal_prefix = Some(body.clone());
+                        }
                     }
                     body.push_str(&format!("data: {completed}\n\n"));
+                    let expected = terminal_prefix.as_deref().unwrap_or(&body);
                     let account = "responses-mcp-local-qualification";
                     let model = "gpt-6-luna";
                     mark_unsupported(account, model);
@@ -202,7 +214,7 @@ fn responses_mcp_local_errors_can_recover_but_response_failures_keep_qualificati
                     });
                     let response = receiver.await.unwrap();
                     let delivered = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-                    assert_eq!(delivered.as_ref(), body.as_bytes(), "Responses bytes stay unchanged");
+                    assert_eq!(delivered.as_ref(), expected.as_bytes(), "Responses bytes stay unchanged through the first canonical terminal");
                     let bridge = delivery.await.unwrap().unwrap();
                     assert_eq!(bridge.is_ok(true), success, "{body}/{bridge:?}");
                     if success {

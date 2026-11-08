@@ -8,6 +8,7 @@ pub(in super::super) struct GatewayUpstreamExecutionContext<'a> {
     original_path: &'a str,
     path: &'a str,
     request_method: &'a str,
+    request_type: &'static str,
     response_adapter: super::super::super::ResponseAdapter,
     protocol_type: &'a str,
     client_model_for_log: Option<&'a str>,
@@ -34,6 +35,7 @@ pub(in super::super) struct OwnedGatewayUpstreamExecutionContext {
     original_path: String,
     path: String,
     request_method: String,
+    request_type: &'static str,
     response_adapter: super::super::super::ResponseAdapter,
     protocol_type: String,
     client_model_for_log: Option<String>,
@@ -61,6 +63,7 @@ impl GatewayUpstreamExecutionContext<'_> {
             original_path: self.original_path.to_owned(),
             path: self.path.to_owned(),
             request_method: self.request_method.to_owned(),
+            request_type: self.request_type,
             response_adapter: self.response_adapter,
             protocol_type: self.protocol_type.to_owned(),
             client_model_for_log: self.client_model_for_log.map(str::to_owned),
@@ -94,6 +97,7 @@ impl OwnedGatewayUpstreamExecutionContext {
             original_path: self.original_path.as_str(),
             path: self.path.as_str(),
             request_method: self.request_method.as_str(),
+            request_type: self.request_type,
             response_adapter: self.response_adapter,
             protocol_type: self.protocol_type.as_str(),
             client_model_for_log: self.client_model_for_log.as_deref(),
@@ -160,6 +164,7 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
             original_path,
             path,
             request_method,
+            request_type: "http",
             response_adapter,
             protocol_type,
             client_model_for_log,
@@ -178,6 +183,11 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
             candidate_count,
             account_max_inflight,
         }
+    }
+
+    pub(in super::super) fn with_request_type(mut self, request_type: &'static str) -> Self {
+        self.request_type = request_type;
+        self
     }
 
     /// 函数 `has_more_candidates`
@@ -442,7 +452,7 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
                 route_strategy: self.route_strategy_for_log,
                 route_source: self.route_source_for_log,
                 response_adapter: Some(self.response_adapter),
-                request_type: Some("http"),
+                request_type: Some(self.request_type),
                 client_model: self.client_model_for_log,
                 model_source: self.model_source_for_log,
                 client_reasoning_effort: self.client_reasoning_for_log,

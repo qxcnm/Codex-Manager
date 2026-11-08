@@ -9,6 +9,12 @@ pub(crate) type BodyReadFuture<'a> = Pin<Box<dyn Future<Output = io::Result<usiz
 pub(crate) trait GatewayResponseBody: Send {
     fn read_async<'a>(&'a mut self, buffer: &'a mut [u8]) -> BodyReadFuture<'a>;
 
+    /// The protocol's terminal output has been completely read into the last
+    /// returned chunk. This does not mean that HTTP has consumed that chunk.
+    fn is_end_stream(&self) -> bool {
+        false
+    }
+
     /// Finish observations already received before delivery was interrupted.
     /// Implementations must bound cleanup and must not wait for provider EOF.
     fn finish_async(&mut self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
@@ -31,6 +37,10 @@ impl GatewayResponseBody for io::Empty {
 impl<T: GatewayResponseBody + ?Sized> GatewayResponseBody for Box<T> {
     fn read_async<'a>(&'a mut self, buffer: &'a mut [u8]) -> BodyReadFuture<'a> {
         (**self).read_async(buffer)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        (**self).is_end_stream()
     }
 
     fn finish_async(&mut self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {

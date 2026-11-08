@@ -8,16 +8,17 @@ use super::super::attempt_flow::transport::UpstreamRequestContext;
 use super::super::GatewayUpstreamResponse;
 
 fn should_skip_codex_v1_alt_for_responses(
-    request_ctx: UpstreamRequestContext<'_>,
+    _request_ctx: UpstreamRequestContext<'_>,
     alt_url: &str,
 ) -> bool {
-    request_ctx.protocol_type == crate::apikey_profile::PROTOCOL_OPENAI_COMPAT
-        && reqwest::Url::parse(alt_url).ok().is_some_and(|url| {
-            url.path()
-                .trim_end_matches('/')
-                .to_ascii_lowercase()
-                .ends_with("/backend-api/codex/v1/responses")
-        })
+    // The Codex backend has no /v1/responses variant. Messages and Chat
+    // requests converted to Responses must preserve the canonical error too.
+    reqwest::Url::parse(alt_url).ok().is_some_and(|url| {
+        url.path()
+            .trim_end_matches('/')
+            .to_ascii_lowercase()
+            .ends_with("/backend-api/codex/v1/responses")
+    })
 }
 
 pub(in super::super) enum AltPathRetryResult {

@@ -9,6 +9,8 @@ mod auth;
 mod io;
 mod request;
 
+pub(crate) use request::is_native_codex_client_request;
+
 pub(super) struct LocalValidationResult {
     pub(super) trace_id: String,
     pub(super) incoming_headers: super::IncomingHeaderSnapshot,

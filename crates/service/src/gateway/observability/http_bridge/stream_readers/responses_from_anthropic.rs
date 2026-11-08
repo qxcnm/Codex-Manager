@@ -645,6 +645,18 @@ impl ResponsesFromAnthropicSseReader {
 }
 
 impl crate::http::gateway_response_body::GatewayResponseBody for ResponsesFromAnthropicSseReader {
+    fn is_end_stream(&self) -> bool {
+        self.state.completed && self.out_cursor.position() >= self.out_cursor.get_ref().len() as u64
+    }
+
+    fn finish_async(
+        &mut self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            self.upstream.stop_input().await;
+        })
+    }
+
     fn read_async<'a>(
         &'a mut self,
         buf: &'a mut [u8],

@@ -2,8 +2,8 @@ use super::*;
 use codexmanager_core::storage::AggregateApi;
 use serde_json::{json, Value};
 
-const MODEL: &str = "gpt-non-stream-tools-test";
-const UPSTREAM_MODEL: &str = "gpt-non-stream-tools-upstream";
+pub(super) const MODEL: &str = "gpt-non-stream-tools-test";
+pub(super) const UPSTREAM_MODEL: &str = "gpt-non-stream-tools-upstream";
 
 fn seed_aggregate_route(storage: &Storage, upstream_addr: &str, action: &str) {
     let now = now_ts();
@@ -63,7 +63,7 @@ fn seed_aggregate_route(storage: &Storage, upstream_addr: &str, action: &str) {
     seed_platform_key(storage, "hybrid_aggregate_first_rotation");
 }
 
-fn seed_account_route(storage: &Storage) {
+pub(super) fn seed_account_route(storage: &Storage) {
     let now = now_ts();
     let account_id = "acc_non_stream_tools_mock";
     storage
@@ -968,10 +968,25 @@ fn stream_http_native_responses_function_tools() {
         }),
     );
     assert_eq!(
-        actual, upstream_sse,
-        "native public HTTP preserves the complete SSE body"
+        actual,
+        upstream_sse
+            .strip_suffix("data: [DONE]\n\n")
+            .expect("fixture contains an optional post-completion marker"),
+        "native Responses preserves all bytes through response.completed"
     );
-    let events = stream_http_events(&actual);
+    // Native Responses ends at completed. The Chat helper below deliberately
+    // keeps its separate [DONE] contract.
+    assert!(
+        actual.ends_with("\n\n"),
+        "complete final SSE frame: {actual}"
+    );
+    let events = actual
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .map(|data| {
+            serde_json::from_str::<Value>(data.trim()).expect("complete Responses SSE JSON")
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         events, expected_events,
         "native HTTP preserves every ordered SSE event"

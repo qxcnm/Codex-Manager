@@ -731,11 +731,64 @@ fn merge_sse_frame_usage(
 ///
 /// # 返回
 /// 返回函数执行结果
+fn terminal_response_snapshot(value: &Value) -> Option<Value> {
+    let event = value.get("type").and_then(Value::as_str)?;
+    let status = match event {
+        "response.completed" | "response.done" => "completed",
+        "response.incomplete" => "incomplete",
+        "response.failed" | "response.error" | "response.cancelled" | "response.canceled"
+        | "error" => "failed",
+        _ => return None,
+    };
+    if status == "completed" && value.get("response").is_none() {
+        return None;
+    }
+    let mut response = value
+        .get("response")
+        .cloned()
+        .unwrap_or_else(|| value.clone());
+    if let Some(object) = response.as_object_mut() {
+        object.entry("status").or_insert_with(|| json!(status));
+        if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
+            object.entry("error").or_insert_with(|| error.clone());
+        }
+    }
+    Some(response)
+}
+
+fn enrich_terminal_response(response: Value, synthesis: &ResponsesSseSynthesis) -> Value {
+    if response.get("status").and_then(Value::as_str) == Some("completed")
+        && response.get("error").is_none_or(Value::is_null)
+        && response
+            .pointer("/status_details/error")
+            .is_none_or(Value::is_null)
+    {
+        return enrich_completed_response_with_sse_text(response, synthesis);
+    }
+    let mut response = response;
+    // Preserve failed/incomplete envelopes and never promote partial tool
+    // buffers into executable calls. A known output limit may retain text that
+    // was actually received before its terminal snapshot omitted that text.
+    if super::super::response_outcome::is_output_limit_incomplete(&response) {
+        let mut text = String::new();
+        collect_response_output_text(&response, &mut text);
+        if text.trim().is_empty() && !synthesis.output_text.trim().is_empty() {
+            let partial = json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":synthesis.output_text}]});
+            if let Some(items) = response.get_mut("output").and_then(Value::as_array_mut) {
+                items.push(partial);
+            } else {
+                response["output"] = json!([partial]);
+            }
+        }
+    }
+    response
+}
+
 pub(in super::super) fn collect_non_stream_json_from_sse_bytes(
     payload: &[u8],
 ) -> (Option<Vec<u8>>, UpstreamResponseUsage) {
     let mut usage = UpstreamResponseUsage::default();
-    let mut completed_response: Option<Value> = None;
+    let mut terminal_response: Option<Value> = None;
     let mut responses_sse_synthesis = ResponsesSseSynthesis::default();
     let mut responses_usage_text_state = OpenAIResponsesOutputTextState::default();
     let mut chat_completion_synthesis = ChatCompletionSseSynthesis::default();
@@ -760,15 +813,18 @@ pub(in super::super) fn collect_non_stream_json_from_sse_bytes(
             if let Some(value) = parse_sse_frame_json(&frame) {
                 update_responses_sse_synthesis(&mut responses_sse_synthesis, &value);
                 update_chat_completion_sse_synthesis(&mut chat_completion_synthesis, &value);
-                if value
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .is_some_and(is_response_completed_event_name)
-                {
-                    if let Some(response_obj) = value.get("response") {
-                        completed_response = Some(response_obj.clone());
-                    }
+                if terminal_response.is_none() {
+                    terminal_response = terminal_response_snapshot(&value);
                 }
+            } else if let Some(super::SseTerminal::Err(message)) =
+                inspect_sse_frame(&frame).terminal
+            {
+                terminal_response = Some(json!({"object":"response","status":"failed","error":{
+                    "type":"upstream_error","code":"upstream_response_failed","message":message
+                }}));
+            }
+            if terminal_response.is_some() {
+                break;
             }
             continue;
         }
@@ -780,24 +836,58 @@ pub(in super::super) fn collect_non_stream_json_from_sse_bytes(
         if let Some(value) = parse_sse_frame_json(&frame_lines) {
             update_responses_sse_synthesis(&mut responses_sse_synthesis, &value);
             update_chat_completion_sse_synthesis(&mut chat_completion_synthesis, &value);
-            if value
-                .get("type")
-                .and_then(Value::as_str)
-                .is_some_and(is_response_completed_event_name)
-            {
-                if let Some(response_obj) = value.get("response") {
-                    completed_response = Some(response_obj.clone());
-                }
+            if terminal_response.is_none() {
+                terminal_response = terminal_response_snapshot(&value);
             }
+        } else if let Some(super::SseTerminal::Err(message)) =
+            inspect_sse_frame(&frame_lines).terminal
+        {
+            terminal_response = Some(json!({"object":"response","status":"failed","error":{
+                "type":"upstream_error","code":"upstream_response_failed","message":message
+            }}));
         }
     }
 
-    let body = completed_response
-        .map(|value| enrich_completed_response_with_sse_text(value, &responses_sse_synthesis))
+    let body = terminal_response
+        .map(|value| enrich_terminal_response(value, &responses_sse_synthesis))
         .and_then(|value| serde_json::to_vec(&value).ok())
         .or_else(|| synthesize_response_body_from_sse(&responses_sse_synthesis))
         .or_else(|| synthesize_chat_completion_body(&chat_completion_synthesis));
     (body, usage)
+}
+
+#[cfg(test)]
+mod terminal_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn non_stream_sse_preserves_first_failed_terminal_instead_of_later_success() {
+        let wire = concat!(
+            "data: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"quota\",\"message\":\"failure\"},\"output\":[],\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"function_call\",\"call_id\":\"must_not_appear\"}]}}\n\n"
+        );
+        let (body, usage) = collect_non_stream_json_from_sse_bytes(wire.as_bytes());
+        let body: Value = serde_json::from_slice(&body.unwrap()).unwrap();
+        assert_eq!(body["status"], "failed");
+        assert_eq!(body["error"]["code"], "quota");
+        assert!(body["output"].as_array().unwrap().is_empty());
+        assert_eq!(usage.output_tokens, Some(2));
+    }
+
+    #[test]
+    fn non_stream_output_limit_retains_received_text_without_synthesizing_partial_tools() {
+        let wire = concat!(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial text\"}\n\n",
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\":\"function_call\",\"call_id\":\"partial_call\",\"name\":\"lookup\",\"arguments\":\"{\"}}\n\n",
+            "data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"output\":[],\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}}\n\n"
+        );
+        let (body, _) = collect_non_stream_json_from_sse_bytes(wire.as_bytes());
+        let body: Value = serde_json::from_slice(&body.unwrap()).unwrap();
+        assert_eq!(body["status"], "incomplete");
+        assert_eq!(body["output"].as_array().unwrap().len(), 1);
+        assert_eq!(body["output"][0]["type"], "message");
+        assert_eq!(body["output"][0]["content"][0]["text"], "partial text");
+    }
 }
 
 /// 函数 `looks_like_sse_payload`

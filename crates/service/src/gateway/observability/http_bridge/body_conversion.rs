@@ -1,3 +1,4 @@
+use super::response_outcome::is_output_limit_incomplete;
 use serde_json::{json, Map, Value};
 
 use super::super::{GeminiStreamOutputMode, ResponseAdapter, ToolNameRestoreMap};
@@ -140,7 +141,12 @@ fn convert_responses_body_to_anthropic_messages(
         .unwrap_or("msg_codexmanager");
     let model = value.get("model").and_then(Value::as_str).unwrap_or("");
     let mut content = Vec::new();
-    let mut stop_reason = "end_turn";
+    let output_limited = is_output_limit_incomplete(&value);
+    let mut stop_reason = if output_limited {
+        "max_tokens"
+    } else {
+        "end_turn"
+    };
     if let Some(output_items) = value.get("output").and_then(Value::as_array) {
         for item in output_items {
             let Some(item_obj) = item.as_object() else {
@@ -204,6 +210,9 @@ fn convert_responses_body_to_anthropic_messages(
                     }
                 }
                 "function_call" | "custom_tool_call" => {
+                    if output_limited {
+                        continue;
+                    }
                     stop_reason = "tool_use";
                     content.push(json!({
                         "type": "tool_use",
@@ -557,6 +566,9 @@ pub(super) fn convert_success_body_for_adapter(
         ResponseAdapter::ResponsesFromAnthropicMessages => {
             convert_anthropic_messages_body_to_responses(body)
         }
+        ResponseAdapter::ResponsesFromChatCompletions => {
+            super::stream_readers::convert_chat_completions_body_to_responses(body)
+        }
         ResponseAdapter::ChatCompletionsFromResponses => {
             convert_responses_body_to_chat_completions(body)
         }
@@ -641,6 +653,7 @@ fn responses_usage_to_chat_usage(usage: &Value) -> Value {
 pub(super) fn convert_responses_body_to_chat_completions(body: &[u8]) -> Option<Vec<u8>> {
     let value = serde_json::from_slice::<Value>(body).ok()?;
     let response = value.get("response").unwrap_or(&value);
+    let output_limited = is_output_limit_incomplete(&value);
     let mut text = String::new();
     if let Some(output_text) = response.get("output_text").and_then(Value::as_str) {
         text.push_str(output_text);
@@ -680,6 +693,7 @@ pub(super) fn convert_responses_body_to_chat_completions(body: &[u8]) -> Option<
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
+        .filter(|_| !output_limited)
         .filter(|item| item.get("type").and_then(Value::as_str) == Some("function_call"))
         .map(|item| {
             let id = item
@@ -723,7 +737,7 @@ pub(super) fn convert_responses_body_to_chat_completions(body: &[u8]) -> Option<
                 "role": "assistant",
                 "content": content
             },
-            "finish_reason": if has_tool_calls { "tool_calls" } else { "stop" }
+            "finish_reason": if output_limited { "length" } else if has_tool_calls { "tool_calls" } else { "stop" }
         }]
     });
     if has_tool_calls {
@@ -895,6 +909,7 @@ pub(super) fn convert_error_body_for_adapter(
             convert_upstream_error_to_anthropic_body(message)
         }
         ResponseAdapter::ResponsesFromAnthropicMessages
+        | ResponseAdapter::ResponsesFromChatCompletions
         | ResponseAdapter::ChatCompletionsFromResponses => serde_json::to_vec(&json!({
             "error": {
                 "message": message,
@@ -936,6 +951,7 @@ pub(super) fn compatibility_stream_content_type(
     match response_adapter {
         ResponseAdapter::AnthropicMessagesFromResponses => "text/event-stream",
         ResponseAdapter::ResponsesFromAnthropicMessages
+        | ResponseAdapter::ResponsesFromChatCompletions
         | ResponseAdapter::ChatCompletionsFromResponses => "text/event-stream",
         ResponseAdapter::CompactFromChatCompletions => "application/json",
         ResponseAdapter::ImagesB64JsonFromResponses | ResponseAdapter::ImagesUrlFromResponses => {

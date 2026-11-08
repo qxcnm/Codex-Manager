@@ -3,6 +3,33 @@ use std::io::{Cursor, Read};
 use std::thread;
 use std::time::Duration;
 
+#[test]
+fn anthropic_responses_terminal_marks_end_without_waiting_for_provider_eof() {
+    use crate::gateway::upstream::{GatewayByteStream, GatewayByteStreamItem};
+    use crate::http::gateway_response_body::GatewayResponseBody;
+    let (sender, receiver) = tokio::sync::mpsc::channel(1);
+    sender.try_send(GatewayByteStreamItem::Chunk(bytes::Bytes::from_static(b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"model\":\"test\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))).unwrap();
+    let mut reader = ResponsesFromAnthropicSseReader::from_pump(
+        UpstreamSseFramePump::from_stream(GatewayByteStream::from_receiver(receiver)),
+        Arc::new(Mutex::new(UpstreamResponseUsage::default())),
+        None,
+        Instant::now(),
+    );
+    crate::gateway::response_test_runtime()
+        .unwrap()
+        .block_on(async {
+            tokio::time::timeout(Duration::from_secs(2), async {
+                let mut buffer = [0; 17];
+                while !reader.is_end_stream() {
+                    assert!(reader.read_async(&mut buffer).await.unwrap() > 0);
+                }
+                reader.finish_async().await;
+            })
+            .await
+            .expect("complete Responses terminal must not depend on provider EOF");
+        });
+}
+
 struct PausingReader {
     payload: Cursor<Vec<u8>>,
     paused: bool,

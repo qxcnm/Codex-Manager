@@ -1153,6 +1153,145 @@ fn native_codex_client_detection_uses_codex_signals_instead_of_client_brand() {
     assert!(is_native_codex_client_request(&opencode_with_codex_signals));
 }
 
+fn openai_sdk_tracking_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert("user-agent", HeaderValue::from_static("OpenAI/JS 7.53.0"));
+    headers.insert(
+        "x-client-request-id",
+        HeaderValue::from_static("sdk-trace-123"),
+    );
+    headers.insert("session_id", HeaderValue::from_static("sdk-session-123"));
+    headers
+}
+
+fn build_tracked_sdk_request(path: &str, body: Value, headers: HeaderMap) -> LocalValidationResult {
+    let storage = crate::storage_helpers::open_storage().expect("open isolated test storage");
+    storage.init().expect("initialize isolated test storage");
+    let incoming_headers = crate::gateway::IncomingHeaderSnapshot::from_http_headers(&headers);
+    let body = Bytes::from(serde_json::to_vec(&body).expect("serialize SDK request"));
+    let mut http_request = axum::http::Request::builder()
+        .method("POST")
+        .uri(path)
+        .body(())
+        .expect("build SDK request");
+    *http_request.headers_mut() = headers;
+    let (parts, ()) = http_request.into_parts();
+    let (request, _response) = Request::new(parts, body.clone());
+    let mut key = sample_api_key(
+        crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        Some("gpt-6-luna"),
+        None,
+        None,
+    );
+    key.upstream_base_url = Some("https://chatgpt.com/backend-api/codex".to_string());
+    build_local_validation_result(
+        &request,
+        "trc_sdk_tracking_test".into(),
+        incoming_headers,
+        storage,
+        body,
+        key,
+    )
+    .unwrap_or_else(|error| {
+        panic!(
+            "prepare SDK request: {} {}",
+            error.status_code, error.message
+        )
+    })
+}
+
+#[test]
+fn openai_sdk_tracking_header_keeps_chat_conversion_and_client_stream_mode() {
+    let _guard = crate::test_env_guard();
+    let path = std::env::temp_dir().join(format!(
+        "cm-sdk-tracking-chat-{:032x}.db",
+        rand::random::<u128>()
+    ));
+    let _database = RuntimeEnvGuard::set("CODEXMANAGER_DB_PATH", path.to_str().unwrap());
+    for stream in [false, true] {
+        let prepared = build_tracked_sdk_request(
+            "/v1/chat/completions",
+            serde_json::json!({"model":"gpt-6-luna","stream":stream,"messages":[{"role":"user","content":"hello"}]}),
+            openai_sdk_tracking_headers(),
+        );
+        assert_eq!(prepared.original_path, "/v1/chat/completions");
+        assert_eq!(prepared.path, "/v1/responses");
+        assert_eq!(
+            prepared.response_adapter,
+            crate::gateway::ResponseAdapter::ChatCompletionsFromResponses
+        );
+        assert_eq!(prepared.is_stream, stream);
+        assert_eq!(
+            prepared.incoming_headers.client_request_id(),
+            Some("sdk-trace-123")
+        );
+        let upstream: Value = serde_json::from_slice(&prepared.body).unwrap();
+        assert_eq!(upstream["stream"], true);
+        assert_eq!(upstream["input"][0]["content"][0]["text"], "hello");
+        assert!(upstream.get("messages").is_none());
+    }
+}
+
+#[test]
+fn openai_sdk_tracking_header_uses_upstream_sse_without_changing_responses_json_mode() {
+    let _guard = crate::test_env_guard();
+    let path = std::env::temp_dir().join(format!(
+        "cm-sdk-tracking-responses-{:032x}.db",
+        rand::random::<u128>()
+    ));
+    let _database = RuntimeEnvGuard::set("CODEXMANAGER_DB_PATH", path.to_str().unwrap());
+    let prepared = build_tracked_sdk_request(
+        "/v1/responses",
+        serde_json::json!({"model":"gpt-6-luna","stream":false,"input":"hello"}),
+        openai_sdk_tracking_headers(),
+    );
+    assert_eq!(prepared.path, "/v1/responses");
+    assert_eq!(
+        prepared.response_adapter,
+        crate::gateway::ResponseAdapter::Passthrough
+    );
+    assert!(!prepared.is_stream, "downstream must still receive JSON");
+    let upstream: Value = serde_json::from_slice(&prepared.body).unwrap();
+    assert_eq!(upstream["stream"], true);
+    assert_eq!(upstream["input"][0]["content"][0]["text"], "hello");
+    assert_eq!(
+        prepared.incoming_headers.client_request_id(),
+        Some("sdk-trace-123")
+    );
+}
+
+#[test]
+fn generic_tracking_header_does_not_mask_real_codex_client_signals() {
+    let headers = openai_sdk_tracking_headers();
+    assert!(!is_native_codex_client_request(
+        &crate::gateway::IncomingHeaderSnapshot::from_http_headers(&headers)
+    ));
+    for (name, value) in [
+        ("user-agent", "codex_cli_rs/0.164.0"),
+        ("user-agent", "codex_exec/0.164.0"),
+        ("originator", "codex_cli_rs"),
+        ("originator", "codex_exec"),
+        ("x-codex-beta-features", "feature"),
+        ("x-codex-window-id", "window-123"),
+        ("x-codex-turn-metadata", "{}"),
+        ("x-codex-turn-state", "turn-123"),
+        ("x-codex-parent-thread-id", "thread-123"),
+    ] {
+        let mut native_headers = headers.clone();
+        native_headers.insert(name, HeaderValue::from_static(value));
+        let snapshot = crate::gateway::IncomingHeaderSnapshot::from_http_headers(&native_headers);
+        assert!(
+            is_native_codex_client_request(&snapshot),
+            "lost native signal: {name}"
+        );
+        assert!(!allow_codex_compat_rewrite_for_client(
+            crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+            "/v1/responses",
+            is_native_codex_client_request(&snapshot),
+        ));
+    }
+}
+
 #[test]
 fn openai_responses_api_clients_use_codex_compat_rewrite_but_native_codex_does_not() {
     assert!(allow_codex_compat_rewrite_for_client(

@@ -31,6 +31,8 @@ use super::response_helpers::{
     extract_error_message_from_json_bytes, force_openai_responses_stream_content_type,
     replace_content_type_header, respond_json_bytes,
 };
+use super::response_outcome::{output_limit_has_visible_text, response_failure};
+use super::stream_readers::ResponsesFromChatCompletionsSseReader;
 use super::{
     collect_non_stream_json_from_sse_bytes, extract_error_hint_from_body, looks_like_sse_payload,
     parse_usage_from_json, usage_has_signal, AnthropicSseReader,
@@ -109,7 +111,8 @@ async fn respond_usage_collector_stream(
         .lock()
         .map(|guard| guard.clone())
         .unwrap_or_default();
-    terminal_bridge_result_with_debug_meta(
+    let explicit_failure = usage.explicit_failure;
+    let mut result = terminal_bridge_result_with_debug_meta(
         usage,
         delivery_error,
         None,
@@ -118,7 +121,13 @@ async fn respond_usage_collector_stream(
         meta.auth_error,
         meta.identity_error_code,
         meta.content_type,
-    )
+    );
+    if explicit_failure {
+        // Delivering a failed terminal is a successful transport operation, but
+        // the legacy usage-only collector must still report a failed response.
+        result.stream_terminal_error = Some("upstream response failed".to_string());
+    }
+    result
 }
 
 async fn respond_passthrough_collector_stream(
@@ -251,7 +260,7 @@ pub(crate) async fn respond_with_stream_upstream(
             let detected_sse = is_sse
                 || ((!is_json || images_response_format.is_some())
                     && looks_like_sse_payload(upstream_body.as_ref()));
-            let (body, usage) = if detected_sse {
+            let (body, mut usage) = if detected_sse {
                 let (synthesized, mut usage) =
                     collect_non_stream_json_from_sse_bytes(upstream_body.as_ref());
                 let body = synthesized.unwrap_or_else(|| upstream_body.to_vec());
@@ -264,7 +273,46 @@ pub(crate) async fn respond_with_stream_upstream(
                     .unwrap_or_default();
                 (upstream_body.to_vec(), usage)
             };
+            let converted_body = convert_success_body_for_adapter(
+                response_adapter,
+                &body,
+                request_path,
+                tool_name_restore_map,
+            )
+            .unwrap_or_else(|| body.clone());
+            // Inspect both envelopes: converting a failed Responses snapshot must
+            // not hide its error, and Chat -> Responses may discover a missing
+            // finish_reason only while constructing the Responses envelope.
+            let raw_value = serde_json::from_slice::<Value>(&body).ok();
+            let converted_value = serde_json::from_slice::<Value>(&converted_body).ok();
+            // Images have their own parser below, which preserves provider
+            // error codes inside the established user-facing error message.
+            let payload_error = if images_response_format.is_some() {
+                None
+            } else {
+                [raw_value.as_ref(), converted_value.as_ref()]
+                    .into_iter()
+                    .flatten()
+                    .find_map(|value| {
+                        if output_limit_has_visible_text(value) {
+                            None
+                        } else {
+                            response_failure(value)
+                        }
+                    })
+            };
+            let output_limited = raw_value
+                .as_ref()
+                .is_some_and(output_limit_has_visible_text)
+                || converted_value
+                    .as_ref()
+                    .is_some_and(output_limit_has_visible_text);
+            if output_limited && payload_error.is_none() {
+                usage.explicit_failure = false;
+                usage.completed_successfully = false;
+            }
             let mut image_error = None;
+            let mut compatibility_error = None;
             let response_body = if status.0 >= 400 {
                 let message = with_upstream_debug_suffix(
                     extract_error_hint_from_body_or_headers(
@@ -284,6 +332,20 @@ pub(crate) async fn respond_with_stream_upstream(
                 )
                 .unwrap_or_else(|| "upstream compatibility bridge failed".to_string());
                 convert_error_body_for_adapter(response_adapter, &message)
+            } else if let Some(error) = payload_error {
+                status = StatusCode(502);
+                compatibility_error = error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let payload = if response_adapter == ResponseAdapter::AnthropicMessagesFromResponses
+                {
+                    serde_json::json!({"type": "error", "error": error})
+                } else {
+                    serde_json::json!({"error": error})
+                };
+                serde_json::to_vec(&payload)
+                    .map_err(|error| format!("serialize upstream failure: {error}"))?
             } else if let Some(response_format) = images_response_format {
                 match super::images::parse_images_response_body_with_sse(
                     upstream_body.as_ref(),
@@ -310,29 +372,23 @@ pub(crate) async fn respond_with_stream_upstream(
                     }
                 }
             } else {
-                convert_success_body_for_adapter(
-                    response_adapter,
-                    &body,
-                    request_path,
-                    tool_name_restore_map,
-                )
-                .unwrap_or_else(|| body.clone())
+                converted_body
             };
             let delivery_error = respond_json_bytes(request, status, headers, response_body).await;
             let mut result = terminal_bridge_result_with_debug_meta(
                 usage,
                 delivery_error,
-                image_error.clone(),
+                image_error.clone().or_else(|| compatibility_error.clone()),
                 &upstream_request_id,
                 &upstream_cf_ray,
                 &upstream_auth_error,
                 &upstream_identity_error_code,
                 &upstream_content_type,
             );
-            if image_error.is_some() {
+            if image_error.is_some() || compatibility_error.is_some() {
                 result.usage.completed_successfully = false;
                 result.usage.explicit_failure = true;
-                result.stream_terminal_error = image_error;
+                result.stream_terminal_error = image_error.or(compatibility_error);
                 result.delivered_status_code = Some(status.0);
             }
             return Ok(result);
@@ -439,6 +495,32 @@ pub(crate) async fn respond_with_stream_upstream(
                 > = Box::new(ChatCompletionsFromResponsesSseReader::from_stream_response(
                     upstream,
                     Arc::clone(&usage_collector),
+                    request_started_at,
+                ));
+                return Ok(respond_passthrough_collector_stream(
+                    request,
+                    status,
+                    headers,
+                    response_body,
+                    usage_collector,
+                    UpstreamDebugMetaRefs {
+                        request_id: &upstream_request_id,
+                        cf_ray: &upstream_cf_ray,
+                        auth_error: &upstream_auth_error,
+                        identity_error_code: &upstream_identity_error_code,
+                        content_type: &upstream_content_type,
+                    },
+                )
+                .await);
+            }
+            ResponseAdapter::ResponsesFromChatCompletions => {
+                let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
+                let response_body: Box<
+                    dyn crate::http::gateway_response_body::GatewayResponseBody,
+                > = Box::new(ResponsesFromChatCompletionsSseReader::from_stream_response(
+                    upstream,
+                    Arc::clone(&usage_collector),
+                    fallback_model,
                     request_started_at,
                 ));
                 return Ok(respond_passthrough_collector_stream(
@@ -883,12 +965,19 @@ pub(crate) async fn respond_with_stream_upstream(
                 let response_body: Box<
                     dyn crate::http::gateway_response_body::GatewayResponseBody,
                 > = if request_path.starts_with("/v1/responses") {
-                    Box::new(OpenAIResponsesPassthroughSseReader::from_stream_response(
-                        upstream,
-                        Arc::clone(&usage_collector),
-                        keepalive_frame,
-                        request_started_at,
-                    ))
+                    Box::new(
+                        OpenAIResponsesPassthroughSseReader::from_stream_response(
+                            upstream,
+                            Arc::clone(&usage_collector),
+                            keepalive_frame,
+                            request_started_at,
+                        )
+                        .with_compatibility_events(
+                            !crate::gateway::is_native_codex_client_request(
+                                &crate::gateway::IncomingHeaderSnapshot::from_request(&request),
+                            ),
+                        ),
+                    )
                 } else {
                     Box::new(PassthroughSseUsageReader::from_stream_response(
                         upstream,
@@ -1006,6 +1095,7 @@ pub(crate) async fn respond_with_stream_upstream(
         }
         ResponseAdapter::AnthropicMessagesFromResponses
         | ResponseAdapter::ResponsesFromAnthropicMessages
+        | ResponseAdapter::ResponsesFromChatCompletions
         | ResponseAdapter::ChatCompletionsFromResponses
         | ResponseAdapter::ImagesB64JsonFromResponses
         | ResponseAdapter::ImagesUrlFromResponses

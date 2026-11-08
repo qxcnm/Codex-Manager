@@ -76,6 +76,10 @@ pub(in super::super) struct OpenAIResponsesEvent {
 
 impl OpenAIResponsesEvent {
     pub(in super::super) fn parse(lines: &[String]) -> Option<Self> {
+        Self::parse_with_payload(lines).map(|(event, _)| event)
+    }
+
+    pub(in super::super) fn parse_with_payload(lines: &[String]) -> Option<(Self, Value)> {
         let value = parse_sse_frame_json(lines)?;
         let event_type = value
             .get("type")
@@ -152,14 +156,17 @@ impl OpenAIResponsesEvent {
             },
         );
 
-        Some(Self {
-            event_type,
-            usage,
-            output_text_kind,
-            output_text_snapshot_key,
-            terminal,
-            upstream_error_hint,
-        })
+        Some((
+            Self {
+                event_type,
+                usage,
+                output_text_kind,
+                output_text_snapshot_key,
+                terminal,
+                upstream_error_hint,
+            },
+            value,
+        ))
     }
 
     pub(in super::super) fn merge_usage_into(

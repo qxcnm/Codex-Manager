@@ -5,6 +5,37 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-11-08
+
+### Added
+
+- Added Responses WebSocket compatibility for aggregate APIs and hybrid routing through the existing HTTP/SSE gateway, reusing authentication, model routing, quotas, concurrency limits, and logs while preserving native WebSocket transport for official Codex accounts.
+- Added local `generate:false` warmup, same-connection `previous_response_id` continuation, tool-result submission, and interruption to the compatibility path; synchronized gateway WebSocket capability and client configuration.
+- Added request and response conversion from Responses clients to Chat Completions aggregate upstreams, covering JSON, SSE, function tools, usage, and errors.
+
+### Fixed
+
+- Fixed native Responses WebSocket rejecting valid named function selections by accepting the standard tool_choice modes and function object while continuing to reject malformed values.
+
+- Fixed OpenAI SDK requests with a generic request-tracing header being misidentified as native Codex clients, which bypassed Chat conversion and sent unsupported non-streaming Responses requests upstream.
+- Normalize Codex-specific metadata and legacy terminal events for standard Responses clients to prevent SDK parsing failures and premature disconnects, while preserving native Codex events.
+
+- Fixed requests being logged as `499 / broken pipe` when clients stopped reading after the complete terminal event had been delivered. Streams now finish promptly without waiting for the upstream connection to close; genuine cancellation, incomplete delivery, and upstream failures retain their error states.
+- Fixed missing visible replies when upstreams provided complete assistant text only in `response.completed`. Repaired messages retain their original IDs and output positions without duplication.
+- Fixed stream completion with missing final SSE delimiters, CR/CRLF line endings, and split chunks. Missing text suffixes are appended only when already-delivered text is an exact prefix of the final snapshot.
+- Fixed terminal states, errors, and output-limit handling when converting Codex upstream responses for Responses, Chat Completions, and Messages clients. Usable partial text and usage are preserved; failures and truncated tool arguments are not treated as success.
+- Fixed assistant content types in Messages conversation history and preserved tool-choice policies, call IDs, arguments, and results. Tool calls present only in the final Responses snapshot are restored and deduplicated by ID.
+- Fixed Responses-to-Chat history ordering when tool calls arrive before assistant text. Complete function definitions and visible history are preserved; provider-specific reasoning metadata is omitted without exposing encrypted content or reasoning summaries as message text.
+- Fixed dropped image inputs in Responses-to-Messages conversion. HTTP(S) URLs and supported base64 images are preserved; invalid sources, unsupported formats, and images in system instructions return explicit errors.
+- Fixed Responses aggregate/hybrid requests failing to select explicitly configured Claude model routes while continuing to exclude disabled or unmapped channels.
+- Preserved original upstream errors by removing fallback requests to the nonexistent official Codex `/backend-api/codex/v1/responses` endpoint, which could replace the original error with a 404.
+- WebSocket compatibility requests now cancel their upstream work on client disconnect or interruption without automatically replaying submitted generation requests. Corrected TCP reset simulation and handshake timing in Windows reconnection regressions.
+
+### Changed
+
+- WebSocket history is bounded and limited to the same connection; new connections and unknown history IDs require complete input. Standard function tools are converted across supported protocols; custom tools and proprietary history references that Chat upstreams cannot represent return explicit errors.
+- Update and restart the CM instance that serves requests in desktop, service, or container deployments. Updating only the client does not change the capabilities of an older remote gateway.
+
 ## [0.7.1] - 2026-11-07
 
 ### Added

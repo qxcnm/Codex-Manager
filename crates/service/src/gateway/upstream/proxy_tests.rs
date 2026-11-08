@@ -216,9 +216,14 @@ fn aggregate_candidate_filter_keeps_model_override_candidate_for_client_model() 
         "MiniMax-M3",
     );
 
-    let candidates =
-        resolve_aggregate_candidates_for_route(&storage, "openai_responses", None, Some("gpt-5.4"))
-            .expect("resolve aggregate candidates");
+    let candidates = resolve_aggregate_candidates_for_route(
+        &storage,
+        "openai_responses",
+        "/v1/responses",
+        None,
+        Some("gpt-5.4"),
+    )
+    .expect("resolve aggregate candidates");
 
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].id, "agg-minimax");
@@ -549,6 +554,7 @@ fn aggregate_route_model_filter_uses_v2_routes() {
     let candidates = resolve_aggregate_candidates_for_route(
         &storage,
         "openai_responses",
+        "/v1/responses",
         None,
         Some("vendor-batched"),
     )
@@ -575,6 +581,7 @@ fn reserve_alias_aggregate_filter_uses_luna_catalog_routes() {
     let candidates = resolve_aggregate_candidates_for_route(
         &storage,
         "openai_responses",
+        "/v1/responses",
         None,
         Some(codexmanager_core::usage::LUNA_RESERVE_MODEL_SLUG),
     )
@@ -601,6 +608,7 @@ fn reserve_alias_aggregate_filter_keeps_explicit_non_luna_override() {
     let candidates = resolve_aggregate_candidates_for_route(
         &storage,
         "openai_responses",
+        "/v1/responses",
         None,
         Some(codexmanager_core::usage::LUNA_RESERVE_MODEL_SLUG),
     )
@@ -638,6 +646,7 @@ fn explicit_aggregate_route_candidate_precedes_provider_candidates() {
     let openai_candidates = resolve_aggregate_candidates_for_route(
         &storage,
         "openai_responses",
+        "/v1/responses",
         Some("agg-claude-explicit"),
         Some("vendor-cross-provider"),
     )
@@ -658,6 +667,7 @@ fn explicit_aggregate_route_candidate_precedes_provider_candidates() {
     let anthropic_candidates = resolve_aggregate_candidates_for_route(
         &storage,
         "anthropic_native",
+        "/v1/messages",
         Some("agg-codex-explicit"),
         Some("vendor-cross-provider"),
     )
@@ -674,6 +684,90 @@ fn explicit_aggregate_route_candidate_precedes_provider_candidates() {
         anthropic_candidates[0].model_override.as_deref(),
         Some("vendor-codex")
     );
+}
+
+#[test]
+fn responses_aggregate_route_allows_configured_claude_channel_only() {
+    let storage = Storage::open_in_memory().unwrap();
+    storage.init().unwrap();
+    for id in [
+        "claude-allowed",
+        "claude-unmapped",
+        "claude-disabled-route",
+        "claude-disabled-api",
+    ] {
+        insert_test_aggregate_api_with_provider(&storage, id, "claude");
+    }
+    for id in [
+        "claude-allowed",
+        "claude-disabled-route",
+        "claude-disabled-api",
+    ] {
+        add_model_route_v2(
+            &storage,
+            "responses-cross-provider",
+            "aggregate_api",
+            id,
+            "vendor-claude",
+        );
+    }
+    let mut model = storage
+        .get_managed_model_v2("responses-cross-provider")
+        .unwrap()
+        .unwrap();
+    model
+        .routes
+        .iter_mut()
+        .find(|route| route.source_id == "claude-disabled-route")
+        .unwrap()
+        .enabled = false;
+    storage
+        .upsert_managed_model_v2(&ManagedModelV2Upsert {
+            previous_slug: None,
+            model,
+        })
+        .unwrap();
+    storage
+        .update_aggregate_api_status("claude-disabled-api", "disabled")
+        .unwrap();
+
+    let candidates = resolve_aggregate_candidates_for_route(
+        &storage,
+        "openai_compat",
+        "/v1/responses",
+        None,
+        Some("responses-cross-provider"),
+    )
+    .unwrap();
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|candidate| candidate.id.as_str())
+            .collect::<Vec<_>>(),
+        ["claude-allowed"]
+    );
+    assert_eq!(
+        candidates[0].model_override.as_deref(),
+        Some("vendor-claude")
+    );
+
+    for path in [
+        "/v1/chat/completions",
+        "/v1/images/generations",
+        "/v1/responses/compact",
+    ] {
+        assert!(
+            resolve_aggregate_candidates_for_route(
+                &storage,
+                "openai_compat",
+                path,
+                None,
+                Some("responses-cross-provider"),
+            )
+            .is_err(),
+            "must preserve the outer protocol for {path}"
+        );
+    }
 }
 
 #[test]

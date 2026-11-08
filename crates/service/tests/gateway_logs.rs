@@ -16,6 +16,12 @@ mod hybrid_routing;
 mod images;
 #[path = "gateway_logs/prompt_cache.rs"]
 mod prompt_cache;
+#[path = "gateway_logs/protocol_error_passthrough.rs"]
+mod protocol_error_passthrough;
+#[path = "gateway_logs/protocol_response_edges.rs"]
+mod protocol_response_edges;
+#[path = "gateway_logs/protocol_roundtrip.rs"]
+mod protocol_roundtrip;
 #[path = "gateway_logs/retry_logging.rs"]
 mod retry_logging;
 #[path = "gateway_logs/stream_timeout_failover.rs"]

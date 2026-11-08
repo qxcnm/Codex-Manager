@@ -12,7 +12,9 @@ use crate::aggregate_api::{
     AGGREGATE_API_AUTH_APIKEY, AGGREGATE_API_AUTH_USERPASS, AGGREGATE_API_PROVIDER_CLAUDE,
     AGGREGATE_API_PROVIDER_CODEX, AGGREGATE_API_PROVIDER_COMPATIBLE, AGGREGATE_API_PROVIDER_GEMINI,
 };
-use crate::gateway::protocol_adapter::adapt_openai_responses_to_anthropic_messages;
+use crate::gateway::protocol_adapter::{
+    adapt_openai_responses_to_anthropic_messages, adapt_openai_responses_to_chat_completions,
+};
 use crate::gateway::request_log::RequestLogUsage;
 use serde_json::Value;
 
@@ -333,6 +335,27 @@ fn aggregate_upstream_model_for_log<'a>(
 fn should_bridge_responses_to_anthropic(candidate: &AggregateApi, path: &str) -> bool {
     normalize_provider_type_value(candidate.provider_type.as_str()) == AGGREGATE_API_PROVIDER_CLAUDE
         && (path == "/v1/responses" || path.starts_with("/v1/responses?"))
+}
+
+fn should_bridge_responses_to_chat(candidate: &AggregateApi, path: &str) -> bool {
+    path.split('?').next() == Some("/v1/responses")
+        && aggregate_action_targets_chat(candidate, path)
+}
+
+fn aggregate_action_targets_chat(candidate: &AggregateApi, path: &str) -> bool {
+    let action = effective_action_path(candidate, path);
+    build_upstream_url(&candidate.url, &action)
+        .ok()
+        .is_some_and(|url| {
+            url.path()
+                .trim_end_matches('/')
+                .ends_with("/chat/completions")
+        })
+}
+
+fn aggregate_action_protocol_error(candidate: &AggregateApi, path: &str) -> Option<&'static str> {
+    (path.split('?').next() == Some("/v1/messages") && aggregate_action_targets_chat(candidate, path))
+        .then_some("aggregate Chat Completions action cannot serve /v1/messages; configure a Messages-compatible action or use a Responses gateway request")
 }
 
 fn responses_to_anthropic_messages_action_path(candidate: &AggregateApi, path: &str) -> String {
@@ -1123,6 +1146,7 @@ struct AggregateDeliveryContext {
     original_path: String,
     path: String,
     request_method: String,
+    request_type: &'static str,
     gateway_mode_for_log: Option<String>,
     route_strategy_for_log: Option<String>,
     route_source_for_log: Option<String>,
@@ -1260,6 +1284,7 @@ impl AggregateDeliveryContext {
             storage,
             super::super::super::request_log::RequestLogTraceContext {
                 trace_id: Some(trace_id),
+                request_type: Some(self.request_type),
                 original_path: Some(original_path),
                 adapted_path: Some(path),
                 gateway_mode: gateway_mode_for_log,
@@ -1345,6 +1370,7 @@ pub(in super::super) async fn proxy_aggregate_request(
         started_at,
         failure_policy,
     } = params;
+    let request_type = request.request_type();
     let estimated_input_tokens =
         super::super::super::request_log::estimate_input_tokens_from_body(body.as_ref());
     if aggregate_api_candidates.is_empty() {
@@ -1415,6 +1441,15 @@ pub(in super::super) async fn proxy_aggregate_request(
         };
 
         let bridge_responses_to_anthropic = should_bridge_responses_to_anthropic(&candidate, path);
+        let bridge_responses_to_chat =
+            !bridge_responses_to_anthropic && should_bridge_responses_to_chat(&candidate, path);
+        if let Some(message) = aggregate_action_protocol_error(&candidate, path) {
+            last_attempt_url = Some(candidate_url.clone());
+            last_attempt_supplier_name = candidate_supplier_name.clone();
+            last_attempt_error = Some(message.to_owned());
+            last_failure_status = 502;
+            continue;
+        }
         let effective_path = if bridge_responses_to_anthropic {
             responses_to_anthropic_messages_action_path(&candidate, path)
         } else {
@@ -1422,6 +1457,8 @@ pub(in super::super) async fn proxy_aggregate_request(
         };
         let response_adapter_for_candidate = if bridge_responses_to_anthropic {
             super::super::super::ResponseAdapter::ResponsesFromAnthropicMessages
+        } else if bridge_responses_to_chat {
+            super::super::super::ResponseAdapter::ResponsesFromChatCompletions
         } else {
             response_adapter
         };
@@ -1470,11 +1507,13 @@ pub(in super::super) async fn proxy_aggregate_request(
             candidate.supplier_name.as_deref(),
             path,
         );
-        let upstream_body = if bridge_responses_to_anthropic {
-            match adapt_openai_responses_to_anthropic_messages(
-                candidate_body.as_ref(),
-                candidate.model_override.as_deref(),
-            ) {
+        let upstream_body = if bridge_responses_to_anthropic || bridge_responses_to_chat {
+            let adapt_request = if bridge_responses_to_chat {
+                adapt_openai_responses_to_chat_completions
+            } else {
+                adapt_openai_responses_to_anthropic_messages
+            };
+            match adapt_request(candidate_body.as_ref(), candidate.model_override.as_deref()) {
                 Ok(body) => Bytes::from(body),
                 Err(err) => {
                     last_attempt_url = Some(base_upstream_url.to_string());
@@ -1519,6 +1558,7 @@ pub(in super::super) async fn proxy_aggregate_request(
                     storage,
                     super::super::super::request_log::RequestLogTraceContext {
                         trace_id: Some(trace_id),
+                        request_type: Some(request_type),
                         original_path: Some(original_path),
                         adapted_path: Some(path),
                         gateway_mode: gateway_mode_for_log,
@@ -1749,6 +1789,7 @@ pub(in super::super) async fn proxy_aggregate_request(
                 original_path: original_path.to_owned(),
                 path: path.to_owned(),
                 request_method: request_method.to_owned(),
+                request_type,
                 gateway_mode_for_log: gateway_mode_for_log.map(str::to_owned),
                 route_strategy_for_log: route_strategy_for_log.map(str::to_owned),
                 route_source_for_log: route_source_for_log.map(str::to_owned),
@@ -1866,6 +1907,7 @@ pub(in super::super) async fn proxy_aggregate_request(
         storage,
         super::super::super::request_log::RequestLogTraceContext {
             trace_id: Some(trace_id),
+            request_type: Some(request_type),
             original_path: Some(original_path),
             adapted_path: Some(path),
             gateway_mode: gateway_mode_for_log,

@@ -1,3 +1,4 @@
+use super::super::response_outcome::{is_output_limit_incomplete, TextDeliveryTracker};
 use super::{
     chat_image_payload, classify_upstream_stream_read_error, collect_image_generation_data_urls,
     collect_output_text_from_event_fields, collect_response_output_text,
@@ -35,6 +36,8 @@ pub(crate) struct ChatCompletionsFromResponsesSseReader {
     finished: bool,
     emitted_assistant_role: bool,
     emitted_text: bool,
+    delivered_text: TextDeliveryTracker,
+    finish_reason_override: Option<&'static str>,
     emitted_reasoning: bool,
     emitted_tool_calls: bool,
     // Responses output positions include reasoning/messages. Keep that identity as
@@ -87,6 +90,8 @@ impl ChatCompletionsFromResponsesSseReader {
             finished: false,
             emitted_assistant_role: false,
             emitted_text: false,
+            delivered_text: TextDeliveryTracker::default(),
+            finish_reason_override: None,
             emitted_reasoning: false,
             emitted_tool_calls: false,
             tool_calls: HashMap::new(),
@@ -214,17 +219,22 @@ impl ChatCompletionsFromResponsesSseReader {
                 "total_tokens": collector.usage.total_tokens.unwrap_or(0)
             })
         });
-        let finish_reason = if self.emitted_tool_calls {
-            "tool_calls"
-        } else {
-            "stop"
-        };
+        let finish_reason = self
+            .finish_reason_override
+            .unwrap_or(if self.emitted_tool_calls {
+                "tool_calls"
+            } else {
+                "stop"
+            });
         let mut out = self.chunk(serde_json::json!({}), Some(finish_reason), usage);
         out.extend_from_slice(b"data: [DONE]\n\n");
         out
     }
 
     fn assistant_delta_chunk(&mut self, mut delta: Value) -> Vec<u8> {
+        if let Some(text) = delta.get("content").and_then(Value::as_str) {
+            self.delivered_text.record(text);
+        }
         if !self.emitted_assistant_role {
             if let Some(object) = delta.as_object_mut() {
                 object.insert("role".to_string(), serde_json::json!("assistant"));
@@ -526,6 +536,32 @@ impl ChatCompletionsFromResponsesSseReader {
                 .then_some(&value)
         });
         let response_status = value.pointer("/response/status").and_then(Value::as_str);
+        if is_output_limit_incomplete(&value) {
+            let mut snapshot = String::new();
+            collect_response_output_text(value.get("response").unwrap_or(&value), &mut snapshot);
+            if !snapshot.trim().is_empty() || self.delivered_text.has_visible_text() {
+                let mut out = Vec::new();
+                if let Some(suffix) = self
+                    .delivered_text
+                    .missing_suffix(&snapshot)
+                    .filter(|s| !s.is_empty())
+                {
+                    out.extend(self.assistant_delta_chunk(serde_json::json!({"content": suffix})));
+                    self.emitted_text = true;
+                }
+                // A partial tool snapshot is not a complete executable call.
+                // Already delivered item.done calls remain untouched.
+                self.finish_reason_override = Some("length");
+                self.finished = true;
+                self.update_terminal_success(event_type.as_deref());
+                if let Ok(mut collector) = self.usage_collector.lock() {
+                    collector.usage.explicit_failure = false;
+                    collector.usage.completed_successfully = false;
+                }
+                out.extend(self.final_chunk());
+                return Some(out);
+            }
+        }
         if failure_event.is_some()
             || upstream_error.is_some()
             || matches!(
@@ -610,12 +646,17 @@ impl ChatCompletionsFromResponsesSseReader {
             Some("response.completed") | Some("response.done")
         ) {
             let mut out = Vec::new();
-            if !self.emitted_text {
-                if let Some(response) = value.get("response") {
-                    collect_response_output_text(response, &mut text);
-                }
-                if !text.is_empty() {
-                    out.extend(self.assistant_delta_chunk(serde_json::json!({ "content": text })));
+            if let Some(response) = value.get("response") {
+                let mut snapshot = String::new();
+                collect_response_output_text(response, &mut snapshot);
+                if let Some(suffix) = self
+                    .delivered_text
+                    .missing_suffix(&snapshot)
+                    .filter(|s| !s.is_empty())
+                {
+                    out.extend(
+                        self.assistant_delta_chunk(serde_json::json!({ "content": suffix })),
+                    );
                     self.emitted_text = true;
                 }
             }

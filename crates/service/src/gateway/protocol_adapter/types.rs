@@ -5,6 +5,7 @@ pub(crate) enum ResponseAdapter {
     Passthrough,
     AnthropicMessagesFromResponses,
     ResponsesFromAnthropicMessages,
+    ResponsesFromChatCompletions,
     ChatCompletionsFromResponses,
     #[allow(dead_code)]
     CompactFromChatCompletions,

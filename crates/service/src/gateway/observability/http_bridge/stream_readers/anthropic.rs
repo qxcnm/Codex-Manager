@@ -1,3 +1,4 @@
+use super::super::response_outcome::{is_output_limit_incomplete, TextDeliveryTracker};
 use super::common::mark_anthropic_terminal_delivered;
 use super::{
     append_output_text, classify_upstream_stream_read_error, collect_output_text_from_event_fields,
@@ -8,7 +9,11 @@ use super::{
     PassthroughSseProtocol, Read, SseKeepAliveFrame, SseTerminal, UpstreamSseFramePump,
     UpstreamSseFramePumpItem, Value,
 };
+use std::collections::HashSet;
 use std::time::Instant;
+
+const MAX_TRACKED_TOOL_CALLS: usize = 1024;
+const MAX_TRACKED_TOOL_ID_BYTES: usize = 256 * 1024;
 
 pub(crate) struct AnthropicSseReader {
     upstream: UpstreamSseFramePump,
@@ -36,8 +41,12 @@ struct AnthropicSseState {
     total_tokens: Option<i64>,
     reasoning_output_tokens: i64,
     output_text: String,
-    emitted_text_to_client: bool,
+    delivered_text: TextDeliveryTracker,
+    output_limited: bool,
     stop_reason: Option<&'static str>,
+    emitted_tool_ids: HashSet<String>,
+    emitted_tool_count: usize,
+    emitted_tool_id_bytes: usize,
 }
 
 impl AnthropicSseReader {
@@ -238,12 +247,54 @@ impl AnthropicSseReader {
                 collector.last_event_type = Some(event_type.to_string());
             }
         }
+        if is_output_limit_incomplete(&value) {
+            let mut snapshot = String::new();
+            collect_response_output_text(value.get("response").unwrap_or(&value), &mut snapshot);
+            if !snapshot.trim().is_empty() || self.state.delivered_text.has_visible_text() {
+                let mut out = String::new();
+                if let Some(suffix) = self
+                    .state
+                    .delivered_text
+                    .missing_suffix(&snapshot)
+                    .filter(|s| !s.is_empty())
+                {
+                    self.emit_text_delta(&mut out, suffix);
+                }
+                self.state.output_limited = true;
+                self.state.stop_reason = Some("max_tokens");
+                // Do not synthesize tools from an incomplete terminal snapshot.
+                let mut bytes = out.into_bytes();
+                bytes.extend(self.finish_stream());
+                return bytes;
+            }
+        }
         let inspection = inspect_sse_frame_for_protocol(lines, PassthroughSseProtocol::Generic);
         let failure_event = [event_name, payload_event]
             .into_iter()
             .flatten()
             .find(|name| Self::is_response_failure_event(name));
-        if failure_event.is_some() || matches!(inspection.terminal, Some(SseTerminal::Err(_))) {
+        let completion_event = [event_name, payload_event]
+            .into_iter()
+            .flatten()
+            .any(|name| matches!(name, "response.completed" | "response.done"));
+        // A terminal event name cannot override an explicitly failed snapshot.
+        // Older compatible upstreams omit status; retain that compatibility.
+        let invalid_completion = completion_event
+            && (value
+                .pointer("/response/status")
+                .and_then(Value::as_str)
+                .is_some_and(|status| status != "completed")
+                || [
+                    "/response/error",
+                    "/response/status_details/error",
+                    "/error",
+                ]
+                .iter()
+                .any(|pointer| value.pointer(pointer).is_some_and(|error| !error.is_null())));
+        if failure_event.is_some()
+            || invalid_completion
+            || matches!(inspection.terminal, Some(SseTerminal::Err(_)))
+        {
             let upstream_error = value
                 .pointer("/response/error")
                 .filter(|error| !error.is_null())
@@ -332,24 +383,7 @@ impl AnthropicSseReader {
                 if fragment.is_empty() {
                     return Vec::new();
                 }
-                append_output_text(&mut self.state.output_text, fragment);
-                self.ensure_message_start(&mut out);
-                self.ensure_text_block_start(&mut out);
-                let text_index = self.state.text_block_index.unwrap_or(0);
-                append_sse_event(
-                    &mut out,
-                    "content_block_delta",
-                    &json!({
-                        "type": "content_block_delta",
-                        "index": text_index,
-                        "delta": {
-                            "type": "text_delta",
-                            "text": fragment
-                        }
-                    }),
-                );
-                self.state.emitted_text_to_client = true;
-                self.state.stop_reason.get_or_insert("end_turn");
+                self.emit_text_delta(&mut out, fragment);
             }
             "response.output_item.done" => {
                 collect_output_text_from_event_fields(value, &mut self.state.output_text);
@@ -360,66 +394,9 @@ impl AnthropicSseReader {
                 else {
                     return Vec::new();
                 };
-                if item_obj
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .is_none_or(|kind| kind != "function_call")
-                {
-                    return Vec::new();
+                if let Err((code, message)) = self.append_tool_call(item_obj, &mut out) {
+                    return self.transport_error_chunk(code, message.to_string());
                 }
-                self.ensure_message_start(&mut out);
-                self.close_text_block(&mut out);
-                let block_index = self.state.next_block_index;
-                self.state.next_block_index = self.state.next_block_index.saturating_add(1);
-                let tool_use_id = item_obj
-                    .get("call_id")
-                    .or_else(|| item_obj.get("id"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("toolu_unknown");
-                let tool_name = item_obj
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .map(|name| restore_tool_name(name, self.tool_name_restore_map.as_ref()))
-                    .unwrap_or_else(|| "tool".to_string());
-                append_sse_event(
-                    &mut out,
-                    "content_block_start",
-                    &json!({
-                        "type": "content_block_start",
-                        "index": block_index,
-                        "content_block": {
-                            "type": "tool_use",
-                            "id": tool_use_id,
-                            "name": tool_name,
-                            "input": {}
-                        }
-                    }),
-                );
-                if let Some(partial_json) =
-                    extract_function_call_input(item_obj).and_then(tool_input_partial_json)
-                {
-                    append_sse_event(
-                        &mut out,
-                        "content_block_delta",
-                        &json!({
-                            "type": "content_block_delta",
-                            "index": block_index,
-                            "delta": {
-                                "type": "input_json_delta",
-                                "partial_json": partial_json,
-                            }
-                        }),
-                    );
-                }
-                append_sse_event(
-                    &mut out,
-                    "content_block_stop",
-                    &json!({
-                        "type": "content_block_stop",
-                        "index": block_index
-                    }),
-                );
-                self.state.stop_reason = Some("tool_use");
             }
             _ if event_type.starts_with("response.output_item.")
                 || event_type.starts_with("response.content_part.") =>
@@ -431,31 +408,25 @@ impl AnthropicSseReader {
                     let mut extracted_output_text = String::new();
                     collect_response_output_text(response, &mut extracted_output_text);
                     if !extracted_output_text.trim().is_empty() {
-                        // Completed carries a full text snapshot. If any text delta was already
-                        // delivered, do not replay that snapshot after tool blocks close text.
-                        if !self.state.emitted_text_to_client {
-                            append_output_text(
-                                &mut self.state.output_text,
-                                extracted_output_text.as_str(),
-                            );
-                            self.ensure_message_start(&mut out);
-                            self.ensure_text_block_start(&mut out);
-                            let text_index = self.state.text_block_index.unwrap_or(0);
-                            append_sse_event(
-                                &mut out,
-                                "content_block_delta",
-                                &json!({
-                                    "type": "content_block_delta",
-                                    "index": text_index,
-                                    "delta": {
-                                        "type": "text_delta",
-                                        "text": extracted_output_text
-                                    }
-                                }),
-                            );
-                            self.state.emitted_text_to_client = true;
+                        if let Some(suffix) = self
+                            .state
+                            .delivered_text
+                            .missing_suffix(&extracted_output_text)
+                            .filter(|s| !s.is_empty())
+                        {
+                            self.emit_text_delta(&mut out, suffix);
                         }
                         self.state.stop_reason.get_or_insert("end_turn");
+                    }
+                    if let Some(items) = response.get("output").and_then(Value::as_array) {
+                        for item in items {
+                            if let Some(item) = item.as_object() {
+                                if let Err((code, message)) = self.append_tool_call(item, &mut out)
+                                {
+                                    return self.transport_error_chunk(code, message.to_string());
+                                }
+                            }
+                        }
                     }
                 }
                 let mut completed = out.into_bytes();
@@ -465,6 +436,121 @@ impl AnthropicSseReader {
             _ => {}
         }
         out.into_bytes()
+    }
+
+    fn emit_text_delta(&mut self, out: &mut String, fragment: &str) {
+        append_output_text(&mut self.state.output_text, fragment);
+        self.ensure_message_start(out);
+        self.ensure_text_block_start(out);
+        append_sse_event(
+            out,
+            "content_block_delta",
+            &json!({
+                "type": "content_block_delta", "index": self.state.text_block_index.unwrap_or(0),
+                "delta": {"type": "text_delta", "text": fragment}
+            }),
+        );
+        self.state.delivered_text.record(fragment);
+        self.state.stop_reason.get_or_insert("end_turn");
+    }
+
+    fn append_tool_call(
+        &mut self,
+        item: &Map<String, Value>,
+        out: &mut String,
+    ) -> Result<(), (&'static str, &'static str)> {
+        if !matches!(
+            item.get("type").and_then(Value::as_str),
+            Some("function_call" | "custom_tool_call")
+        ) {
+            return Ok(());
+        }
+        let call_id = item
+            .get("call_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty());
+        let item_id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty());
+        if call_id.is_none() && item_id.is_none() {
+            return Err((
+                "upstream_tool_call_missing_id",
+                "upstream tool call has no usable call_id or id",
+            ));
+        }
+        let identity_bytes = call_id
+            .map_or(0, |id| id.len().saturating_add(5))
+            .saturating_add(item_id.map_or(0, |id| id.len().saturating_add(5)));
+        // Check before allocating owned ID copies, including a single oversized ID.
+        if identity_bytes > MAX_TRACKED_TOOL_ID_BYTES {
+            return Err((
+                "upstream_tool_tracking_limit",
+                "upstream tool ID tracking byte limit exceeded",
+            ));
+        }
+        let identities = call_id
+            .map(|id| format!("call:{id}"))
+            .into_iter()
+            .chain(item_id.map(|id| format!("item:{id}")))
+            .collect::<Vec<_>>();
+        if identities
+            .iter()
+            .any(|id| self.state.emitted_tool_ids.contains(id))
+        {
+            return Ok(());
+        }
+        if self.state.emitted_tool_count >= MAX_TRACKED_TOOL_CALLS
+            || self
+                .state
+                .emitted_tool_id_bytes
+                .saturating_add(identity_bytes)
+                > MAX_TRACKED_TOOL_ID_BYTES
+        {
+            return Err((
+                "upstream_tool_tracking_limit",
+                "upstream tool ID tracking limit exceeded",
+            ));
+        }
+        self.state.emitted_tool_count += 1;
+        self.state.emitted_tool_id_bytes += identity_bytes;
+        self.state.emitted_tool_ids.extend(identities);
+        self.ensure_message_start(out);
+        self.close_text_block(out);
+        let index = self.state.next_block_index;
+        self.state.next_block_index = self.state.next_block_index.saturating_add(1);
+        let name = item
+            .get("name")
+            .and_then(Value::as_str)
+            .map(|name| restore_tool_name(name, self.tool_name_restore_map.as_ref()))
+            .unwrap_or_else(|| "tool".to_string());
+        append_sse_event(
+            out,
+            "content_block_start",
+            &json!({
+                "type": "content_block_start", "index": index,
+                "content_block": {"type": "tool_use", "id": call_id.or(item_id).unwrap_or("toolu_unknown"), "name": name, "input": {}}
+            }),
+        );
+        if let Some(partial_json) =
+            extract_function_call_input(item).and_then(tool_input_partial_json)
+        {
+            append_sse_event(
+                out,
+                "content_block_delta",
+                &json!({
+                    "type": "content_block_delta", "index": index,
+                    "delta": {"type": "input_json_delta", "partial_json": partial_json}
+                }),
+            );
+        }
+        append_sse_event(
+            out,
+            "content_block_stop",
+            &json!({"type": "content_block_stop", "index": index}),
+        );
+        self.state.stop_reason = Some("tool_use");
+        Ok(())
     }
 
     /// 函数 `capture_response_meta`
@@ -692,6 +778,7 @@ impl AnthropicSseReader {
         if let Ok(mut collector) = self.usage_collector.lock() {
             collector.saw_terminal |= saw_terminal;
             collector.usage.explicit_failure |= saw_terminal;
+            collector.usage.completed_successfully = false;
             collector.terminal_error = error
                 .get("message")
                 .and_then(Value::as_str)
@@ -734,7 +821,10 @@ impl AnthropicSseReader {
         self.persist_usage();
         if let Ok(mut collector) = self.usage_collector.lock() {
             collector.saw_terminal = true;
-            collector.usage.completed_successfully = true;
+            collector.usage.completed_successfully = !self.state.output_limited;
+            if self.state.output_limited {
+                collector.usage.explicit_failure = false;
+            }
             collector.usage.response_id = self.state.response_id.clone();
         }
         let mut out = String::new();

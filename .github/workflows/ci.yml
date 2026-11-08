@@ -61,6 +61,7 @@ jobs:
         run: |
           cargo test -p codexmanager-core --no-fail-fast
           cargo test -p codexmanager-service --lib storage::maintenance -- --test-threads=1
+          cargo test -p codexmanager-service --lib usage::reset_credits:: -- --test-threads=1
 
       - name: Test atomic application settings
         run: |
@@ -85,7 +86,21 @@ jobs:
       - name: Test Responses WebSocket regressions
         run: |
           cargo test -p codexmanager-service --lib official_responses_websocket_ --no-fail-fast
+          cargo test -p codexmanager-service --lib responses_websocket_http_bridge -- --test-threads=1
+          cargo test -p codexmanager-service --lib force_tcp_reset_is_observed_by_peer_as_connection_reset
+          cargo test -p codexmanager-service --lib tool_choice -- --test-threads=1
           cargo test -p codexmanager-service --lib send_websocket_upstream_request_ --no-fail-fast
+
+      - name: Test terminal delivery and protocol conversion boundaries
+        run: |
+          cargo test -p codexmanager-service --lib http::gateway_request::tests -- --test-threads=1
+          cargo test -p codexmanager-service --lib terminal_delivery_tests -- --test-threads=1
+          cargo test -p codexmanager-service --lib gateway::http_bridge::native_async_tests -- --test-threads=1
+          cargo test -p codexmanager-service --lib protocol_adapter:: -- --test-threads=1
+          cargo test -p codexmanager-service --lib gateway::local_validation:: -- --test-threads=1
+          cargo test -p codexmanager-service --lib responses_event_compat -- --test-threads=1
+          cargo test -p codexmanager-service --lib compatible_native -- --test-threads=1
+          cargo test -p codexmanager-service --lib response_outcome:: -- --test-threads=1
 
       - name: Test Chat streaming tool call indices
         env:

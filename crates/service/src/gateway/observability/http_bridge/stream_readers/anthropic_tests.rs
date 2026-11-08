@@ -351,6 +351,240 @@ fn successful_tool_turn_preserves_arguments_and_does_not_duplicate_completion() 
 }
 
 #[test]
+fn completed_only_tool_calls_preserve_inputs_usage_and_tool_stop() {
+    let response = json!({
+        "type": "response.completed",
+        "response": {
+            "id": "resp_completed_tools", "status": "completed", "model": "test-model",
+            "output": [
+                {"type": "function_call", "id": "fc_a", "call_id": "call_a", "name": "lookup", "arguments": "{\"city\":\"上海\"}"},
+                {"type": "function_call", "id": "fc_b", "call_id": "call_b", "name": "count", "arguments": {"n": 2}}
+            ],
+            "usage": {"input_tokens": 13, "output_tokens": 7, "total_tokens": 20}
+        }
+    });
+    let (body, state) = run_fixture(&format!("data: {response}\n\n"));
+    let events = body
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    let starts = events
+        .iter()
+        .filter(|v| v["type"] == "content_block_start")
+        .map(|v| v["content_block"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(starts.len(), 2);
+    assert_eq!(starts[0]["id"], "call_a");
+    assert_eq!(starts[1]["id"], "call_b");
+    let inputs = events
+        .iter()
+        .filter_map(|v| v.pointer("/delta/partial_json").and_then(Value::as_str))
+        .map(|v| serde_json::from_str::<Value>(v).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(inputs, vec![json!({"city": "上海"}), json!({"n": 2})]);
+    assert_eq!(body.matches("event: message_stop\n").count(), 1);
+    assert!(body.contains("\"stop_reason\":\"tool_use\""));
+    assert!(state.saw_terminal);
+    assert_eq!(state.usage.input_tokens, Some(13));
+    assert_eq!(state.usage.output_tokens, Some(7));
+    assert!(state.terminal_error.is_none());
+}
+
+#[test]
+fn completed_tool_snapshot_recovers_missing_calls_without_replaying_done_calls() {
+    let tool = json!({"type": "function_call", "id": "fc_a", "call_id": "call_a", "name": "lookup", "arguments": "{\"n\":1}"});
+    let events = [
+        json!({"type": "response.output_item.done", "item": tool}),
+        json!({"type": "response.output_item.done", "item": tool}),
+        json!({"type": "response.completed", "response": {"status": "completed", "output": [tool,
+            {"type": "function_call", "id": "fc_b", "call_id": "call_b", "name": "count", "arguments": "{\"n\":2}"}
+        ]}}),
+    ];
+    let sse = events
+        .iter()
+        .map(|event| format!("data: {event}\n\n"))
+        .collect::<String>();
+    let (body, state) = run_fixture(&sse);
+    assert_eq!(body.matches("\"type\":\"tool_use\"").count(), 2);
+    assert_eq!(body.matches("\"id\":\"call_a\"").count(), 1);
+    assert_eq!(body.matches("\"id\":\"call_b\"").count(), 1);
+    assert_eq!(body.matches("event: content_block_stop\n").count(), 2);
+    assert_eq!(body.matches("event: message_stop\n").count(), 1);
+    assert!(body.contains("\"stop_reason\":\"tool_use\""));
+    assert!(state.saw_terminal);
+}
+
+#[test]
+fn failed_completion_snapshots_never_emit_executable_tools() {
+    let tool = json!({"type": "function_call", "id": "fc_failure", "call_id": "call_failure", "name": "lookup", "arguments": "{}"});
+    for (event_type, status, error_at) in [
+        ("response.completed", "failed", None),
+        ("response.completed", "incomplete", None),
+        ("response.done", "cancelled", None),
+        ("response.completed", "completed", Some("response")),
+        ("response.completed", "completed", Some("top")),
+    ] {
+        let mut event = json!({"type": event_type, "response": {"status": status, "output": [tool], "usage": {"input_tokens": 4, "output_tokens": 2}}});
+        if let Some(location) = error_at {
+            let error =
+                json!({"code": "synthetic_failure", "message": "do not execute failed output"});
+            if location == "top" {
+                event["error"] = error;
+            } else {
+                event["response"]["error"] = error;
+            }
+        }
+        let (body, state) = run_fixture(&format!("data: {event}\n\n"));
+        assert_no_false_success(&body);
+        assert!(!body.contains("\"type\":\"tool_use\""), "{body}");
+        assert!(state.usage.explicit_failure);
+        assert!(!state.usage.completed_successfully);
+        assert_eq!(state.usage.output_tokens, Some(2));
+    }
+}
+
+#[test]
+fn tool_snapshots_without_any_id_fail_instead_of_inventing_toolu_unknown() {
+    let event = json!({"type": "response.completed", "response": {"status": "completed", "output": [
+        {"type": "function_call", "name": "lookup", "arguments": "{}"}
+    ]}});
+    let (body, state) = run_fixture(&format!("data: {event}\n\n"));
+    assert_eq!(
+        error_from_body(&body)["code"],
+        "upstream_tool_call_missing_id"
+    );
+    assert_no_false_success(&body);
+    assert!(!body.contains("toolu_unknown"));
+    assert!(!body.contains("\"type\":\"tool_use\""));
+    assert!(!state.usage.completed_successfully);
+}
+
+#[test]
+fn tool_identity_tracking_has_call_count_and_byte_limits() {
+    let make_reader = || {
+        AnthropicSseReader::from_reader(
+            Cursor::new(Vec::<u8>::new()),
+            Arc::new(Mutex::new(PassthroughSseCollector::default())),
+            None,
+            None,
+            Instant::now(),
+        )
+    };
+    let mut reader = make_reader();
+    for number in 0..MAX_TRACKED_TOOL_CALLS {
+        let item = json!({"type": "function_call", "call_id": format!("call_{number}"), "name": "lookup", "arguments": "{}"});
+        reader
+            .append_tool_call(item.as_object().unwrap(), &mut String::new())
+            .unwrap();
+    }
+    let extra = json!({"type": "response.output_item.done", "item": {"type": "function_call", "call_id": "overflow", "name": "lookup", "arguments": "{}"}});
+    let body =
+        String::from_utf8(reader.consume_openai_event(&extra, Some("response.output_item.done")))
+            .unwrap();
+    assert_eq!(
+        error_from_body(&body)["code"],
+        "upstream_tool_tracking_limit"
+    );
+    assert_no_false_success(&body);
+    assert_eq!(reader.state.emitted_tool_count, MAX_TRACKED_TOOL_CALLS);
+    assert!(reader.state.emitted_tool_ids.len() <= MAX_TRACKED_TOOL_CALLS * 2);
+    assert!(reader.state.emitted_tool_id_bytes <= MAX_TRACKED_TOOL_ID_BYTES);
+
+    let mut reader = make_reader();
+    for prefix in ["a", "b"] {
+        let item = json!({"type": "function_call", "call_id": format!("{prefix}{}", "x".repeat(100_000)), "name": "lookup", "arguments": "{}"});
+        reader
+            .append_tool_call(item.as_object().unwrap(), &mut String::new())
+            .unwrap();
+    }
+    let extra = json!({"type": "function_call", "call_id": "z".repeat(100_000), "name": "lookup", "arguments": "{}"});
+    let mut out = String::new();
+    assert_eq!(
+        reader
+            .append_tool_call(extra.as_object().unwrap(), &mut out)
+            .unwrap_err()
+            .0,
+        "upstream_tool_tracking_limit"
+    );
+    assert!(out.is_empty());
+    assert_eq!(reader.state.emitted_tool_count, 2);
+    assert!(reader.state.emitted_tool_id_bytes <= MAX_TRACKED_TOOL_ID_BYTES);
+
+    let mut reader = make_reader();
+    let oversized = json!({"type": "function_call", "call_id": "x".repeat(MAX_TRACKED_TOOL_ID_BYTES), "name": "lookup", "arguments": "{}"});
+    assert!(reader
+        .append_tool_call(oversized.as_object().unwrap(), &mut String::new())
+        .is_err());
+    assert!(reader.state.emitted_tool_ids.is_empty());
+    assert_eq!(reader.state.emitted_tool_id_bytes, 0);
+}
+
+#[test]
+fn completion_repairs_only_matching_text_suffix_without_replaying_prefix() {
+    for (prefix, snapshot, expected) in [
+        ("上海", "上海23°C", "上海23°C"),
+        ("same", "same", "same"),
+        ("first", "different", "first"),
+    ] {
+        let sse = [json!({"type":"response.output_text.delta","delta":prefix}),
+            json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":snapshot}]}]}})]
+            .iter().map(|v| format!("data: {v}\n\n")).collect::<String>();
+        let (body, _) = run_fixture(&sse);
+        let text = body
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter_map(|v| {
+                v.pointer("/delta/text")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect::<String>();
+        assert_eq!(text, expected);
+        assert_eq!(body.matches("event: message_stop\n").count(), 1);
+    }
+}
+
+#[test]
+fn output_limit_keeps_partial_text_but_never_synthesizes_truncated_tool() {
+    let partial = json!({"type":"response.incomplete","response":{
+        "status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},
+        "output":[{"type":"message","content":[{"type":"output_text","text":"上海23°C"}]},
+            {"type":"function_call","call_id":"call_truncated","name":"lookup","arguments":"{\"city\":"}],
+        "usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}
+    }});
+    let sse = format!("data: {{\"type\":\"response.output_text.delta\",\"delta\":\"上海\"}}\n\ndata: {partial}\n\n");
+    let (body, state) = run_fixture(&sse);
+    assert!(body.contains("\"stop_reason\":\"max_tokens\""));
+    assert!(body.contains("23°C"));
+    assert!(!body.contains("\"type\":\"tool_use\""));
+    assert!(!body.contains("event: error"));
+    assert_eq!(body.matches("event: message_stop\n").count(), 1);
+    assert_eq!(state.usage.output_tokens, Some(7));
+    assert!(!state.usage.explicit_failure);
+    assert!(!state.usage.completed_successfully);
+}
+
+#[test]
+fn output_limit_does_not_replay_an_already_delivered_complete_tool() {
+    let tool = json!({"type":"function_call","id":"fc_done","call_id":"call_done","name":"lookup","arguments":"{}"});
+    let events = [
+        json!({"type":"response.output_item.done","item":tool}),
+        json!({"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[tool,{"type":"message","content":[{"type":"output_text","text":"partial"}]}]}}),
+    ];
+    let (body, _) = run_fixture(
+        &events
+            .iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>(),
+    );
+    assert_eq!(body.matches("\"id\":\"call_done\"").count(), 1);
+    assert_eq!(body.matches("\"type\":\"tool_use\"").count(), 1);
+    assert!(body.contains("\"stop_reason\":\"max_tokens\""));
+}
+
+#[test]
 fn tool_sub_event_errors_do_not_abort_successful_response() {
     for event in ["response.mcp_call.failed", "response.mcp_list_tools.failed"] {
         let sse = format!("data: {{\"type\":\"{event}\",\"error\":{{\"message\":\"tool unavailable\"}}}}\n\ndata: {{\"type\":\"response.completed\",\"response\":{{\"status\":\"completed\",\"output\":[{{\"type\":\"message\",\"content\":[{{\"type\":\"output_text\",\"text\":\"fallback answer\"}}]}}]}}}}\n\n");

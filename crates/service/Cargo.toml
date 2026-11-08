@@ -58,6 +58,7 @@ reqwest = { version = "0.12", features = ["blocking"] }
 tokio = { version = "1", features = ["process"] }
 tiny_http = "0.12"
 rcgen = "0.13"
+socket2 = "0.6"
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"

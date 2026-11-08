@@ -38,13 +38,15 @@ async fn cancelled_redemption_cannot_start_another_charge() {
         "CODEXMANAGER_DB_PATH",
         Some(dir.join("fixture.db").to_str().unwrap()),
     );
-    restore.set("CODEXMANAGER_UPSTREAM_PROXY_URL", Some(""));
-    restore.set("NO_PROXY", Some("*"));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     restore.set(
         "CODEXMANAGER_USAGE_BASE_URL",
         Some(&format!("http://{}", listener.local_addr().unwrap())),
     );
+    // Declare this after Restore so proxy settings are restored before Restore
+    // rebuilds the shared usage clients. A wildcard NO_PROXY does not match
+    // literal IP addresses in the current hyper-util dependency.
+    let _loopback_proxy = crate::loopback_proxy_test::LoopbackProxyGuard::enter(&_env);
     crate::usage_http::reload_usage_http_client_from_env();
     crate::storage_helpers::initialize_storage().unwrap();
     let storage = open_storage().unwrap();
@@ -103,7 +105,12 @@ async fn cancelled_redemption_cannot_start_another_charge() {
     });
     tokio::time::timeout(Duration::from_secs(5), posted.notified())
         .await
-        .expect("provider sees redemption");
+        .unwrap_or_else(|error| {
+            panic!(
+                "provider sees redemption: {error}; local fixture POST count={}",
+                count.load(Ordering::SeqCst)
+            )
+        });
     work.abort();
     assert!(work.await.unwrap_err().is_cancelled());
     let error = consume_reset_credit_async(&id, &random_uuid_v4())
@@ -136,13 +143,12 @@ async fn completed_operation_replay_returns_saved_result_without_another_charge(
         "CODEXMANAGER_DB_PATH",
         Some(dir.join("fixture.db").to_str().unwrap()),
     );
-    restore.set("CODEXMANAGER_UPSTREAM_PROXY_URL", Some(""));
-    restore.set("NO_PROXY", Some("*"));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     restore.set(
         "CODEXMANAGER_USAGE_BASE_URL",
         Some(&format!("http://{}", listener.local_addr().unwrap())),
     );
+    let _loopback_proxy = crate::loopback_proxy_test::LoopbackProxyGuard::enter(&_env);
     crate::usage_http::reload_usage_http_client_from_env();
     crate::storage_helpers::initialize_storage().unwrap();
     let storage = open_storage().unwrap();
@@ -193,7 +199,12 @@ async fn completed_operation_replay_returns_saved_result_without_another_charge(
     let operation_id = random_uuid_v4();
     let first = consume_reset_credit_async(&id, &operation_id)
         .await
-        .expect("first redemption");
+        .unwrap_or_else(|error| {
+            panic!(
+                "first redemption: {error}; local fixture POST count={}",
+                post_count.load(Ordering::SeqCst)
+            )
+        });
     let replay = consume_reset_credit_async(&id, &operation_id)
         .await
         .expect("replay saved result");
@@ -217,13 +228,12 @@ async fn pending_operation_replay_reuses_redeem_id_after_ambiguous_provider_erro
         "CODEXMANAGER_DB_PATH",
         Some(dir.join("fixture.db").to_str().unwrap()),
     );
-    restore.set("CODEXMANAGER_UPSTREAM_PROXY_URL", Some(""));
-    restore.set("NO_PROXY", Some("*"));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     restore.set(
         "CODEXMANAGER_USAGE_BASE_URL",
         Some(&format!("http://{}", listener.local_addr().unwrap())),
     );
+    let _loopback_proxy = crate::loopback_proxy_test::LoopbackProxyGuard::enter(&_env);
     crate::usage_http::reload_usage_http_client_from_env();
     crate::storage_helpers::initialize_storage().unwrap();
     let storage = open_storage().unwrap();
@@ -294,7 +304,12 @@ async fn pending_operation_replay_reuses_redeem_id_after_ambiguous_provider_erro
 
     let replay = consume_reset_credit_async(&id, &operation_id)
         .await
-        .expect("same operation can be reconciled");
+        .unwrap_or_else(|error| {
+            panic!(
+                "same operation can be reconciled: {error}; local fixture POST count={}",
+                post_count.load(Ordering::SeqCst)
+            )
+        });
     assert!(replay.consumed);
     let storage = open_storage().unwrap();
     let completed = storage

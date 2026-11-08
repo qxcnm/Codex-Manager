@@ -7,6 +7,10 @@
 use std::cell::RefCell;
 use std::future::Future;
 use std::io::{self, Cursor, Read};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use axum::body::Body;
 use axum::http::{header, request::Parts, Method, Response, StatusCode};
@@ -43,6 +47,52 @@ impl Drop for ResponseCancellationScope {
 }
 
 pub(crate) struct CancelResponseOnDrop(Option<watch::Sender<bool>>);
+
+/// Trusted ingress metadata for an internally dispatched WebSocket turn.
+/// HTTP headers never create this marker or override the actual POST method.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WebSocketHttpBridge;
+
+/// Internal per-turn delivery confirmation. Reading the bridged HTTP body is
+/// only an intermediate step: a WebSocket terminal must also reach its sink.
+#[derive(Clone)]
+pub(crate) struct WebSocketDeliveryGate(watch::Receiver<bool>);
+
+impl WebSocketDeliveryGate {
+    pub(crate) fn new() -> (watch::Sender<bool>, Self) {
+        let (confirmation, delivered) = watch::channel(false);
+        (confirmation, Self(delivered))
+    }
+}
+
+/// Shared with outer HTTP middleware through response extensions. Only the
+/// body consumer may confirm a complete protocol terminal, never the parser.
+#[derive(Clone, Default)]
+pub(crate) struct ResponseBodyDeliveryState(Arc<AtomicBool>);
+
+impl ResponseBodyDeliveryState {
+    pub(crate) fn terminal_consumed(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+
+    fn mark_terminal_consumed(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+struct ResponseBodyChunk {
+    bytes: io::Result<Bytes>,
+    terminal_consumed: Option<oneshot::Sender<()>>,
+}
+
+impl ResponseBodyChunk {
+    fn new(bytes: io::Result<Bytes>) -> Self {
+        Self {
+            bytes,
+            terminal_consumed: None,
+        }
+    }
+}
 
 impl CancelResponseOnDrop {
     pub(crate) fn disarm(&mut self) {
@@ -81,6 +131,8 @@ pub(crate) fn with_response_cancellation<F: Future>(
 
 pub(crate) struct GatewayRequest {
     method: Method,
+    request_type: &'static str,
+    websocket_delivery: Option<watch::Receiver<bool>>,
     uri: String,
     headers: Vec<super::gateway_response::Header>,
     remote_addr: Option<std::net::SocketAddr>,
@@ -116,6 +168,17 @@ impl GatewayRequest {
         (
             Self {
                 method: parts.method,
+                request_type: if parts.extensions.get::<WebSocketHttpBridge>().is_some() {
+                    "ws"
+                } else {
+                    "http"
+                },
+                websocket_delivery: parts.extensions.get::<WebSocketHttpBridge>().and_then(|_| {
+                    parts
+                        .extensions
+                        .get::<WebSocketDeliveryGate>()
+                        .map(|gate| gate.0.clone())
+                }),
                 uri: parts
                     .uri
                     .path_and_query()
@@ -146,6 +209,9 @@ impl GatewayRequest {
 
     pub(crate) fn method(&self) -> &Method {
         &self.method
+    }
+    pub(crate) fn request_type(&self) -> &'static str {
+        self.request_type
     }
     pub(crate) fn url(&self) -> &str {
         &self.uri
@@ -243,6 +309,20 @@ impl GatewayRequest {
             .map_err(io::Error::other)?;
         }
         let status = StatusCode::from_u16(response.status_code().0).map_err(io::Error::other)?;
+        // Error/JSON responses are converted into WS errors by the caller and
+        // retain their actual HTTP status. Only successful SSE turns wait for
+        // the outer socket's terminal-send confirmation.
+        let websocket_delivery = self.websocket_delivery.take().filter(|_| {
+            status.is_success()
+                && response.headers().iter().any(|header| {
+                    header.field.as_str().eq_ignore_ascii_case("content-type")
+                        && header
+                            .value
+                            .as_str()
+                            .to_ascii_lowercase()
+                            .starts_with("text/event-stream")
+                })
+        });
         let mut builder = Response::builder().status(status);
         for item in response.headers() {
             let name = item.field.as_str();
@@ -259,12 +339,37 @@ impl GatewayRequest {
         let suppress_body = self.method == Method::HEAD
             || status == StatusCode::NO_CONTENT
             || status == StatusCode::NOT_MODIFIED;
-        let (sender, receiver) = mpsc::channel::<io::Result<Bytes>>(2);
+        let delivery_state = ResponseBodyDeliveryState::default();
+        builder = builder.extension(delivery_state.clone());
+        let (sender, receiver) = mpsc::channel::<ResponseBodyChunk>(2);
+        // The WS bridge must observe HTTP EOF before deciding that a terminal
+        // is missing. Waiting for finalization here would wait for its own
+        // socket confirmation in that case. Ordinary HTTP keeps its EOF barrier.
+        let completion = self
+            .completion
+            .take()
+            .filter(|_| websocket_delivery.is_none());
         let stream = futures_util::stream::unfold(
-            (receiver, self.cancellation_guard(), self.completion.take()),
-            |(mut receiver, cancellation, completion)| async move {
+            (
+                receiver,
+                self.cancellation_guard(),
+                completion,
+                delivery_state,
+            ),
+            |(mut receiver, cancellation, completion, delivery_state)| async move {
                 match receiver.recv().await {
-                    Some(chunk) => Some((chunk, (receiver, cancellation, completion))),
+                    Some(chunk) => {
+                        // A terminal read is only complete once HTTP takes the
+                        // last bytes, not merely when the producer queues them.
+                        if let Some(consumed) = chunk.terminal_consumed {
+                            delivery_state.mark_terminal_consumed();
+                            let _ = consumed.send(());
+                        }
+                        Some((
+                            chunk.bytes,
+                            (receiver, cancellation, completion, delivery_state),
+                        ))
+                    }
                     None => {
                         if let Some(completion) = completion {
                             let _ = completion.await;
@@ -309,33 +414,59 @@ impl GatewayRequest {
                             "gateway response body ended early",
                         )
                     };
-                    let _ = sender.send(Err(error())).await;
+                    let _ = sender.send(ResponseBodyChunk::new(Err(error()))).await;
                     break Err(error());
                 }
                 Ok(0) => break Ok(()),
                 Ok(length) => {
+                    let (terminal_consumed, terminal_ack) = if reader.is_end_stream() {
+                        let (consumed, acknowledgement) = oneshot::channel();
+                        (Some(consumed), Some(acknowledgement))
+                    } else {
+                        (None, None)
+                    };
                     if sender
-                        .send(Ok(Bytes::copy_from_slice(&buffer[..length])))
+                        .send(ResponseBodyChunk {
+                            bytes: Ok(Bytes::copy_from_slice(&buffer[..length])),
+                            terminal_consumed,
+                        })
                         .await
                         .is_err()
                     {
                         break Err(disconnected());
                     }
                     written = written.saturating_add(length);
+                    if let Some(acknowledgement) = terminal_ack {
+                        // Do not race a completed protocol response against a
+                        // later body drop or upstream EOF. Dropping the body
+                        // before consuming this chunk drops its sender, so a
+                        // genuine truncated delivery still reports BrokenPipe.
+                        break acknowledgement.await.map_err(|_| disconnected());
+                    }
                 }
                 Err(error) => {
                     let _ = sender
-                        .send(Err(io::Error::new(
+                        .send(ResponseBodyChunk::new(Err(io::Error::new(
                             error.kind(),
                             "gateway response body failed",
-                        )))
+                        ))))
                         .await;
                     break Err(error);
                 }
             }
         };
         reader.finish_async().await;
-        delivery
+        // Let the bridge observe EOF even while finalization waits for the
+        // outer WS send, including readers that end without a protocol terminal.
+        drop(sender);
+        delivery?;
+        if let Some(mut confirmed) = websocket_delivery {
+            confirmed
+                .wait_for(|delivered| *delivered)
+                .await
+                .map_err(|_| disconnected())?;
+        }
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -433,6 +564,7 @@ impl From<tiny_http::Request> for GatewayRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::StreamExt;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -447,6 +579,36 @@ mod tests {
             .unwrap()
             .into_parts();
         GatewayRequest::new(parts, Bytes::from_static(b"{}"))
+    }
+
+    #[test]
+    fn websocket_http_bridge_metadata_preserves_post_method() {
+        let (parts, ()) = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .extension(WebSocketHttpBridge)
+            .body(())
+            .unwrap()
+            .into_parts();
+        let (request, _receiver) = GatewayRequest::new(parts, Bytes::new());
+        assert_eq!(request.request_type(), "ws");
+        assert_eq!(request.method(), Method::POST);
+    }
+
+    #[test]
+    fn websocket_type_cannot_be_spoofed_with_http_headers() {
+        let (parts, ()) = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .header("x-codexmanager-request-type", "ws")
+            .header("x-codexmanager-websocket-http-bridge", "true")
+            .header("upgrade", "websocket")
+            .body(())
+            .unwrap()
+            .into_parts();
+        let (request, _receiver) = GatewayRequest::new(parts, Bytes::new());
+        assert_eq!(request.request_type(), "http");
+        assert_eq!(request.method(), Method::POST);
     }
 
     #[tokio::test]
@@ -517,6 +679,293 @@ mod tests {
                 std::future::pending().await
             })
         }
+    }
+
+    struct ProtocolTerminalReader {
+        bytes: Cursor<Vec<u8>>,
+        terminal_read: Option<oneshot::Sender<()>>,
+    }
+
+    impl super::super::gateway_response_body::GatewayResponseBody for ProtocolTerminalReader {
+        fn read_async<'a>(
+            &'a mut self,
+            buffer: &'a mut [u8],
+        ) -> super::super::gateway_response_body::BodyReadFuture<'a> {
+            Box::pin(async move {
+                assert!(
+                    !self.is_end_stream(),
+                    "protocol completion must not wait for another provider read"
+                );
+                let read = self.bytes.read(buffer)?;
+                if self.is_end_stream() {
+                    if let Some(terminal_read) = self.terminal_read.take() {
+                        let _ = terminal_read.send(());
+                    }
+                }
+                Ok(read)
+            })
+        }
+
+        fn is_end_stream(&self) -> bool {
+            self.bytes.position() == self.bytes.get_ref().len() as u64
+        }
+    }
+
+    fn terminal_response_fixture(
+        bytes: Vec<u8>,
+    ) -> (
+        oneshot::Receiver<Response<Body>>,
+        oneshot::Receiver<()>,
+        tokio::task::JoinHandle<io::Result<()>>,
+    ) {
+        let (request, receiver) = request("POST");
+        let (terminal_read, read_completed) = oneshot::channel();
+        // Exercise trait-object forwarding as used by the production bridge.
+        let reader: Box<dyn super::super::gateway_response_body::GatewayResponseBody> =
+            Box::new(ProtocolTerminalReader {
+                bytes: Cursor::new(bytes),
+                terminal_read: Some(terminal_read),
+            });
+        let worker = tokio::spawn(request.respond_async(
+            super::super::gateway_response::Response::new(
+                super::super::gateway_response::StatusCode(200),
+                vec![],
+                reader,
+                None,
+            ),
+        ));
+        (receiver, read_completed, worker)
+    }
+
+    #[tokio::test]
+    async fn native_terminal_chunk_dropped_before_consumption_is_broken_pipe() {
+        let (receiver, terminal_read, worker) =
+            terminal_response_fixture(b"event: response.completed\n\n".to_vec());
+        let response = receiver.await.unwrap();
+        terminal_read.await.unwrap();
+        assert!(!worker.is_finished(), "queueing is not consumption");
+        drop(response);
+        let error = tokio::time::timeout(std::time::Duration::from_secs(2), worker)
+            .await
+            .expect("discarding the queued terminal chunk cancels its acknowledgement")
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[tokio::test]
+    async fn native_consumed_terminal_chunk_succeeds_after_immediate_body_drop() {
+        let bytes = b"event: response.completed\n\n".to_vec();
+        let (receiver, terminal_read, worker) = terminal_response_fixture(bytes.clone());
+        let mut body = receiver.await.unwrap().into_body().into_data_stream();
+        terminal_read.await.unwrap();
+        assert_eq!(body.next().await.unwrap().unwrap().as_ref(), bytes);
+        // Emulate Codex ending its SSE read as soon as completion arrives.
+        drop(body);
+        tokio::time::timeout(std::time::Duration::from_secs(2), worker)
+            .await
+            .expect("completed delivery must not await provider EOF")
+            .unwrap()
+            .unwrap();
+    }
+
+    fn websocket_terminal_fixture(
+        trusted: bool,
+    ) -> (
+        watch::Sender<bool>,
+        oneshot::Receiver<Response<Body>>,
+        tokio::task::JoinHandle<io::Result<()>>,
+    ) {
+        let (confirmation, gate) = WebSocketDeliveryGate::new();
+        let mut builder = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .extension(gate);
+        if trusted {
+            builder = builder.extension(WebSocketHttpBridge);
+        }
+        let (parts, ()) = builder.body(()).unwrap().into_parts();
+        let (request, receiver) = GatewayRequest::new(parts, Bytes::new());
+        // All three events fit in one HTTP chunk. Consuming that chunk can
+        // precede sending even the first WS event, so it cannot confirm WS EOS.
+        let bytes = b"event: response.created\ndata: {\"type\":\"response.created\"}\n\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\"}\n\n".to_vec();
+        let reader = ProtocolTerminalReader {
+            bytes: Cursor::new(bytes),
+            terminal_read: None,
+        };
+        let worker = tokio::spawn(request.respond_async(
+            super::super::gateway_response::Response::new(
+                super::super::gateway_response::StatusCode(200),
+                vec![super::super::gateway_response::Header::from_bytes(
+                    "content-type",
+                    "text/event-stream",
+                )
+                .unwrap()],
+                reader,
+                None,
+            ),
+        ));
+        (confirmation, receiver, worker)
+    }
+
+    #[tokio::test]
+    async fn websocket_http_terminal_consumption_waits_for_socket_confirmation() {
+        let (confirmation, receiver, mut worker) = websocket_terminal_fixture(true);
+        let mut body = receiver.await.unwrap().into_body().into_data_stream();
+        assert!(body.next().await.unwrap().unwrap().ends_with(b"\n\n"));
+        drop(body);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut worker)
+                .await
+                .is_err(),
+            "internal HTTP consumption must not finalize a WS turn"
+        );
+        confirmation.send_replace(true);
+        tokio::time::timeout(std::time::Duration::from_secs(2), worker)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn websocket_disconnect_after_http_terminal_consumption_is_broken_pipe() {
+        let (confirmation, receiver, worker) = websocket_terminal_fixture(true);
+        let mut body = receiver.await.unwrap().into_body().into_data_stream();
+        body.next().await.unwrap().unwrap();
+        drop(body);
+        // Socket send failure, connection close and response.interrupt all drop
+        // the per-turn sender without confirming the terminal.
+        drop(confirmation);
+        let error = tokio::time::timeout(std::time::Duration::from_secs(2), worker)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[tokio::test]
+    async fn websocket_confirmation_does_not_override_unconsumed_http_terminal() {
+        let (confirmation, receiver, worker) = websocket_terminal_fixture(true);
+        let response = receiver.await.unwrap();
+        confirmation.send_replace(true);
+        drop(response);
+        let error = tokio::time::timeout(std::time::Duration::from_secs(2), worker)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[tokio::test]
+    async fn websocket_delivery_gate_requires_trusted_ingress_marker() {
+        let (_confirmation, receiver, worker) = websocket_terminal_fixture(false);
+        let mut body = receiver.await.unwrap().into_body().into_data_stream();
+        body.next().await.unwrap().unwrap();
+        drop(body);
+        tokio::time::timeout(std::time::Duration::from_secs(2), worker)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn websocket_missing_terminal_eof_does_not_wait_for_its_own_finalization() {
+        let (confirmation, gate) = WebSocketDeliveryGate::new();
+        let (parts, ()) = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/responses")
+            .extension(WebSocketHttpBridge)
+            .extension(gate)
+            .body(())
+            .unwrap()
+            .into_parts();
+        let (mut request, receiver) = GatewayRequest::new(parts, Bytes::new());
+        let (_finalized, completion) = oneshot::channel();
+        request.finish_body_after(completion);
+        let incomplete = b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n";
+        let worker = tokio::spawn(request.respond_async(
+            super::super::gateway_response::Response::new(
+                super::super::gateway_response::StatusCode(200),
+                vec![super::super::gateway_response::Header::from_bytes(
+                    "content-type", "text/event-stream",
+                ).unwrap()],
+                Cursor::new(incomplete.to_vec()),
+                None,
+            ),
+        ));
+        let response = receiver.await.unwrap();
+        let body = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            axum::body::to_bytes(response.into_body(), 4096),
+        )
+        .await
+        .expect("bridge must observe missing-terminal EOF before finalization")
+        .unwrap();
+        assert_eq!(body.as_ref(), incomplete);
+        assert!(
+            !worker.is_finished(),
+            "EOF alone must not confirm WS delivery"
+        );
+        // The bridge now reports missing terminal and drops the active turn.
+        drop(confirmation);
+        let error = tokio::time::timeout(std::time::Duration::from_secs(2), worker)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[tokio::test]
+    async fn native_partially_consumed_terminal_frame_remains_broken_pipe() {
+        let bytes = vec![b'x'; 2 * 16 * 1024 + 31];
+        let (receiver, terminal_read, worker) = terminal_response_fixture(bytes);
+        let mut body = receiver.await.unwrap().into_body().into_data_stream();
+        // The first two fragments fill the queue; the terminal fragment is
+        // already read but cannot finish its send until capacity is available.
+        terminal_read.await.unwrap();
+        assert_eq!(body.next().await.unwrap().unwrap().len(), 16 * 1024);
+        drop(body);
+        let error = tokio::time::timeout(std::time::Duration::from_secs(2), worker)
+            .await
+            .expect("unconsumed terminal fragments must not become successful delivery")
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[tokio::test]
+    async fn native_terminal_ack_waits_for_all_queued_frame_fragments() {
+        let bytes = (0..2 * 16 * 1024 + 31)
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        let (receiver, terminal_read, worker) = terminal_response_fixture(bytes.clone());
+        let mut body = receiver.await.unwrap().into_body().into_data_stream();
+        terminal_read.await.unwrap();
+        let mut received = Vec::new();
+        for _ in 0..2 {
+            let fragment = body.next().await.unwrap().unwrap();
+            assert_eq!(fragment.len(), 16 * 1024);
+            received.extend_from_slice(&fragment);
+            assert!(
+                !worker.is_finished(),
+                "earlier fragments cannot acknowledge the terminal fragment"
+            );
+        }
+        let final_fragment = body.next().await.unwrap().unwrap();
+        assert_eq!(final_fragment.len(), 31);
+        received.extend_from_slice(&final_fragment);
+        drop(body);
+        tokio::time::timeout(std::time::Duration::from_secs(2), worker)
+            .await
+            .expect("consuming the final fragment completes delivery")
+            .unwrap()
+            .unwrap();
+        assert_eq!(received, bytes);
     }
 
     #[tokio::test]

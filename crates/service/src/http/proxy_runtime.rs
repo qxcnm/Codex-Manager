@@ -16,6 +16,7 @@ use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
 
+use crate::http::gateway_request::ResponseBodyDeliveryState;
 use crate::http::proxy_bridge::run_proxy_server;
 #[cfg(test)]
 use crate::http::proxy_request::build_target_url;
@@ -35,14 +36,24 @@ static ZSTD_DECODE_SEMAPHORE: tokio::sync::Semaphore =
 static GATEWAY_PREPARATION_SLOTS: LazyLock<Arc<tokio::sync::Semaphore>> =
     LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(32)));
 
-/// Tracks whether a streamed proxy response reached a terminal frame. A body
-/// dropped before EOS means the downstream client disconnected; record it as
-/// HTTP 499 so cancellation remains visible while the legacy backend is
-/// being retired.
+/// Tracks cancellation before HTTP EOF or a consumed native protocol terminal.
+/// Reading a terminal into the producer's queue is not sufficient: the native
+/// body confirms consumption of its final fragment through the shared state.
 struct DisconnectTrackingBody {
     body: Body,
     path: String,
     completed: bool,
+    delivery_state: Option<ResponseBodyDeliveryState>,
+}
+
+impl DisconnectTrackingBody {
+    fn disconnected_before_completion(&self) -> bool {
+        !self.completed
+            && !self
+                .delivery_state
+                .as_ref()
+                .is_some_and(ResponseBodyDeliveryState::terminal_consumed)
+    }
 }
 
 impl HttpBody for DisconnectTrackingBody {
@@ -71,7 +82,7 @@ impl HttpBody for DisconnectTrackingBody {
 
 impl Drop for DisconnectTrackingBody {
     fn drop(&mut self) {
-        if !self.completed {
+        if self.disconnected_before_completion() {
             crate::gateway::record_gateway_request_outcome(
                 self.path.as_str(),
                 499,
@@ -510,6 +521,10 @@ async fn proxy_handler(
             body: response_body,
             path,
             completed: false,
+            delivery_state: response_parts
+                .extensions
+                .get::<ResponseBodyDeliveryState>()
+                .cloned(),
         })
     };
     let response = Response::from_parts(response_parts, response_body);
@@ -723,3 +738,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/proxy_policy_tests.rs"]
 mod policy_tests;
+
+#[cfg(test)]
+#[path = "tests/proxy_terminal_delivery_tests.rs"]
+mod terminal_delivery_tests;

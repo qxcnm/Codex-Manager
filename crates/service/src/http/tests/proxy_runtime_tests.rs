@@ -28,6 +28,8 @@ use tokio_tungstenite::tungstenite::handshake::server::{Callback, Request, Respo
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
 
+#[path = "responses_websocket_http_bridge_tests.rs"]
+mod responses_websocket_http_bridge_tests;
 #[path = "responses_websocket_interrupt_tests.rs"]
 mod responses_websocket_interrupt_tests;
 
@@ -40,6 +42,7 @@ static TEST_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
 const TEST_ZSTD_MAX_BODY_BYTES: usize = 256 * 1024 * 1024;
 const TEST_LARGE_RESPONSES_WS_FRAME_BYTES: usize = 17 * 1024 * 1024;
 const TEST_IMAGE_CONTEXT_RESPONSES_WS_FRAME_BYTES: usize = 34 * 1024 * 1024;
+const TEST_FRAME_RESET_TIMEOUT: Duration = Duration::from_secs(30);
 
 async fn assert_normal_client_close(
     socket: &mut tokio_tungstenite::WebSocketStream<
@@ -1091,15 +1094,16 @@ async fn start_mock_upstream_ws_resets_before_first_frame() -> (
             .accept()
             .await
             .expect("accept initial-send-reset upstream");
-        let websocket = accept_hdr_async(stream, |_: &Request, response: Response| Ok(response))
-            .await
-            .expect("accept initial-send-reset websocket handshake");
-        let raw_stream = websocket
-            .into_inner()
-            .into_std()
-            .expect("convert initial-send-reset stream");
-        force_tcp_reset(&raw_stream);
-        drop(raw_stream);
+        let mut upstream_config = test_upstream_ws_config();
+        upstream_config.extensions = ExtensionsConfig::default();
+        let websocket = accept_hdr_async_with_config(
+            stream,
+            |_: &Request, response: Response| Ok(response),
+            Some(upstream_config),
+        )
+        .await
+        .expect("accept initial-send-reset websocket handshake");
+        reset_websocket_after_frame_starts(websocket).await;
 
         let (replacement_stream, _) = listener
             .accept()
@@ -1155,13 +1159,22 @@ async fn start_mock_upstream_ws_resets_twice_before_first_frame() -> (
         .expect("double-initial-send-reset mock upstream addr");
     let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
     let handle = tokio::spawn(async move {
-        let upstream_config = test_upstream_ws_config();
+        let started = std::time::Instant::now();
+        let mut last_reset_at = started;
+        let mut upstream_config = test_upstream_ws_config();
+        // Keep the 17 MiB frame large on the wire: compression would reduce the
+        // repeated image bytes to a tiny frame and race a successful send with reset.
+        upstream_config.extensions = ExtensionsConfig::default();
 
         for round in 1..=2 {
-            let (stream, _) = listener
-                .accept()
+            let (stream, _) = tokio::time::timeout(TEST_FRAME_RESET_TIMEOUT, listener.accept())
                 .await
+                .expect("double initial-send-reset connection timeout")
                 .expect("accept double initial-send-reset upstream");
+            eprintln!(
+                "double-reset: accepted connection {round} at {:?}",
+                started.elapsed()
+            );
             let websocket = accept_hdr_async_with_config(
                 stream,
                 |_: &Request, response: Response| Ok(response),
@@ -1169,19 +1182,19 @@ async fn start_mock_upstream_ws_resets_twice_before_first_frame() -> (
             )
             .await
             .expect("accept double initial-send-reset websocket handshake");
-            let raw_stream = websocket
-                .into_inner()
-                .into_std()
-                .expect("convert double initial-send-reset stream");
-            force_tcp_reset(&raw_stream);
-            drop(raw_stream);
+            reset_websocket_after_frame_starts(websocket).await;
+            last_reset_at = std::time::Instant::now();
+            eprintln!(
+                "double-reset: reset connection {round} at {:?}",
+                started.elapsed()
+            );
             event_tx
                 .send((round, String::new()))
                 .expect("record double initial-send-reset connection");
         }
 
         let (replacement_stream, _) =
-            match tokio::time::timeout(Duration::from_secs(3), listener.accept()).await {
+            match tokio::time::timeout(TEST_FRAME_RESET_TIMEOUT, listener.accept()).await {
                 Ok(result) => result.expect("accept final double initial-send-reset upstream"),
                 Err(_) => {
                     event_tx
@@ -1193,6 +1206,11 @@ async fn start_mock_upstream_ws_resets_twice_before_first_frame() -> (
                     return;
                 }
             };
+        eprintln!(
+            "double-reset: accepted connection 3 at {:?}, {:?} after the second reset",
+            started.elapsed(),
+            last_reset_at.elapsed()
+        );
         let mut replacement = accept_hdr_async_with_config(
             replacement_stream,
             |_: &Request, response: Response| Ok(response),
@@ -1204,6 +1222,10 @@ async fn start_mock_upstream_ws_resets_twice_before_first_frame() -> (
             Some(Ok(Message::Text(text))) => text.to_string(),
             other => panic!("expected final replacement response.create, got {other:?}"),
         };
+        eprintln!(
+            "double-reset: received final request at {:?}",
+            started.elapsed()
+        );
         event_tx
             .send((3, text))
             .expect("record final double initial-send-reset request");
@@ -1240,7 +1262,8 @@ async fn start_mock_upstream_ws_switches_after_initial_reset() -> (
         .expect("account-switch initial-send-reset mock upstream addr");
     let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
     let handle = tokio::spawn(async move {
-        let upstream_config = test_upstream_ws_config();
+        let mut upstream_config = test_upstream_ws_config();
+        upstream_config.extensions = ExtensionsConfig::default();
 
         for _ in 0..3 {
             let (stream, _) = listener
@@ -1274,12 +1297,7 @@ async fn start_mock_upstream_ws_switches_after_initial_reset() -> (
                 .unwrap_or_else(|| "missing-account-id".to_string());
 
             if account_id == "workspace-failed" {
-                let raw_stream = websocket
-                    .into_inner()
-                    .into_std()
-                    .expect("convert account-switch reset stream");
-                force_tcp_reset(&raw_stream);
-                drop(raw_stream);
+                reset_websocket_after_frame_starts(websocket).await;
                 event_tx
                     .send((account_id, String::new()))
                     .expect("record failed account reset");
@@ -1768,31 +1786,45 @@ async fn start_mock_upstream_ws_connection_limit_then_success() -> (
     (addr.to_string(), event_rx, handle)
 }
 
+async fn reset_websocket_after_frame_starts(
+    websocket: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+) {
+    // Observe the first frame byte before resetting: the peer has consumed the
+    // HTTP 101, while the server has not received the complete frame. An earlier
+    // RST can fail the upgrade itself rather than exercise frame-send recovery.
+    let mut stream = websocket.into_inner();
+    tokio::time::timeout(TEST_FRAME_RESET_TIMEOUT, stream.read_exact(&mut [0; 1]))
+        .await
+        .expect("reset fixture frame start timeout")
+        .expect("observe reset fixture frame start");
+    let raw_stream = stream.into_std().expect("convert frame-reset stream");
+    force_tcp_reset(&raw_stream);
+    drop(raw_stream);
+}
+
 fn force_tcp_reset(stream: &std::net::TcpStream) {
-    #[cfg(unix)]
-    {
-        use std::os::fd::AsRawFd;
+    socket2::SockRef::from(stream)
+        .set_linger(Some(Duration::ZERO))
+        .expect("set abortive TCP close on every supported platform");
+}
 
-        let linger = libc::linger {
-            l_onoff: 1,
-            l_linger: 0,
-        };
-        let result = unsafe {
-            libc::setsockopt(
-                stream.as_raw_fd(),
-                libc::SOL_SOCKET,
-                libc::SO_LINGER,
-                (&linger as *const libc::linger).cast(),
-                std::mem::size_of::<libc::linger>() as libc::socklen_t,
-            )
-        };
-        assert_eq!(result, 0, "set reset-after-preamble linger");
-    }
+#[test]
+fn force_tcp_reset_is_observed_by_peer_as_connection_reset() {
+    use std::io::Read;
 
-    #[cfg(not(unix))]
-    {
-        let _ = stream;
-    }
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind TCP reset fixture");
+    let mut peer = std::net::TcpStream::connect(listener.local_addr().unwrap())
+        .expect("connect TCP reset peer");
+    peer.set_read_timeout(Some(Duration::from_secs(3)))
+        .expect("set TCP reset peer timeout");
+    let (stream, _) = listener.accept().expect("accept TCP reset peer");
+    force_tcp_reset(&stream);
+    drop(stream);
+
+    let error = peer
+        .read(&mut [0; 1])
+        .expect_err("abortive close must produce a TCP reset, not a clean EOF");
+    assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
 }
 
 async fn start_mock_upstream_ws_resets_after_output() -> (
@@ -2129,7 +2161,7 @@ fn build_ws_request(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unsupported_responses_websocket_returns_426() {
+async fn aggregate_responses_websocket_accepts_upgrade() {
     let _guard = crate::test_env_guard();
     let db_path = new_test_db_path("codexmanager-proxy-runtime-ws-unsupported");
     let storage = init_test_storage(&db_path);
@@ -2158,22 +2190,18 @@ async fn unsupported_responses_websocket_returns_426() {
         &[("OpenAI-Beta", "responses_websockets=2026-02-06")],
     );
 
-    let err = connect_async(request)
+    let (mut socket, response) = connect_async(request)
         .await
-        .expect_err("websocket should fail");
-    match err {
-        tokio_tungstenite::tungstenite::Error::Http(response) => {
-            assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
-        }
-        other => panic!("unexpected websocket error: {other}"),
-    }
+        .expect("aggregate websocket upgrade");
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    assert_normal_client_close(&mut socket).await;
 
     let _ = shutdown_tx.send(());
     server_handle.await.expect("join front proxy");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn hybrid_responses_websocket_returns_426() {
+async fn hybrid_responses_websocket_accepts_upgrade() {
     let _guard = crate::test_env_guard();
     let db_path = new_test_db_path("codexmanager-proxy-runtime-ws-hybrid-unsupported");
     let storage = init_test_storage(&db_path);
@@ -2202,15 +2230,11 @@ async fn hybrid_responses_websocket_returns_426() {
         &[("OpenAI-Beta", "responses_websockets=2026-02-06")],
     );
 
-    let err = connect_async(request)
+    let (mut socket, response) = connect_async(request)
         .await
-        .expect_err("websocket should fail");
-    match err {
-        tokio_tungstenite::tungstenite::Error::Http(response) => {
-            assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
-        }
-        other => panic!("unexpected websocket error: {other}"),
-    }
+        .expect("hybrid websocket upgrade");
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    assert_normal_client_close(&mut socket).await;
 
     let _ = shutdown_tx.send(());
     server_handle.await.expect("join front proxy");
@@ -3465,11 +3489,13 @@ async fn official_responses_websocket_retries_when_reconnected_socket_breaks_bef
         .expect("send double-reset image-heavy response.create");
 
     let mut forwarded = None;
+    let mut connection_rounds = Vec::new();
     for _ in 0..3 {
-        let (round, text) = tokio::time::timeout(Duration::from_secs(10), upstream_events.recv())
+        let (round, text) = tokio::time::timeout(TEST_FRAME_RESET_TIMEOUT, upstream_events.recv())
             .await
             .expect("double-reset recovery frame timeout")
             .expect("double-reset recovery frame channel");
+        connection_rounds.push(round);
         match round {
             1 | 2 => assert!(text.is_empty()),
             3 => {
@@ -3482,9 +3508,18 @@ async fn official_responses_websocket_retries_when_reconnected_socket_breaks_bef
             other => panic!("unexpected double-reset upstream round {other}"),
         }
     }
+    assert_eq!(connection_rounds, [1, 2, 3]);
     let forwarded = forwarded.expect("final replacement must receive response.create");
     assert!(forwarded.contains("recover after two pre-send websocket resets"));
     assert!(forwarded.contains("data:image/png;base64,"));
+    let forwarded: serde_json::Value =
+        serde_json::from_str(&forwarded).expect("parse final replacement request");
+    let expected_image_url = format!("data:image/png;base64,{image_data}");
+    assert!(
+        forwarded["input"][0]["content"][1]["image_url"].as_str()
+            == Some(expected_image_url.as_str()),
+        "final replacement must receive the complete image payload"
+    );
 
     loop {
         let event = tokio::time::timeout(Duration::from_secs(10), client_ws.next())

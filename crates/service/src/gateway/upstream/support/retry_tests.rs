@@ -55,11 +55,22 @@ fn compact_responses_mapped_to_chat_completions_keeps_alternate_path_available()
 }
 
 #[test]
-fn anthropic_responses_bridge_keeps_alternate_path_available() {
-    assert!(!should_skip_codex_v1_alt_for_responses(
+fn anthropic_responses_bridge_skips_invalid_codex_alternate_path() {
+    assert!(should_skip_codex_v1_alt_for_responses(
         request_ctx(
             "/v1/responses",
             crate::apikey_profile::PROTOCOL_ANTHROPIC_NATIVE,
+        ),
+        "https://chatgpt.com/backend-api/codex/v1/responses"
+    ));
+}
+
+#[test]
+fn gemini_responses_bridge_skips_invalid_codex_alternate_path() {
+    assert!(should_skip_codex_v1_alt_for_responses(
+        request_ctx(
+            "/v1/responses",
+            crate::apikey_profile::PROTOCOL_GEMINI_NATIVE,
         ),
         "https://chatgpt.com/backend-api/codex/v1/responses"
     ));

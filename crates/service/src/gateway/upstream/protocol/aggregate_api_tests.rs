@@ -1,10 +1,12 @@
 use codexmanager_core::storage::{now_ts, AggregateApi, Storage};
 
 use super::{
-    build_aggregate_api_request, build_anthropic_bridge_aggregate_api_request, build_upstream_url,
-    effective_action_path, is_client_delivery_error, resolve_aggregate_api_rotation_candidates,
+    aggregate_action_protocol_error, build_aggregate_api_request,
+    build_anthropic_bridge_aggregate_api_request, build_upstream_url, effective_action_path,
+    is_client_delivery_error, resolve_aggregate_api_rotation_candidates,
     resolve_passthrough_sse_protocol, responses_to_anthropic_messages_action_path,
-    rewrite_body_model_override, should_bridge_responses_to_anthropic, AggregateApiAuthConfig,
+    rewrite_body_model_override, should_bridge_responses_to_anthropic,
+    should_bridge_responses_to_chat, AggregateApiAuthConfig,
 };
 use crate::aggregate_api::{
     AGGREGATE_API_AUTH_APIKEY, AGGREGATE_API_PROVIDER_CLAUDE, AGGREGATE_API_PROVIDER_CODEX,
@@ -48,6 +50,44 @@ fn empty_custom_action_uses_base_url_without_original_path() {
     let api = aggregate_api_with_action(Some(""));
     let path = effective_action_path(&api, "/v1/messages?beta=true");
     assert_eq!(path, "");
+}
+
+#[test]
+fn responses_to_chat_bridge_requires_the_resolved_chat_action() {
+    let mut api = aggregate_api_with_action(Some("/v1/chat/completions?route=fast"));
+    api.provider_type = AGGREGATE_API_PROVIDER_COMPATIBLE.to_owned();
+    assert!(should_bridge_responses_to_chat(&api, "/v1/responses"));
+    assert!(should_bridge_responses_to_chat(
+        &api,
+        "/v1/responses?beta=true"
+    ));
+    assert!(!should_bridge_responses_to_chat(
+        &api,
+        "/v1/responses/compact"
+    ));
+    assert!(!should_bridge_responses_to_chat(
+        &api,
+        "/v1/chat/completions"
+    ));
+    api.action = None;
+    assert!(!should_bridge_responses_to_chat(&api, "/v1/responses"));
+    api.url = "https://example.com/v1/chat/completions".into();
+    api.action = Some(String::new());
+    assert!(should_bridge_responses_to_chat(&api, "/v1/responses"));
+}
+
+#[test]
+fn messages_with_explicit_chat_action_is_rejected_before_upstream_submission() {
+    let mut api = aggregate_api_with_action(Some("/v1/chat/completions"));
+    assert!(
+        aggregate_action_protocol_error(&api, "/v1/messages?beta=true")
+            .unwrap()
+            .contains("Messages-compatible action")
+    );
+    assert!(aggregate_action_protocol_error(&api, "/v1/responses").is_none());
+    assert!(aggregate_action_protocol_error(&api, "/v1/chat/completions").is_none());
+    api.action = Some("/v1/messages".into());
+    assert!(aggregate_action_protocol_error(&api, "/v1/messages").is_none());
 }
 
 #[test]

@@ -1,5 +1,8 @@
 mod request_router;
+mod responses_to_chat;
 mod types;
+
+pub(super) use self::responses_to_chat::adapt_openai_responses_to_chat_completions;
 
 pub(super) use self::request_router::{
     adapt_openai_responses_to_anthropic_messages, adapt_request_for_protocol,

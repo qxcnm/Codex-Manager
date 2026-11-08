@@ -3320,7 +3320,9 @@ fn gateway_supports_websockets(storage: &Storage, api_key_id: &str) -> Result<bo
     let api_key = crate::apikey::remote::find_by_id(storage, api_key_id)
         .map_err(|err| format!("read api key websocket config failed: {err}"))?
         .ok_or_else(|| "api key not found".to_string())?;
-    Ok(crate::gateway::gateway_supports_official_responses_websocket(&api_key))
+    Ok(crate::gateway::gateway_supports_responses_websocket(
+        &api_key,
+    ))
 }
 
 fn parse_config(content: &str) -> Result<DocumentMut, String> {
