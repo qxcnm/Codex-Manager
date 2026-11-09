@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useAccountResetWarmup } from "@/hooks/useAccountResetWarmup";
+import { useAccountBps } from "@/hooks/useAccountBps";
 import { useSourceModelSync } from "@/hooks/useSourceModelSync";
 import {
   isAdminRole,
@@ -37,6 +38,7 @@ import {
 import { AccountsPageView } from "@/app/accounts/accounts-page-view";
 import { AggregateApiModelAssociationModal } from "@/components/modals/aggregate-api-model-association-modal";
 import { SourceModelSyncControl, SourceModelSyncDialog } from "@/components/source-model-sync";
+import { AccountBpsControl, AccountBpsLoginDialog, AccountBpsRiskDialog } from "@/components/accounts/account-bps-control";
 import { isBannedAccount, isLimitedAccount } from "@/lib/utils/usage";
 import { accountClient } from "@/lib/api/account-client";
 import { getAppErrorMessage } from "@/lib/api/transport";
@@ -141,6 +143,11 @@ function AccountsPageContent({ serviceAddr }: AccountsPageContentProps) {
   const { isUpdatingResetWarmup, setAccountResetWarmupEnabled } =
     useAccountResetWarmup(serviceAddr, isServiceReady);
   const isPageActive = useDesktopPageActive("/accounts/");
+  const bps = useAccountBps({
+    accounts,
+    serviceAddr,
+    available: isPageActive && isServiceReady && canManageAccountModels,
+  });
   const modelSync = useSourceModelSync({
     sourceKind: "openai_account",
     serviceAddr,
@@ -1050,6 +1057,9 @@ const toggleCleanupStatus = (rawStatus: string) => {
           onClick={() => modelSync.openSource({ id: account.id, name: account.name })}
         />
       )}
+      renderBpsControl={(account) => <AccountBpsControl account={account} controller={bps} />}
+      isUpdatingBps={bps.isUpdating}
+      setAccountBpsEnabled={(accountIds, enabled) => { void bps.setEnabled(accountIds, enabled); }}
       accountTestAccount={accountTestAccount}
       isProxySettingsLoading={isProxySettingsLoading}
       proxyEnabledDraft={proxyEnabledDraft}
@@ -1159,6 +1169,8 @@ const toggleCleanupStatus = (rawStatus: string) => {
         onAssociate={associateAccountModels}
       />
       <SourceModelSyncDialog controller={modelSync} />
+      <AccountBpsLoginDialog controller={bps} />
+      <AccountBpsRiskDialog controller={bps} />
     </>
   );
 }

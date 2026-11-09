@@ -27,6 +27,7 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<(), DbErr> {
         schema.create_table_from_entity(crate::proxy_history::proxy_diagnostic_test::Entity),
         schema.create_table_from_entity(crate::proxy_history::account_proxy_url_test::Entity),
         schema.create_table_from_entity(crate::accounts::Entity),
+        schema.create_table_from_entity(crate::accounts_bps::Entity),
         schema.create_table_from_entity(crate::account_details::metadata::Entity),
         schema.create_table_from_entity(crate::account_details::subscriptions::Entity),
         schema.create_table_from_entity(crate::account_details::proxy_settings::Entity),

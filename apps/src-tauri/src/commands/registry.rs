@@ -129,6 +129,9 @@ macro_rules! invoke_handler {
             crate::commands::login::service_chatgpt_auth_tokens_refresh,
             crate::commands::login::service_chatgpt_auth_tokens_refresh_all,
             // account
+            crate::commands::account::bps::service_account_bps_update,
+            crate::commands::account::bps::service_account_bps_login_start,
+            crate::commands::account::bps::service_account_bps_login_status,
             crate::commands::account::local::local_account_delete,
             crate::commands::account::remote::service_account_list,
             crate::commands::account::remote::service_account_delete,

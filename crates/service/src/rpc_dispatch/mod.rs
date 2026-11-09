@@ -279,6 +279,9 @@ fn admin_only_method(method: &str) -> bool {
     matches!(
         method,
         "codexProfile/applyModels"
+            | "account/bps/update"
+            | "account/bps/login/start"
+            | "account/bps/login/status"
             | "account/usage/resetCredits"
             | "account/usage/resetCredit/consume"
             | "apikey/managedModelPriceSyncV2"

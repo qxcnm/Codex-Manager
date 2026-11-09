@@ -167,6 +167,10 @@ pub(crate) struct WsConnectError {
 }
 
 impl WsConnectError {
+    pub(crate) fn status_code(&self) -> Option<u16> {
+        self.status_code
+    }
+
     fn from_message(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -347,9 +351,16 @@ pub(super) async fn upgrade_responses_websocket(request: HttpRequest<Body>) -> R
         Err(_) => return text_error_response(StatusCode::SERVICE_UNAVAILABLE, "service busy"),
     };
     let headers = parts.headers.clone();
-    let context = match tokio::task::spawn_blocking(move || {
+    let (context, bps_bridge_enabled) = match tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        authorize_websocket_request(&headers)
+        let context = authorize_websocket_request(&headers)?;
+        let bps_enabled = crate::account::bps::any_enabled().map_err(|_| {
+            text_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "BPS routing configuration could not be read",
+            )
+        })?;
+        Ok::<_, Response<Body>>((context, bps_enabled))
     })
     .await
     {
@@ -382,7 +393,9 @@ pub(super) async fn upgrade_responses_websocket(request: HttpRequest<Body>) -> R
     ws.max_message_size(RESPONSES_WS_MAX_MESSAGE_BYTES)
         .max_frame_size(RESPONSES_WS_MAX_MESSAGE_BYTES)
         .on_upgrade(move |socket| async move {
-            if crate::gateway::gateway_supports_official_responses_websocket(&context.api_key) {
+            if !bps_bridge_enabled
+                && crate::gateway::gateway_supports_official_responses_websocket(&context.api_key)
+            {
                 run_responses_websocket_session(socket, context).await;
             } else {
                 responses_websocket_http_bridge::run_session(socket, context, bridge_context).await;
@@ -614,12 +627,27 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
     };
 
     let mut completed_responses = CompletedWsResponseCache::default();
-    let first_frame = capture_native_ws_upstream_attempt(
+    let first_frame = match capture_native_ws_upstream_attempt(
         &context,
         &first_pending.log,
         &upstream,
         first_pending.prepared.text.as_str(),
-    );
+    ) {
+        Ok(frame) => frame,
+        Err(error) => {
+            finalize_ws_request_log(
+                &context,
+                &first_pending.log,
+                Some(&upstream.account_id),
+                Some(&upstream.upstream_url),
+                error.status,
+                crate::gateway::RequestLogUsage::default(),
+                Some(error.message.clone()),
+            );
+            send_ws_error_and_close(&mut socket, error, context.prefer_raw_errors).await;
+            return;
+        }
+    };
     if let Err(err) = upstream
         .stream
         .send(UpstreamMessage::Text(first_frame))
@@ -943,12 +971,19 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
                                         }
                                     }
                                 } else {
-                                    let current_frame = capture_native_ws_upstream_attempt(
+                                    let current_frame = match capture_native_ws_upstream_attempt(
                                         &context,
                                         &current_pending.log,
                                         &upstream,
                                         current_pending.prepared.text.as_str(),
-                                    );
+                                    ) {
+                                        Ok(frame) => frame,
+                                        Err(error) => {
+                                            finalize_ws_request_log(&context, &current_pending.log, Some(&upstream.account_id), Some(&upstream.upstream_url), error.status, crate::gateway::RequestLogUsage::default(), Some(error.message.clone()));
+                                            send_ws_error_and_close(&mut socket, error, context.prefer_raw_errors).await;
+                                            break;
+                                        }
+                                    };
                                     if let Err(send_err) = upstream.stream.send(
                                         UpstreamMessage::Text(current_frame),
                                     ).await {
@@ -2514,7 +2549,7 @@ async fn reconnect_upstream_for_pending_request(
             &pending.log,
             &replacement,
             pending.prepared.text.as_str(),
-        );
+        )?;
         match replacement.stream.send(UpstreamMessage::Text(frame)).await {
             Ok(()) => {
                 if attempt > 1 {
@@ -2663,6 +2698,15 @@ async fn connect_account_upstream_websocket(
     ws_url: &str,
     strip_session_affinity: bool,
 ) -> Result<UpstreamWebsocketStream, String> {
+    // A switch changed after this socket was upgraded. A fresh downstream
+    // connection will choose the shared HTTP bridge; never send BPS accounts
+    // through their old Codex credentials in the meantime.
+    if crate::account::bps::enabled_for_account(&account.id)? {
+        return Err(
+            "BPS forwarding was enabled; reconnect the client WebSocket to apply the new route"
+                .to_owned(),
+        );
+    }
     let (authorization, token) =
         resolve_upstream_authorization_for_websocket(account.clone(), token).await?;
     let request = build_upstream_websocket_request(
@@ -2998,13 +3042,40 @@ pub(crate) async fn connect_upstream_websocket_request_detailed(
     ),
     WsConnectError,
 > {
+    connect_upstream_websocket_request_with_limit(
+        request,
+        ws_url,
+        proxy_url,
+        RESPONSES_WS_MAX_MESSAGE_BYTES,
+    )
+    .await
+}
+
+pub(crate) async fn connect_upstream_websocket_request_with_limit(
+    request: WsClientRequest,
+    ws_url: &str,
+    proxy_url: Option<&str>,
+    max_message_bytes: usize,
+) -> Result<
+    (
+        tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>,
+        WsClientResponse,
+    ),
+    WsConnectError,
+> {
     ensure_rustls_crypto_provider();
+    let configuration = |compress| {
+        let mut config = responses_ws_transport_config(compress);
+        config.max_message_size = Some(max_message_bytes);
+        config.max_frame_size = Some(max_message_bytes);
+        config
+    };
     let compressed_request = request.clone();
     let first_result = connect_upstream_websocket_request_with_config(
         compressed_request,
         ws_url,
         proxy_url,
-        responses_ws_transport_config(true),
+        configuration(true),
     )
     .await;
     match first_result {
@@ -3018,7 +3089,7 @@ pub(crate) async fn connect_upstream_websocket_request_detailed(
                 request,
                 ws_url,
                 proxy_url,
-                responses_ws_transport_config(false),
+                configuration(false),
             )
             .await
         }
@@ -3469,7 +3540,14 @@ fn capture_native_ws_upstream_attempt(
     pending: &PendingWsRequestLog,
     upstream: &ConnectedUpstreamWebsocket,
     text: &str,
-) -> tokio_tungstenite::tungstenite::Utf8Bytes {
+) -> Result<tokio_tungstenite::tungstenite::Utf8Bytes, WsSessionError> {
+    if crate::account::bps::enabled_for_account(&upstream.account_id).map_err(|_| {
+        WsSessionError::service_unavailable("BPS routing configuration could not be read")
+    })? {
+        return Err(WsSessionError::service_unavailable(
+            "BPS forwarding was enabled; reconnect the client WebSocket to apply the new route",
+        ));
+    }
     let frame = tokio_tungstenite::tungstenite::Utf8Bytes::from(text.to_string());
     let sent_body = bytes::Bytes::from(frame.clone());
     crate::gateway::capture_outbound_payload(
@@ -3484,7 +3562,7 @@ fn capture_native_ws_upstream_attempt(
         &sent_body,
         None,
     );
-    frame
+    Ok(frame)
 }
 
 fn begin_ws_request_log(
@@ -4005,7 +4083,7 @@ async fn try_retry_ws_request_after_terminal(
     let retry_text = retry_text.unwrap_or_else(|| pending.prepared.text.clone());
     let retry_input = ws_request_input_from_text(retry_text.as_str())?;
     let retry_frame =
-        capture_native_ws_upstream_attempt(context, &pending.log, upstream, retry_text.as_str());
+        capture_native_ws_upstream_attempt(context, &pending.log, upstream, retry_text.as_str())?;
     match upstream
         .stream
         .send(UpstreamMessage::Text(retry_frame))

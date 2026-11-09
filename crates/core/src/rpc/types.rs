@@ -181,6 +181,12 @@ pub struct AccountSummary {
     pub preferred: bool,
     #[serde(default = "default_reset_warmup_enabled")]
     pub reset_warmup_enabled: bool,
+    #[serde(default)]
+    pub bps_enabled: bool,
+    #[serde(default)]
+    pub bps_authorized: bool,
+    #[serde(default)]
+    pub bps_expires_at: Option<i64>,
     pub sort: i64,
     pub status: String,
     pub status_reason: Option<String>,

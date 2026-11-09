@@ -149,6 +149,7 @@ pub(crate) fn error_message_for_client(
 }
 
 mod anchor_fingerprint;
+pub(crate) mod bps_protocol;
 mod concurrency;
 #[path = "routing/conversation_binding.rs"]
 pub(crate) mod conversation_binding;
@@ -206,6 +207,7 @@ mod token_exchange;
 #[path = "observability/trace_log.rs"]
 mod trace_log;
 mod upstream;
+pub(crate) use upstream::executor::bps::account_test_request as bps_account_test_request;
 
 pub(crate) use concurrency::current_gateway_concurrency_recommendation;
 use metrics::{

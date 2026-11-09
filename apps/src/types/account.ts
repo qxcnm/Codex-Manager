@@ -43,6 +43,10 @@ export interface Account {
   priority: number;
   preferred: boolean;
   resetWarmupEnabled: boolean;
+  /** Absent on older services; BPS forwarding is off until explicitly enabled. */
+  bpsEnabled?: boolean;
+  bpsAuthorized?: boolean;
+  bpsExpiresAt?: number | null;
   label: string;
   groupName: string;
   sort: number;

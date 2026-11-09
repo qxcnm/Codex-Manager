@@ -5,6 +5,32 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-11-09
+
+### Added
+
+- Added an independently implemented, built-in BPS (ChatGPT Excel / Basispoints) adapter without an external bridge executable. Account cards and list rows have individual switches, and Account actions supports selected-account batch changes. BPS is disabled by default; disabling it restores the original Codex upstream for subsequent requests.
+- Added independent BPS OAuth device-code authorization, account identity matching, and credential expiry checks. Existing Codex sign-in does not replace this authorization. The dialog instructs users to enable device code login in ChatGPT Settings → Security first; workspace accounts may need an administrator to allow it.
+- Added enable-time risk confirmation with the affected account count. Cancel starts neither authorization nor a settings update. Batch enable requires valid authorization for every selected account, otherwise the entire selection remains unchanged. The separate key-icon action saves credentials without automatically enabling forwarding.
+- Added BPS request and response conversion for `/v1/responses`, converted `/v1/chat/completions`, streaming SSE, non-streaming JSON, and client WebSocket access, retaining the requested model, full visible history, and upstream-reported model and usage.
+- Added client function, custom, and namespace tool declarations, calls, and complete tool-result continuation. Only completed, validated calls are delivered for client-side execution, with at most one tool call per turn.
+- Added Chinese and English [BPS documentation](bps-forwarding.md) covering independent authorization, device-code troubleshooting, switch behavior, account testing, and compatibility limits.
+
+### Changed
+
+- Test account now follows the account's BPS switch: enabled tests BPS text generation, disabled tests the original Codex route. Image-generation tests in BPS mode return an explicit error.
+- BPS uses separate credentials with the account proxy and gateway timeouts. Account-pool groups, key ownership, account eligibility, model routing, and administrator permissions remain enforced. Expired BPS credentials require renewed authorization; automatic BPS refresh is not enabled in this release.
+- When any pool account has BPS enabled, new client WebSocket connections use the existing HTTP bridge before account routing selects the upstream. Accounts with BPS disabled retain the original Codex route; existing native connections may require reconnection after a routing change.
+- Documented experimental limits: BPS does not guarantee improved model quality or prevent reduced capabilities, and authorization does not verify model access or independent quota. Only `auto/default` service tiers are supported. Unsupported parameters and inputs return explicit errors; hosted search, code interpreter, and image generation are not provided as BPS capabilities.
+- Verified the authorized test account with `gpt-6-luna` before release: text returned `BPS_OK`; Responses streaming returned the custom tool `echo_text` with `BPS_TOOL_OK`; Chat non-streaming returned correct function arguments and `finish_reason: tool_calls`; full tool-result continuation returned `BPS_TOOL_DONE`. These results apply to this account and model, not to every account, plan, or model.
+
+### Fixed
+
+- Fixed reasoning and tool requests being rejected when gateway normalization added `include: ["reasoning.encrypted_content"]` and forwarded it unchanged to BPS. The adapter accepts this compatibility option without sending the Codex-specific `include` field to BPS; other unavailable include fields still return explicit errors.
+- Isolated BPS failures from the original Codex account state. BPS authorization, generation, and test failures do not invalidate or refresh original Codex credentials, replace them with BPS tokens, or change the account's health state.
+- BPS failures do not silently fall back to the original route, and dispatched generation requests are not automatically replayed. Cancellation, disconnection, and incomplete tool output remain failures rather than causing duplicate execution or delivery of unfinished calls.
+- Closing the authorization dialog stops UI polling and automatic enable operations that have not yet been sent. Failed switch updates preserve saved state. Added browser regressions for risk cancellation, batch changes, authorization guidance, and non-administrator access.
+
 ## [0.7.2] - 2026-11-08
 
 ### Added

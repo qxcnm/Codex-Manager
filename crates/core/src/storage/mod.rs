@@ -8,7 +8,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 mod traits;
 pub use traits::*;
 
+mod account_bps;
 mod account_manager;
+pub use account_bps::AccountBpsSettings;
 mod account_metadata;
 mod account_proxy_settings;
 mod account_reset_warmups;
@@ -2411,6 +2413,10 @@ impl Storage {
         self.apply_sql_migration(
             "146_service_health",
             include_str!("../../migrations/146_service_health.sql"),
+        )?;
+        self.apply_sql_migration(
+            "147_account_bps_settings",
+            include_str!("../../migrations/147_account_bps_settings.sql"),
         )?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_api_key_account_group_filter_column()?;

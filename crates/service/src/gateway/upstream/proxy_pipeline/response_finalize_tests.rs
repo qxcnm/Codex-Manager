@@ -1,6 +1,84 @@
 use super::{derive_final_error, derive_status_for_log, is_client_disconnect_error};
 
 #[test]
+fn bps_terminal_failure_does_not_deactivate_or_cool_down_codex_account() {
+    use crate::gateway::{http_bridge::UpstreamResponseBridgeResult, ResponseAdapter};
+    use codexmanager_core::storage::{now_ts, Account, Storage};
+    let _guard = crate::test_env_guard();
+    let storage = Storage::open_in_memory().unwrap();
+    storage.init().unwrap();
+    let id = "bps-isolated-finalization";
+    storage
+        .insert_account(&Account {
+            id: id.into(),
+            label: id.into(),
+            issuer: "https://auth.openai.com".into(),
+            chatgpt_account_id: Some("upstream-account".into()),
+            workspace_id: None,
+            group_name: None,
+            sort: 0,
+            status: "active".into(),
+            created_at: now_ts(),
+            updated_at: now_ts(),
+        })
+        .unwrap();
+    crate::gateway::clear_account_cooldown(id);
+    let context = super::GatewayUpstreamExecutionContext::new(
+        "bps-isolated-finalization",
+        &storage,
+        "bps-test-key",
+        "/v1/responses",
+        "/v1/responses",
+        "POST",
+        ResponseAdapter::Passthrough,
+        "openai_compat",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some("account_rotation"),
+        Some("ordered"),
+        Some("test"),
+        0,
+        2,
+        1,
+    );
+    super::finalize_bridge_result(
+        UpstreamResponseBridgeResult {
+            stream_terminal_seen: true,
+            stream_terminal_delivered: true,
+            stream_terminal_error: Some("account_deactivated".into()),
+            ..Default::default()
+        },
+        200,
+        true,
+        &context,
+        id,
+        Some("https://bps.openai.com/basispoints/api/responses"),
+        None,
+        ResponseAdapter::Passthrough,
+        true,
+        "/v1/responses",
+        "bps-isolated-finalization",
+        std::time::Instant::now(),
+        None,
+        Some(&[id.to_owned()]),
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        storage.find_account_by_id(id).unwrap().unwrap().status,
+        "active"
+    );
+    assert!(!crate::gateway::is_account_in_cooldown(id));
+}
+
+#[test]
 fn derive_final_error_prefers_upstream_hint_then_http_error_then_bridge_error() {
     assert_eq!(
         derive_final_error(

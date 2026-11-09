@@ -1,6 +1,7 @@
 "use client";
 
 import { normalizeAccountProxySummaryFields } from "./account-proxy-normalize";
+import { normalizeBpsSummary } from "@/lib/account-bps";
 
 import {
   Account,
@@ -467,6 +468,7 @@ export function normalizeAccount(item: unknown, usage?: AccountUsage | null): Ac
     preferred: Boolean(source.preferred),
     resetWarmupEnabled:
       (source.resetWarmupEnabled ?? source.reset_warmup_enabled) !== false,
+    ...normalizeBpsSummary(source),
     label: name,
     groupName,
     sort: asInteger(source.sort ?? source.priority, 0, 0),

@@ -189,6 +189,9 @@ fn to_account_summary_with_reason(
         group_name: parts.group_name,
         preferred,
         reset_warmup_enabled: true,
+        bps_enabled: false,
+        bps_authorized: false,
+        bps_expires_at: None,
         sort: parts.sort,
         status: parts.status,
         status_reason,
@@ -288,6 +291,19 @@ where
         .collect::<HashMap<_, _>>();
     for item in &mut items {
         item.reset_warmup_enabled = reset_warmup_settings.get(&item.id).copied().unwrap_or(true);
+    }
+    let bps_settings = storage
+        .list_account_bps_settings(&account_ids)
+        .map_err(|err| format!("load account BPS settings failed: {err}"))?
+        .into_iter()
+        .map(|settings| (settings.account_id.clone(), settings))
+        .collect::<HashMap<_, _>>();
+    for item in &mut items {
+        if let Some(settings) = bps_settings.get(&item.id) {
+            item.bps_enabled = settings.enabled;
+            item.bps_authorized = settings.authorized_at(codexmanager_core::storage::now_ts());
+            item.bps_expires_at = settings.expires_at;
+        }
     }
     Ok(AccountSummaryContext {
         items,

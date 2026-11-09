@@ -117,6 +117,12 @@ test("quota reset warmup uses a dedicated batch setting RPC", () => {
   });
 });
 
+test("BPS settings and device authorization preserve dedicated RPC contracts", () => {
+  assert.deepEqual(commandMap.service_account_bps_update, { rpcMethod: "account/bps/update" });
+  assert.deepEqual(commandMap.service_account_bps_login_start, { rpcMethod: "account/bps/login/start" });
+  assert.deepEqual(commandMap.service_account_bps_login_status, { rpcMethod: "account/bps/login/status" });
+});
+
 test("createWebCommandMap keeps app and gateway transport settings payloads aligned", () => {
   const appSettingsSet = commandMap.app_settings_set;
   assert.equal(appSettingsSet.rpcMethod, "appSettings/set");

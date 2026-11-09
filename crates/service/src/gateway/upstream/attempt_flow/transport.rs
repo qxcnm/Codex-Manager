@@ -144,6 +144,7 @@ enum RequestCompression {
 #[derive(Debug, Clone, Copy)]
 pub(in super::super) struct UpstreamRequestContext<'a> {
     pub(in super::super) request_path: &'a str,
+    pub(in super::super) original_body: Option<&'a [u8]>,
     pub(in super::super) protocol_type: &'a str,
     pub(in super::super) is_fedramp: bool,
     pub(in super::super) capture: Option<super::super::super::OutboundPayloadContext<'a>>,
@@ -165,6 +166,7 @@ impl<'a> UpstreamRequestContext<'a> {
     pub(in super::super) fn from_request(request: &'a Request, protocol_type: &'a str) -> Self {
         Self {
             request_path: request.url(),
+            original_body: Some(request.original_body()),
             protocol_type,
             is_fedramp: false,
             capture: None,

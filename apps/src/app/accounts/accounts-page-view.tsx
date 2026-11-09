@@ -225,6 +225,9 @@ export interface AccountsPageViewProps {
   fetchingModelsAccountId: string | null;
   openModelAssociation: (account: Account) => Promise<void>;
   renderModelSyncControl: (account: Account) => ReactNode;
+  renderBpsControl: (account: Account) => ReactNode;
+  isUpdatingBps: boolean;
+  setAccountBpsEnabled: (accountIds: string[], enabled: boolean) => void;
   isProxySettingsLoading: boolean;
   proxyEnabledDraft: boolean;
   proxySourceDraft: AccountProxySource;
@@ -372,6 +375,9 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     fetchingModelsAccountId,
     openModelAssociation,
     renderModelSyncControl,
+    renderBpsControl,
+    isUpdatingBps,
+    setAccountBpsEnabled,
     isProxySettingsLoading,
     proxyEnabledDraft,
     proxyProfileIdDraft,
@@ -942,8 +948,13 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                   </div>
                 </div>
               </CardContent>
-              <CardFooter className="flex-wrap justify-between gap-2 bg-muted/20 px-3 py-2">
-                {canManageAccountModels ? renderModelSyncControl(account) : null}
+              <CardFooter className="flex-wrap justify-between gap-2 bg-muted/20 px-3 py-2 [&>.table-action-cell]:ml-auto [&>.table-action-cell]:h-auto">
+                {canManageAccountModels ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {renderModelSyncControl(account)}
+                    {renderBpsControl(account)}
+                  </div>
+                ) : null}
                 {renderAccountActions(account)}
               </CardFooter>
             </Card>
@@ -1226,6 +1237,30 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                   </DropdownMenuItem>
                 </DropdownMenuGroup>
                 <DropdownMenuSeparator />
+                {canManageAccountModels ? (
+                  <>
+                    <DropdownMenuGroup>
+                      <DropdownMenuLabel>{t("BPS 转发（选中 {count} 个）", { count: effectiveSelectedIds.length })}</DropdownMenuLabel>
+                      <DropdownMenuItem
+                        disabled={!isServiceReady || isUpdatingBps || effectiveSelectedIds.length === 0}
+                        onClick={() => setAccountBpsEnabled(effectiveSelectedIds, true)}
+                      >
+                        {isUpdatingBps ? <Loader2 className="animate-spin" /> : <Power />}
+                        {t("批量开启 BPS 转发")}
+                        <DropdownMenuShortcut>{effectiveSelectedIds.length || "-"}</DropdownMenuShortcut>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={!isServiceReady || isUpdatingBps || effectiveSelectedIds.length === 0}
+                        onClick={() => setAccountBpsEnabled(effectiveSelectedIds, false)}
+                      >
+                        {isUpdatingBps ? <Loader2 className="animate-spin" /> : <PowerOff />}
+                        {t("批量关闭 BPS 转发")}
+                        <DropdownMenuShortcut>{effectiveSelectedIds.length || "-"}</DropdownMenuShortcut>
+                      </DropdownMenuItem>
+                    </DropdownMenuGroup>
+                    <DropdownMenuSeparator />
+                  </>
+                ) : null}
                 <DropdownMenuGroup>
                   <DropdownMenuLabel>{t("额度重置自动唤醒")}</DropdownMenuLabel>
                   <DropdownMenuItem
@@ -1582,7 +1617,12 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                           account={account}
                           isPreferred={account.preferred}
                         />
-                        {canManageAccountModels ? <div className="mt-2">{renderModelSyncControl(account)}</div> : null}
+                        {canManageAccountModels ? (
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            {renderModelSyncControl(account)}
+                            {renderBpsControl(account)}
+                          </div>
+                        ) : null}
                       </TableCell>
                       <TableCell>
                         <QuotaOverviewCell items={quotaItems} compact />

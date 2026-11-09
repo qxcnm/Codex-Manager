@@ -219,6 +219,7 @@ If this project has helped you, donations are welcome!
 ## Feature Overview
 
 - Account pool management: groups, tags, ordering, notes, ban recognition, and ban filtering.
+- [Experimental BPS forwarding](bps-forwarding.md): built-in independent authorization and per-account or selected-account batch switches; disabled by default.
 - Batch import/export: multi-file import, recursive JSON folder import on desktop, and per-account single-file export.
 - Usage display: standard 5-hour + 7-day windows, 7-day-only accounts, and official additional buckets such as Code Review / Spark; refresh shows remaining percentages and reset times consistently.
 - [Quota reset warmup (Chinese guide)](../zh-CN/额度重置自动唤醒.md): enabled by default, sends a short warmup message after an exhausted 5-hour window resets. Enable or disable it per account or in bulk to reduce the wait for the next quota refresh.

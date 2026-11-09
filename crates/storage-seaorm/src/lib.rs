@@ -11,6 +11,7 @@ use std::time::Duration;
 
 mod account_details;
 mod account_tokens;
+mod accounts_bps;
 mod accounts_domain;
 mod accounts_proxy;
 mod accounts_warmups;

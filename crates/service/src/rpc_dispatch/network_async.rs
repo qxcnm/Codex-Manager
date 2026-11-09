@@ -4,6 +4,7 @@ pub(crate) fn is_async_method(method: &str) -> bool {
     matches!(
         method,
         "account/login/start"
+            | "account/bps/login/start"
             | "account/login/complete"
             | "codexProfile/applyDirectAccount"
             | "codexProfile/applyGateway"
@@ -69,6 +70,11 @@ pub(crate) async fn try_handle_network_request_async(
     if req.method == "gateway/codexLatestVersion/get" {
         let result =
             super::value_or_error(crate::app_settings::fetch_codex_latest_version_async().await);
+        return Some(JsonRpcMessage::Response(super::response(req, result)));
+    }
+    if req.method == "account/bps/login/start" {
+        let account_id = super::str_param(req, "accountId").unwrap_or("");
+        let result = super::value_or_error(crate::account::bps::login_start(account_id).await);
         return Some(JsonRpcMessage::Response(super::response(req, result)));
     }
     if req.method == "apikey/managedModelPriceSyncV2" {

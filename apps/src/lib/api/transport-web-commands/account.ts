@@ -5,6 +5,9 @@ import { exportAccountsViaBrowser, pickImportFilesFromBrowser } from "./browser-
 export function createAccountWebCommands(postWebRpc: WebRpcCaller): Record<string, WebCommandDescriptor> {
   return {
     service_account_list: { rpcMethod: "account/list" },
+    service_account_bps_update: { rpcMethod: "account/bps/update" },
+    service_account_bps_login_start: { rpcMethod: "account/bps/login/start" },
+    service_account_bps_login_status: { rpcMethod: "account/bps/login/status" },
     service_account_delete: { rpcMethod: "account/delete" },
     service_account_delete_many: { rpcMethod: "account/deleteMany" },
     service_account_delete_by_statuses: { rpcMethod: "account/deleteByStatuses" },

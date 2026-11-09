@@ -202,6 +202,7 @@ pub(super) async fn finalize_upstream_response(
     has_more_candidates: bool,
 ) -> Result<FinalizeUpstreamResponseOutcome, String> {
     let status_code = response.status().as_u16();
+    let isolated_account_state = response.isolates_account_state();
 
     #[cfg(test)]
     if !request.is_native() {
@@ -226,6 +227,7 @@ pub(super) async fn finalize_upstream_response(
         return finalize_bridge_result(
             bridge,
             status_code,
+            isolated_account_state,
             context,
             account_id,
             last_attempt_url,
@@ -270,6 +272,7 @@ pub(super) async fn finalize_upstream_response(
             let _ = finalize_bridge_result(
                 bridge,
                 status_code,
+                isolated_account_state,
                 &context,
                 &account_id_owned,
                 last_attempt_url_owned.as_deref(),
@@ -292,6 +295,7 @@ pub(super) async fn finalize_upstream_response(
 fn finalize_bridge_result(
     bridge: crate::gateway::http_bridge::UpstreamResponseBridgeResult,
     status_code: u16,
+    isolated_account_state: bool,
     context: &GatewayUpstreamExecutionContext<'_>,
     account_id: &str,
     last_attempt_url: Option<&str>,
@@ -349,6 +353,7 @@ fn finalize_bridge_result(
     );
     let gateway_error_follow_up = final_error
         .as_deref()
+        .filter(|_| !isolated_account_state)
         .map(|error| context.apply_gateway_error_follow_up(account_id, error, has_more_candidates));
     let gateway_failover =
         gateway_error_follow_up.is_some_and(|follow_up| follow_up.should_failover);
@@ -368,7 +373,7 @@ fn finalize_bridge_result(
         client_delivery_failed,
     );
 
-    if upstream_stream_failed {
+    if upstream_stream_failed && !isolated_account_state {
         super::super::super::mark_account_cooldown(
             account_id,
             super::super::super::CooldownReason::Network,
@@ -376,13 +381,15 @@ fn finalize_bridge_result(
         super::super::super::record_route_quality(account_id, 502);
     }
 
-    clear_model_rejection_after_success(
-        account_id,
-        model_for_log,
-        status_code,
-        client_is_stream,
-        &bridge,
-    );
+    if !isolated_account_state {
+        clear_model_rejection_after_success(
+            account_id,
+            model_for_log,
+            status_code,
+            client_is_stream,
+            &bridge,
+        );
+    }
     let usage = bridge.usage;
     let response_id = (bridge_ok && status_for_log < 400)
         .then(|| usage.response_id.as_deref())

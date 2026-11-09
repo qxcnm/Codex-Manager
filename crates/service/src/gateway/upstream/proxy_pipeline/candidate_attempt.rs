@@ -121,6 +121,14 @@ pub(in super::super) async fn run_candidate_attempt(
             }
         }
     };
+    if let CandidateUpstreamDecision::RespondUpstream(response) = &decision {
+        if response.isolates_account_state() {
+            let url = super::super::executor::bps::RESPONSES_URL;
+            trace.last_attempt_url = Some(url.to_owned());
+            context.log_attempt_result(&account.id, Some(url), response.status().as_u16(), None);
+            return decision;
+        }
+    }
     if request_ctx.replay_is_blocked() {
         return CandidateUpstreamDecision::Terminal {
             status_code: 502,

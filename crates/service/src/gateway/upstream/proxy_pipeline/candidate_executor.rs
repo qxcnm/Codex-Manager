@@ -562,7 +562,9 @@ pub(in super::super) async fn execute_candidate_sequence(
                 );
             }
             CandidateUpstreamDecision::RespondUpstream(mut resp) => {
-                if resp.status().as_u16() == 400
+                let isolated_account_state = resp.isolates_account_state();
+                if !isolated_account_state
+                    && resp.status().as_u16() == 400
                     && !strip_session_affinity
                     && (incoming_turn_state.is_some() || setup.has_body_encrypted_content)
                 {
@@ -642,15 +644,23 @@ pub(in super::super) async fn execute_candidate_sequence(
                         }
                     }
                 }
-                let preflight = crate::http::gateway_request::with_response_cancellation(
-                    preflight_stream_response(
-                        resp,
-                        path,
-                        upstream_is_stream,
-                        context.has_more_candidates(idx),
-                    ),
-                )
-                .await;
+                // BPS has its own event validator. Codex preflight may refresh/disable
+                // accounts or replay a generation, neither of which applies to BPS.
+                // A retry can switch routes after a setting changes; inspect the
+                // current response rather than the first attempt's cached flag.
+                let preflight = if resp.isolates_account_state() {
+                    Ok(StreamPreflightOutcome::Ready(resp))
+                } else {
+                    crate::http::gateway_request::with_response_cancellation(
+                        preflight_stream_response(
+                            resp,
+                            path,
+                            upstream_is_stream,
+                            context.has_more_candidates(idx),
+                        ),
+                    )
+                    .await
+                };
 
                 if finalize_cancelled_candidate(
                     request

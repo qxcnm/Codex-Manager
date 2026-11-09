@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use super::attempt_flow::transport::UpstreamRequestContext;
 
+pub(in crate::gateway) mod bps;
 mod claude;
 mod codex;
 mod gemini;

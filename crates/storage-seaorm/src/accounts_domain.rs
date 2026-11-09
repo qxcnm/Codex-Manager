@@ -798,6 +798,9 @@ impl AccountsRepository {
             proxy_settings::Entity::delete_by_id(&id).exec(&tx).await?;
             quota_overrides::Entity::delete_by_id(&id).exec(&tx).await?;
             warmups::Entity::delete_by_id(&id).exec(&tx).await?;
+            crate::accounts_bps::Entity::delete_by_id(&id)
+                .exec(&tx)
+                .await?;
             crate::account_tokens::Entity::delete_by_id(&id)
                 .exec(&tx)
                 .await?;

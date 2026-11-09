@@ -1,6 +1,7 @@
 #[path = "account_availability.rs"]
 pub(crate) mod availability;
 pub(crate) mod background;
+pub(crate) mod bps;
 #[path = "account_cleanup.rs"]
 pub(crate) mod cleanup;
 #[path = "account_delete.rs"]
@@ -28,6 +29,7 @@ pub(crate) mod proxy_health;
 #[path = "proxy_testing/mod.rs"]
 pub(crate) mod proxy_testing;
 mod remote_aggregate;
+mod remote_bps;
 mod remote_catalog;
 mod remote_conversations;
 mod remote_plugins;

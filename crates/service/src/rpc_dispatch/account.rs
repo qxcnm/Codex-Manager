@@ -19,7 +19,27 @@ use crate::{
 /// # 返回
 /// 返回函数执行结果
 pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonRpcResponse> {
+    if req.method.starts_with("account/bps/") && !actor.is_admin() {
+        return Some(super::response(
+            req,
+            super::value_or_error::<()>(Err(super::permission_denied(&req.method))),
+        ));
+    }
     let result = match req.method.as_str() {
+        "account/bps/login/start" => super::value_or_error(crate::auth_tokens::run_auth_future(
+            crate::account::bps::login_start(super::str_param(req, "accountId").unwrap_or("")),
+        )),
+        "account/bps/update" => super::value_or_error(
+            serde_json::from_value::<crate::account::bps::BpsUpdate>(
+                req.params.clone().unwrap_or(serde_json::Value::Null),
+            )
+            .map_err(|_| "invalid BPS settings".to_string())
+            .and_then(crate::account::bps::update),
+        ),
+        "account/bps/login/status" => super::value_or_error(crate::account::bps::login_status(
+            super::str_param(req, "accountId").unwrap_or(""),
+            super::str_param(req, "loginId").unwrap_or(""),
+        )),
         "account/list" => super::value_or_error(account_list::read_accounts()),
         "account/delete" => {
             let account_id = super::str_param(req, "accountId").unwrap_or("");

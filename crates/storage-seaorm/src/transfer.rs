@@ -159,6 +159,7 @@ fn specs() -> Vec<TableSpec> {
         spec(crate::aggregate_apis::balance_secrets::Entity),
         spec(crate::settings::Entity),
         spec(crate::accounts::Entity),
+        spec(crate::accounts_bps::Entity),
         spec(crate::account_tokens::Entity),
         spec(crate::api_keys::Entity),
         spec(crate::request_logs::Entity),

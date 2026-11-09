@@ -342,6 +342,8 @@ pub(crate) struct GatewayStreamResponse {
     status: reqwest::StatusCode,
     headers: reqwest::header::HeaderMap,
     body: GatewayByteStream,
+    // Product-specific authorization and failures must not alter Codex account health.
+    isolated_account_state: bool,
 }
 
 impl GatewayStreamResponse {
@@ -354,7 +356,13 @@ impl GatewayStreamResponse {
             status,
             headers,
             body,
+            isolated_account_state: false,
         }
+    }
+
+    pub(crate) fn with_isolated_account_state(mut self) -> Self {
+        self.isolated_account_state = true;
+        self
     }
 
     #[cfg(test)]
@@ -413,11 +421,14 @@ impl GatewayStreamResponse {
             status,
             headers,
             body,
+            isolated_account_state,
         } = self;
         let (prefix, body, terminal) = body
             .prefetch_until_async(max_bytes, idle_timeout, wall_clock_timeout, should_stop)
             .await;
-        (prefix, Self::new(status, headers, body), terminal)
+        let mut response = Self::new(status, headers, body);
+        response.isolated_account_state = isolated_account_state;
+        (prefix, response, terminal)
     }
 }
 
@@ -437,6 +448,14 @@ pub(crate) enum GatewayUpstreamResponse {
 }
 
 impl GatewayUpstreamResponse {
+    pub(crate) fn isolates_account_state(&self) -> bool {
+        match self {
+            #[cfg(test)]
+            Self::Blocking(_) => false,
+            Self::Stream(response) => response.isolated_account_state,
+        }
+    }
+
     pub(crate) fn status(&self) -> reqwest::StatusCode {
         match self {
             #[cfg(test)]
@@ -461,6 +480,7 @@ impl GatewayUpstreamResponse {
     }
 
     pub(crate) async fn into_buffered_async(self) -> Result<(Bytes, Self), String> {
+        let isolated_account_state = self.isolates_account_state();
         let status = self.status();
         let headers = self.headers().clone();
         let body = match self {
@@ -472,12 +492,13 @@ impl GatewayUpstreamResponse {
             }
             Self::Stream(response) => response.read_all_bytes_async().await?,
         };
-        let rebuilt = Self::Stream(GatewayStreamResponse::new(
+        let mut rebuilt = GatewayStreamResponse::new(
             status,
             headers,
             GatewayByteStream::from_bytes(body.clone()),
-        ));
-        Ok((body, rebuilt))
+        );
+        rebuilt.isolated_account_state = isolated_account_state;
+        Ok((body, Self::Stream(rebuilt)))
     }
 
     #[cfg(test)]

@@ -29,6 +29,8 @@ use crate::storage_helpers::open_storage;
 
 #[path = "account_test_async_events.rs"]
 mod async_events;
+#[path = "account_bps_test.rs"]
+mod bps_test;
 #[cfg(test)]
 pub(crate) use async_events::account_test_async_subscriber_count;
 pub(crate) use async_events::{
@@ -535,6 +537,7 @@ async fn run_account_test(
     cancel_flag: Arc<AtomicBool>,
     status_context: AccountStatusContext,
 ) {
+    let isolated_account_state = AtomicBool::new(false);
     let attempt = std::panic::AssertUnwindSafe(execute_account_test(
         account_id,
         test_id,
@@ -542,6 +545,7 @@ async fn run_account_test(
         prompt,
         kind,
         &cancel_flag,
+        &isolated_account_state,
     ))
     .catch_unwind();
     let outcome = await_account_test(test_id, &cancel_flag, async {
@@ -556,7 +560,9 @@ async fn run_account_test(
     })
     .await;
 
-    if let Some(storage) = open_storage() {
+    if let Some(storage) =
+        open_storage().filter(|_| !isolated_account_state.load(Ordering::Relaxed))
+    {
         match &outcome {
             AccountTestOutcome::Success => {
                 let _ = restore_account_active_after_test(&storage, account_id, &status_context);
@@ -587,11 +593,25 @@ async fn execute_account_test(
     prompt: &str,
     kind: TestKind,
     cancel_flag: &Arc<AtomicBool>,
+    isolated_account_state: &AtomicBool,
 ) -> AccountTestOutcome {
     notify_account_test_event(AccountTestEvent::new(test_id, "test_start").with_model(model));
     notify_account_test_event(
         AccountTestEvent::new(test_id, "status").with_status("正在连接上游…"),
     );
+
+    match crate::account::bps::credentials_for_account(account_id).await {
+        Ok(Some(credentials)) => {
+            isolated_account_state.store(true, Ordering::Relaxed);
+            return bps_test::execute(account_id, test_id, model, prompt, kind, credentials).await;
+        }
+        Err(error) => {
+            isolated_account_state.store(true, Ordering::Relaxed);
+            emit_redacted_error(test_id, &error, &[]);
+            return AccountTestOutcome::Failed(error);
+        }
+        Ok(None) => {}
+    }
 
     let client = match build_test_client(account_id) {
         Ok(client) => client,

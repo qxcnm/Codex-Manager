@@ -37,6 +37,39 @@ pub(super) async fn execute<F>(
 where
     F: FnMut(Option<&str>, u16, Option<&str>),
 {
+    match crate::account::bps::credentials_for_account(&account.id).await {
+        Ok(Some(credentials)) => {
+            if let Some(original_body) = request_ctx.original_body {
+                if let Err(error) = crate::gateway::bps_protocol::validate_original_constraints(
+                    request_ctx.request_path,
+                    original_body,
+                ) {
+                    return CandidateUpstreamDecision::RespondUpstream(super::bps::error_response(
+                        400, &error,
+                    ));
+                }
+            }
+            return CandidateUpstreamDecision::RespondUpstream(
+                super::bps::execute(
+                    method,
+                    path,
+                    request_ctx,
+                    incoming_headers,
+                    body,
+                    &account.id,
+                    credentials,
+                    request_deadline,
+                )
+                .await,
+            );
+        }
+        Err(error) => {
+            return CandidateUpstreamDecision::RespondUpstream(super::bps::error_response(
+                401, &error,
+            ));
+        }
+        Ok(None) => {}
+    }
     let client = match super::super::super::async_upstream_client_for_account(account.id.as_str()) {
         Ok(client) => client,
         Err(err) => {

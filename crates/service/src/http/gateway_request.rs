@@ -226,6 +226,13 @@ impl GatewayRequest {
         &mut self.body
     }
 
+    /// The ingress bytes remain available after routing consumes the reader.
+    /// Route-specific validation must not mistake a rewritten body for the
+    /// client's original constraints.
+    pub(crate) fn original_body(&self) -> &[u8] {
+        self.body.get_ref().as_ref()
+    }
+
     pub(crate) fn is_cancelled(&self) -> bool {
         self.response.is_closed() || *self.cancelled.borrow()
     }
