@@ -91,37 +91,68 @@ PatewayAI는 공식 고품질 모델 API 중계에 집중하며 Claude와 Codex 
 <table>
   <tr>
     <td align="center" valign="middle" width="180">
-      <a href="https://sidrune.ai/register?source=github&campaign=codexmanger&promo=codexmanger"><img src="../../assets/images/sponsors/sidrune.png" alt="Sidrune AI" width="120" /></a>
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%201"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="스폰서 모집" width="120" /></a>
     </td>
     <td valign="top">
-      <strong><a href="https://sidrune.ai/register?source=github&campaign=codexmanger&promo=codexmanger">Sidrune AI｜하나의 진입점으로 세계 주요 AI 모델 연결 및 관리</a></strong><br />
-      Sidrune AI는 개인 개발자, 기술팀, 기업이 통합 API를 통해 세계 주요 AI 모델에 연결하고 관리할 수 있도록 지원합니다. 여러 경로의 동적 스케줄링으로 가용성을 높이고 모델 성능, 응답 시간, 비용을 투명하게 제공합니다. 모델과 경로에 따라 API 호출 비용을 공식 또는 기준 가격 대비 40%~98% 절감할 수 있습니다.<br />
-      지금 <a href="https://sidrune.ai/register?source=github&campaign=codexmanger&promo=codexmanger">방문하여 가입</a>하면 바로 사용할 수 있는 $3.88 체험 크레딧을 받을 수 있습니다.
+      <strong>스폰서 자리 1 · 월 900위안(CNY) · 모집 중</strong><br />
+      CodexManager 개발자 커뮤니티에 브랜드를 소개하세요.<br />
+      AI 도구, API 서비스, 개발자 제품의 참여를 환영합니다. 브랜드 로고, 제품 소개, 공식 링크를 표시할 수 있습니다.<br />
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%201">이 자리 문의하기</a> · 18272669457@163.com
     </td>
   </tr>
   <tr>
     <td align="center" valign="middle" width="180">
-      <a href="https://onesay.io"><img src="../../assets/images/sponsors/onesay.jpg" alt="OneSay Desktop" width="120" /></a>
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%202"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="스폰서 모집" width="120" /></a>
     </td>
     <td valign="top">
-      <strong><a href="https://onesay.io">Typeless를 대신할 OneSay! OneSay Pro를 3개월 무료로 사용하세요!</a></strong><br />
-      느린 타이핑과 낮은 작업 효율이 고민이라면 OneSay Desktop을 사용해 보세요. 지능형 받아쓰기, AI 번역, 문장 다듬기, 질의응답을 통합한 AI 음성 비서로, 말하기만 하면 이메일 작성, 메시지 답장, 아이디어 기록을 처리할 수 있습니다.<br />
-      <strong>기간 한정 혜택: 신규 사용자는 Pro 모드를 3개월 무료로 체험할 수 있습니다!</strong> 친구를 초대해 가입하면 멤버십 기간이 연장되며, 더 많이 초대할수록 더 오래 무료로 사용할 수 있습니다.<br />
-      Typeless 수준의 음성 입력 효율을 OneSay에서 경험하세요. 지금 가입: <a href="https://onesay.io">https://onesay.io</a>
+      <strong>스폰서 자리 2 · 월 800위안(CNY) · 모집 중</strong><br />
+      CodexManager 개발자 커뮤니티에 브랜드를 소개하세요.<br />
+      AI 도구, API 서비스, 개발자 제품의 참여를 환영합니다. 브랜드 로고, 제품 소개, 공식 링크를 표시할 수 있습니다.<br />
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%202">이 자리 문의하기</a> · 18272669457@163.com
     </td>
   </tr>
   <tr>
     <td align="center" valign="middle" width="180">
-      <a href="https://omniakey.com"><img src="../../assets/images/sponsors/OmniaKey.png" alt="OmniaKey" width="120" /></a>
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%203"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="스폰서 모집" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>안녕하세요! 만나서 반갑습니다 👋</strong><br />
-      저희는 개발자를 위한 멀티모달 AI API 중계 플랫폼 <strong><a href="https://omniakey.com">OmniaKey</a></strong> 팀입니다. 하나의 API Key로 텍스트, 이미지, 비디오, 오디오 모델을 다양한 AI 작업에 사용할 수 있습니다.<br />
-      <strong>📝 텍스트:</strong> GPT, Claude, Gemini, Grok, GLM, Qwen 등 주요 모델로 대화, 코드, 추론을 한곳에서 처리합니다.<br />
-      <strong>🎨 이미지:</strong> GPT-image-2.5, Nanobanna 2.1, Seedream 5.0 Pro로 텍스트 기반 이미지 생성, 이미지 변환, 이미지 편집을 바로 사용할 수 있습니다.<br />
-      <strong>🎬 비디오:</strong> Seedance 2.5, Wan3, Kling, MiniMaxH3의 텍스트 및 이미지 기반 비디오 모델을 간편하게 연결해 영상을 제작합니다.<br />
-      <strong>🔊 오디오:</strong> Suno AI 음악 생성을 API로 직접 호출하여 오디오 제작에 활용할 수 있습니다.<br />
-      공식 사이트: <a href="https://omniakey.com">omniakey.com</a> · 중국어 사이트: <a href="https://omniakey.com/zh">omniakey.com/zh</a>
+      <strong>스폰서 자리 3 · 월 700위안(CNY) · 모집 중</strong><br />
+      CodexManager 개발자 커뮤니티에 브랜드를 소개하세요.<br />
+      AI 도구, API 서비스, 개발자 제품의 참여를 환영합니다. 브랜드 로고, 제품 소개, 공식 링크를 표시할 수 있습니다.<br />
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%203">이 자리 문의하기</a> · 18272669457@163.com
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="middle" width="180">
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%204"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="스폰서 모집" width="120" /></a>
+    </td>
+    <td valign="top">
+      <strong>스폰서 자리 4 · 월 600위안(CNY) · 모집 중</strong><br />
+      CodexManager 개발자 커뮤니티에 브랜드를 소개하세요.<br />
+      AI 도구, API 서비스, 개발자 제품의 참여를 환영합니다. 브랜드 로고, 제품 소개, 공식 링크를 표시할 수 있습니다.<br />
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%204">이 자리 문의하기</a> · 18272669457@163.com
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="middle" width="180">
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%205"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="스폰서 모집" width="120" /></a>
+    </td>
+    <td valign="top">
+      <strong>스폰서 자리 5 · 월 500위안(CNY) · 모집 중</strong><br />
+      CodexManager 개발자 커뮤니티에 브랜드를 소개하세요.<br />
+      AI 도구, API 서비스, 개발자 제품의 참여를 환영합니다. 브랜드 로고, 제품 소개, 공식 링크를 표시할 수 있습니다.<br />
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%205">이 자리 문의하기</a> · 18272669457@163.com
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="middle" width="180">
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%206"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="스폰서 모집" width="120" /></a>
+    </td>
+    <td valign="top">
+      <strong>스폰서 자리 6 · 월 400위안(CNY) · 모집 중</strong><br />
+      CodexManager 개발자 커뮤니티에 브랜드를 소개하세요.<br />
+      AI 도구, API 서비스, 개발자 제품의 참여를 환영합니다. 브랜드 로고, 제품 소개, 공식 링크를 표시할 수 있습니다.<br />
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%206">이 자리 문의하기</a> · 18272669457@163.com
     </td>
   </tr>
   <tr>
@@ -130,22 +161,6 @@ PatewayAI는 공식 고품질 모델 API 중계에 집중하며 Claude와 Codex 
     </td>
     <td valign="top">
       <strong><a href="https://daitouai.com/">DaitouAI (呆头 AI)</a></strong>는 중국 주요 대규모 모델 API 서비스를 전문으로 하며 GLM, Kimi, DeepSeek 등에 간편하게 연결할 수 있습니다. 대화와 질의응답, 코드 생성, 콘텐츠 제작, 자동화 개발에 적합하며 공식 가격보다 저렴한 요금을 제공합니다. 개인 개발자의 빠른 체험부터 독립 프로젝트와 팀의 필요에 따른 호출까지 중국 모델 사용 비용을 낮출 수 있습니다. 사용 가능한 모델, 연결 방법, 최신 혜택은 <a href="https://daitouai.com/">공식 사이트</a>에서 확인하세요.
-    </td>
-  </tr>
-  <tr>
-    <td align="center" valign="middle" width="180">
-      <a href="https://api.fenno.ai/s/4ADZ"><img src="../../assets/images/sponsors/fennoai.jpg" alt="FennoAI" width="120" /></a>
-    </td>
-    <td valign="top">
-      <strong><a href="https://api.fenno.ai/s/4ADZ">FennoAI</a></strong>는 기업 R&amp;D 팀과 개발자를 위한 안정적이고 고성능인 API 중계 서비스를 제공합니다. OpenAI와 Anthropic 프로토콜을 지원하며 Codex, Claude Code, OpenCode 등 주요 AI 코딩 도구와 연동됩니다. 엔터프라이즈 인프라는 하루 수천억 Token 규모를 지원하며 중국 내외 법인 간 정산과 청구서 발행도 제공합니다. Codex-Manager 사용자는 <a href="https://api.fenno.ai/s/4ADZ">전용 링크</a>로 구독하면 50달러 상당의 Coding Plan 크레딧을 1.99달러에 이용할 수 있습니다. 친구를 초대해 구매하면 최대 20%의 수수료를 받을 수 있으며, 초대할수록 보상이 늘어납니다.
-    </td>
-  </tr>
-  <tr>
-    <td align="center" valign="middle" width="180">
-      <a href="https://s.qiniu.com/eiaQrq"><img src="../../assets/images/sponsors/qiniuyun.jpg" alt="Qiniu Cloud AI" width="120" /></a>
-    </td>
-    <td valign="top">
-      <strong><a href="https://s.qiniu.com/eiaQrq">Qiniu Cloud AI</a></strong>는 Qiniu Cloud(02567.HK)의 엔터프라이즈 대규모 모델 MaaS 플랫폼으로, 150개 이상의 글로벌 주요 모델을 한곳에서 호출할 수 있습니다. 주요 모델 공급업체 프로토콜을 지원하고 텍스트·이미지·오디오·비디오·파일 처리 등 멀티모달 기능을 제공하며, 169만 이상의 기업과 개발자가 이용하고 있습니다. Codex-Manager 전용 혜택으로 <a href="https://s.qiniu.com/eiaQrq">전용 링크</a>를 통해 가입하면 기업 사용자는 1,200만 Token, 개발자는 300만 Token을 무료로 받을 수 있습니다.
     </td>
   </tr>
   <tr>

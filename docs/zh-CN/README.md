@@ -91,43 +91,68 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
 <table>
   <tr>
     <td align="center" valign="middle" width="180">
-      <a href="https://sidrune.ai/register?source=github&campaign=codexmanger&promo=codexmanger">
-        <img src="../../assets/images/sponsors/sidrune.png" alt="Sidrune AI" width="120" />
-      </a>
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%201"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="赞助商招募" width="120" /></a>
     </td>
     <td valign="top">
-      <strong><a href="https://sidrune.ai/register?source=github&campaign=codexmanger&promo=codexmanger">Sidrune AI｜一个入口，接入并管理全球主流AI模型</a></strong><br />
-      Sidrune AI 面向个人开发者、技术团队与企业，通过统一 API 接入并管理全球主流 AI 模型；通过多线路动态调度提升可用性，模型表现、响应时间与费用透明可查。根据不同模型与线路，API 调用成本可较官方或基准价格降低 40%—98%。<br />
-      立即<a href="https://sidrune.ai/register?source=github&campaign=codexmanger&promo=codexmanger">访问并注册</a>，即可获得 $3.88 试用额度，可直接使用。
+      <strong>赞助位 1 · 900 元/月 · 招募中</strong><br />
+      让你的品牌与 CodexManager 开发者社区相遇。<br />
+      欢迎 AI 工具、API 服务及开发者产品入驻，展示品牌 Logo、产品介绍与官网链接。<br />
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%201">洽谈此赞助位</a> · 18272669457@163.com
     </td>
   </tr>
   <tr>
     <td align="center" valign="middle" width="180">
-      <a href="https://onesay.io">
-        <img src="../../assets/images/sponsors/onesay.jpg" alt="OneSay Desktop" width="120" />
-      </a>
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%202"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="赞助商招募" width="120" /></a>
     </td>
     <td valign="top">
-      <strong><a href="https://onesay.io">Typeless 最佳平替来了！OneSay Pro 免费用 3 个月！</a></strong><br />
-      还在为打字慢、效率低而烦恼？试试 OneSay Desktop！一款让你开口就能高效工作的 AI 语音助手，集智能听写、AI 翻译、文字改写、智能问答于一体。写邮件、回消息、记录灵感，动动嘴就能搞定！<br />
-      <strong>限时福利：新用户免费体验 Pro 模式 3 个月！</strong>邀请好友注册，还能继续延长会员时长，邀请越多，免费用得越久！<br />
-      体验 Typeless 级别的语音输入效率，从 OneSay 开始！立即注册体验：<a href="https://onesay.io">https://onesay.io</a>
+      <strong>赞助位 2 · 800 元/月 · 招募中</strong><br />
+      让你的品牌与 CodexManager 开发者社区相遇。<br />
+      欢迎 AI 工具、API 服务及开发者产品入驻，展示品牌 Logo、产品介绍与官网链接。<br />
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%202">洽谈此赞助位</a> · 18272669457@163.com
     </td>
   </tr>
   <tr>
     <td align="center" valign="middle" width="180">
-      <a href="https://omniakey.com">
-        <img src="../../assets/images/sponsors/OmniaKey.png" alt="OmniaKey" width="120" />
-      </a>
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%203"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="赞助商招募" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>嗨嗨嗨！很高兴被你看见 👋</strong><br />
-      我们是 <strong><a href="https://omniakey.com">OmniaKey</a></strong> 团队，专为开发者打造的全模态 AI API 中转平台，提供文本、图片、视频与音频模型接入，一套 API Key 覆盖多种 AI 场景。<br />
-      <strong>📝 文本：</strong>GPT、Claude、Gemini、Grok、GLM、Qwen 等主流大模型全线覆盖，对话、代码、推理一站满足。<br />
-      <strong>🎨 图片：</strong>GPT-image-2.5、Nanobanna 2.1、Seedream 5.0 Pro，文生图、图生图、改图设计开箱即用。<br />
-      <strong>🎬 视频：</strong>Seedance 2.5、Wan3、Kling、MiniMaxH3，文生视频与图生视频模型，一键接入即可出片。<br />
-      <strong>🔊 音频：</strong>Suno AI 音乐生成，直接 API 调用，轻松落地音频创作场景。<br />
-      官网：<a href="https://omniakey.com">omniakey.com</a> · 中文地址：<a href="https://omniakey.com/zh">omniakey.com/zh</a>
+      <strong>赞助位 3 · 700 元/月 · 招募中</strong><br />
+      让你的品牌与 CodexManager 开发者社区相遇。<br />
+      欢迎 AI 工具、API 服务及开发者产品入驻，展示品牌 Logo、产品介绍与官网链接。<br />
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%203">洽谈此赞助位</a> · 18272669457@163.com
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="middle" width="180">
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%204"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="赞助商招募" width="120" /></a>
+    </td>
+    <td valign="top">
+      <strong>赞助位 4 · 600 元/月 · 招募中</strong><br />
+      让你的品牌与 CodexManager 开发者社区相遇。<br />
+      欢迎 AI 工具、API 服务及开发者产品入驻，展示品牌 Logo、产品介绍与官网链接。<br />
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%204">洽谈此赞助位</a> · 18272669457@163.com
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="middle" width="180">
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%205"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="赞助商招募" width="120" /></a>
+    </td>
+    <td valign="top">
+      <strong>赞助位 5 · 500 元/月 · 招募中</strong><br />
+      让你的品牌与 CodexManager 开发者社区相遇。<br />
+      欢迎 AI 工具、API 服务及开发者产品入驻，展示品牌 Logo、产品介绍与官网链接。<br />
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%205">洽谈此赞助位</a> · 18272669457@163.com
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="middle" width="180">
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%206"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="赞助商招募" width="120" /></a>
+    </td>
+    <td valign="top">
+      <strong>赞助位 6 · 400 元/月 · 招募中</strong><br />
+      让你的品牌与 CodexManager 开发者社区相遇。<br />
+      欢迎 AI 工具、API 服务及开发者产品入驻，展示品牌 Logo、产品介绍与官网链接。<br />
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%206">洽谈此赞助位</a> · 18272669457@163.com
     </td>
   </tr>
   <tr>
@@ -138,26 +163,6 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
     </td>
     <td valign="top">
       <strong><a href="https://daitouai.com/">呆头 AI</a></strong> 专注于国内主流大模型 API 服务，提供 GLM、Kimi、DeepSeek 等模型的便捷接入，适用于对话问答、代码生成、内容创作和自动化开发等常见场景。平台主打比官方更实惠的价格，支持个人开发者快速试用，也适合独立项目与团队按需调用，帮助降低国内大模型的使用成本。欢迎通过<a href="https://daitouai.com/">官网</a>了解可用模型、接入方式与最新优惠。
-    </td>
-  </tr>
-  <tr>
-    <td align="center" valign="middle" width="180">
-      <a href="https://api.fenno.ai/s/4ADZ">
-        <img src="../../assets/images/sponsors/fennoai.jpg" alt="FennoAI" width="120" />
-      </a>
-    </td>
-    <td valign="top">
-      <strong><a href="https://api.fenno.ai/s/4ADZ">FennoAI</a></strong> 面向企业研发团队和开发者提供高稳定、高性能的 API 中转服务，兼容 OpenAI 与 Anthropic 协议，可无缝接入 Codex、Claude Code、OpenCode 等主流 AI 编程工具。平台具备企业级稳定性，可支撑千亿 Token/日的调用规模，并支持境内外主体公对公结算及开票。Codex-Manager 用户通过<a href="https://api.fenno.ai/s/4ADZ">专属链接</a>购买订阅，仅需 1.99 美元即可获得价值 50 美元的 Coding Plan 额度；邀请好友购买最高可获得 20% 返佣，邀请越多，奖励越高。
-    </td>
-  </tr>
-  <tr>
-    <td align="center" valign="middle" width="180">
-      <a href="https://s.qiniu.com/eiaQrq">
-        <img src="../../assets/images/sponsors/qiniuyun.jpg" alt="七牛云 AI" width="120" />
-      </a>
-    </td>
-    <td valign="top">
-      <strong><a href="https://s.qiniu.com/eiaQrq">七牛云 AI</a></strong> 是七牛云（02567.HK）旗下企业级大模型 MaaS 平台，一站式调用全球 150+ 主流模型，兼容全球主流模型厂商协议，覆盖文本、图像、音频、视频、文件处理等全模态处理能力，服务超过 169 万企业及开发者用户。七牛云 AI 为 Codex-Manager 用户提供专属福利：通过<a href="https://s.qiniu.com/eiaQrq">专属链接</a>注册，企业用户免费领取 1200 万 Token，开发者免费领取 300 万 Token。
     </td>
   </tr>
   <tr>

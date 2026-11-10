@@ -93,37 +93,68 @@ PatewayAI специализируется на высококачественн
 <table>
   <tr>
     <td align="center" valign="middle" width="180">
-      <a href="https://sidrune.ai/register?source=github&campaign=codexmanger&promo=codexmanger"><img src="../../assets/images/sponsors/sidrune.png" alt="Sidrune AI" width="120" /></a>
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%201"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="Приглашаем спонсоров" width="120" /></a>
     </td>
     <td valign="top">
-      <strong><a href="https://sidrune.ai/register?source=github&campaign=codexmanger&promo=codexmanger">Sidrune AI — единая точка доступа к ведущим AI-моделям мира и управления ими</a></strong><br />
-      Sidrune AI предоставляет индивидуальным разработчикам, техническим командам и предприятиям единый API для доступа к ведущим AI-моделям и управления ими. Динамическое распределение между несколькими маршрутами повышает доступность; качество моделей, время ответа и расходы доступны для прозрачного сравнения. В зависимости от модели и маршрута стоимость API-запросов может быть на 40–98% ниже официальной или базовой цены.<br />
-      <a href="https://sidrune.ai/register?source=github&campaign=codexmanger&promo=codexmanger">Зарегистрируйтесь сейчас</a>, чтобы получить пробный баланс 3,88 доллара, готовый к использованию.
+      <strong>Спонсорское место 1 · 900 CNY/месяц · Открыто</strong><br />
+      Представьте свой бренд сообществу разработчиков CodexManager.<br />
+      Приглашаем AI-инструменты, API-сервисы и продукты для разработчиков. Разместите логотип, описание продукта и официальную ссылку.<br />
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%201">Обсудить это место</a> · 18272669457@163.com
     </td>
   </tr>
   <tr>
     <td align="center" valign="middle" width="180">
-      <a href="https://onesay.io"><img src="../../assets/images/sponsors/onesay.jpg" alt="OneSay Desktop" width="120" /></a>
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%202"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="Приглашаем спонсоров" width="120" /></a>
     </td>
     <td valign="top">
-      <strong><a href="https://onesay.io">Лучшая альтернатива Typeless: OneSay Pro бесплатно на 3 месяца!</a></strong><br />
-      Устали от медленного набора текста и низкой производительности? Попробуйте OneSay Desktop — голосового AI-помощника с умной диктовкой, AI-переводом, переработкой текста и ответами на вопросы. Пишите письма, отвечайте на сообщения и записывайте идеи голосом.<br />
-      <strong>Ограниченное предложение: новым пользователям — 3 месяца режима Pro бесплатно!</strong> Приглашайте друзей зарегистрироваться, чтобы продлить подписку: чем больше приглашений, тем дольше бесплатное использование.<br />
-      Попробуйте эффективность голосового ввода уровня Typeless с OneSay. Регистрация: <a href="https://onesay.io">https://onesay.io</a>
+      <strong>Спонсорское место 2 · 800 CNY/месяц · Открыто</strong><br />
+      Представьте свой бренд сообществу разработчиков CodexManager.<br />
+      Приглашаем AI-инструменты, API-сервисы и продукты для разработчиков. Разместите логотип, описание продукта и официальную ссылку.<br />
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%202">Обсудить это место</a> · 18272669457@163.com
     </td>
   </tr>
   <tr>
     <td align="center" valign="middle" width="180">
-      <a href="https://omniakey.com"><img src="../../assets/images/sponsors/OmniaKey.png" alt="OmniaKey" width="120" /></a>
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%203"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="Приглашаем спонсоров" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>Привет! Рады, что вы нас заметили 👋</strong><br />
-      Мы — команда <strong><a href="https://omniakey.com">OmniaKey</a></strong>, мультимодальная платформа AI API relay для разработчиков. Один API key открывает доступ к моделям для текста, изображений, видео и аудио.<br />
-      <strong>📝 Текст:</strong> GPT, Claude, Gemini, Grok, GLM, Qwen и другие ведущие модели для диалогов, кода и рассуждений.<br />
-      <strong>🎨 Изображения:</strong> GPT-image-2.5, Nanobanna 2.1, Seedream 5.0 Pro — готовые возможности генерации по тексту, преобразования и редактирования изображений.<br />
-      <strong>🎬 Видео:</strong> Seedance 2.5, Wan3, Kling, MiniMaxH3 — генерация видео по тексту и изображениям через простое подключение.<br />
-      <strong>🔊 Аудио:</strong> генерация музыки Suno AI через прямые API-вызовы для ваших аудиопроектов.<br />
-      Сайт: <a href="https://omniakey.com">omniakey.com</a> · Китайская версия: <a href="https://omniakey.com/zh">omniakey.com/zh</a>
+      <strong>Спонсорское место 3 · 700 CNY/месяц · Открыто</strong><br />
+      Представьте свой бренд сообществу разработчиков CodexManager.<br />
+      Приглашаем AI-инструменты, API-сервисы и продукты для разработчиков. Разместите логотип, описание продукта и официальную ссылку.<br />
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%203">Обсудить это место</a> · 18272669457@163.com
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="middle" width="180">
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%204"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="Приглашаем спонсоров" width="120" /></a>
+    </td>
+    <td valign="top">
+      <strong>Спонсорское место 4 · 600 CNY/месяц · Открыто</strong><br />
+      Представьте свой бренд сообществу разработчиков CodexManager.<br />
+      Приглашаем AI-инструменты, API-сервисы и продукты для разработчиков. Разместите логотип, описание продукта и официальную ссылку.<br />
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%204">Обсудить это место</a> · 18272669457@163.com
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="middle" width="180">
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%205"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="Приглашаем спонсоров" width="120" /></a>
+    </td>
+    <td valign="top">
+      <strong>Спонсорское место 5 · 500 CNY/месяц · Открыто</strong><br />
+      Представьте свой бренд сообществу разработчиков CodexManager.<br />
+      Приглашаем AI-инструменты, API-сервисы и продукты для разработчиков. Разместите логотип, описание продукта и официальную ссылку.<br />
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%205">Обсудить это место</a> · 18272669457@163.com
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="middle" width="180">
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%206"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="Приглашаем спонсоров" width="120" /></a>
+    </td>
+    <td valign="top">
+      <strong>Спонсорское место 6 · 400 CNY/месяц · Открыто</strong><br />
+      Представьте свой бренд сообществу разработчиков CodexManager.<br />
+      Приглашаем AI-инструменты, API-сервисы и продукты для разработчиков. Разместите логотип, описание продукта и официальную ссылку.<br />
+      <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%206">Обсудить это место</a> · 18272669457@163.com
     </td>
   </tr>
   <tr>
@@ -132,22 +163,6 @@ PatewayAI специализируется на высококачественн
     </td>
     <td valign="top">
       <strong><a href="https://daitouai.com/">Daitou AI (呆头 AI)</a></strong> специализируется на API ведущих китайских больших моделей и упрощает подключение GLM, Kimi, DeepSeek и других моделей для диалогов, генерации кода, создания контента и автоматизации разработки. Платформа предлагает цены ниже официальных, быстрый пробный доступ для индивидуальных разработчиков и использование по потребности для независимых проектов и команд, помогая снизить расходы на китайские модели. Доступные модели, способы подключения и текущие предложения опубликованы на <a href="https://daitouai.com/">официальном сайте</a>.
-    </td>
-  </tr>
-  <tr>
-    <td align="center" valign="middle" width="180">
-      <a href="https://api.fenno.ai/s/4ADZ"><img src="../../assets/images/sponsors/fennoai.jpg" alt="FennoAI" width="120" /></a>
-    </td>
-    <td valign="top">
-      <strong><a href="https://api.fenno.ai/s/4ADZ">FennoAI</a></strong> предоставляет стабильный высокопроизводительный API relay для корпоративных R&amp;D-команд и разработчиков, совместимый с протоколами OpenAI и Anthropic и инструментами Codex, Claude Code и OpenCode. Инфраструктура корпоративного уровня рассчитана на сотни миллиардов токенов в день и поддерживает расчёты между юридическими лицами в Китае и за рубежом, а также выставление счетов. При покупке подписки по <a href="https://api.fenno.ai/s/4ADZ">специальной ссылке</a> пользователи Codex-Manager получают Coding Plan с балансом 50 долларов за 1,99 доллара; комиссия за покупки приглашённых друзей — до 20%: больше приглашений — больше вознаграждений.
-    </td>
-  </tr>
-  <tr>
-    <td align="center" valign="middle" width="180">
-      <a href="https://s.qiniu.com/eiaQrq"><img src="../../assets/images/sponsors/qiniuyun.jpg" alt="Qiniu Cloud AI" width="120" /></a>
-    </td>
-    <td valign="top">
-      <strong><a href="https://s.qiniu.com/eiaQrq">Qiniu Cloud AI</a></strong> — корпоративная MaaS-платформа Qiniu Cloud (02567.HK) с единым доступом к более чем 150 ведущим мировым моделям и совместимостью с протоколами основных поставщиков. Она поддерживает текст, изображения, аудио, видео и обработку файлов и обслуживает более 1,69 млн предприятий и разработчиков. При регистрации по <a href="https://s.qiniu.com/eiaQrq">специальной ссылке</a> корпоративные пользователи Codex-Manager бесплатно получают 12 млн токенов, разработчики — 3 млн.
     </td>
   </tr>
   <tr>
