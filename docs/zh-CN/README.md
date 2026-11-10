@@ -72,7 +72,7 @@
 
 ## 赞助商
 
-本项目现开放赞助合作，价格可谈。赞助方可在 README 及项目内的赞助展示区域展示品牌 Logo、简介及官方链接；具体文案、展示位置、展示周期与上线时间由双方协商确认。为保持项目调性与用户体验，合作内容需与开发者或 AI 工具生态相关，并符合相关法律法规。
+本项目现开放赞助合作。赞助方可在 README 及项目内的赞助展示区域展示品牌 Logo、简介及官方链接；具体文案、展示位置、展示周期与上线时间由双方协商确认。为保持项目调性与用户体验，合作内容需与开发者或 AI 工具生态相关，并符合相关法律法规。
 
 **合作洽谈：** 可通过微信、Telegram 或邮箱 `18272669457@163.com` 联系，添加好友时请备注“赞助合作”。
 
@@ -94,9 +94,9 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%201"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="赞助商招募" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>赞助位 1 · 900 元/月 · 招募中</strong><br />
-      让你的品牌与 CodexManager 开发者社区相遇。<br />
-      欢迎 AI 工具、API 服务及开发者产品入驻，展示品牌 Logo、产品介绍与官网链接。<br />
+      <strong>赞助位 1 · 招募中</strong><br />
+      展示渠道：软件内赞助页、GitHub、Gitee、AtomGit、微信群公告、Telegram（TG）群等。<br />
+      支持品牌 Logo、产品介绍与官方链接展示，具体展示安排欢迎联系洽谈。<br />
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%201">洽谈此赞助位</a> · 18272669457@163.com
     </td>
   </tr>
@@ -105,9 +105,9 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%202"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="赞助商招募" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>赞助位 2 · 800 元/月 · 招募中</strong><br />
-      让你的品牌与 CodexManager 开发者社区相遇。<br />
-      欢迎 AI 工具、API 服务及开发者产品入驻，展示品牌 Logo、产品介绍与官网链接。<br />
+      <strong>赞助位 2 · 招募中</strong><br />
+      展示渠道：软件内赞助页、GitHub、Gitee、AtomGit、微信群公告、Telegram（TG）群等。<br />
+      支持品牌 Logo、产品介绍与官方链接展示，具体展示安排欢迎联系洽谈。<br />
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%202">洽谈此赞助位</a> · 18272669457@163.com
     </td>
   </tr>
@@ -116,9 +116,9 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%203"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="赞助商招募" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>赞助位 3 · 700 元/月 · 招募中</strong><br />
-      让你的品牌与 CodexManager 开发者社区相遇。<br />
-      欢迎 AI 工具、API 服务及开发者产品入驻，展示品牌 Logo、产品介绍与官网链接。<br />
+      <strong>赞助位 3 · 招募中</strong><br />
+      展示渠道：软件内赞助页、GitHub、Gitee、AtomGit、微信群公告、Telegram（TG）群等。<br />
+      支持品牌 Logo、产品介绍与官方链接展示，具体展示安排欢迎联系洽谈。<br />
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%203">洽谈此赞助位</a> · 18272669457@163.com
     </td>
   </tr>
@@ -127,9 +127,9 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%204"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="赞助商招募" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>赞助位 4 · 600 元/月 · 招募中</strong><br />
-      让你的品牌与 CodexManager 开发者社区相遇。<br />
-      欢迎 AI 工具、API 服务及开发者产品入驻，展示品牌 Logo、产品介绍与官网链接。<br />
+      <strong>赞助位 4 · 招募中</strong><br />
+      展示渠道：软件内赞助页、GitHub、Gitee、AtomGit、微信群公告、Telegram（TG）群等。<br />
+      支持品牌 Logo、产品介绍与官方链接展示，具体展示安排欢迎联系洽谈。<br />
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%204">洽谈此赞助位</a> · 18272669457@163.com
     </td>
   </tr>
@@ -138,9 +138,9 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%205"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="赞助商招募" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>赞助位 5 · 500 元/月 · 招募中</strong><br />
-      让你的品牌与 CodexManager 开发者社区相遇。<br />
-      欢迎 AI 工具、API 服务及开发者产品入驻，展示品牌 Logo、产品介绍与官网链接。<br />
+      <strong>赞助位 5 · 招募中</strong><br />
+      展示渠道：软件内赞助页、GitHub、Gitee、AtomGit、微信群公告、Telegram（TG）群等。<br />
+      支持品牌 Logo、产品介绍与官方链接展示，具体展示安排欢迎联系洽谈。<br />
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%205">洽谈此赞助位</a> · 18272669457@163.com
     </td>
   </tr>
@@ -149,9 +149,9 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%206"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="赞助商招募" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>赞助位 6 · 400 元/月 · 招募中</strong><br />
-      让你的品牌与 CodexManager 开发者社区相遇。<br />
-      欢迎 AI 工具、API 服务及开发者产品入驻，展示品牌 Logo、产品介绍与官网链接。<br />
+      <strong>赞助位 6 · 招募中</strong><br />
+      展示渠道：软件内赞助页、GitHub、Gitee、AtomGit、微信群公告、Telegram（TG）群等。<br />
+      支持品牌 Logo、产品介绍与官方链接展示，具体展示安排欢迎联系洽谈。<br />
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%206">洽谈此赞助位</a> · 18272669457@163.com
     </td>
   </tr>

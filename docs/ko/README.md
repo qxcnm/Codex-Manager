@@ -72,7 +72,7 @@ CodexManager는 데스크톱 앱과 서비스 모드에서 Codex 계정, 사용�
 
 ## 스폰서
 
-이 프로젝트는 스폰서 협업을 받고 있으며 비용은 협의할 수 있습니다. 스폰서는 README와 프로젝트 내 스폰서 영역에 브랜드 로고, 소개, 공식 링크를 표시할 수 있습니다. 문구, 위치, 표시 기간, 게시 시점은 상호 협의하며, 개발자 또는 AI 도구 생태계와 관련되고 관련 법규를 준수해야 합니다.
+이 프로젝트는 스폰서 협업을 받고 있습니다. 스폰서는 README와 프로젝트 내 스폰서 영역에 브랜드 로고, 소개, 공식 링크를 표시할 수 있습니다. 문구, 위치, 표시 기간, 게시 시점은 상호 협의하며, 개발자 또는 AI 도구 생태계와 관련되고 관련 법규를 준수해야 합니다.
 
 **협업 문의:** WeChat, Telegram 또는 `18272669457@163.com`으로 연락해 주세요. WeChat 친구 추가 시 “스폰서 협업”이라고 적어 주세요.
 
@@ -94,9 +94,9 @@ PatewayAI는 공식 고품질 모델 API 중계에 집중하며 Claude와 Codex 
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%201"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="스폰서 모집" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>스폰서 자리 1 · 월 900위안(CNY) · 모집 중</strong><br />
-      CodexManager 개발자 커뮤니티에 브랜드를 소개하세요.<br />
-      AI 도구, API 서비스, 개발자 제품의 참여를 환영합니다. 브랜드 로고, 제품 소개, 공식 링크를 표시할 수 있습니다.<br />
+      <strong>스폰서 자리 1 · 모집 중</strong><br />
+      노출 채널: 앱 내 스폰서 페이지, GitHub, Gitee, AtomGit, WeChat 그룹 공지, Telegram 그룹 등.<br />
+      브랜드 로고, 제품 소개, 공식 링크를 표시할 수 있습니다. 구체적인 게재 방식은 문의해 주세요.<br />
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%201">이 자리 문의하기</a> · 18272669457@163.com
     </td>
   </tr>
@@ -105,9 +105,9 @@ PatewayAI는 공식 고품질 모델 API 중계에 집중하며 Claude와 Codex 
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%202"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="스폰서 모집" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>스폰서 자리 2 · 월 800위안(CNY) · 모집 중</strong><br />
-      CodexManager 개발자 커뮤니티에 브랜드를 소개하세요.<br />
-      AI 도구, API 서비스, 개발자 제품의 참여를 환영합니다. 브랜드 로고, 제품 소개, 공식 링크를 표시할 수 있습니다.<br />
+      <strong>스폰서 자리 2 · 모집 중</strong><br />
+      노출 채널: 앱 내 스폰서 페이지, GitHub, Gitee, AtomGit, WeChat 그룹 공지, Telegram 그룹 등.<br />
+      브랜드 로고, 제품 소개, 공식 링크를 표시할 수 있습니다. 구체적인 게재 방식은 문의해 주세요.<br />
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%202">이 자리 문의하기</a> · 18272669457@163.com
     </td>
   </tr>
@@ -116,9 +116,9 @@ PatewayAI는 공식 고품질 모델 API 중계에 집중하며 Claude와 Codex 
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%203"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="스폰서 모집" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>스폰서 자리 3 · 월 700위안(CNY) · 모집 중</strong><br />
-      CodexManager 개발자 커뮤니티에 브랜드를 소개하세요.<br />
-      AI 도구, API 서비스, 개발자 제품의 참여를 환영합니다. 브랜드 로고, 제품 소개, 공식 링크를 표시할 수 있습니다.<br />
+      <strong>스폰서 자리 3 · 모집 중</strong><br />
+      노출 채널: 앱 내 스폰서 페이지, GitHub, Gitee, AtomGit, WeChat 그룹 공지, Telegram 그룹 등.<br />
+      브랜드 로고, 제품 소개, 공식 링크를 표시할 수 있습니다. 구체적인 게재 방식은 문의해 주세요.<br />
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%203">이 자리 문의하기</a> · 18272669457@163.com
     </td>
   </tr>
@@ -127,9 +127,9 @@ PatewayAI는 공식 고품질 모델 API 중계에 집중하며 Claude와 Codex 
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%204"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="스폰서 모집" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>스폰서 자리 4 · 월 600위안(CNY) · 모집 중</strong><br />
-      CodexManager 개발자 커뮤니티에 브랜드를 소개하세요.<br />
-      AI 도구, API 서비스, 개발자 제품의 참여를 환영합니다. 브랜드 로고, 제품 소개, 공식 링크를 표시할 수 있습니다.<br />
+      <strong>스폰서 자리 4 · 모집 중</strong><br />
+      노출 채널: 앱 내 스폰서 페이지, GitHub, Gitee, AtomGit, WeChat 그룹 공지, Telegram 그룹 등.<br />
+      브랜드 로고, 제품 소개, 공식 링크를 표시할 수 있습니다. 구체적인 게재 방식은 문의해 주세요.<br />
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%204">이 자리 문의하기</a> · 18272669457@163.com
     </td>
   </tr>
@@ -138,9 +138,9 @@ PatewayAI는 공식 고품질 모델 API 중계에 집중하며 Claude와 Codex 
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%205"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="스폰서 모집" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>스폰서 자리 5 · 월 500위안(CNY) · 모집 중</strong><br />
-      CodexManager 개발자 커뮤니티에 브랜드를 소개하세요.<br />
-      AI 도구, API 서비스, 개발자 제품의 참여를 환영합니다. 브랜드 로고, 제품 소개, 공식 링크를 표시할 수 있습니다.<br />
+      <strong>스폰서 자리 5 · 모집 중</strong><br />
+      노출 채널: 앱 내 스폰서 페이지, GitHub, Gitee, AtomGit, WeChat 그룹 공지, Telegram 그룹 등.<br />
+      브랜드 로고, 제품 소개, 공식 링크를 표시할 수 있습니다. 구체적인 게재 방식은 문의해 주세요.<br />
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%205">이 자리 문의하기</a> · 18272669457@163.com
     </td>
   </tr>
@@ -149,9 +149,9 @@ PatewayAI는 공식 고품질 모델 API 중계에 집중하며 Claude와 Codex 
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%206"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="스폰서 모집" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>스폰서 자리 6 · 월 400위안(CNY) · 모집 중</strong><br />
-      CodexManager 개발자 커뮤니티에 브랜드를 소개하세요.<br />
-      AI 도구, API 서비스, 개발자 제품의 참여를 환영합니다. 브랜드 로고, 제품 소개, 공식 링크를 표시할 수 있습니다.<br />
+      <strong>스폰서 자리 6 · 모집 중</strong><br />
+      노출 채널: 앱 내 스폰서 페이지, GitHub, Gitee, AtomGit, WeChat 그룹 공지, Telegram 그룹 등.<br />
+      브랜드 로고, 제품 소개, 공식 링크를 표시할 수 있습니다. 구체적인 게재 방식은 문의해 주세요.<br />
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%206">이 자리 문의하기</a> · 18272669457@163.com
     </td>
   </tr>

@@ -74,7 +74,7 @@
 
 ## Sponsors
 
-This project is open to sponsorship partnerships, with pricing negotiable. Sponsors may display their brand logo, introduction, and official link in the README and in-project sponsor areas. Exact wording, placement, display period, and launch time are agreed upon by both parties. Partnerships should be relevant to developers or the AI tooling ecosystem and comply with applicable laws and regulations.
+This project is open to sponsorship partnerships. Sponsors may display their brand logo, introduction, and official link in the README and in-project sponsor areas. Exact wording, placement, display period, and launch time are agreed upon by both parties. Partnerships should be relevant to developers or the AI tooling ecosystem and comply with applicable laws and regulations.
 
 **Partnership contact:** Reach out via WeChat, Telegram, or email at `18272669457@163.com`; when adding on WeChat, please note “Sponsorship”.
 
@@ -96,9 +96,9 @@ Economy mode starts as low as 5% of standard rates. <a href="https://pateway.ai/
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%201"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="Sponsorship opportunity" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>Sponsorship slot 1 · CNY 900/month · Open</strong><br />
-      Introduce your brand to the CodexManager developer community.<br />
-      Open to AI tools, API services, and developer products. Display your logo, product introduction, and official link.<br />
+      <strong>Sponsorship slot 1 · Open</strong><br />
+      Display channels: the in-app Sponsors page, GitHub, Gitee, AtomGit, WeChat group announcements, Telegram groups, and more.<br />
+      Showcase your logo, product introduction, and official link. Contact us to discuss placement details.<br />
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%201">Discuss this slot</a> · 18272669457@163.com
     </td>
   </tr>
@@ -107,9 +107,9 @@ Economy mode starts as low as 5% of standard rates. <a href="https://pateway.ai/
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%202"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="Sponsorship opportunity" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>Sponsorship slot 2 · CNY 800/month · Open</strong><br />
-      Introduce your brand to the CodexManager developer community.<br />
-      Open to AI tools, API services, and developer products. Display your logo, product introduction, and official link.<br />
+      <strong>Sponsorship slot 2 · Open</strong><br />
+      Display channels: the in-app Sponsors page, GitHub, Gitee, AtomGit, WeChat group announcements, Telegram groups, and more.<br />
+      Showcase your logo, product introduction, and official link. Contact us to discuss placement details.<br />
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%202">Discuss this slot</a> · 18272669457@163.com
     </td>
   </tr>
@@ -118,9 +118,9 @@ Economy mode starts as low as 5% of standard rates. <a href="https://pateway.ai/
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%203"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="Sponsorship opportunity" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>Sponsorship slot 3 · CNY 700/month · Open</strong><br />
-      Introduce your brand to the CodexManager developer community.<br />
-      Open to AI tools, API services, and developer products. Display your logo, product introduction, and official link.<br />
+      <strong>Sponsorship slot 3 · Open</strong><br />
+      Display channels: the in-app Sponsors page, GitHub, Gitee, AtomGit, WeChat group announcements, Telegram groups, and more.<br />
+      Showcase your logo, product introduction, and official link. Contact us to discuss placement details.<br />
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%203">Discuss this slot</a> · 18272669457@163.com
     </td>
   </tr>
@@ -129,9 +129,9 @@ Economy mode starts as low as 5% of standard rates. <a href="https://pateway.ai/
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%204"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="Sponsorship opportunity" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>Sponsorship slot 4 · CNY 600/month · Open</strong><br />
-      Introduce your brand to the CodexManager developer community.<br />
-      Open to AI tools, API services, and developer products. Display your logo, product introduction, and official link.<br />
+      <strong>Sponsorship slot 4 · Open</strong><br />
+      Display channels: the in-app Sponsors page, GitHub, Gitee, AtomGit, WeChat group announcements, Telegram groups, and more.<br />
+      Showcase your logo, product introduction, and official link. Contact us to discuss placement details.<br />
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%204">Discuss this slot</a> · 18272669457@163.com
     </td>
   </tr>
@@ -140,9 +140,9 @@ Economy mode starts as low as 5% of standard rates. <a href="https://pateway.ai/
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%205"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="Sponsorship opportunity" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>Sponsorship slot 5 · CNY 500/month · Open</strong><br />
-      Introduce your brand to the CodexManager developer community.<br />
-      Open to AI tools, API services, and developer products. Display your logo, product introduction, and official link.<br />
+      <strong>Sponsorship slot 5 · Open</strong><br />
+      Display channels: the in-app Sponsors page, GitHub, Gitee, AtomGit, WeChat group announcements, Telegram groups, and more.<br />
+      Showcase your logo, product introduction, and official link. Contact us to discuss placement details.<br />
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%205">Discuss this slot</a> · 18272669457@163.com
     </td>
   </tr>
@@ -151,9 +151,9 @@ Economy mode starts as low as 5% of standard rates. <a href="https://pateway.ai/
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%206"><img src="../../assets/images/sponsors/sponsor-recruitment.svg" alt="Sponsorship opportunity" width="120" /></a>
     </td>
     <td valign="top">
-      <strong>Sponsorship slot 6 · CNY 400/month · Open</strong><br />
-      Introduce your brand to the CodexManager developer community.<br />
-      Open to AI tools, API services, and developer products. Display your logo, product introduction, and official link.<br />
+      <strong>Sponsorship slot 6 · Open</strong><br />
+      Display channels: the in-app Sponsors page, GitHub, Gitee, AtomGit, WeChat group announcements, Telegram groups, and more.<br />
+      Showcase your logo, product introduction, and official link. Contact us to discuss placement details.<br />
       <a href="mailto:18272669457@163.com?subject=CodexManager%20sponsorship%20-%20slot%206">Discuss this slot</a> · 18272669457@163.com
     </td>
   </tr>
