@@ -25,6 +25,68 @@ impl CodexRuntimeReloadResult {
     }
 }
 
+pub(crate) fn ensure_codex_desktop_closed(codex_home: &Path) -> Result<(), String> {
+    let system = System::new_all();
+    let desktop_running = system.processes().values().any(|process| {
+        let executable = process
+            .exe()
+            .map(Path::to_path_buf)
+            .or_else(|| process.cmd().first().map(PathBuf::from));
+        let Some(executable) = executable else {
+            return false;
+        };
+        let has_desktop_resources = executable
+            .parent()
+            .is_some_and(|parent| parent.join("resources").join("app.asar").is_file());
+        is_codex_desktop_main_process(&executable, process.cmd(), has_desktop_resources)
+            && resolve_codex_home_from_environment(process.environ())
+                .is_some_and(|process_home| same_path(&process_home, codex_home))
+    });
+    if desktop_running {
+        Err(format!(
+            "Close Codex desktop before switching accounts to preserve local projects (CODEX_HOME: {})",
+            codex_home.display()
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn is_codex_desktop_main_process(
+    executable: &Path,
+    command: &[String],
+    has_desktop_resources: bool,
+) -> bool {
+    // Electron reuses the main executable for renderer and utility processes.
+    // The CLI and app-server can also be bundled alongside the desktop app.
+    if command.iter().any(|argument| {
+        argument == "app-server" || argument == "--type" || argument.starts_with("--type=")
+    }) {
+        return false;
+    }
+    let executable = executable.to_string_lossy().replace('\\', "/");
+    let executable = executable.to_ascii_lowercase();
+    let name = executable.rsplit('/').next().unwrap_or_default();
+    // Current Windows packages launch the Electron host as ChatGPT.exe;
+    // Codex.exe in the same directory is only the launcher. Restrict that
+    // executable alias to the Codex package so the ChatGPT app is not matched.
+    let windows_codex_package = executable.contains("/windowsapps/openai.codex_")
+        && matches!(name, "codex.exe" | "chatgpt.exe")
+        && executable.ends_with(&format!("/app/{name}"));
+    if name == "chatgpt.exe" {
+        return windows_codex_package;
+    }
+    if !matches!(name, "codex" | "codex.exe") {
+        return false;
+    }
+    // Bundle paths identify the desktop app even if resource metadata cannot
+    // be read. Other installs (including Linux AppImages) require app.asar next
+    // to the executable; the bare CLI name alone is deliberately insufficient.
+    executable.ends_with("/codex.app/contents/macos/codex")
+        || windows_codex_package
+        || has_desktop_resources
+}
+
 pub(crate) fn reload_codex_app_servers(codex_home: &Path) -> CodexRuntimeReloadResult {
     let system = System::new_all();
     let matched_pids = system
@@ -208,6 +270,93 @@ mod tests {
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn desktop_detection_accepts_packaged_windows_macos_and_linux_main_processes() {
+        for (executable, has_resources) in [
+            (
+                r"C:\Program Files\WindowsApps\OpenAI.Codex_26.1106.6628.0_x64__example\app\Codex.exe",
+                false,
+            ),
+            (
+                r"C:\Program Files\WindowsApps\OpenAI.Codex_26.1106.6628.0_x64__example\app\ChatGPT.exe",
+                false,
+            ),
+            ("/Applications/Codex.app/Contents/MacOS/Codex", false),
+            ("/opt/codex/codex", true),
+            ("/tmp/.mount_Codex123/codex", true),
+            (
+                r"C:\Users\Example\AppData\Local\Programs\Codex\Codex.exe",
+                true,
+            ),
+        ] {
+            assert!(
+                is_codex_desktop_main_process(
+                    Path::new(executable),
+                    &strings(&[executable]),
+                    has_resources,
+                ),
+                "desktop executable was not detected: {executable}"
+            );
+        }
+    }
+
+    #[test]
+    fn desktop_detection_rejects_cli_app_servers_node_helpers_and_manager() {
+        for (executable, arguments, has_resources) in [
+            ("/usr/bin/codex", vec!["codex"], false),
+            (r"C:\tools\codex.exe", vec!["codex.exe", "resume"], false),
+            ("/opt/codex/codex", vec!["codex", "app-server"], true),
+            ("/usr/bin/node", vec!["node", "codex.js"], true),
+            ("/opt/codex/codex", vec!["codex", "--type=renderer"], true),
+            ("/opt/codex/codex", vec!["codex", "--type", "utility"], true),
+            (
+                "/Applications/Codex.app/Contents/Frameworks/Codex Helper.app/Contents/MacOS/Codex Helper",
+                vec!["Codex Helper"],
+                true,
+            ),
+            ("/opt/codex/chrome_crashpad_handler", vec!["chrome_crashpad_handler"], true),
+            (r"C:\CodexManager\CodexManager.exe", vec!["CodexManager.exe"], true),
+            (
+                r"C:\Program Files\WindowsApps\OpenAI.ChatGPT_1.0_x64__example\app\ChatGPT.exe",
+                vec!["ChatGPT.exe"],
+                true,
+            ),
+            (r"C:\tools\ChatGPT.exe", vec!["ChatGPT.exe"], true),
+            (
+                r"C:\Program Files\WindowsApps\OpenAI.Codex_26.1106.6628.0_x64__example\app\ChatGPT.exe",
+                vec!["ChatGPT.exe", "--type=renderer"],
+                false,
+            ),
+        ] {
+            assert!(
+                !is_codex_desktop_main_process(
+                    Path::new(executable),
+                    &strings(&arguments),
+                    has_resources,
+                ),
+                "non-desktop process was detected: {executable} {arguments:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn desktop_home_matching_requires_process_environment_and_same_profile() {
+        let target = Path::new("/profiles/account-a");
+        for environment in [
+            strings(&[]),
+            strings(&["CODEX_HOME=/profiles/account-b"]),
+            strings(&["HOME=/users/another"]),
+        ] {
+            assert!(!resolve_codex_home_from_environment(&environment)
+                .is_some_and(|process_home| same_path(&process_home, target)));
+        }
+        assert!(resolve_codex_home_from_environment(&strings(&[
+            "CODEX_HOME=/profiles/account-a",
+            "HOME=/users/another",
+        ]))
+        .is_some_and(|process_home| same_path(&process_home, target)));
     }
 
     #[test]

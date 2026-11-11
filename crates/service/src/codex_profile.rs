@@ -17,6 +17,8 @@ use toml_edit::{value as toml_value, DocumentMut, Item, Table, Value};
 
 use crate::codex_runtime::CodexRuntimeReloadResult;
 
+#[path = "codex_profile_desktop_state.rs"]
+mod desktop_state;
 #[path = "codex_profile_rollout.rs"]
 mod rollout;
 
@@ -678,7 +680,6 @@ pub(crate) async fn apply_direct_account_async(
     ensure_usable_token(&token)?;
 
     profile_commit(&lease, move || {
-        ensure_backup(&profile_dir)?;
         let auth_json = build_direct_auth_json(&account, &token)?;
         let current_config = read_optional(&profile_dir.join(CONFIG_FILE))?;
         let paths = managed_profile_paths(&profile_dir)?;
@@ -689,6 +690,12 @@ pub(crate) async fn apply_direct_account_async(
             &paths.gateway_model_catalog_path,
             previous_model_catalog_json.as_deref(),
         )?;
+        desktop_state::protect_account_switch(
+            &profile_dir,
+            Some(&auth_json),
+            &paths.root.join("desktop-state-before-switch.json"),
+        )?;
+        ensure_backup(&profile_dir)?;
         write_profile_files(
             &profile_dir,
             &auth_json,
@@ -1254,12 +1261,17 @@ fn restore_locked(codex_home: Option<&str>) -> Result<CodexProfileStatus, String
             profile_dir.display()
         )
     })?;
+    let paths = managed_profile_paths(&profile_dir)?;
+    desktop_state::protect_account_switch(
+        &profile_dir,
+        backup.auth_json.as_deref(),
+        &paths.root.join("desktop-state-before-switch.json"),
+    )?;
     restore_optional_file(&profile_dir.join(AUTH_FILE), backup.auth_json.as_deref())?;
     restore_optional_file(
         &profile_dir.join(CONFIG_FILE),
         backup.config_toml.as_deref(),
     )?;
-    let paths = managed_profile_paths(&profile_dir)?;
     remove_file_if_exists(&paths.marker_path)?;
     remove_file_if_exists(&paths.legacy_marker_path)?;
     save_backups(&backups)?;

@@ -252,7 +252,24 @@ fn test_token(account_id: &str, access_token: &str, refresh_token: &str) -> Toke
 }
 
 async fn assert_switch_to_account_writes_auth(storage: &Storage, profile_dir: &Path) {
+    use base64::Engine as _;
     let auth_before = fs::read(profile_dir.join(AUTH_FILE)).ok();
+    let desktop_before = serde_json::json!({
+        "electron-account-renderer-state-v1": {"owner": "previous-account", "inactive": {}},
+        "local-projects": {"local-fixture": {"id": "local-fixture", "name": "Fixture", "rootPaths": ["D:/fixture"]}},
+        "project-order": ["local-fixture"],
+        "thread-project-assignments": {"fixture-thread": {"projectKind": "local", "projectId": "local-fixture"}},
+        "electron-persisted-atom-state": {"private-draft": "do not transfer"}
+    }).to_string();
+    fs::write(
+        profile_dir.join(".codex-global-state.json"),
+        &desktop_before,
+    )
+    .unwrap();
+    let access_token = format!("header.{}.signature", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+        serde_json::json!({"exp": 4_000_000_000u64, "https://api.openai.com/auth": {"user_id": "fixture-user", "chatgpt_account_id": "fixture-account"}}).to_string()
+    ));
+    let refreshed_token = access_token.clone();
     let server = tiny_http::Server::http("127.0.0.1:0").expect("bind local OAuth fixture");
     let issuer = format!("http://{}", server.server_addr());
     let _refresh_url_guard = EnvGuard::set(
@@ -269,7 +286,7 @@ async fn assert_switch_to_account_writes_auth(storage: &Storage, profile_dir: &P
         request
             .respond(
                 tiny_http::Response::from_string(
-                    r#"{"access_token":"switched-account-access","refresh_token":"switched-account-refresh"}"#,
+                    serde_json::json!({"access_token": refreshed_token, "refresh_token": "switched-account-refresh"}).to_string(),
                 )
                 .with_header(
                     tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap(),
@@ -317,7 +334,7 @@ async fn assert_switch_to_account_writes_auth(storage: &Storage, profile_dir: &P
     let auth: serde_json::Value = serde_json::from_slice(&auth_bytes).unwrap();
     assert!(auth["OPENAI_API_KEY"].is_null());
     assert_eq!(auth["tokens"]["id_token"], "id-token");
-    assert_eq!(auth["tokens"]["access_token"], "switched-account-access");
+    assert_eq!(auth["tokens"]["access_token"], access_token);
     assert_eq!(auth["tokens"]["refresh_token"], "switched-account-refresh");
     assert_eq!(
         auth["tokens"]["account_id"].as_str(),
@@ -331,6 +348,34 @@ async fn assert_switch_to_account_writes_auth(storage: &Storage, profile_dir: &P
     let state = load_state().expect("account state persisted");
     assert!(matches!(state.mode, CodexProfileMode::DirectAccount));
     assert_eq!(state.account_id.as_deref(), Some(account_id.as_str()));
+    let desktop: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(profile_dir.join(".codex-global-state.json")).unwrap(),
+    )
+    .unwrap();
+    let owner = format!(
+        "{:x}",
+        Sha256::digest(br#"["fixture-user","fixture-account"]"#)
+    );
+    let inherited = &desktop["electron-account-renderer-state-v1"]["inactive"][&owner];
+    assert_eq!(
+        inherited["globals"]["project-order"],
+        serde_json::json!(["local-fixture"])
+    );
+    assert_eq!(
+        inherited["globals"]["thread-project-assignments"]["fixture-thread"]["projectId"],
+        "local-fixture"
+    );
+    assert_eq!(inherited["atoms"], serde_json::json!({}));
+    assert_eq!(
+        fs::read_to_string(
+            managed_profile_paths(profile_dir)
+                .unwrap()
+                .root
+                .join("desktop-state-before-switch.json")
+        )
+        .unwrap(),
+        desktop_before
+    );
 }
 
 fn write_test_rollout(dir: &Path, thread_id: &str, provider: &str) -> (PathBuf, String) {
@@ -2207,6 +2252,12 @@ async fn restore_waits_for_the_profile_mutation_lease() {
     fs::create_dir_all(&dir).expect("create profile");
     fs::write(dir.join(CONFIG_FILE), "model_provider = \"current\"\n")
         .expect("write current config");
+    let desktop_before = serde_json::json!({
+        "electron-renderer-content-owner": "current-owner",
+        "electron-owner-value:electron-saved-workspace-roots:current-owner": ["D:/restore-fixture"]
+    })
+    .to_string();
+    fs::write(dir.join(".codex-global-state.json"), &desktop_before).unwrap();
     let key = profile_key(&dir);
     let now = now_ts();
     save_backups(&HashMap::from([(
@@ -2241,6 +2292,23 @@ async fn restore_waits_for_the_profile_mutation_lease() {
         fs::read_to_string(dir.join(CONFIG_FILE)).expect("read restored config"),
         "model_provider = \"restored\"\n"
     );
+    let desktop: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dir.join(".codex-global-state.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        desktop["electron-owner-value:electron-saved-workspace-roots:signed-out"],
+        serde_json::json!(["D:/restore-fixture"])
+    );
+    assert_eq!(
+        fs::read_to_string(
+            managed_profile_paths(&dir)
+                .unwrap()
+                .root
+                .join("desktop-state-before-switch.json")
+        )
+        .unwrap(),
+        desktop_before
+    );
     cleanup_profile(&dir);
 }
 
@@ -2273,6 +2341,41 @@ fn direct_account_auth_json_contains_selected_tokens() {
     assert_eq!(auth["tokens"]["access_token"], "access-token");
     assert_eq!(auth["tokens"]["refresh_token"], "refresh-token");
     assert_eq!(auth["tokens"]["account_id"], "chatgpt-1");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn restore_rejects_corrupt_desktop_state_before_changing_auth_or_backup() {
+    let _env_lock = crate::test_env_guard();
+    let _backend_guard = EnvGuard::remove("CODEXMANAGER_STORAGE_BACKEND");
+    let _database_url_guard = EnvGuard::remove("CODEXMANAGER_DATABASE_URL");
+    let dir = temp_profile("restore-corrupt-desktop-state");
+    let _db_guard = set_test_db(&dir);
+    fs::write(dir.join(AUTH_FILE), "current-auth").unwrap();
+    fs::write(dir.join(CONFIG_FILE), "model = \"current\"\n").unwrap();
+    fs::write(dir.join(".codex-global-state.json"), "{corrupt").unwrap();
+    ensure_backup(&dir).unwrap();
+    let backup_before = crate::app_settings::get_persisted_app_setting(APP_SETTING_BACKUPS_KEY);
+
+    let result = restore_async(Some(dir.to_string_lossy().as_ref())).await;
+
+    assert!(result.unwrap_err().contains("invalid global state"));
+    assert_eq!(
+        fs::read_to_string(dir.join(AUTH_FILE)).unwrap(),
+        "current-auth"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join(CONFIG_FILE)).unwrap(),
+        "model = \"current\"\n"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join(".codex-global-state.json")).unwrap(),
+        "{corrupt"
+    );
+    assert_eq!(
+        crate::app_settings::get_persisted_app_setting(APP_SETTING_BACKUPS_KEY),
+        backup_before
+    );
+    cleanup_profile(&dir);
 }
 
 fn detect_login_mode_for_config(name: &str, config: &str) -> CodexProfileMode {
