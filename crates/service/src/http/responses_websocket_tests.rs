@@ -41,6 +41,49 @@ fn sample_api_key() -> ApiKey {
 }
 
 #[test]
+fn companion_page_websocket_context_preserves_real_outputs_and_raw_capture() {
+    let _guard = crate::test_env_guard();
+    for strategy in [
+        crate::apikey_profile::ROTATION_ACCOUNT,
+        crate::apikey_profile::ROTATION_AGGREGATE_API,
+    ] {
+        let mut key = sample_api_key();
+        key.rotation_strategy = strategy.to_string();
+        let context = WsRequestContext {
+            api_key: key,
+            incoming_headers: sample_incoming_headers(None, None),
+            prompt_cache_key: None,
+            cache_affinity_key: None,
+            route_conversation_id: None,
+            route_conversation_source: None,
+            effective_upstream_base: "https://chatgpt.com/backend-api/codex".into(),
+            prefer_raw_errors: false,
+        };
+        for stream in [false, true] {
+            let real_output =
+                json!({"type":"function_call_output","call_id":"call_real","output":"real result"});
+            let text = json!({
+                "type":"response.create", "model":"gpt-5.4", "stream":stream,
+                "input":[real_output,
+                    {"type":"function_call_output","id":"fco_page","name":"codex_apps_open_page","namespace":"agent","output":"{\"page_id\":null}"},
+                    {"type":"function_call_output","id":"fco_snapshot","name":"codex_apps_selected_page_part_1_of_1","namespace":"agent","output":"Companion Page snapshot part1\n页面正文\n"}
+                ]
+            }).to_string();
+            let prepared =
+                rewrite_client_frame(&text, &context).expect("rewrite page context frame");
+            let upstream: Value = serde_json::from_str(&prepared.text).unwrap();
+            assert_eq!(prepared.raw_body.as_ref(), text.as_bytes());
+            assert_eq!(upstream["stream"], stream);
+            assert_eq!(prepared.input, upstream["input"]);
+            assert_eq!(upstream["input"][0], real_output);
+            assert_eq!(upstream["input"][1]["role"], "user");
+            assert_eq!(upstream["input"][2]["role"], "user");
+            assert_eq!(upstream["input"][2]["content"][0]["text"], "Companion Page context (agent.codex_apps_selected_page_part_1_of_1):\nCompanion Page snapshot part1\n页面正文\n");
+        }
+    }
+}
+
+#[test]
 fn websocket_tool_registry_text_and_control_events_do_not_wait_for_registry_lock() {
     let _guard = crate::test_env_guard();
     let session_id = format!("registry-fast-path-{}-{}", std::process::id(), now_ts());

@@ -1890,6 +1890,10 @@ fn rewrite_response_create(
     context: &WsRequestContext,
 ) -> Result<PreparedClientFrame, WsSessionError> {
     let raw_body = bytes::Bytes::copy_from_slice(text.as_bytes());
+    crate::gateway::companion_page_context::normalize_companion_page_context(
+        RESPONSES_ENDPOINT,
+        &mut payload,
+    );
     let Some(object) = payload.as_object_mut() else {
         return Err(WsSessionError::bad_request_bilingual(
             "WebSocket 载荷必须是 JSON 对象",

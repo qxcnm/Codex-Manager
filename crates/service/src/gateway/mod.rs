@@ -150,6 +150,8 @@ pub(crate) fn error_message_for_client(
 
 mod anchor_fingerprint;
 pub(crate) mod bps_protocol;
+#[path = "request/companion_page_context.rs"]
+pub(crate) mod companion_page_context;
 mod concurrency;
 #[path = "routing/conversation_binding.rs"]
 pub(crate) mod conversation_binding;

@@ -1967,7 +1967,19 @@ pub(super) fn build_local_validation_result(
             crate::gateway::bilingual_error("不支持的请求方法", "unsupported method"),
         )
     })?;
-    let initial_request_value = super::super::parse_request_json_value(&client_body);
+    let mut initial_request_value = super::super::parse_request_json_value(&client_body);
+    let mut client_body = client_body;
+    if let Some(value) = initial_request_value.as_mut() {
+        if super::super::companion_page_context::normalize_companion_page_context(
+            logical_path.as_str(),
+            value,
+        ) > 0
+        {
+            client_body = Bytes::from(serde_json::to_vec(value).map_err(|err| {
+                LocalValidationError::new(400, format!("serialize page context failed: {err}"))
+            })?);
+        }
+    }
     let initial_service_tier_diagnostic = initial_request_value
         .as_ref()
         .map(|value| super::super::inspect_service_tier_value(value.get("service_tier")))

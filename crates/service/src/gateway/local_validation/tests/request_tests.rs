@@ -10,6 +10,9 @@ use serde_json::Value;
 
 const COMPACT_API_PATH_ENV: &str = "CODEXMANAGER_COMPACT_API_PATH";
 
+#[path = "request_companion_page_tests.rs"]
+mod companion_page_tests;
+
 struct RuntimeEnvGuard {
     name: &'static str,
     previous_value: Option<String>,
