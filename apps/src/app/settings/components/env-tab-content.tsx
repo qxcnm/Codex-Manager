@@ -11,12 +11,29 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import type { EnvOverrideCatalogItem } from "@/types";
 
 type TranslateFn = (key: string) => string;
+
+const IMAGE_TOOL_MODELS = [
+  "gpt-image-2",
+  "gpt-image-2.5-sunburst",
+  "gpt-image-2.5-flare",
+];
+const IMAGE_TOOL_MODEL_LABELS = Object.fromEntries(
+  IMAGE_TOOL_MODELS.map((model) => [model, model]),
+);
 
 interface EnvTabContentProps {
   t: TranslateFn;
@@ -65,6 +82,10 @@ export function EnvTabContent({
   onResetEnv,
   onResetAllEnv,
 }: EnvTabContentProps) {
+  const isImageToolModel = selectedEnvKey === "CODEXMANAGER_CODEX_IMAGE_TOOL_MODEL";
+  const hasInvalidImageToolModel =
+    isImageToolModel && !IMAGE_TOOL_MODELS.includes(selectedEnvValue);
+
   return (
     <>
       <div className="flex flex-col gap-3 rounded-xl border border-border/50 bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -197,34 +218,91 @@ export function EnvTabContent({
                   </Alert>
                 )}
 
-                <div className="space-y-2">
-                  <Label>{t("当前值")}</Label>
-                  <Input
-                    value={selectedEnvValue}
-                    onChange={(event) =>
-                      onSelectedEnvValueChange(event.target.value)
-                    }
-                    className="h-11 font-mono"
-                    placeholder={t("输入变量值")}
-                  />
-                  <p className="text-[10px] text-muted-foreground">
-                    {t("默认值:")}{" "}
-                    {selectedEnvItem?.defaultValue ? (
-                      <span className="font-mono italic">
-                        {selectedEnvItem.defaultValue}
-                      </span>
+                <FieldGroup>
+                  <Field data-invalid={hasInvalidImageToolModel || undefined}>
+                    <FieldLabel htmlFor="env-override-value">{t("当前值")}</FieldLabel>
+                    {isImageToolModel ? (
+                      <Select
+                        items={IMAGE_TOOL_MODEL_LABELS}
+                        disabled={isSaving}
+                        value={hasInvalidImageToolModel ? null : selectedEnvValue}
+                        onValueChange={(value) => {
+                          if (
+                            typeof value === "string" &&
+                            IMAGE_TOOL_MODELS.includes(value)
+                          ) {
+                            onSelectedEnvValueChange(value);
+                          }
+                        }}
+                      >
+                        <SelectTrigger
+                          id="env-override-value"
+                          className="w-full data-[size=default]:h-11"
+                          aria-invalid={hasInvalidImageToolModel || undefined}
+                          aria-describedby={
+                            hasInvalidImageToolModel ? "env-image-model-error" : undefined
+                          }
+                        >
+                          <SelectValue placeholder={t("请选择图片型号")} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {IMAGE_TOOL_MODELS.map((model) => (
+                              <SelectItem key={model} value={model}>
+                                {model}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
                     ) : (
-                      <span>{t("空")}</span>
+                      <Input
+                        id="env-override-value"
+                        disabled={isSaving}
+                        value={selectedEnvValue}
+                        onChange={(event) =>
+                          onSelectedEnvValueChange(event.target.value)
+                        }
+                        className="h-11 font-mono"
+                        placeholder={t("输入变量值")}
+                      />
                     )}
-                  </p>
-                </div>
+                    {hasInvalidImageToolModel ? (
+                      <Alert id="env-image-model-error" variant="destructive">
+                        <AlertDescription>
+                          <span>{t("当前型号不受支持，请重新选择或恢复默认。")}</span>
+                          <code className="break-all">{selectedEnvValue || t("空")}</code>
+                        </AlertDescription>
+                      </Alert>
+                    ) : null}
+                    <p className="text-[10px] text-muted-foreground">
+                      {t("默认值:")}{" "}
+                      {selectedEnvItem?.defaultValue ? (
+                        <span className="font-mono italic">
+                          {selectedEnvItem.defaultValue}
+                        </span>
+                      ) : (
+                        <span>{t("空")}</span>
+                      )}
+                    </p>
+                  </Field>
+                </FieldGroup>
 
                 <Separator />
                 <div className="flex gap-3">
-                  <Button onClick={onSaveEnv} className="gap-2">
+                  <Button
+                    onClick={onSaveEnv}
+                    disabled={hasInvalidImageToolModel || isSaving}
+                    className="gap-2"
+                  >
                     <Save className="h-4 w-4" /> {t("保存修改")}
                   </Button>
-                  <Button variant="outline" onClick={onResetEnv} className="gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={onResetEnv}
+                    disabled={isSaving}
+                    className="gap-2"
+                  >
                     <RotateCcw className="h-4 w-4" /> {t("恢复默认")}
                   </Button>
                 </div>

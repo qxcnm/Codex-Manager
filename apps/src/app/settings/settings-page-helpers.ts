@@ -10,9 +10,9 @@ export const ENV_DESCRIPTION_MAP: Record<string, string> = {
   CODEXMANAGER_CODEX_IMAGE_GENERATION_ENABLED:
     "控制 OpenAI Images 兼容入口是否启用；默认 1，填 0 会关闭 /v1/images/generations 和 /v1/images/edits。",
   CODEXMANAGER_CODEX_IMAGE_MAIN_MODEL:
-    "控制 Images API 兼容入口内部使用的 Codex 主模型；默认 gpt-6-luna。",
+    "仅用于 Images API 转为 Responses 时的文本主模型；默认 gpt-6-luna，不控制 Codex 原生生图。",
   CODEXMANAGER_CODEX_IMAGE_TOOL_MODEL:
-    "控制 Images API 兼容入口注入的图片工具模型；默认 gpt-image-2。",
+    "控制 CM 接入的 Codex 原生图片请求，并作为兼容 Images API 未指定 model 时的默认值；默认 gpt-image-2，请从列表中选择图片型号。",
   CODEXMANAGER_COMPACT_API_PATH:
     "控制 compact 请求实际转发到哪个上游路径；默认 /v1/responses/compact，可改成 /v1/chat/completions。",
   CODEXMANAGER_UPSTREAM_TOTAL_TIMEOUT_MS:

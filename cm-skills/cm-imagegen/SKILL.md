@@ -1,13 +1,13 @@
 ---
 name: "cm-imagegen"
-description: "Generate or edit raster images through CodexManager's OpenAI-compatible Images API when Codex should use the current Codex provider base_url and auth.json API key instead of the official built-in image_gen tool. Use when the user asks for CodexManager image generation, API-key/provider-mode image generation, or image generation through CodexManager account pools, routing, logs, and billing."
+description: "Generate or edit raster images through CodexManager's OpenAI-compatible Images API using the current Codex provider base_url and provider credentials. Use when the user asks for CodexManager image generation, API-key/provider-mode image generation, or image generation through CodexManager account pools, routing, logs, and billing."
 ---
 
 # CM Image Generation Skill
 
 Generates or edits images for the current project (for example website assets, game assets, UI mockups, product mockups, wireframes, logo design, photorealistic images, or infographics).
 
-This skill follows the same request semantics, prompt workflow, decision tree, and output expectations as the official `imagegen` skill. The only intentional difference is the execution layer: image requests are sent to CodexManager's OpenAI-compatible Images API using the current Codex provider `base_url` and `auth.json` API key.
+This skill follows the same prompt workflow, decision tree, and output expectations as the official `imagegen` skill. Image requests use the bundled CodexManager CLI and the current Codex provider's endpoint and credentials; its supported arguments are documented in `references/cli.md`.
 
 ## Top-level modes and rules
 
@@ -28,10 +28,12 @@ Rules:
 
 CodexManager config policy:
 - If `CODEXMANAGER_IMAGE_BASE_URL` is set, use it as the image request base URL.
-- Otherwise, read the active `model_provider` from `$CODEX_HOME/config.toml`.
+- Otherwise, read the active `model_provider` from `$CODEX_HOME/config.toml`, including a `model_provider` override in the selected `[profiles.<profile>]` when the top-level `profile` is set.
 - Read that provider's `base_url` from `[model_providers.<provider>]`.
-- Read `OPENAI_API_KEY` from `$CODEX_HOME/auth.json`.
+- Read the active provider's `experimental_bearer_token` first, then the environment variable named by that provider's `env_key`. Only when neither is configured, fall back to the legacy top-level `experimental_bearer_token`, then `OPENAI_API_KEY` in `$CODEX_HOME/auth.json`.
+- An explicitly configured but unset `env_key` is a configuration error; do not substitute another provider's key. Never use ChatGPT login tokens as platform keys, and do not modify `auth.json` or ask the user to switch authentication modes to use this skill.
 - Use `CODEXMANAGER_IMAGE_MODEL` only for the image model override; otherwise use `gpt-image-2` for OpenAI-compatible Images providers, or `image-01` when the provider base URL targets the image_generation API (`minimax.io` / `minimaxi.com` hosts).
+- Use the CLI's configured image model by default. Do not copy a different default from the official imagegen CLI, infer that Images API is unavailable from a text-only model list, or interpret a single `model_not_found` response as proof that the provider supports no image models. Report the actual endpoint/model error and check the configured image model.
 - When the provider base URL targets the image_generation API, the CLI calls `POST /v1/image_generation` with `aspect_ratio`/`width`/`height`/`seed`/`n`/`prompt_optimizer`/`response_format` request fields, passes `--image` inputs as `subject_reference`, and parses `data.image_urls` / `data.image_base64` + `base_resp.status_code`; otherwise it calls the OpenAI Images `/images/generations` and `/images/edits` endpoints and parses `data[].b64_json`.
 - Use `CODEXMANAGER_IMAGE_OUTPUT_DIR` only for the output directory override; otherwise save under the current working directory's `generated-images/` folder.
 

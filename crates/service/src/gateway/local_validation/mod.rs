@@ -7,6 +7,7 @@ use super::conversation_binding::RouteConversationSource;
 
 mod auth;
 mod io;
+mod native_images;
 mod request;
 
 pub(crate) use request::is_native_codex_client_request;

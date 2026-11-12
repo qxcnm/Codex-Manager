@@ -47,10 +47,13 @@ export const KO_DYNAMIC_UI_MESSAGES: MessageCatalog = {
   简体中文: "중국어 간체",
   "控制 compact 请求实际转发到哪个上游路径；默认 /v1/responses/compact，可改成 /v1/chat/completions。":
     "compact 요청을 실제로 전달할 상위 경로를 제어합니다. 기본값은 /v1/responses/compact이며 /v1/chat/completions로 변경할 수 있습니다.",
-  "控制 Images API 兼容入口内部使用的 Codex 主模型；默认 gpt-6-luna。":
-    "Images API 호환 엔드포인트 내부에서 사용하는 Codex 주 모델을 제어합니다. 기본값은 gpt-6-luna입니다.",
-  "控制 Images API 兼容入口注入的图片工具模型；默认 gpt-image-2。":
-    "Images API 호환 엔드포인트가 주입하는 이미지 도구 모델을 제어합니다. 기본값은 gpt-image-2입니다.",
+  "仅用于 Images API 转为 Responses 时的文本主模型；默认 gpt-6-luna，不控制 Codex 原生生图。":
+    "Images API 요청을 Responses로 변환할 때만 사용하는 텍스트 주 모델입니다. 기본값은 gpt-6-luna이며 Codex 기본 이미지 생성에는 영향을 주지 않습니다.",
+  "控制 CM 接入的 Codex 原生图片请求，并作为兼容 Images API 未指定 model 时的默认值；默认 gpt-image-2，请从列表中选择图片型号。":
+    "CM을 통한 Codex 기본 이미지 요청 모델과 호환 Images API에서 model을 생략했을 때의 기본값을 제어합니다. 기본값은 gpt-image-2이며 목록에서 이미지 모델을 선택하세요.",
+  请选择图片型号: "이미지 모델 선택",
+  "当前型号不受支持，请重新选择或恢复默认。":
+    "현재 모델은 지원되지 않습니다. 다른 모델을 선택하거나 기본값으로 복원하세요.",
   "控制 OpenAI Images 兼容入口是否启用；默认 1，填 0 会关闭 /v1/images/generations 和 /v1/images/edits。":
     "OpenAI Images 호환 엔드포인트 활성화 여부를 제어합니다. 기본값은 1이며, 0을 입력하면 /v1/images/generations 및 /v1/images/edits가 꺼집니다.",
   来源模型保存结果为空: "소스 모델 저장 결과가 비어 있습니다",

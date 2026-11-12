@@ -340,6 +340,12 @@ pub(crate) fn supports_image_generation(model: &ManagedModelV2) -> bool {
     .unwrap_or(false)
 }
 
+pub(crate) fn supports_image_editing(model: &ManagedModelV2) -> bool {
+    capability(model, &["supports_image_editing", "supportsImageEditing"])
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
 pub(crate) fn ensure_text_generation_model(
     storage: &codexmanager_core::storage::Storage,
     slug: Option<&str>,
@@ -469,10 +475,7 @@ pub(crate) fn model_info(model: &ManagedModelV2) -> ModelInfo {
         ),
         (
             "supports_image_editing".to_string(),
-            capability(model, &["supports_image_editing", "supportsImageEditing"])
-                .and_then(Value::as_bool)
-                .map(Value::Bool)
-                .unwrap_or(Value::Bool(false)),
+            serde_json::json!(supports_image_editing(model)),
         ),
         (
             "supports_transparent_background".to_string(),

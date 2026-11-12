@@ -109,13 +109,17 @@
 
 - `CODEXMANAGER_CODEX_IMAGE_GENERATION_ENABLED`: enables the image-generation compatibility path. Default `1`.
 - `CODEXMANAGER_CODEX_IMAGE_MAIN_MODEL`: main conversation model used internally by Images API compatibility endpoints. Default `gpt-6-luna`. `auto` and known retired models such as `gpt-5.4-mini` fall back to this concrete default, rather than being forwarded as `auto`.
-- `CODEXMANAGER_CODEX_IMAGE_TOOL_MODEL`: default image tool model when the Images request omits `model`. Default `gpt-image-2`; an explicit request `model` takes precedence. `auto` and known retired values fall back to the default.
+- `CODEXMANAGER_CODEX_IMAGE_TOOL_MODEL`: image model for native Codex image requests through CM, and the default tool model when an ordinary Images compatibility request omits `model`. Default `gpt-image-2`. Ordinary compatibility requests still give an explicit `model` precedence. `auto` and known retired values fall back to the default. Use an image model such as `gpt-image-2`, `gpt-image-2.5-sunburst` or `gpt-image-2.5-flare`; `gpt-image-2.5` is not a complete official model name, and text models do not belong in this setting.
 
 Notes:
 
-- `/v1/images/generations` and `/v1/images/edits` are converted internally to `/v1/responses + image_generation tool`.
+- In Settings → Environment, the image tool model uses a dropdown with the three complete model names above. Unsupported stored values are shown explicitly and cannot be saved until replaced or reset. Saving applies to the next image request without restarting CM or Codex.
+- Ordinary `/v1/images/generations` and `/v1/images/edits` compatibility requests use `/v1/responses + image_generation tool` on the account route; native extension requests retain the Images path.
 - These compatibility requests do not inject text-model reasoning effort or platform-key text defaults; some upstream image models reject reasoning effort mapped to image complexity. Model selection is forwarded to the tool, though the upstream may report its own internal image model alias.
-- Non-streaming requests return Images JSON (`data[].b64_json`, or `data[].url` for `response_format=url`). Failed or incomplete upstream responses return a JSON error instead of raw SSE with a JSON content type. JSON requests with explicit `stream=true` retain Images streaming events.
+- In account rotation, Images compatibility requests apply catalog policies to the configured main model after conversion. The tool model does not need a separate text-model catalog entry. Native Images passthrough, aggregate and hybrid routes retain their existing catalog checks.
+- Native Codex image generation uses a separate Images request with a client-fixed image model. For JSON Images requests carrying a non-empty `x-codex-image-turn-id`, CM applies the configured image tool model before catalog, access, route and billing checks. This applies to account, aggregate and hybrid routing, including CCSwitch and manually configured providers without CM's local extension marker. Ordinary API requests without this header retain their explicit model; third parties reusing the header also opt into the configured image model. The image main-model setting does not change this native path. See the [source comparison and client limits](../../report/codex-native-image-generation-20261111.md).
+- `cm-imagegen` reads the active profile/provider's `experimental_bearer_token` or `env_key`, with legacy top-level bearer and `auth.json` API key fallbacks. ChatGPT sign-in can remain in `auth.json`; do not replace it with a platform key just to use this skill. Update installed copies of `cm-imagegen` to pick up credential and CLI documentation fixes.
+- Non-streaming requests return Images JSON (`data[].b64_json`, or `data[].url` for `response_format=url`). Failed or incomplete upstream responses return a JSON error instead of raw SSE with a JSON content type. JSON and multipart edit requests with explicit `stream=true` retain Images streaming events.
 - When Codex CLI sends `tools[].type = "image_generation"` natively, the gateway forwards it and does not affect the existing text request path.
 
 ## 迁移中的弃用项

@@ -1997,17 +1997,25 @@ pub(super) fn build_local_validation_result(
         .map(super::super::parse_request_metadata_from_value)
         .unwrap_or_default();
     let native_codex_client = is_native_codex_client_request(&incoming_headers);
+    let native_image_model_override = super::native_images::resolve_model_override(
+        &storage,
+        effective_protocol_type,
+        logical_path.as_str(),
+        &incoming_headers,
+        initial_request_value.as_ref(),
+    )?;
     let compact_gateway_mode =
         is_compact_subagent_request(normalized_path.as_str(), &incoming_headers)
             .then_some("compact".to_string());
-    let compact_model_override_for_logical_request = resolve_compact_model_override_for_request(
+    let model_override_for_logical_request = resolve_compact_model_override_for_request(
         normalized_path.as_str(),
         &incoming_headers,
         initial_request_meta
             .model
             .as_deref()
             .or(api_key.model_slug.as_deref()),
-    );
+    )
+    .or_else(|| native_image_model_override.clone());
     log::debug!(
         "event=gateway_client_profile trace_id={} path={} originator={} user_agent={} session_affinity={} native_codex={}",
         trace_id.as_str(),
@@ -2052,7 +2060,7 @@ pub(super) fn build_local_validation_result(
             client_body.to_vec(),
             &api_key,
             initial_request_meta.service_tier.clone(),
-            compact_model_override_for_logical_request.as_deref(),
+            model_override_for_logical_request.as_deref(),
         );
         let client_model_for_log = initial_request_meta.model.clone();
         let model_source_for_log = resolve_override_source_for_log(
@@ -2176,32 +2184,43 @@ pub(super) fn build_local_validation_result(
         client_body.to_vec(),
         &api_key,
         initial_request_meta.service_tier.clone(),
-        compact_model_override_for_logical_request.as_deref(),
+        model_override_for_logical_request.as_deref(),
     )
     .0;
-    let passthrough_policy_model = super::super::parse_request_json_value(&passthrough_body)
-        .as_ref()
-        .map(super::super::parse_request_metadata_from_value)
-        .and_then(|metadata| metadata.model);
-    let passthrough_model_for_policy = passthrough_policy_model.as_deref().or_else(|| {
-        compact_model_override_for_logical_request
-            .as_deref()
-            .or(api_key.model_slug.as_deref())
-            .or(initial_request_meta.model.as_deref())
-    });
-    passthrough_body = apply_model_instructions_policy(
-        &storage,
-        passthrough_model_for_policy,
-        passthrough_body,
-        instruction_protocol_for_passthrough(effective_protocol_type),
-    )?;
-    passthrough_body = apply_model_fast_policy(
-        &storage,
-        passthrough_model_for_policy,
-        passthrough_body,
-        initial_service_tier_diagnostic.raw_value.as_deref(),
-    )?
-    .0;
+    let adapts_account_images_request = api_key.rotation_strategy
+        == crate::apikey_profile::ROTATION_ACCOUNT
+        && effective_protocol_type == crate::apikey_profile::PROTOCOL_OPENAI_COMPAT
+        && should_preserve_openai_images_request_fields(logical_path.as_str())
+        && should_adapt_openai_images_request(native_codex_client, &incoming_headers);
+    if !adapts_account_images_request {
+        // Account Images compatibility requests use the configured main model's policies after
+        // adaptation below. Their original model selects an image tool, so validating this
+        // unused passthrough body against the text catalog can reject valid tool models.
+        // Native, aggregate and hybrid routes can forward this body and still need its policies.
+        let passthrough_policy_model = super::super::parse_request_json_value(&passthrough_body)
+            .as_ref()
+            .map(super::super::parse_request_metadata_from_value)
+            .and_then(|metadata| metadata.model);
+        let passthrough_model_for_policy = passthrough_policy_model.as_deref().or_else(|| {
+            model_override_for_logical_request
+                .as_deref()
+                .or(api_key.model_slug.as_deref())
+                .or(initial_request_meta.model.as_deref())
+        });
+        passthrough_body = apply_model_instructions_policy(
+            &storage,
+            passthrough_model_for_policy,
+            passthrough_body,
+            instruction_protocol_for_passthrough(effective_protocol_type),
+        )?;
+        passthrough_body = apply_model_fast_policy(
+            &storage,
+            passthrough_model_for_policy,
+            passthrough_body,
+            initial_service_tier_diagnostic.raw_value.as_deref(),
+        )?
+        .0;
+    }
     let mut passthrough_body_value_for_validation = None;
     if is_non_native_openai_responses_api_request(
         effective_protocol_type,
@@ -2340,7 +2359,24 @@ pub(super) fn build_local_validation_result(
     }
     // 中文注释：下游调用方的 stream 语义必须来自原始客户端请求；
     // 否则协议适配（例如 Anthropic/Gemini 转 /responses 强制 stream=true）会污染响应模式判断。
-    let client_request_meta = initial_request_meta.clone();
+    let mut client_request_meta = initial_request_meta.clone();
+    if matches!(
+        response_adapter,
+        super::super::ResponseAdapter::ImagesB64JsonFromResponses
+            | super::super::ResponseAdapter::ImagesUrlFromResponses
+    ) {
+        // Multipart cannot be parsed as JSON initially. The Images adapter records the original
+        // form's stream flag separately from the internal Responses transport's stream=true.
+        if let Some(stream) = super::super::parse_request_json_value(&body).and_then(|value| {
+            value
+                .get("metadata")?
+                .get("codexmanager_client_stream")?
+                .as_bool()
+        }) {
+            client_request_meta.is_stream = stream;
+            client_request_meta.stream_specified = true;
+        }
+    }
     // Images requests keep their own model semantics even after adapting the transport path.
     let preserve_images_fields =
         should_preserve_openai_images_request_fields(logical_path.as_str());
@@ -2352,6 +2388,8 @@ pub(super) fn build_local_validation_result(
             .as_ref()
             .map(super::super::parse_request_metadata_from_value)
             .and_then(|metadata| metadata.model);
+    } else if let Some(model) = native_image_model_override {
+        effective_model = Some(model);
     }
     effective_model = resolve_compact_model_override_for_request(
         normalized_path.as_str(),

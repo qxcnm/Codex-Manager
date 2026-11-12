@@ -47,10 +47,13 @@ export const EN_DYNAMIC_UI_MESSAGES: MessageCatalog = {
   简体中文: "Simplified Chinese",
   "控制 compact 请求实际转发到哪个上游路径；默认 /v1/responses/compact，可改成 /v1/chat/completions。":
     "Controls which upstream path compact requests are forwarded to. Default is /v1/responses/compact; it can be changed to /v1/chat/completions.",
-  "控制 Images API 兼容入口内部使用的 Codex 主模型；默认 gpt-6-luna。":
-    "Controls the Codex main model used internally by the Images API compatibility endpoint. Default is gpt-6-luna.",
-  "控制 Images API 兼容入口注入的图片工具模型；默认 gpt-image-2。":
-    "Controls the image tool model injected by the Images API compatibility endpoint. Default is gpt-image-2.",
+  "仅用于 Images API 转为 Responses 时的文本主模型；默认 gpt-6-luna，不控制 Codex 原生生图。":
+    "The text model used only when converting Images API requests to Responses. Default is gpt-6-luna; it does not control native Codex image generation.",
+  "控制 CM 接入的 Codex 原生图片请求，并作为兼容 Images API 未指定 model 时的默认值；默认 gpt-image-2，请从列表中选择图片型号。":
+    "Controls native Codex image requests through CM and the default for compatible Images API requests that omit model. Default is gpt-image-2. Select an image model from the list.",
+  请选择图片型号: "Choose an image model",
+  "当前型号不受支持，请重新选择或恢复默认。":
+    "The current model is unsupported. Choose another model or restore the default.",
   "控制 OpenAI Images 兼容入口是否启用；默认 1，填 0 会关闭 /v1/images/generations 和 /v1/images/edits。":
     "Controls whether the OpenAI Images compatibility endpoint is enabled. Default is 1; set 0 to disable /v1/images/generations and /v1/images/edits.",
   来源模型保存结果为空: "Source model save result is empty",

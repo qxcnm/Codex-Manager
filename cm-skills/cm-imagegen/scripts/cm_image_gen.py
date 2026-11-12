@@ -10,6 +10,11 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    tomllib = None
+
 DEFAULT_MODEL = "gpt-image-2"
 DEFAULT_SIZE = "1024x1024"
 DEFAULT_RESPONSE_FORMAT = "b64_json"
@@ -29,8 +34,13 @@ def load_toml_basic(path: Path) -> dict:
     data = {}
     if not path.exists():
         return data
+    if tomllib is not None:
+        try:
+            return tomllib.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            raise SystemExit(f"Failed to read TOML configuration in {path}.") from None
     section = []
-    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for raw in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
@@ -51,21 +61,37 @@ def load_toml_basic(path: Path) -> dict:
     return data
 
 
+def active_provider(cfg: dict) -> tuple[str, dict]:
+    config_path = codex_home() / "config.toml"
+    provider_name = cfg.get("model_provider")
+    profile_name = str(cfg.get("profile") or "").strip()
+    if profile_name:
+        profiles = cfg.get("profiles") or {}
+        profile = profiles.get(profile_name) if isinstance(profiles, dict) else None
+        if not isinstance(profile, dict):
+            raise SystemExit(f"Profile {profile_name!r} is not defined in {config_path}.")
+        provider_name = profile.get("model_provider") or provider_name
+    provider_name = str(provider_name or "").strip()
+    providers = cfg.get("model_providers") or {}
+    if not isinstance(providers, dict):
+        raise SystemExit(f"No model_providers table found in {config_path}.")
+    if provider_name and provider_name not in providers:
+        raise SystemExit(f"model_provider {provider_name!r} is not defined in {config_path}.")
+    provider = providers.get(provider_name) or {}
+    if not isinstance(provider, dict):
+        raise SystemExit(f"model_provider {provider_name!r} is not defined in {config_path}.")
+    return provider_name, provider
+
+
 def provider_base_url() -> str:
     override = os.environ.get("CODEXMANAGER_IMAGE_BASE_URL")
     if override and override.strip():
         return override.strip().rstrip("/")
     config_path = codex_home() / "config.toml"
     cfg = load_toml_basic(config_path)
-    provider_name = str(cfg.get("model_provider") or "").strip()
+    provider_name, provider = active_provider(cfg)
     if not provider_name:
         raise SystemExit(f"No model_provider found in {config_path}.")
-    providers = cfg.get("model_providers") or {}
-    if not isinstance(providers, dict):
-        raise SystemExit(f"No model_providers table found in {config_path}.")
-    provider = providers.get(provider_name) or {}
-    if not isinstance(provider, dict):
-        raise SystemExit(f"model_provider {provider_name!r} is not defined in {config_path}.")
     base_url = str(provider.get("base_url") or "").strip()
     if not base_url:
         raise SystemExit(f"model_provider {provider_name!r} has no base_url in {config_path}.")
@@ -79,16 +105,39 @@ def is_minimax_base_url(base_url: str) -> bool:
 
 
 def load_api_key() -> str:
+    config_path = codex_home() / "config.toml"
+    cfg = load_toml_basic(config_path)
+    _, provider = active_provider(cfg)
+    # Gateway connections preserve auth.json, which may still contain ChatGPT
+    # tokens or an unrelated API key. Use the active provider's credential first.
+    value = provider.get("experimental_bearer_token")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    env_key = provider.get("env_key")
+    if isinstance(env_key, str) and env_key.strip():
+        value = os.environ.get(env_key.strip())
+        if value and value.strip():
+            return value.strip()
+        raise SystemExit(f"The active provider's env_key variable {env_key.strip()!r} is not set.")
+    value = cfg.get("experimental_bearer_token")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
     auth_path = codex_home() / "auth.json"
     if auth_path.exists():
         try:
-            data = json.loads(auth_path.read_text(encoding="utf-8"))
+            data = json.loads(auth_path.read_text(encoding="utf-8-sig"))
+            if not isinstance(data, dict):
+                raise ValueError("Expected an object")
             value = data.get("OPENAI_API_KEY")
             if isinstance(value, str) and value.strip():
                 return value.strip()
-        except Exception as exc:
-            raise SystemExit(f"Failed to read auth.json: {exc}")
-    raise SystemExit(f"No OPENAI_API_KEY found in {auth_path}.")
+        except (OSError, ValueError):
+            raise SystemExit(f"Failed to read authentication from {auth_path}.") from None
+    raise SystemExit(
+        f"No image API credential found. Configure the active provider's experimental_bearer_token "
+        f"or env_key in {config_path}, or OPENAI_API_KEY in {auth_path}. "
+        "ChatGPT login tokens are not CodexManager platform keys; auth.json does not need to be modified."
+    )
 
 
 def sanitize_filename(name: str) -> str:

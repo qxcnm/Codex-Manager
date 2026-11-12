@@ -251,7 +251,7 @@ If this project has helped you, donations are welcome!
 - System internal interface inventory: all desktop/service commands, RPC methods, and built-in plugin functions.
 - Local service: automatic startup with configurable port and listen address.
 - Local gateway: one OpenAI-compatible endpoint for Codex CLI, Gemini CLI, Claude Code, and third-party tools; supports Gemini to `/v1/responses`, SSE, tools, MCP, skills, and request/stream timeouts.
-- Image generation: injects the official Codex `image_generation` tool for `/v1/responses` by default, passes explicitly provided tools through, and provides `/v1/images/generations` and `/v1/images/edits`; the Images API compatibility main model defaults to `gpt-6-luna`, while the injected image tool remains `gpt-image-2` and the two Image 2.5 variants are available for explicit selection.
+- Image generation: passes explicitly provided Responses image tools through and provides `/v1/images/generations` and `/v1/images/edits`; the Images API compatibility main model defaults to `gpt-6-luna`. The image tool defaults to `gpt-image-2`, and its setting also controls native Codex image requests through CM; Image 2.5 uses the complete `gpt-image-2.5-sunburst` or `gpt-image-2.5-flare` name. See [native image support and client limits](docs/report/codex-native-image-generation-20261111.md).
 
 ## Screenshots
 

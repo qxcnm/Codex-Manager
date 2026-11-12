@@ -13,6 +13,9 @@ const COMPACT_API_PATH_ENV: &str = "CODEXMANAGER_COMPACT_API_PATH";
 #[path = "request_companion_page_tests.rs"]
 mod companion_page_tests;
 
+#[path = "request_images_policy_tests.rs"]
+mod images_policy_tests;
+
 struct RuntimeEnvGuard {
     name: &'static str,
     previous_value: Option<String>,

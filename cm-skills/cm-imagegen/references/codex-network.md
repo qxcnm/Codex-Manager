@@ -1,11 +1,11 @@
 # Codex network approvals / sandbox notes
 
-This file is for the fallback CLI mode only. Read it only after the user explicitly asks to use `scripts/image_gen.py`.
+This file covers network access for `scripts/cm_image_gen.py`.
 
-This guidance is intentionally isolated from `SKILL.md` because it can vary by environment and may become stale. Prefer the defaults in your environment when in doubt.
+Network policy varies by environment. Follow the current environment's rules.
 
 ## Why am I asked to approve image generation calls?
-The fallback CLI uses the OpenAI Image API, so it needs outbound network access. In many Codex setups, network access is disabled by default and/or the approval policy requires confirmation before networked commands run.
+The CLI contacts the configured provider endpoint, which may be a local CodexManager gateway or a remote provider. Network restrictions may apply to either. Credentials come from the active provider configuration or legacy `auth.json` API key as described in `cli.md`; a separate official OpenAI API key is not required for CodexManager gateway use.
 
 ## Important note about approvals vs network
 - `--ask-for-approval never` suppresses approval prompts.

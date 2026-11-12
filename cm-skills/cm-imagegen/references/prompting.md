@@ -1,10 +1,8 @@
 # Prompting best practices
 
-These prompting principles are shared by both top-level modes of the skill:
-- built-in `image_gen` tool (default)
-- explicit `scripts/image_gen.py` CLI fallback
+These prompting principles apply to CodexManager image generation through `scripts/cm_image_gen.py`.
 
-This file is about prompt structure, specificity, and iteration. Fallback-only execution controls such as `quality`, `input_fidelity`, masks, output format, and output paths live in the fallback docs.
+This file is about prompt structure, specificity, and iteration. CLI controls such as `quality`, masks, output format, and output paths are documented in `cli.md`.
 
 ## Contents
 - [Structure](#structure)

@@ -47,10 +47,13 @@ export const RU_DYNAMIC_UI_MESSAGES: MessageCatalog = {
   简体中文: "Упрощённый китайский",
   "控制 compact 请求实际转发到哪个上游路径；默认 /v1/responses/compact，可改成 /v1/chat/completions。":
     "Управляет upstream-путём для compact-запросов. По умолчанию /v1/responses/compact; можно изменить на /v1/chat/completions.",
-  "控制 Images API 兼容入口内部使用的 Codex 主模型；默认 gpt-6-luna。":
-    "Управляет основной моделью Codex внутри совместимого endpoint Images API. По умолчанию gpt-6-luna.",
-  "控制 Images API 兼容入口注入的图片工具模型；默认 gpt-image-2。":
-    "Управляет моделью image tool, которую внедряет совместимый endpoint Images API. По умолчанию gpt-image-2.",
+  "仅用于 Images API 转为 Responses 时的文本主模型；默认 gpt-6-luna，不控制 Codex 原生生图。":
+    "Текстовая модель только для преобразования запросов Images API в Responses. По умолчанию gpt-6-luna; не управляет нативной генерацией изображений Codex.",
+  "控制 CM 接入的 Codex 原生图片请求，并作为兼容 Images API 未指定 model 时的默认值；默认 gpt-image-2，请从列表中选择图片型号。":
+    "Управляет нативными запросами изображений Codex через CM и моделью по умолчанию для совместимого Images API, если model не указан. По умолчанию gpt-image-2; выберите модель изображений из списка.",
+  请选择图片型号: "Выберите модель изображений",
+  "当前型号不受支持，请重新选择或恢复默认。":
+    "Текущая модель не поддерживается. Выберите другую модель или восстановите значение по умолчанию.",
   "控制 OpenAI Images 兼容入口是否启用；默认 1，填 0 会关闭 /v1/images/generations 和 /v1/images/edits。":
     "Управляет включением совместимого endpoint OpenAI Images. По умолчанию 1; значение 0 отключает /v1/images/generations и /v1/images/edits.",
   来源模型保存结果为空: "Результат сохранения модели источника пуст",
