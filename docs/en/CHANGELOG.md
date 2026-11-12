@@ -5,6 +5,27 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-11-12
+
+### Added
+
+- Replaced the image tool model input with a dropdown offering the complete names `gpt-image-2`, `gpt-image-2.5-sunburst`, and `gpt-image-2.5-flare`. Invalid saved values show an error and cannot be saved; duplicate save and reset actions are disabled while saving.
+
+### Changed
+
+- Clarified configuration for native Codex image tools, the `cm-imagegen` Skill, and the Images API compatibility path. The image tool model controls native image requests and the default when compatible requests omit `model`; the image main model only applies to Images → Responses conversion.
+- `cm-imagegen` now resolves credentials from the active profile/provider, preferring the provider's `experimental_bearer_token` or `env_key` before root configuration and the API Key in `auth.json`. A missing explicitly configured environment variable fails clearly, and ChatGPT OAuth tokens are not used as CM platform keys. Added coverage for Python versions, UTF-8 BOM, and credential errors.
+- Updated sponsorship display information and removed expired sponsor assets.
+- The image fixes have been checked against official source and local mock upstream regressions. Real-account image generation has not been verified because a test account is unavailable; upstream capacity, account permissions, quota, and model availability remain subject to the actual upstream response.
+
+### Fixed
+
+- Fixed native Codex image requests always using the client's built-in model. Images JSON requests with a valid image-turn identifier can now use the configured image tool model in account, aggregate, and both hybrid rotation modes without a CM-specific actor marker, while preserving the Images generation/edit endpoint and response `generation_id`.
+- Fixed image requests being validated as text models before model rewriting and compatibility conversion. The final body, model capabilities, enabled state, key permissions, routing, and billing now use the same effective model. Explicit models in ordinary Images API requests retain precedence, with separate generation and editing capability checks.
+- Fixed the Images API compatibility path returning `model_not_found` when the original image model was checked against text policy, and fixed multipart image edit requests losing their `stream` setting during conversion.
+- Fixed local Codex Desktop project navigation, workspace roots, labels, and the selected project being lost when switching direct accounts or restoring configuration. State merging preserves existing target-account details, adds backups and concurrency checks, and requires a running Codex Desktop instance to be closed before switching.
+- Fixed known Companion Page context entries without a `call_id` being rejected upstream. Page text and source are converted into user-priority context without altering real tool calls or results, covering HTTP, WebSocket, compact, and BPS forwarding paths.
+
 ## [0.7.3] - 2026-11-09
 
 ### Added

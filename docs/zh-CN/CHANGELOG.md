@@ -5,6 +5,27 @@
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-11-12
+
+### Added
+
+- 图片工具型号改为下拉选择，提供 `gpt-image-2`、`gpt-image-2.5-sunburst` 和 `gpt-image-2.5-flare` 三个完整型号；旧配置中的非法值会显示提示并阻止保存，保存期间禁用重复保存和恢复默认操作。
+
+### Changed
+
+- 明确区分 Codex 原生图片工具、`cm-imagegen` Skill 和 Images API 兼容入口的配置用途：图片工具型号控制原生图片请求和兼容入口省略 `model` 时的默认值，图片主模型只用于 Images → Responses 转换。
+- `cm-imagegen` 按当前 profile/provider 读取凭据，优先使用 provider 的 `experimental_bearer_token` 或 `env_key`，再使用根配置及 `auth.json` 中的 API Key；指定环境变量缺失时明确失败，不把 ChatGPT OAuth token 当作 CM 平台密钥，并补充 Python 版本、UTF-8 BOM 和凭据错误回归。
+- 更新赞助展示说明并清理过期赞助素材。
+- 本次图片修复已完成官方源码对照和本地模拟上游回归；由于暂无测试账号，尚未完成真实账号生图验收，上游容量、账号权限、额度及型号可用性仍以实际返回为准。
+
+### Fixed
+
+- 修复 Codex 原生图片请求固定使用客户端内置型号的问题：带有效图片轮次标识的 Images JSON 请求现在可在账号、聚合和两种混合轮转模式下使用配置的图片工具型号，无需 CM 专用 actor 标识，保留原 Images 生成或编辑路径以及响应中的 `generation_id`。
+- 修复图片请求在型号改写和兼容转换前被错误地按文本模型校验的问题，使最终请求体、模型能力、启用状态、Key 权限、路由和计费使用一致的有效型号；普通 Images API 请求显式指定的型号继续优先，生成与编辑能力分别校验。
+- 修复 Images API 兼容入口把原始图片型号误用于文本策略校验而返回 `model_not_found`，以及 multipart 图片编辑请求在转换时丢失 `stream` 设置的问题。
+- 修复切换直连账号或恢复配置时 Codex Desktop 本地项目导航、工作区根目录、标签及选中项目可能丢失的问题；合并保留目标账号已有详情，增加状态备份与并发检查，并要求先关闭正在运行的 Codex Desktop 后再切换。
+- 修复 Companion Page 已知页面上下文缺少 `call_id` 时被上游拒绝的问题；将这类页面正文和来源转换为用户优先级上下文，保留真实工具调用及结果，覆盖 HTTP、WebSocket、compact 和 BPS 转发路径。
+
 ## [0.7.3] - 2026-11-09
 
 ### Added
