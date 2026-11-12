@@ -9,13 +9,11 @@ use super::{
 use axum::http::{header, HeaderValue, Uri};
 use axum::{body::Bytes, extract::State, http::HeaderMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, MutexGuard};
 use std::time::Duration;
 
-static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
-
 fn env_test_lock() -> MutexGuard<'static, ()> {
-    ENV_TEST_LOCK.lock().expect("env test lock")
+    crate::auth::test_env_guard()
 }
 
 struct EnvGuard {
@@ -314,9 +312,122 @@ async fn rpc_proxy_rejects_body_over_the_bounded_upload_limit() {
     );
     let body = Bytes::from(vec![b'x'; codexmanager_service::RPC_BODY_LIMIT_BYTES + 1]);
 
-    let response = super::rpc_proxy(State(state), headers, body).await;
+    let response = super::rpc_proxy(
+        State(state),
+        axum::Extension(codexmanager_service::RpcActor::system_admin()),
+        headers,
+        body,
+    )
+    .await;
 
     assert_eq!(response.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
+async fn rpc_proxy_preserves_authenticated_member_without_reloading_session() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind actor mock");
+    let addr = listener.local_addr().unwrap();
+    let mock = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().route(
+                "/rpc",
+                axum::routing::post(|headers: HeaderMap| async move {
+                    assert_eq!(headers["x-codexmanager-rpc-token"], "actor-test-token");
+                    axum::Json(serde_json::json!({
+                        "role": headers["x-codexmanager-rpc-actor-role"].to_str().unwrap(),
+                        "userId": headers["x-codexmanager-rpc-actor-user-id"].to_str().unwrap(),
+                    }))
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+    let state = Arc::new(crate::AppState {
+        client: super::build_service_proxy_client().unwrap(),
+        service_rpc_url: format!("http://{addr}/rpc"),
+        service_addr: addr.to_string(),
+        rpc_token: "actor-test-token".to_string(),
+        web_auth_session_key: "actor-test-session".to_string(),
+        shutdown_tx,
+        spawned_service: Arc::new(tokio::sync::Mutex::new(false)),
+        missing_ui_html: Arc::new(String::new()),
+    });
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        "x-codexmanager-rpc-actor-role",
+        HeaderValue::from_static("system_admin"),
+    );
+    // The session cookie is absent by the time the proxy runs. The identity
+    // authenticated by middleware must survive session revocation or a mode
+    // change, and an incoming role header must not override that identity.
+    let response = super::rpc_proxy(
+        State(state),
+        axum::Extension(codexmanager_service::RpcActor::from_parts(
+            Some("member"),
+            Some("member-user"),
+        )),
+        headers,
+        Bytes::from_static(
+            br#"{"jsonrpc":"2.0","id":1,"method":"account/chatgptAuthTokens/refresh"}"#,
+        ),
+    )
+    .await;
+    let body = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .unwrap();
+    mock.abort();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["role"], "member");
+    assert_eq!(payload["userId"], "member-user");
+}
+
+#[tokio::test]
+async fn rpc_proxy_rejects_a_request_without_a_trusted_actor_extension() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind untrusted actor route");
+    let addr = listener.local_addr().unwrap();
+    let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+    let state = Arc::new(crate::AppState {
+        client: super::build_service_proxy_client().unwrap(),
+        service_rpc_url: "http://127.0.0.1:1/rpc".to_string(),
+        service_addr: "127.0.0.1:1".to_string(),
+        rpc_token: "actor-test-token".to_string(),
+        web_auth_session_key: "actor-test-session".to_string(),
+        shutdown_tx,
+        spawned_service: Arc::new(tokio::sync::Mutex::new(false)),
+        missing_ui_html: Arc::new(String::new()),
+    });
+    let app = axum::Router::new()
+        .route("/api/rpc", axum::routing::post(super::rpc_proxy))
+        .with_state(state);
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let response = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .post(format!("http://{addr}/api/rpc"))
+        .header("content-type", "application/json")
+        .header("x-codexmanager-rpc-actor-role", "system_admin")
+        .body(r#"{"jsonrpc":"2.0","id":1,"method":"account/list"}"#)
+        .send()
+        .await
+        .unwrap();
+    server.abort();
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert!(response.text().await.unwrap().contains("Extension"));
 }
 
 #[tokio::test]
@@ -390,7 +501,12 @@ async fn rpc_proxy_does_not_replay_committed_writes_through_307_or_308_redirects
             Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"method":"apikey/create","params":{}}"#);
         let response = tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            super::rpc_proxy(State(state), headers, body),
+            super::rpc_proxy(
+                State(state),
+                axum::Extension(codexmanager_service::RpcActor::system_admin()),
+                headers,
+                body,
+            ),
         )
         .await
         .expect("RPC proxy must finish");
@@ -533,6 +649,7 @@ async fn call_rpc_proxy_for_mock(
     );
     super::rpc_proxy(
         State(state),
+        axum::Extension(codexmanager_service::RpcActor::system_admin()),
         headers,
         Bytes::from_static(
             br#"{"jsonrpc":"2.0","id":1,"method":"apikey/create","params":{"retries":99}}"#,

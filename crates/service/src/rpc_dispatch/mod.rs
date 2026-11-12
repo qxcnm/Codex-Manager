@@ -7,6 +7,8 @@ mod storage_reads;
 pub(crate) use network_async::{is_async_method, try_handle_network_request_async};
 mod account_async;
 mod account_auth_async;
+#[cfg(test)]
+mod account_permissions_tests;
 mod aggregate_async;
 mod codex_profile_async;
 mod codex_skills_async;
@@ -221,30 +223,6 @@ const MEMBER_METHOD_ALLOWLIST: &[&str] = &[
     "serviceHealth/summary",
     "serviceHealth/report",
     "serviceHealth/resolve",
-    "account/chatgptAuthTokens/refresh",
-    "account/chatgptAuthTokens/refreshAll",
-    "account/list",
-    "account/proxy/clear",
-    "account/proxy/cancel-test",
-    "account/proxy/get",
-    "account/proxy/latency-test",
-    "account/proxy/set",
-    "account/proxy/speed-test",
-    "account/proxy/cloudflare-speed-test",
-    "account/proxy/speed-test-history",
-    "account/proxy/latency-test-history",
-    "account/proxy/diagnostics-history",
-    "account/proxy/test",
-    "account/proxy/test-job",
-    "account/read",
-    "account/update",
-    "account/updateSorts",
-    "account/resetWarmup/update",
-    "account/usage/aggregate",
-    "account/usage/list",
-    "account/usage/read",
-    "account/usage/refresh",
-    "account/warmup",
     "accountManager/password/change",
     "accountManager/profile/update",
     "accountManager/session/current",
@@ -270,20 +248,21 @@ const MEMBER_METHOD_ALLOWLIST: &[&str] = &[
 ];
 
 fn member_method_allowed(method: &str) -> bool {
-    // Native storage RPCs already in the allowlist need no synchronous settings
-    // lookup. Retain the password-mode compatibility policy for other methods.
-    MEMBER_METHOD_ALLOWLIST.contains(&method) || crate::current_web_auth_mode() == "password"
+    // Authorization belongs to the authenticated actor, not mutable auth mode.
+    // Password-mode Web and desktop callers already carry administrator identity.
+    MEMBER_METHOD_ALLOWLIST.contains(&method)
 }
 
 fn admin_only_method(method: &str) -> bool {
+    // account/* operates on the operator's shared upstream pool in every auth
+    // mode. Member self-service lives in accountManager/* and must never expose
+    // pooled OAuth credentials.
+    if method.starts_with("account/") {
+        return true;
+    }
     matches!(
         method,
         "codexProfile/applyModels"
-            | "account/bps/update"
-            | "account/bps/login/start"
-            | "account/bps/login/status"
-            | "account/usage/resetCredits"
-            | "account/usage/resetCredit/consume"
             | "apikey/managedModelPriceSyncV2"
             | "apikey/managedModelReorderV2"
             | "storage/spaceUsage"

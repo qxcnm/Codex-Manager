@@ -5,6 +5,12 @@ use serde::Deserialize;
 
 const WEB_AUTH_TAB_SESSION_STORAGE_KEY: &str = "codexmanager_web_auth_tab";
 
+#[cfg(test)]
+pub(super) fn test_env_guard() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct LoginForm {
     username: Option<String>,
@@ -208,15 +214,43 @@ fn is_public_static_asset_path(path: &str) -> bool {
 /// # 返回
 /// 返回函数执行结果
 fn request_is_authenticated(headers: &HeaderMap, state: &AppState) -> bool {
-    match codexmanager_service::current_web_auth_mode().as_str() {
-        "none" => true,
-        "accounts" => current_app_session_from_headers(headers).is_some(),
+    authenticated_rpc_actor(headers, state).is_some()
+}
+
+fn authenticated_rpc_actor(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Option<codexmanager_service::RpcActor> {
+    // Resolve the auth mode and identity once. A later session revocation or
+    // mode transition must never turn an authenticated member into an admin.
+    let mode = codexmanager_service::current_web_auth_mode();
+    let password_hash = (mode == "password")
+        .then(current_web_access_password_hash)
+        .flatten();
+    rpc_actor_for_auth_mode(&mode, headers, state, password_hash.as_deref())
+}
+
+fn rpc_actor_for_auth_mode(
+    mode: &str,
+    headers: &HeaderMap,
+    state: &AppState,
+    password_hash: Option<&str>,
+) -> Option<codexmanager_service::RpcActor> {
+    match mode {
+        "none" => Some(codexmanager_service::RpcActor::system_admin()),
+        "accounts" => app_session_from_headers(headers).map(|session| {
+            codexmanager_service::RpcActor::from_parts(
+                Some(&session.user.role),
+                Some(&session.user.id),
+            )
+        }),
         _ => password_request_is_authenticated(
             headers,
-            current_web_access_password_hash().as_deref(),
+            password_hash,
             &state.rpc_token,
             &state.web_auth_session_key,
-        ),
+        )
+        .then(codexmanager_service::RpcActor::system_admin),
     }
 }
 
@@ -244,6 +278,12 @@ pub(super) fn current_app_session_from_headers(
     if codexmanager_service::current_web_auth_mode() != "accounts" {
         return None;
     }
+    app_session_from_headers(headers)
+}
+
+fn app_session_from_headers(
+    headers: &HeaderMap,
+) -> Option<codexmanager_service::AppSessionUserResult> {
     parse_cookie_value(headers, WEB_AUTH_COOKIE_NAME).and_then(|token| {
         codexmanager_service::resolve_app_user_session(&token)
             .ok()
@@ -600,14 +640,15 @@ fn logout_success_html() -> String {
 /// 返回函数执行结果
 pub(super) async fn web_auth_middleware(
     State(state): State<Arc<AppState>>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Response {
     let path = request.uri().path().to_string();
     if path == "/__login" || path == "/__logout" || is_public_static_asset_path(&path) {
         return next.run(request).await;
     }
-    if request_is_authenticated(request.headers(), state.as_ref()) {
+    if let Some(actor) = authenticated_rpc_actor(request.headers(), state.as_ref()) {
+        request.extensions_mut().insert(actor);
         return next.run(request).await;
     }
     if path.starts_with("/api/") {

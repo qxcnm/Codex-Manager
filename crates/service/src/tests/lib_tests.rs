@@ -315,7 +315,7 @@ fn password_mode_can_call_admin_rpcs() {
     let db_path = setup_dashboard_test_db("codexmanager-password-model-source-rpc");
     set_web_access_password(Some("password123")).expect("set web password");
     set_web_auth_mode("password").expect("enable password mode");
-    let actor = RpcActor::from_parts(Some(ROLE_MEMBER), Some("password-mode-user"));
+    let actor = RpcActor::from_parts(None, None);
 
     let admin_resp = response_result(handle_request_with_actor(
         JsonRpcRequest {
@@ -353,7 +353,7 @@ fn removed_legacy_model_rpcs_return_unknown_method() {
     ] {
         let resp = handle_request_with_actor(
             rpc_request(method, serde_json::json!({})),
-            RpcActor::from_parts(Some(ROLE_MEMBER), Some("member-user")),
+            RpcActor::system_admin(),
         );
         match resp {
             JsonRpcMessage::Error(err) => {
@@ -928,7 +928,7 @@ fn member_api_key_updates_preserve_admin_routing_fields() {
 }
 
 #[test]
-fn account_group_name_rpc_is_admin_only_without_blocking_member_profile_updates() {
+fn account_pool_updates_are_admin_only() {
     let _guard = test_env_guard();
     let db_path = setup_dashboard_test_db("codexmanager-account-group-rpc-permission");
     let storage = storage_helpers::open_storage().expect("open storage");
@@ -978,11 +978,7 @@ fn account_group_name_rpc_is_admin_only_without_blocking_member_profile_updates(
         ),
         member.clone(),
     ));
-    assert!(
-        member_sort.result.get("error").is_none(),
-        "{:?}",
-        member_sort.result
-    );
+    assert_eq!(rpc_error(&member_sort), "permission_denied: account/update");
     let member_group = response_result(handle_request_with_actor(
         rpc_request(
             "account/update",
@@ -992,13 +988,13 @@ fn account_group_name_rpc_is_admin_only_without_blocking_member_profile_updates(
     ));
     assert_eq!(
         rpc_error(&member_group),
-        "permission_denied: account/update groupName"
+        "permission_denied: account/update"
     );
     let unchanged = storage
         .find_account_by_id("acc-group-rpc")
         .expect("read unchanged account")
         .expect("account exists");
-    assert_eq!(unchanged.sort, 7);
+    assert_eq!(unchanged.sort, 0);
     assert_eq!(unchanged.group_name.as_deref(), Some("team-a"));
 
     let admin_clear = response_result(handle_request_with_actor(

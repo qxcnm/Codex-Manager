@@ -38,7 +38,7 @@ fn reset_warmup_rpc_persists_single_and_batch_settings_without_changing_account_
     let update = |params| {
         response_result(handle_request_with_actor(
             rpc_request("account/resetWarmup/update", params),
-            RpcActor::from_parts(Some(ROLE_MEMBER), Some("member-reset-warmup")),
+            RpcActor::system_admin(),
         ))
         .result
     };

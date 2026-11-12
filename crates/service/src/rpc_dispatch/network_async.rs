@@ -394,6 +394,10 @@ mod tests {
         for method in [
             "account/login/start",
             "account/login/complete",
+            "account/read",
+            "account/chatgptAuthTokens/refresh",
+            "account/chatgptAuthTokens/refreshAll",
+            "account/proxy/test",
             "account/fetchModels",
             "account/test",
             "aggregateApi/fetchModels",
@@ -465,6 +469,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(actual, serde_json::to_value(expected).unwrap());
-        assert_ne!(actual["result"]["errorCode"], "permission_denied");
+        assert_eq!(actual["result"]["errorCode"], "permission_denied");
     }
 }

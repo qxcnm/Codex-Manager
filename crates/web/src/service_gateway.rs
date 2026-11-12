@@ -369,6 +369,7 @@ pub(super) async fn ensure_service_running(
 /// 返回函数执行结果
 pub(super) async fn rpc_proxy(
     State(state): State<Arc<AppState>>,
+    axum::Extension(actor): axum::Extension<codexmanager_service::RpcActor>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -382,11 +383,10 @@ pub(super) async fn rpc_proxy(
         .client
         .post(&state.service_rpc_url)
         .header("content-type", "application/json")
-        .header("x-codexmanager-rpc-token", &state.rpc_token);
-    if let Some(session) = auth::current_app_session_from_headers(&headers) {
-        request = request
-            .header("x-codexmanager-rpc-actor-role", session.user.role)
-            .header("x-codexmanager-rpc-actor-user-id", session.user.id);
+        .header("x-codexmanager-rpc-token", &state.rpc_token)
+        .header("x-codexmanager-rpc-actor-role", actor.role);
+    if let Some(user_id) = actor.user_id {
+        request = request.header("x-codexmanager-rpc-actor-user-id", user_id);
     }
     let resp = request.body(body).send().await;
     let resp = match resp {
