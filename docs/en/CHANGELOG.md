@@ -5,8 +5,17 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-11-13
+
+### Changed
+
+- Upgraded Next.js to `16.4.1` and refreshed related frontend dependencies to include upstream security and compatibility updates.
+
 ### Fixed
 
+- Fixed the Linux updater failing to recognize architecture-specific portable archives and potentially choosing an installer for another CPU architecture. Portable, AppImage, deb, and rpm selection now matches the current architecture and excludes other architectures and `.zsync` metadata. Older Linux clients that cannot update in-app should manually download the matching v0.7.5 package for this upgrade.
+- Fixed ordinary members being able to access the shared upstream account pool and OAuth credentials in multi-user Web mode. All `account/*` operations, including reads, token refresh, proxy settings, and usage management, now require an administrator; member profile, password, and platform key self-service remain available.
+- Fixed Web RPC forwarding losing the authenticated identity when reloading a session. The authenticated actor now stays attached throughout the request, preventing session revocation or authentication-mode changes from falling back to administrator privileges; member permissions no longer expand with the current authentication mode.
 - Fix incomplete tool-context recovery during Responses WebSocket follow-ups, including `tool_search` calls and results. Same-account recovery preserves response history references, session metadata, and reasoning, with bounded repairs for distinct missing calls instead of dropping context or rejecting unrelated historical outputs (#527).
 
 ## [0.7.4] - 2026-11-12
