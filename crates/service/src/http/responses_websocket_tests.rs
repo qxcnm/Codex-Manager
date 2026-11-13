@@ -655,7 +655,7 @@ fn websocket_stale_tool_output_after_task_boundary_recovers_from_call_registry()
         r#"{"type":"error","status":400,"error":{"type":"invalid_request_error","code":null,"message":"No tool call found for custom tool call output with call_id call_stale_task.","param":"input"}}"#,
     )
     .expect("exact upstream missing-tool terminal");
-    let mut already_retried = false;
+    let mut already_retried = std::collections::HashSet::new();
     let recovered = prepare_missing_ws_tool_call_retry(
         stale_request.text.as_str(),
         &cached,
@@ -666,7 +666,7 @@ fn websocket_stale_tool_output_after_task_boundary_recovers_from_call_registry()
     .expect("cached call must make the stale output self-contained");
     let value: Value = serde_json::from_str(recovered.as_str()).expect("parse recovered request");
     let input = value["input"].as_array().expect("recovered input array");
-    assert!(already_retried);
+    assert_eq!(already_retried.len(), 1);
     assert_eq!(input.len(), 2);
     assert_eq!(input[0]["type"], "custom_tool_call");
     assert_eq!(input[0]["call_id"], "call_stale_task");
@@ -2325,7 +2325,7 @@ fn websocket_detects_previous_response_not_found_terminal() {
 }
 
 #[test]
-fn websocket_detects_exact_missing_custom_and_function_tool_call_terminals() {
+fn websocket_detects_missing_tool_call_terminals() {
     for (message, expected_kind, expected_call_id) in [
         (
             "No tool call found for custom tool call output with call_id call_custom_1.",
@@ -2351,6 +2351,16 @@ fn websocket_detects_exact_missing_custom_and_function_tool_call_terminals() {
             "NO TOOL CALL FOUND for function call output related to call_id=\"call_function_3\".",
             WsToolCallKind::Function,
             "call_function_3",
+        ),
+        (
+            "No tool call found for tool search output with call_id call_search_1.",
+            WsToolCallKind::ToolSearch,
+            "call_search_1",
+        ),
+        (
+            "No tool call found for tool search call output with call_id: 'call_search_2'.",
+            WsToolCallKind::ToolSearch,
+            "call_search_2",
         ),
     ] {
         let terminal = inspect_ws_terminal_event(
@@ -2405,15 +2415,15 @@ fn websocket_missing_tool_call_recovery_changes_payload_and_retries_only_once() 
         r#"{"type":"response.failed","status":400,"error":{"message":"No tool call found for custom tool call output with call_id call_retry_once."}}"#,
     )
     .expect("missing tool call terminal");
-    let mut already_retried = false;
+    let mut already_retried = std::collections::HashSet::new();
 
     let recovered =
         prepare_missing_ws_tool_call_retry(&request, &cache, &terminal, &mut already_retried)
             .expect("prepare recovery")
             .expect("matching cached call should allow recovery");
     let value: Value = serde_json::from_str(&recovered).expect("parse recovered request");
-    assert!(already_retried);
-    assert!(value.get("previous_response_id").is_none());
+    assert_eq!(already_retried.len(), 1);
+    assert_eq!(value["previous_response_id"], "resp_old");
     assert_eq!(value["input"][0]["type"], "custom_tool_call");
     assert_eq!(value["input"][1]["type"], "custom_tool_call_output");
 
@@ -2430,7 +2440,7 @@ fn websocket_missing_tool_call_recovery_requires_a_matching_call_and_changed_reb
         r#"{"type":"error","status":400,"error":{"message":"No tool call found for custom tool call output with call_id call_unchanged."}}"#,
     )
     .expect("missing tool call terminal");
-    let mut already_retried = false;
+    let mut already_retried = std::collections::HashSet::new();
     let orphan = json!({
         "type": "response.create",
         "input": [{
@@ -2448,7 +2458,7 @@ fn websocket_missing_tool_call_recovery_requires_a_matching_call_and_changed_reb
     )
     .expect("orphan recovery check")
     .is_none());
-    assert!(!already_retried);
+    assert!(already_retried.is_empty());
 
     let already_rebased = json!({
         "type": "response.create",
@@ -2475,5 +2485,102 @@ fn websocket_missing_tool_call_recovery_requires_a_matching_call_and_changed_reb
     )
     .expect("unchanged recovery check")
     .is_none());
-    assert!(!already_retried);
+    assert!(already_retried.is_empty());
+}
+
+#[test]
+fn websocket_recovered_request_state_keeps_history_expansion_consistent() {
+    let _guard = crate::test_env_guard();
+    let context = WsRequestContext {
+        api_key: sample_api_key(),
+        incoming_headers: sample_incoming_headers(None, None),
+        prompt_cache_key: None,
+        cache_affinity_key: None,
+        route_conversation_id: None,
+        route_conversation_source: None,
+        effective_upstream_base: "https://chatgpt.com/backend-api/codex".into(),
+        prefer_raw_errors: false,
+    };
+    let mut prepared = rewrite_client_frame(
+        &json!({"type":"response.create", "model":"gpt-5.4",
+            "previous_response_id":"resp_parent", "input":"follow up"})
+        .to_string(),
+        &context,
+    )
+    .unwrap();
+    let full_input = json!([
+        {"role":"user", "content":"original instruction"},
+        {"role":"user", "content":"follow up"}
+    ]);
+    super::replace_ws_request_text(
+        &mut prepared,
+        json!({"type":"response.create", "input":full_input}).to_string(),
+    )
+    .unwrap();
+    assert!(prepared.previous_response_id.is_none());
+    assert_eq!(prepared.input, full_input);
+
+    let mut history = CompletedWsResponseCache::default();
+    super::cache_completed_ws_response(
+        &mut history,
+        &prepared,
+        &json!({"type":"response.completed", "response":{"id":"resp_recovered", "output":[]}})
+            .to_string(),
+    );
+    let recovered = super::expand_response_create_previous_response(
+        &json!({"type":"response.create", "previous_response_id":"resp_recovered", "input":"next turn"}).to_string(),
+        &history,
+    ).unwrap().unwrap();
+    let recovered: Value = serde_json::from_str(&recovered).unwrap();
+    assert_eq!(recovered["input"].as_array().unwrap().len(), 3);
+    assert_eq!(recovered["input"][0], full_input[0]);
+    assert_eq!(recovered["input"][1], full_input[1]);
+
+    super::replace_ws_request_text(&mut prepared,
+        json!({"type":"response.create", "previous_response_id":"resp_recovered", "input":"next turn"}).to_string()).unwrap();
+    assert_eq!(
+        prepared.previous_response_id.as_deref(),
+        Some("resp_recovered")
+    );
+}
+
+#[test]
+fn websocket_missing_tool_recovery_has_a_per_turn_budget() {
+    let mut cache = CompletedWsToolCallCache::default();
+    let mut outputs = Vec::new();
+    for index in 0..=super::RESPONSES_WS_MAX_TOOL_CONTEXT_RECOVERY_ATTEMPTS {
+        let call_id = format!("call_budget_{index}");
+        cache.observe_input(&json!([{
+            "type":"function_call", "call_id":call_id, "name":"lookup", "arguments":"{}"
+        }]));
+        outputs.push(
+            json!({"type":"function_call_output", "call_id":call_id, "output":"real result"}),
+        );
+    }
+    let mut request =
+        json!({"type":"response.create", "previous_response_id":"resp_live", "input":outputs})
+            .to_string();
+    let mut retried_calls = std::collections::HashSet::new();
+    for index in 0..=super::RESPONSES_WS_MAX_TOOL_CONTEXT_RECOVERY_ATTEMPTS {
+        let terminal = inspect_ws_terminal_event(&json!({"type":"error", "status":400,
+            "error":{"message":format!("No tool call found for function call output with call_id call_budget_{index}.")}}).to_string()).unwrap();
+        let recovered =
+            prepare_missing_ws_tool_call_retry(&request, &cache, &terminal, &mut retried_calls)
+                .unwrap();
+        if index < super::RESPONSES_WS_MAX_TOOL_CONTEXT_RECOVERY_ATTEMPTS {
+            request =
+                recovered.expect("a new observed missing call can be repaired within the budget");
+            let value: Value = serde_json::from_str(&request).unwrap();
+            assert_eq!(value["previous_response_id"], "resp_live");
+        } else {
+            assert!(
+                recovered.is_none(),
+                "a turn must stop after its finite repair budget"
+            );
+        }
+    }
+    assert_eq!(
+        retried_calls.len(),
+        super::RESPONSES_WS_MAX_TOOL_CONTEXT_RECOVERY_ATTEMPTS
+    );
 }

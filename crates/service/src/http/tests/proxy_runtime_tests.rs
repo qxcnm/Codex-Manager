@@ -32,6 +32,8 @@ use tokio_tungstenite::tungstenite::Message;
 mod responses_websocket_http_bridge_tests;
 #[path = "responses_websocket_interrupt_tests.rs"]
 mod responses_websocket_interrupt_tests;
+#[path = "responses_websocket_tool_context_tests.rs"]
+mod responses_websocket_tool_context_tests;
 
 struct EnvGuard {
     key: &'static str,

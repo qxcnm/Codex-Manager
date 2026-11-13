@@ -5,6 +5,10 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix incomplete tool-context recovery during Responses WebSocket follow-ups, including `tool_search` calls and results. Same-account recovery preserves response history references, session metadata, and reasoning, with bounded repairs for distinct missing calls instead of dropping context or rejecting unrelated historical outputs (#527).
+
 ## [0.7.4] - 2026-11-12
 
 ### Added

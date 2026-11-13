@@ -35,6 +35,7 @@ const WS_ACCOUNT_AFFINITY_KEYS: &[&str] = &[
 pub(super) enum WsToolCallKind {
     Function,
     Custom,
+    ToolSearch,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -81,6 +82,7 @@ impl WsToolCallKind {
         match self {
             Self::Function => "function_call",
             Self::Custom => "custom_tool_call",
+            Self::ToolSearch => "tool_search_call",
         }
     }
 
@@ -88,6 +90,7 @@ impl WsToolCallKind {
         match self {
             Self::Function => "function_call_output",
             Self::Custom => "custom_tool_call_output",
+            Self::ToolSearch => "tool_search_output",
         }
     }
 }
@@ -468,11 +471,18 @@ fn normalize_ws_tool_call_item(item: &Value) -> Option<(WsToolCallKey, Value)> {
     {
         "function_call" => WsToolCallKind::Function,
         "custom_tool_call" => WsToolCallKind::Custom,
+        "tool_search_call" => WsToolCallKind::ToolSearch,
         _ => return None,
     };
+    // Server-executed tool searches may have no call_id. Their item id is not
+    // a call identifier and must never be invented as one for replay.
     let call_id = object
         .get("call_id")
-        .or_else(|| object.get("id"))
+        .or_else(|| {
+            object
+                .get("id")
+                .filter(|_| kind != WsToolCallKind::ToolSearch)
+        })
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())?
@@ -504,8 +514,16 @@ fn ws_tool_output_key(item: &Value) -> Result<Option<WsToolCallKey>, String> {
     {
         "function_call_output" => WsToolCallKind::Function,
         "custom_tool_call_output" => WsToolCallKind::Custom,
+        "tool_search_output" => WsToolCallKind::ToolSearch,
         _ => return Ok(None),
     };
+    if kind == WsToolCallKind::ToolSearch
+        && object.get("call_id").is_none_or(|call_id| {
+            call_id.is_null() || call_id.as_str().is_some_and(|id| id.trim().is_empty())
+        })
+    {
+        return Ok(None);
+    }
     let output_type = kind.output_item_type();
     let call_id = object
         .get("call_id")
@@ -517,6 +535,17 @@ fn ws_tool_output_key(item: &Value) -> Result<Option<WsToolCallKey>, String> {
         kind,
         call_id: call_id.to_string(),
     }))
+}
+
+fn ws_tool_output_matches_key(item: &Value, key: &WsToolCallKey) -> bool {
+    item.get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|item_type| {
+            item_type
+                .trim()
+                .eq_ignore_ascii_case(key.kind.output_item_type())
+        })
+        && item.get("call_id").and_then(Value::as_str).map(str::trim) == Some(key.call_id.as_str())
 }
 
 fn remove_ws_account_affinity_fields(object: &mut serde_json::Map<String, Value>) {
@@ -560,6 +589,21 @@ pub(super) fn rebase_response_create_for_account_change(
         object.remove("client_metadata");
     }
 
+    restore_ws_tool_call_pairs(object, completed_tool_calls, None)?;
+
+    let serialized = serde_json::to_vec(&value)
+        .map_err(|err| format!("serialize response.create after account rebase failed: {err}"))?;
+    let serialized =
+        crate::gateway::strip_cross_account_encrypted_content(&serialized).unwrap_or(serialized);
+    String::from_utf8(serialized)
+        .map_err(|err| format!("serialize response.create after account rebase failed: {err}"))
+}
+
+fn restore_ws_tool_call_pairs(
+    object: &mut serde_json::Map<String, Value>,
+    completed_tool_calls: &CompletedWsToolCallCache,
+    target: Option<&WsToolCallKey>,
+) -> Result<(), String> {
     if let Some(input) = object.get("input").cloned() {
         let input_was_array = input.is_array();
         let items = match input {
@@ -576,7 +620,19 @@ pub(super) fn rebase_response_create_for_account_change(
         let mut input_changed = false;
 
         for item in items {
-            if let Some((key, normalized)) = normalize_ws_tool_call_item(&item) {
+            let call = normalize_ws_tool_call_item(&item);
+            if let Some(target) = target {
+                // Other results may refer to calls already retained by a live
+                // previous_response_id. Leave them and their calls untouched;
+                // only fresh-account recovery must validate every pair.
+                if !call.as_ref().is_some_and(|(key, _)| key == target)
+                    && !ws_tool_output_matches_key(&item, target)
+                {
+                    rewritten_items.push(item);
+                    continue;
+                }
+            }
+            if let Some((key, normalized)) = call {
                 if emitted_calls.insert(key) {
                     input_changed |= normalized != item;
                     rewritten_items.push(normalized);
@@ -614,12 +670,7 @@ pub(super) fn rebase_response_create_for_account_change(
         }
     }
 
-    let serialized = serde_json::to_vec(&value)
-        .map_err(|err| format!("serialize response.create after account rebase failed: {err}"))?;
-    let serialized =
-        crate::gateway::strip_cross_account_encrypted_content(&serialized).unwrap_or(serialized);
-    String::from_utf8(serialized)
-        .map_err(|err| format!("serialize response.create after account rebase failed: {err}"))
+    Ok(())
 }
 
 pub(super) fn rebase_response_create_for_missing_tool_call(
@@ -648,11 +699,7 @@ pub(super) fn rebase_response_create_for_missing_tool_call(
     };
     let has_expected_output = items
         .iter()
-        .map(ws_tool_output_key)
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .any(|key| key == expected);
+        .any(|item| ws_tool_output_matches_key(item, &expected));
     if !has_expected_output {
         return Ok(None);
     }
@@ -664,9 +711,22 @@ pub(super) fn rebase_response_create_for_missing_tool_call(
         return Ok(None);
     }
 
-    let rebased = rebase_response_create_for_account_change(text, completed_tool_calls)?;
-    let rebased_value = serde_json::from_str::<Value>(&rebased).map_err(|err| {
-        format!("parse response.create after tool context recovery failed: {err}")
+    let mut rebased = original.clone();
+    let object = rebased.as_object_mut().ok_or_else(|| {
+        "response.create for tool context recovery must be a JSON object".to_string()
     })?;
-    Ok((rebased_value != original).then_some(rebased))
+    // A missing call on an otherwise live socket does not make its response
+    // chain or account affinity invalid. Repair only the observed call pairs;
+    // stale response ids use the separate full-history recovery path.
+    restore_ws_tool_call_pairs(object, completed_tool_calls, Some(&expected))?;
+    if rebased == original {
+        return Ok(None);
+    }
+    serde_json::to_string(&rebased).map(Some).map_err(|err| {
+        format!("serialize response.create after tool context recovery failed: {err}")
+    })
 }
+
+#[cfg(test)]
+#[path = "tests/responses_websocket_tool_search_tests.rs"]
+mod tool_search_tests;

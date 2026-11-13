@@ -66,6 +66,9 @@ const RESPONSES_WS_MAX_PENDING_FRAME_SEND_ATTEMPTS: usize = 2;
 // A response can emit only connection preamble events before a transport reset. Reconnect the
 // lane at most twice in that state; once substantive output exists, replay is not safe.
 const RESPONSES_WS_MAX_PRE_COMPLETION_RECOVERY_ATTEMPTS: u8 = 2;
+// Repair each upstream-reported missing call once, with a per-turn cap so a
+// request containing many stale results cannot amplify into unbounded retries.
+const RESPONSES_WS_MAX_TOOL_CONTEXT_RECOVERY_ATTEMPTS: usize = 8;
 // Tool-call output can arrive in a new frontend task after the upstream websocket was closed.
 // Retain only the call descriptors needed to make that output self-contained; response history
 // is intentionally not retained here because it was the source of the previous over-broad fix.
@@ -122,7 +125,7 @@ struct PendingWsRequestState {
     buffered_upstream_preamble: Vec<String>,
     buffer_retry_preamble: bool,
     attempted_account_ids: HashSet<String>,
-    retried_missing_tool_call_context: bool,
+    retried_missing_tool_calls: HashSet<(WsToolCallKind, String)>,
     interrupt_requested: bool,
 }
 
@@ -622,7 +625,7 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
             false,
         ),
         attempted_account_ids: first_attempted_account_ids,
-        retried_missing_tool_call_context: false,
+        retried_missing_tool_calls: HashSet::new(),
         interrupt_requested: false,
     };
 
@@ -879,7 +882,7 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
                                     buffered_upstream_preamble: Vec::new(),
                                     buffer_retry_preamble,
                                     attempted_account_ids,
-                                    retried_missing_tool_call_context: false,
+                                    retried_missing_tool_calls: HashSet::new(),
                                     interrupt_requested: false,
                                 };
                                 let (must_reselect_account, fresh_conversation_routing, fresh_route_strategy, fresh_route_source) = match ws_collect_routed_candidates(
@@ -2546,7 +2549,8 @@ async fn reconnect_upstream_for_pending_request(
             &replacement,
             &pending.attempted_account_ids,
             pending.prepared.text.as_str(),
-            pending.retried_missing_tool_call_context,
+            pending.retried_missing_tool_calls.len()
+                >= RESPONSES_WS_MAX_TOOL_CONTEXT_RECOVERY_ATTEMPTS,
         );
         let frame = capture_native_ws_upstream_attempt(
             context,
@@ -2667,7 +2671,7 @@ async fn wait_for_client_request_and_reconnect_upstream(
         buffered_upstream_preamble: Vec::new(),
         buffer_retry_preamble: false,
         attempted_account_ids: HashSet::new(),
-        retried_missing_tool_call_context: false,
+        retried_missing_tool_calls: HashSet::new(),
         interrupt_requested: false,
     };
     match reconnect_upstream_for_pending_request(
@@ -3739,6 +3743,7 @@ fn ws_request_has_tool_call_output(text: &str) -> bool {
             .is_some_and(|item_type| {
                 item_type.eq_ignore_ascii_case("custom_tool_call_output")
                     || item_type.eq_ignore_ascii_case("function_call_output")
+                    || item_type.eq_ignore_ascii_case("tool_search_output")
             })
     };
     match input {
@@ -3751,10 +3756,10 @@ fn should_buffer_ws_retry_preamble(
     upstream: &ConnectedUpstreamWebsocket,
     attempted_account_ids: &HashSet<String>,
     request_text: &str,
-    retried_missing_tool_call_context: bool,
+    tool_context_recovery_exhausted: bool,
 ) -> bool {
     has_unattempted_ws_failover_candidate(upstream, attempted_account_ids)
-        || (!retried_missing_tool_call_context && ws_request_has_tool_call_output(request_text))
+        || (!tool_context_recovery_exhausted && ws_request_has_tool_call_output(request_text))
 }
 
 async fn flush_ws_upstream_preamble(
@@ -3894,28 +3899,42 @@ fn prepare_ws_request_for_new_connection(
                 "response.create declared previous_response_id but no recoverable id was found",
             )
         })?;
-        pending.prepared.text = expanded;
-        pending.prepared.previous_response_id = None;
-        pending.prepared.input = ws_request_input_from_text(pending.prepared.text.as_str())?;
+        replace_ws_request_text(&mut pending.prepared, expanded)?;
     }
     if account_changed {
-        pending.prepared.text = rebase_ws_request_for_account_change(
+        let rebased = rebase_ws_request_for_account_change(
             pending.prepared.text.as_str(),
             completed_tool_calls,
         )?;
-        pending.prepared.input = ws_request_input_from_text(pending.prepared.text.as_str())?;
+        replace_ws_request_text(&mut pending.prepared, rebased)?;
     }
     Ok(())
 }
 
-fn ws_request_input_from_text(text: &str) -> Result<Value, WsSessionError> {
-    serde_json::from_str::<Value>(text)
-        .map_err(|err| {
-            ws_context_rebase_error(format!("parse recovered response.create failed: {err}"))
-        })?
+fn ws_request_context_from_text(text: &str) -> Result<(Value, Option<String>), WsSessionError> {
+    let value = serde_json::from_str::<Value>(text).map_err(|err| {
+        ws_context_rebase_error(format!("parse recovered response.create failed: {err}"))
+    })?;
+    let input = value
         .get("input")
         .cloned()
-        .ok_or_else(|| ws_context_rebase_error("recovered response.create is missing input"))
+        .ok_or_else(|| ws_context_rebase_error("recovered response.create is missing input"))?;
+    let previous_response_id = value
+        .get("previous_response_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Ok((input, previous_response_id))
+}
+
+fn replace_ws_request_text(
+    prepared: &mut PreparedClientFrame,
+    text: String,
+) -> Result<(), WsSessionError> {
+    let (input, previous_response_id) = ws_request_context_from_text(&text)?;
+    prepared.text = text;
+    prepared.input = input;
+    prepared.previous_response_id = previous_response_id;
+    Ok(())
 }
 
 fn cache_completed_ws_response(
@@ -3948,12 +3967,14 @@ fn prepare_missing_ws_tool_call_retry(
     text: &str,
     completed_tool_calls: &CompletedWsToolCallCache,
     terminal: &WsTerminalEvent,
-    already_retried: &mut bool,
+    retried_calls: &mut HashSet<(WsToolCallKind, String)>,
 ) -> Result<Option<String>, WsSessionError> {
     let Some((kind, call_id)) = missing_ws_tool_call_from_terminal(terminal) else {
         return Ok(None);
     };
-    if *already_retried {
+    if retried_calls.len() >= RESPONSES_WS_MAX_TOOL_CONTEXT_RECOVERY_ATTEMPTS
+        || retried_calls.contains(&(kind, call_id.clone()))
+    {
         return Ok(None);
     }
     let Some(rebased) = rebase_response_create_for_missing_tool_call(
@@ -3966,7 +3987,7 @@ fn prepare_missing_ws_tool_call_retry(
     else {
         return Ok(None);
     };
-    *already_retried = true;
+    retried_calls.insert((kind, call_id));
     Ok(Some(rebased))
 }
 
@@ -4034,7 +4055,7 @@ async fn try_retry_ws_request_after_terminal(
             pending.prepared.text.as_str(),
             completed_tool_calls,
             terminal,
-            &mut pending.retried_missing_tool_call_context,
+            &mut pending.retried_missing_tool_calls,
         )?
         else {
             return Ok(false);
@@ -4054,10 +4075,7 @@ async fn try_retry_ws_request_after_terminal(
                 "previous_response_id was rejected and no recoverable response id was found",
             )
         })?;
-        pending.prepared.text = expanded;
-        pending.prepared.previous_response_id = None;
-        pending.prepared.input = ws_request_input_from_text(pending.prepared.text.as_str())?;
-        retry_text = Some(pending.prepared.text.clone());
+        retry_text = Some(expanded);
     } else {
         let previous_account_id = upstream.account_id.clone();
         if !try_rotate_ws_upstream_after_terminal(
@@ -4085,7 +4103,8 @@ async fn try_retry_ws_request_after_terminal(
         }
     }
     let retry_text = retry_text.unwrap_or_else(|| pending.prepared.text.clone());
-    let retry_input = ws_request_input_from_text(retry_text.as_str())?;
+    let (retry_input, retry_previous_response_id) =
+        ws_request_context_from_text(retry_text.as_str())?;
     let retry_frame =
         capture_native_ws_upstream_attempt(context, &pending.log, upstream, retry_text.as_str())?;
     match upstream
@@ -4096,13 +4115,15 @@ async fn try_retry_ws_request_after_terminal(
         Ok(()) => {
             pending.prepared.text = retry_text;
             pending.prepared.input = retry_input;
+            pending.prepared.previous_response_id = retry_previous_response_id;
             pending.forwarded_upstream_event = false;
             pending.buffered_upstream_preamble.clear();
             pending.buffer_retry_preamble = should_buffer_ws_retry_preamble(
                 upstream,
                 &pending.attempted_account_ids,
                 pending.prepared.text.as_str(),
-                pending.retried_missing_tool_call_context,
+                pending.retried_missing_tool_calls.len()
+                    >= RESPONSES_WS_MAX_TOOL_CONTEXT_RECOVERY_ATTEMPTS,
             );
             pending.log.first_response_ms = None;
             Ok(true)
@@ -4324,6 +4345,8 @@ fn parse_missing_ws_tool_call_error_message(message: &str) -> Option<(WsToolCall
     } else if lower.contains("function tool call output") || lower.contains("function call output")
     {
         WsToolCallKind::Function
+    } else if lower.contains("tool search output") || lower.contains("tool search call output") {
+        WsToolCallKind::ToolSearch
     } else {
         return None;
     };
