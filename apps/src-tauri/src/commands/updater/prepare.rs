@@ -66,11 +66,71 @@ pub(super) fn portable_asset_names_for_platform(latest_version: &str) -> Vec<Str
             "CodexManager-macos-portable.zip".to_string(),
         ]
     } else {
-        vec![
-            format!("CodexManager-{v}-linux-portable.zip"),
-            "CodexManager-linux-portable.zip".to_string(),
-        ]
+        linux_portable_asset_names_for_arch(v, std::env::consts::ARCH)
     }
+}
+
+fn linux_arch_tokens(arch: &str) -> &'static [&'static str] {
+    match arch {
+        "x86_64" => &["x86_64", "amd64", "x64"],
+        "aarch64" => &["arm64", "aarch64"],
+        _ => &[],
+    }
+}
+
+fn linux_portable_asset_names_for_arch(latest_version: &str, arch: &str) -> Vec<String> {
+    let version = latest_version.trim().trim_start_matches(['v', 'V']);
+    let mut names = Vec::new();
+    for token in linux_arch_tokens(arch) {
+        names.push(format!("CodexManager-linux-{token}-portable.zip"));
+        names.push(format!("CodexManager-{version}-linux-{token}-portable.zip"));
+    }
+    // Before the ARM64 release matrix (96026699), generic Linux ZIPs were
+    // built on the x86_64 ubuntu-22.04 runner. They are unsafe on ARM64.
+    if arch == "x86_64" {
+        names.push(format!("CodexManager-{version}-linux-portable.zip"));
+        names.push("CodexManager-linux-portable.zip".to_string());
+    }
+    names
+}
+
+fn select_linux_payload_asset_for_arch(
+    mode: &str,
+    latest_version: &str,
+    assets: &[GitHubAsset],
+    arch: &str,
+) -> Option<GitHubAsset> {
+    let arch_tokens = linux_arch_tokens(arch);
+    if arch_tokens.is_empty() {
+        return None;
+    }
+    if mode == "portable" {
+        return linux_portable_asset_names_for_arch(latest_version, arch)
+            .iter()
+            .find_map(|expected| {
+                assets
+                    .iter()
+                    .find(|asset| asset.name.eq_ignore_ascii_case(expected))
+                    .cloned()
+            });
+    }
+
+    // Match the architecture immediately before the package extension. A
+    // sidecar such as .AppImage.zsync must never be treated as executable.
+    for extension in ["appimage", "deb", "rpm"] {
+        if let Some(asset) = assets.iter().find(|asset| {
+            let name = asset.name.to_ascii_lowercase();
+            name.starts_with("codexmanager")
+                && arch_tokens.iter().any(|token| {
+                    ["_", "-", "."]
+                        .iter()
+                        .any(|separator| name.ends_with(&format!("{separator}{token}.{extension}")))
+                })
+        }) {
+            return Some(asset.clone());
+        }
+    }
+    None
 }
 
 /// 函数 `macos_current_arch_tokens`
@@ -205,6 +265,14 @@ fn select_payload_asset(
     latest_version: &str,
     assets: &[GitHubAsset],
 ) -> Option<GitHubAsset> {
+    if cfg!(target_os = "linux") {
+        return select_linux_payload_asset_for_arch(
+            mode,
+            latest_version,
+            assets,
+            std::env::consts::ARCH,
+        );
+    }
     if mode == "portable" {
         let portable_names = portable_asset_names_for_platform(latest_version);
         for expected in portable_names {
@@ -238,22 +306,7 @@ fn select_payload_asset(
         return select_macos_dmg_asset_for_arch(assets, macos_current_arch_tokens());
     }
 
-    if let Some(appimage) = assets
-        .iter()
-        .find(|asset| asset.name.to_ascii_lowercase().ends_with(".appimage"))
-    {
-        return Some(appimage.clone());
-    }
-    if let Some(deb) = assets
-        .iter()
-        .find(|asset| asset.name.to_ascii_lowercase().ends_with(".deb"))
-    {
-        return Some(deb.clone());
-    }
-    assets
-        .iter()
-        .find(|asset| asset.name.to_ascii_lowercase().ends_with(".rpm"))
-        .cloned()
+    None
 }
 
 /// 函数 `sanitize_tag`
@@ -755,7 +808,10 @@ pub(super) fn prepare_update_impl(app: &tauri::AppHandle) -> Result<UpdatePrepar
 
 #[cfg(test)]
 mod tests {
-    use super::{portable_asset_names_for_platform, sanitize_tag, select_macos_dmg_asset_for_arch};
+    use super::{
+        portable_asset_names_for_platform, sanitize_tag, select_linux_payload_asset_for_arch,
+        select_macos_dmg_asset_for_arch, stage_portable_payload,
+    };
     use crate::commands::updater::model::GitHubAsset;
 
     /// 函数 `portable_asset_names_include_current_workflow_artifact`
@@ -775,14 +831,245 @@ mod tests {
         if cfg!(target_os = "windows") {
             assert!(names.iter().any(|name| name == "CodexManager-portable.exe"));
         } else if cfg!(target_os = "linux") {
-            assert!(names
-                .iter()
-                .any(|name| name == "CodexManager-linux-portable.zip"));
+            let expected = match std::env::consts::ARCH {
+                "x86_64" => "CodexManager-linux-x86_64-portable.zip",
+                "aarch64" => "CodexManager-linux-arm64-portable.zip",
+                _ => return assert!(names.is_empty()),
+            };
+            assert!(names.iter().any(|name| name == expected));
         } else if cfg!(target_os = "macos") {
             assert!(names
                 .iter()
                 .any(|name| name == "CodexManager-macos-portable.zip"));
         }
+    }
+
+    fn release_assets(names: &[&str]) -> Vec<GitHubAsset> {
+        names
+            .iter()
+            .map(|name| GitHubAsset {
+                name: (*name).to_string(),
+                browser_download_url: format!("https://example.com/{name}"),
+            })
+            .collect()
+    }
+
+    fn current_release_assets() -> Vec<GitHubAsset> {
+        // Preserve the v0.7.4 Release API order: ARM packages precede x86_64.
+        release_assets(&[
+            "CodexManager-linux-arm64-portable.zip",
+            "CodexManager-linux-x86_64-portable.zip",
+            "CodexManager-macos-portable.zip",
+            "CodexManager-portable.exe",
+            "CodexManager-service-linux-arm64.zip",
+            "CodexManager-service-linux-x86_64.zip",
+            "CodexManager-service-macos-arm64.zip",
+            "CodexManager-service-macos-x64.zip",
+            "CodexManager-service-windows-x86_64.zip",
+            "CodexManager-web-linux-arm64.zip",
+            "CodexManager-web-linux-x86_64.zip",
+            "CodexManager_0.7.4_aarch64.AppImage",
+            "CodexManager_0.7.4_aarch64.AppImage.zsync",
+            "CodexManager_0.7.4_aarch64.dmg",
+            "CodexManager_0.7.4_amd64.AppImage",
+            "CodexManager_0.7.4_amd64.AppImage.zsync",
+            "CodexManager_0.7.4_amd64.deb",
+            "CodexManager_0.7.4_arm64.deb",
+            "CodexManager_0.7.4_x64-setup.exe",
+            "CodexManager_0.7.4_x64.dmg",
+        ])
+    }
+
+    #[test]
+    fn linux_update_selects_matching_packages_from_real_release_inventory() {
+        let mut assets = current_release_assets();
+        for _ in 0..2 {
+            for (arch, portable, installer) in [
+                (
+                    "x86_64",
+                    "CodexManager-linux-x86_64-portable.zip",
+                    "CodexManager_0.7.4_amd64.AppImage",
+                ),
+                (
+                    "aarch64",
+                    "CodexManager-linux-arm64-portable.zip",
+                    "CodexManager_0.7.4_aarch64.AppImage",
+                ),
+            ] {
+                for (mode, expected) in [("portable", portable), ("installer", installer)] {
+                    let selected =
+                        select_linux_payload_asset_for_arch(mode, "0.7.4", &assets, arch)
+                            .expect("matching Linux package");
+                    assert_eq!(selected.name, expected, "{arch} {mode}");
+                }
+            }
+            assets.reverse();
+        }
+    }
+
+    #[test]
+    fn linux_update_rejects_foreign_architectures_and_zsync_sidecars() {
+        for (arch, foreign_arch, own_appimage_arch) in [
+            ("x86_64", "arm64", "amd64"),
+            ("aarch64", "x86_64", "aarch64"),
+        ] {
+            let names = [
+                format!("CodexManager-linux-{foreign_arch}-portable.zip"),
+                format!("CodexManager_0.7.5_{foreign_arch}.AppImage"),
+                format!("CodexManager_0.7.5_{foreign_arch}.deb"),
+                format!("CodexManager-0.7.5.{foreign_arch}.rpm"),
+                format!("CodexManager_0.7.5_{own_appimage_arch}.AppImage.zsync"),
+                "CodexManager_0.7.5.AppImage".to_string(),
+                "CodexManager_0.7.5_notamd64.deb".to_string(),
+            ];
+            let assets = release_assets(&names.iter().map(String::as_str).collect::<Vec<_>>());
+            for mode in ["portable", "installer"] {
+                assert!(
+                    select_linux_payload_asset_for_arch(mode, "0.7.5", &assets, arch).is_none(),
+                    "{arch} {mode} must reject foreign/ambiguous packages"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn linux_update_rejects_unknown_cpu_even_with_legacy_packages() {
+        let mut assets = current_release_assets();
+        assets.extend(release_assets(&["CodexManager-linux-portable.zip"]));
+        for mode in ["portable", "installer"] {
+            assert!(
+                select_linux_payload_asset_for_arch(mode, "0.7.5", &assets, "riscv64").is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn linux_update_keeps_package_format_priority_after_filtering_architecture() {
+        for (arch, own_arch, foreign_arch) in [
+            ("x86_64", "amd64", "aarch64"),
+            ("aarch64", "arm64", "amd64"),
+        ] {
+            let rpm = format!("CodexManager-0.7.5-1.{own_arch}.rpm");
+            let deb = format!("CodexManager_0.7.5_{own_arch}.deb");
+            let appimage = format!("CodexManager_0.7.5_{own_arch}.AppImage");
+            let foreign = format!("CodexManager_0.7.5_{foreign_arch}.AppImage");
+            let mut assets = release_assets(&[&foreign, &rpm, &deb, &appimage]);
+            for expected in [&appimage, &deb, &rpm] {
+                let selected =
+                    select_linux_payload_asset_for_arch("installer", "0.7.5", &assets, arch)
+                        .expect("matching package format");
+                assert_eq!(&selected.name, expected);
+                assets.retain(|asset| &asset.name != expected);
+            }
+            assert!(
+                select_linux_payload_asset_for_arch("installer", "0.7.5", &assets, arch).is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn linux_update_accepts_supported_arch_aliases_and_rpm_separators() {
+        for (arch, aliases) in [
+            ("x86_64", &["amd64", "x86_64", "x64"][..]),
+            ("aarch64", &["arm64", "aarch64"][..]),
+        ] {
+            for alias in aliases {
+                for (extension, separator) in [("AppImage", "_"), ("deb", "_"), ("rpm", ".")] {
+                    let name = format!("CodexManager_0.7.5{separator}{alias}.{extension}");
+                    let assets = release_assets(&[&name]);
+                    assert_eq!(
+                        select_linux_payload_asset_for_arch("installer", "0.7.5", &assets, arch)
+                            .expect("supported architecture alias")
+                            .name,
+                        name
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn linux_update_prioritizes_arch_portable_zip_and_limits_legacy_to_x86_64() {
+        for legacy_name in [
+            "CodexManager-linux-portable.zip",
+            "CodexManager-0.7.5-linux-portable.zip",
+        ] {
+            let mut assets = release_assets(&[legacy_name]);
+            assert_eq!(
+                select_linux_payload_asset_for_arch("portable", "v0.7.5", &assets, "x86_64")
+                    .expect("historic x86_64 ZIP")
+                    .name,
+                legacy_name
+            );
+            assert!(
+                select_linux_payload_asset_for_arch("portable", "v0.7.5", &assets, "aarch64")
+                    .is_none()
+            );
+            assets.extend(current_release_assets());
+            assert_eq!(
+                select_linux_payload_asset_for_arch("portable", "v0.7.5", &assets, "x86_64")
+                    .expect("current architecture ZIP before legacy")
+                    .name,
+                "CodexManager-linux-x86_64-portable.zip"
+            );
+        }
+    }
+
+    #[test]
+    fn linux_update_accepts_versioned_arch_portable_zip_case_insensitively() {
+        let name = "CODEXMANAGER-0.7.5-LINUX-AARCH64-PORTABLE.ZIP";
+        let assets = release_assets(&[name]);
+        assert_eq!(
+            select_linux_payload_asset_for_arch("portable", " v0.7.5 ", &assets, "aarch64")
+                .expect("versioned ARM64 alias")
+                .name,
+            name
+        );
+    }
+
+    #[test]
+    fn linux_update_arch_zip_stages_flat_executable_for_apply() {
+        let selected = select_linux_payload_asset_for_arch(
+            "portable",
+            "0.7.4",
+            &current_release_assets(),
+            "x86_64",
+        )
+        .expect("Linux ZIP");
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "codexmanager-linux-updater-{}-{unique}",
+            std::process::id()
+        ));
+        let staging = root.join("staging");
+        std::fs::create_dir_all(&staging).expect("staging directory");
+        let payload = root.join(&selected.name);
+        let file = std::fs::File::create(&payload).expect("ZIP file");
+        let mut writer = zip::ZipWriter::new(file);
+        writer
+            .start_file(
+                "CodexManager-portable",
+                zip::write::SimpleFileOptions::default().unix_permissions(0o755),
+            )
+            .expect("flat executable entry");
+        std::io::Write::write_all(&mut writer, b"linux executable fixture")
+            .expect("executable contents");
+        writer.finish().expect("complete ZIP");
+
+        stage_portable_payload(&payload, &selected.name, &staging).expect("stage selected ZIP");
+        assert_eq!(
+            std::fs::read(staging.join("CodexManager-portable")).expect("staged executable"),
+            b"linux executable fixture"
+        );
+        assert_eq!(
+            super::resolve_portable_restart_exe(&staging, "CodexManager-portable")
+                .expect("apply restart executable"),
+            "CodexManager-portable"
+        );
+        std::fs::remove_dir_all(root).expect("remove test directory");
     }
 
     /// 函数 `sanitize_tag_replaces_unsafe_characters`
