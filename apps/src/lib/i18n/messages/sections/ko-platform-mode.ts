@@ -24,6 +24,8 @@ export const KO_PLATFORM_MODE_MESSAGES: MessageCatalog = {
   "日志与统计": "로그 및 통계",
   重载行为: "다시 로드 동작",
   应用后: "적용 후",
+  应用接入配置: "연결 설정 적용",
+  确认应用: "확인 및 적용",
   "OpenAI 官方目录": "OpenAI 공식 카탈로그",
   "CodexManager 本地目录": "CodexManager 로컬 카탈로그",
   "聚合 API": "통합 API",

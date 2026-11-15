@@ -23,7 +23,7 @@ test("Codex onboarding routes configuration through Platform Mode", () => {
   assert.match(source, /打开 Codex 接入方式/);
   assert.match(source, /直接连接 OpenAI/);
   assert.match(source, /通过 CodexManager/);
-  assert.match(platformModeState, /codexProfileClient\.applyGateway\(\{/);
+  assert.match(platformModeState, /mutationFn: codexProfileClient\.applyGateway/);
   assert.match(platformModeState, /supportsWebsockets/);
 });
 

@@ -21,7 +21,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
-import { Field, FieldContent, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Field, FieldContent, FieldLabel } from "@/components/ui/field";
+import { ConnectionApplyDialog } from "./connection-apply-dialog";
 import { buildStaticRouteUrl } from "@/lib/utils/static-routes";
 import { cn } from "@/lib/utils";
 import { CODEX_PROFILE_MODE_LABELS } from "@/hooks/useCodexProfileModeStatus";
@@ -149,6 +150,7 @@ function ConnectionPreview({
   catalog,
   telemetry,
   authentication,
+  websocket,
   reloadAfterSwitch,
 }: {
   t: Translate;
@@ -157,6 +159,7 @@ function ConnectionPreview({
   catalog: string;
   telemetry: string;
   authentication?: string;
+  websocket?: boolean;
   reloadAfterSwitch: boolean;
 }) {
   const facts = [
@@ -165,20 +168,15 @@ function ConnectionPreview({
     [t("模型来源"), catalog],
     [t("日志与统计"), telemetry],
     ...(authentication ? [[t("认证模式"), authentication]] : []),
+    ...(websocket !== undefined ? [["Responses WebSocket", t(websocket ? "启用" : "禁用")]] : []),
     [
       t("重载行为"),
       reloadAfterSwitch ? t("切换后尝试重载后台") : t("下次启动时生效"),
     ],
   ];
   return (
-    <details className="group rounded-md border border-border/60 bg-muted/20">
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-2.5 py-1.5 text-xs text-foreground">
-        <span className="shrink-0 font-semibold">{t("应用后")}</span>
-        <span className="min-w-0 flex-1 truncate text-muted-foreground" title={`${connection} · ${route}`}>
-          {connection} · {route}
-        </span>
-        <ChevronDown className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
-      </summary>
+    <div className="rounded-md border border-border/60 bg-muted/20">
+      <p className="px-2.5 py-1.5 text-xs font-semibold">{t("应用后")}</p>
       <dl className="grid gap-1 border-t border-border/60 p-2.5 text-xs">
         {facts.map(([label, value]) => (
           <div
@@ -192,7 +190,7 @@ function ConnectionPreview({
           </div>
         ))}
       </dl>
-    </details>
+    </div>
   );
 }
 
@@ -382,7 +380,6 @@ export function DirectAggregateCard({
   selectedAggregateApiId,
   onSelectAggregateApi,
   onApply,
-  isPending,
   selectedAggregateApi,
   reloadAfterSwitch,
   aggregateApiLabel,
@@ -395,8 +392,7 @@ export function DirectAggregateCard({
   isDirectAggregateActive: boolean;
   selectedAggregateApiId: string;
   onSelectAggregateApi: (value: string | null) => void;
-  onApply: () => void;
-  isPending: boolean;
+  onApply: () => Promise<unknown>;
   selectedAggregateApi: CodexProfileAggregateApiCandidate | undefined;
   reloadAfterSwitch: boolean;
   aggregateApiLabel: (api: CodexProfileAggregateApiCandidate) => string;
@@ -414,19 +410,8 @@ export function DirectAggregateCard({
           <CardTitle>{t("直连聚合 API")}</CardTitle>
           {isDirectAggregateActive ? <Badge>{t("正在使用")}</Badge> : null}
         </div>
-        <CardDescription
-          className="line-clamp-2 text-xs leading-4"
-          title={t("Codex 直接请求所选聚合 API，不经过 CodexManager 网关；切换时会自动写入对应的 Responses base_url 与认证配置。")}
-        >
-          {t(
-            "Codex 直接请求所选聚合 API，不经过 CodexManager 网关；切换时会自动写入对应的 Responses base_url 与认证配置。",
-          )}
-        </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-2.5">
-        <p className="text-xs leading-5 text-muted-foreground">
-          {t("仅更新 config.toml，聚合 API 密钥也保存在该文件；保留现有 auth.json。")}
-        </p>
         {candidates.length === 0 && !isLoading ? (
           <div className="grid gap-2 rounded-md border border-dashed border-border/70 bg-muted/25 p-2.5 text-sm text-muted-foreground">
             <p>
@@ -488,25 +473,25 @@ export function DirectAggregateCard({
             </p>
           </div>
         )}
-        <ConnectionPreview
+        <ConnectionApplyDialog
           t={t}
-          connection={t("直连聚合 API")}
-          route={selectedAggregateApi?.label || t("请选择聚合 API")}
-          catalog={t("由聚合 API 提供")}
-          telemetry={t("CodexManager 不记录")}
-          reloadAfterSwitch={reloadAfterSwitch}
-        />
-        <Button
-          type="button"
-          onClick={onApply}
+          label={isDirectAggregateActive ? t("重新应用直连聚合 API") : t("切换为直连聚合 API")}
+          target={`${t("直连聚合 API")} · ${selectedAggregateApi ? aggregateApiLabel(selectedAggregateApi) : selectedAggregateApiId}`}
+          icon={<Database data-icon="inline-start" />}
+          onApply={onApply}
           disabled={!isServiceReady || isMutating || !selectedAggregateApiId}
-          className="w-fit"
         >
-          {isPending ? <Loader2 className="size-4 animate-spin" /> : <Database className="size-4" />}
-          {isDirectAggregateActive
-            ? t("重新应用直连聚合 API")
-            : t("切换为直连聚合 API")}
-        </Button>
+          <p>{t("Codex 直接请求所选聚合 API，不经过 CodexManager 网关；切换时会自动写入对应的 Responses base_url 与认证配置。")}</p>
+          <p>{t("仅更新 config.toml，聚合 API 密钥也保存在该文件；保留现有 auth.json。")}</p>
+          <ConnectionPreview
+            t={t}
+            connection={t("直连聚合 API")}
+            route={selectedAggregateApi?.label || t("请选择聚合 API")}
+            catalog={t("由聚合 API 提供")}
+            telemetry={t("CodexManager 不记录")}
+            reloadAfterSwitch={reloadAfterSwitch}
+          />
+        </ConnectionApplyDialog>
       </CardContent>
     </Card>
   );
@@ -522,7 +507,6 @@ export function DirectAccountCard({
   selectedAccountId,
   onSelectAccount,
   onApply,
-  isPending,
   reloadAfterSwitch,
   accountLabel,
 }: {
@@ -534,11 +518,11 @@ export function DirectAccountCard({
   isDirectActive: boolean;
   selectedAccountId: string;
   onSelectAccount: (value: string | null) => void;
-  onApply: () => void;
-  isPending: boolean;
+  onApply: () => Promise<unknown>;
   reloadAfterSwitch: boolean;
   accountLabel: (account: CodexProfileAccountCandidate) => string;
 }) {
+  const selectedAccount = candidates.find((account) => account.id === selectedAccountId);
   return (
     <Card
       className={cn(
@@ -552,19 +536,8 @@ export function DirectAccountCard({
           <CardTitle>{t("直接连接 OpenAI")}</CardTitle>
           {isDirectActive ? <Badge>{t("正在使用")}</Badge> : null}
         </div>
-        <CardDescription
-          className="line-clamp-2 text-xs leading-4"
-          title={t("直连 OpenAI 官方后端，不经过 CodexManager 网关；本机 Codex 的直连请求不会写入网关日志，但仪表盘仍会展示已记录的其他网关流量。")}
-        >
-          {t(
-            "直连 OpenAI 官方后端，不经过 CodexManager 网关；本机 Codex 的直连请求不会写入网关日志，但仪表盘仍会展示已记录的其他网关流量。",
-          )}
-        </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-2.5">
-        <p className="text-xs leading-5 text-muted-foreground">
-          {t("应用后会更新 auth.json，切换为所选 OpenAI 账号。")}
-        </p>
         {candidates.length === 0 && !isLoading ? (
           <div className="grid gap-2 rounded-md border border-dashed border-border/70 bg-muted/25 p-2.5 text-sm text-muted-foreground">
             <p>{t("没有可用于直接连接 OpenAI 的 active 账号。")}</p>
@@ -611,23 +584,25 @@ export function DirectAccountCard({
             </p>
           </div>
         )}
-        <ConnectionPreview
+        <ConnectionApplyDialog
           t={t}
-          connection={t("直接连接 OpenAI")}
-          route={t("所选 OpenAI 账号")}
-          catalog={t("OpenAI 官方目录")}
-          telemetry={t("CodexManager 不记录")}
-          reloadAfterSwitch={reloadAfterSwitch}
-        />
-        <Button
-          type="button"
-          onClick={onApply}
+          label={isDirectActive ? t("重新应用直接连接") : t("切换为直接连接 OpenAI")}
+          target={`${t("直接连接 OpenAI")} · ${selectedAccount ? accountLabel(selectedAccount) : selectedAccountId}`}
+          icon={<ShieldCheck data-icon="inline-start" />}
+          onApply={onApply}
           disabled={!isServiceReady || isMutating || !selectedAccountId}
-          className="w-fit"
         >
-          {isPending ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
-          {isDirectActive ? t("重新应用直接连接") : t("切换为直接连接 OpenAI")}
-        </Button>
+          <p>{t("直连 OpenAI 官方后端，不经过 CodexManager 网关；本机 Codex 的直连请求不会写入网关日志，但仪表盘仍会展示已记录的其他网关流量。")}</p>
+          <p>{t("应用后会更新 auth.json，切换为所选 OpenAI 账号。")}</p>
+          <ConnectionPreview
+            t={t}
+            connection={t("直接连接 OpenAI")}
+            route={t("所选 OpenAI 账号")}
+            catalog={t("OpenAI 官方目录")}
+            telemetry={t("CodexManager 不记录")}
+            reloadAfterSwitch={reloadAfterSwitch}
+          />
+        </ConnectionApplyDialog>
       </CardContent>
     </Card>
   );
@@ -648,7 +623,6 @@ export function GatewayModeCard({
   supportsWebsockets,
   onSupportsWebsocketsChange,
   onApply,
-  isPending,
   selectedApiKey,
   reloadAfterSwitch,
   keyLabel,
@@ -666,8 +640,7 @@ export function GatewayModeCard({
   onGatewayAuthModeChange: (mode: CodexGatewayAuthMode) => void;
   supportsWebsockets: boolean;
   onSupportsWebsocketsChange: (enabled: boolean) => void;
-  onApply: () => void;
-  isPending: boolean;
+  onApply: () => Promise<unknown>;
   selectedApiKey: CodexProfileApiKeyCandidate | undefined;
   reloadAfterSwitch: boolean;
   keyLabel: (key: CodexProfileApiKeyCandidate) => string;
@@ -685,19 +658,8 @@ export function GatewayModeCard({
           <CardTitle>{t("通过 CodexManager")}</CardTitle>
           {isGatewayActive ? <Badge>{t("正在使用")}</Badge> : null}
         </div>
-        <CardDescription
-          className="line-clamp-2 text-xs leading-4"
-          title={t("通过 CodexManager 本地网关转发 Codex CLI 请求；请求日志、Token、费用估算和仪表盘统计可用。")}
-        >
-          {t(
-            "通过 CodexManager 本地网关转发 Codex CLI 请求；请求日志、Token、费用估算和仪表盘统计可用。",
-          )}
-        </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-2.5">
-        <p className="text-xs leading-5 text-muted-foreground">
-          {t("通过 CodexManager 接入只需可用的平台密钥。选择认证模式后，点击下方按钮应用。")}
-        </p>
         {candidates.length === 0 && !isLoading ? (
           <div className="grid gap-2 rounded-md border border-dashed border-border/70 bg-muted/25 p-2.5 text-sm text-muted-foreground">
             <p>{t("没有可用于 CodexManager 转发的平台密钥。")}</p>
@@ -755,11 +717,6 @@ export function GatewayModeCard({
         >
           <FieldContent>
             <FieldLabel htmlFor="gateway-apikey-auth">{t("纯 API Key 模式")}</FieldLabel>
-            <FieldDescription id="gateway-apikey-auth-description">
-              {gatewayAuthMode === "apikey"
-                ? t("仅使用所选平台密钥；备份原认证信息后重写 auth.json，切回保留模式可恢复。切换前请关闭使用此配置的 Codex 桌面端。")
-                : t("保留账号信息；从纯 API Key 模式切回时恢复原认证，并保留外部修改。认证切换前请关闭对应 Codex 桌面端。")}
-            </FieldDescription>
           </FieldContent>
           <Switch
             id="gateway-apikey-auth"
@@ -767,7 +724,6 @@ export function GatewayModeCard({
             onCheckedChange={(enabled) => onGatewayAuthModeChange(enabled ? "apikey" : "preserve")}
             disabled={!isServiceReady || isMutating}
             aria-label={t("纯 API Key 模式")}
-            aria-describedby="gateway-apikey-auth-description"
           />
         </Field>
         <div className="flex items-center justify-between gap-2 rounded-md border border-border/70 bg-background/45 p-2.5">
@@ -775,14 +731,6 @@ export function GatewayModeCard({
             <Label htmlFor="gateway-responses-websocket">
               {t("启用 Responses WebSocket")}
             </Label>
-            <p
-              className="line-clamp-2 text-[11px] leading-4 text-muted-foreground"
-              title={t("关闭时 Codex 使用普通 Responses HTTP 流；开启时使用 Responses WebSocket。仅在当前平台密钥支持时开启。")}
-            >
-              {t(
-                "关闭时 Codex 使用普通 Responses HTTP 流；开启时使用 Responses WebSocket。仅在当前平台密钥支持时开启。",
-              )}
-            </p>
           </div>
           <Switch
             id="gateway-responses-websocket"
@@ -792,28 +740,35 @@ export function GatewayModeCard({
             aria-label={t("启用 Responses WebSocket")}
           />
         </div>
-        <ConnectionPreview
+        <ConnectionApplyDialog
           t={t}
-          connection={t("通过 CodexManager")}
-          route={
-            selectedApiKey
-              ? rotationStrategyLabel(selectedApiKey.rotationStrategy, t)
-              : t("请选择平台密钥")
-          }
-          catalog={catalogSourceLabel(selectedApiKey?.catalogSource, t)}
-          telemetry={t("CodexManager 可记录")}
-          authentication={t(gatewayAuthMode === "apikey" ? "纯 API Key 模式" : "保留账号信息")}
-          reloadAfterSwitch={reloadAfterSwitch}
-        />
-        <Button
-          type="button"
-          onClick={onApply}
+          label={isGatewayActive ? t("重新应用 CodexManager 接入") : t("切换为通过 CodexManager")}
+          target={`${t("通过 CodexManager")} · ${selectedApiKey ? keyLabel(selectedApiKey) : selectedApiKeyId}`}
+          icon={<Network data-icon="inline-start" />}
+          onApply={onApply}
           disabled={!isServiceReady || isMutating || !selectedApiKeyId || !gatewayBaseUrl.trim()}
-          className="w-fit"
         >
-          {isPending ? <Loader2 className="size-4 animate-spin" /> : <Network className="size-4" />}
-          {isGatewayActive ? t("重新应用 CodexManager 接入") : t("切换为通过 CodexManager")}
-        </Button>
+          <p>{t("通过 CodexManager 本地网关转发 Codex CLI 请求；请求日志、Token、费用估算和仪表盘统计可用。")}</p>
+          <p>{gatewayAuthMode === "apikey"
+            ? t("仅使用所选平台密钥；备份原认证信息后重写 auth.json，切回保留模式可恢复。切换前请关闭使用此配置的 Codex 桌面端。")
+            : t("保留账号信息；从纯 API Key 模式切回时恢复原认证，并保留外部修改。认证切换前请关闭对应 Codex 桌面端。")}</p>
+          <p className="break-all">{t("将使用 gateway base_url")}：{gatewayBaseUrl}</p>
+          <p>{t("关闭时 Codex 使用普通 Responses HTTP 流；开启时使用 Responses WebSocket。仅在当前平台密钥支持时开启。")}</p>
+          <ConnectionPreview
+            t={t}
+            connection={t("通过 CodexManager")}
+            route={
+              selectedApiKey
+                ? rotationStrategyLabel(selectedApiKey.rotationStrategy, t)
+                : t("请选择平台密钥")
+            }
+            catalog={catalogSourceLabel(selectedApiKey?.catalogSource, t)}
+            telemetry={t("CodexManager 可记录")}
+            authentication={t(gatewayAuthMode === "apikey" ? "纯 API Key 模式" : "保留账号信息")}
+            websocket={supportsWebsockets}
+            reloadAfterSwitch={reloadAfterSwitch}
+          />
+        </ConnectionApplyDialog>
       </CardContent>
     </Card>
   );

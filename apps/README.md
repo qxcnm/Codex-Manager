@@ -48,9 +48,10 @@ pnpm exec playwright test
 - 模型管理页的“应用模型”在未勾选时把完整目录写入 `gateway-models.json`，存在勾选项时只写入所选模型，并在目标 `CODEX_HOME/config.toml` 更新 `model_catalog_json`；它不要求平台密钥，也不会改写现有认证、模型提供方或网关地址。
 - 应用时不按 enabled、`supportedInApi`、visibility 或文本生成能力过滤，`gpt-image-2`、两个 Image 2.5 模型和明确勾选的隐藏模型也能进入 Codex 模型列表。操作不会终止 Codex 后台进程；关闭并重新打开 Codex 后读取新目录。
 - 模型管理页不提供写入或下载 `~/.codex/models_cache.json` 的入口；Codex 通过 `model_catalog_json` 指向的 `gateway-models.json` 读取已应用的模型列表。
-- 平台模式页支持 OpenAI 账号直连、Codex/Compatible Responses 聚合 API 直连和 CodexManager 本地网关三种接入方式；聚合 API 直连只接纳可映射为 Responses `base_url` 的 API-key 条目。应用账号直连会更新 `auth.json` 以切换所选账号；聚合 API 接入仅更新 `config.toml`（包括对应密钥），保留现有 `auth.json`。网关默认保留账号信息；启用“纯 API Key 模式”后备份原认证，将 `auth.json` 改为仅含 `auth_mode: "apikey"` 和所选平台 Key 的 `OPENAI_API_KEY`，切回时恢复原认证，保留外部修改。认证切换前请关闭对应 Codex 桌面端，应用后重启 Codex。
+- 平台模式页支持 OpenAI 账号直连、Codex/Compatible Responses 聚合 API 直连和 CodexManager 本地网关三种接入方式；接入说明和“应用后”预览在点击切换后的弹窗中展示，确认后才写入配置，取消不写入。聚合 API 直连只接纳可映射为 Responses `base_url` 的 API-key 条目。应用账号直连会更新 `auth.json` 以切换所选账号；聚合 API 接入仅更新 `config.toml`（包括对应密钥），保留现有 `auth.json`。网关默认保留账号信息；启用“纯 API Key 模式”后备份原认证，将 `auth.json` 改为仅含 `auth_mode: "apikey"` 和所选平台 Key 的 `OPENAI_API_KEY`，切回时恢复原认证，保留外部修改。认证切换前请关闭对应 Codex 桌面端，应用后重启 Codex。
 - 网关和聚合 API 的 provider 配置都写入 `experimental_bearer_token`：网关使用所选平台 Key，聚合 API 使用所选聚合 API Key。
-- 平台模式页提供“切换后重载 Codex 后台”开关；默认开启，只匹配使用目标 `CODEX_HOME` 的 app-server，不会终止前台 Codex CLI。
+- 网关待应用地址默认跟随当前连接端点：桌面端使用所连接服务的地址和端口，Web 端使用当前访问地址，并补上 `/v1`；不沿用 Codex profile 中的旧地址。高级设置可手动指定地址，该草稿仅用于对应端点。
+- 平台模式页提供“切换后重载 Codex 后台”开关；默认关闭，开启后只匹配使用目标 `CODEX_HOME` 的 app-server，不会终止前台 Codex CLI。
 
 ### Web 部署
 

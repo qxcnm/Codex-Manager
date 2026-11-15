@@ -126,7 +126,10 @@ export function usePlatformModePageState(
   const [selectedAggregateApiIdDraft, setSelectedAggregateApiIdDraft] = useState<
     string | null
   >(null);
-  const [gatewayBaseUrlDraft, setGatewayBaseUrlDraft] = useState<string | null>(null);
+  const [gatewayBaseUrlDraft, setGatewayBaseUrlDraftState] = useState<{
+    endpoint: string;
+    value: string;
+  } | null>(null);
   const [gatewayAuthModeDraft, setGatewayAuthModeDraft] =
     useState<CodexGatewayAuthMode | null>(null);
   const [supportsWebsocketsDraft, setSupportsWebsocketsDraft] = useState<boolean | null>(
@@ -154,6 +157,10 @@ export function usePlatformModePageState(
     });
     return buildOpenAiGatewayEndpoint(origin);
   }, [browserOrigin, mode, serviceStatus.addr]);
+
+  const setGatewayBaseUrlDraft = (value: string) => {
+    setGatewayBaseUrlDraftState({ endpoint: defaultGatewayBaseUrl, value });
+  };
 
   const statusQuery = useCodexProfileModeStatus({ enabled: isPageActive });
 
@@ -198,8 +205,11 @@ export function usePlatformModePageState(
     status?.selectedAggregateApiId,
     candidates.aggregateApis,
   );
+  // The profile URL describes the existing configuration, not the endpoint being applied.
   const gatewayBaseUrl =
-    gatewayBaseUrlDraft ?? status?.gatewayBaseUrl ?? defaultGatewayBaseUrl;
+    gatewayBaseUrlDraft?.endpoint === defaultGatewayBaseUrl
+      ? gatewayBaseUrlDraft.value
+      : defaultGatewayBaseUrl;
   const supportsWebsockets =
     supportsWebsocketsDraft ?? status?.supportsWebsockets ?? false;
   const gatewayAuthMode = gatewayAuthModeDraft ?? status?.gatewayAuthMode ?? "preserve";
@@ -276,12 +286,7 @@ export function usePlatformModePageState(
   });
 
   const applyDirectMutation = useMutation({
-    mutationFn: () =>
-      codexProfileClient.applyDirectAccount({
-        accountId: selectedAccountId,
-        codexHome: codexHomeInput,
-        reloadAfterSwitch,
-      }),
+    mutationFn: codexProfileClient.applyDirectAccount,
     onSuccess: async (nextStatus) => {
       setGatewayAuthModeDraft(null);
       await refreshAll();
@@ -295,12 +300,7 @@ export function usePlatformModePageState(
   });
 
   const applyDirectAggregateMutation = useMutation({
-    mutationFn: () =>
-      codexProfileClient.applyDirectAggregate({
-        aggregateApiId: selectedAggregateApiId,
-        codexHome: codexHomeInput,
-        reloadAfterSwitch,
-      }),
+    mutationFn: codexProfileClient.applyDirectAggregate,
     onSuccess: async (nextStatus) => {
       setGatewayAuthModeDraft(null);
       await refreshAll();
@@ -314,15 +314,7 @@ export function usePlatformModePageState(
   });
 
   const applyGatewayMutation = useMutation({
-    mutationFn: () =>
-      codexProfileClient.applyGateway({
-        apiKeyId: selectedApiKeyId,
-        codexHome: codexHomeInput,
-        baseUrl: gatewayBaseUrl,
-        authMode: gatewayAuthMode,
-        supportsWebsockets,
-        reloadAfterSwitch,
-      }),
+    mutationFn: codexProfileClient.applyGateway,
     onSuccess: async (nextStatus) => {
       queryClient.setQueryData(CODEX_PROFILE_STATUS_QUERY_KEY, nextStatus);
       setGatewayAuthModeDraft(null);

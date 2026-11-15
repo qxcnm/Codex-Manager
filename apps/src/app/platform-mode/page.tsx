@@ -164,8 +164,11 @@ export default function PlatformModePage() {
           isDirectActive={state.isDirectActive}
           selectedAccountId={state.selectedAccountId}
           onSelectAccount={(value) => state.setSelectedAccountIdDraft(String(value || ""))}
-          onApply={() => state.applyDirectMutation.mutate()}
-          isPending={state.applyDirectMutation.isPending}
+          onApply={() => state.applyDirectMutation.mutateAsync({
+            accountId: state.selectedAccountId,
+            codexHome: state.codexHomeInput,
+            reloadAfterSwitch: state.reloadAfterSwitch,
+          })}
           reloadAfterSwitch={state.reloadAfterSwitch}
           accountLabel={accountLabel}
         />
@@ -181,8 +184,11 @@ export default function PlatformModePage() {
           onSelectAggregateApi={(value) =>
             state.setSelectedAggregateApiIdDraft(String(value || ""))
           }
-          onApply={() => state.applyDirectAggregateMutation.mutate()}
-          isPending={state.applyDirectAggregateMutation.isPending}
+          onApply={() => state.applyDirectAggregateMutation.mutateAsync({
+            aggregateApiId: state.selectedAggregateApiId,
+            codexHome: state.codexHomeInput,
+            reloadAfterSwitch: state.reloadAfterSwitch,
+          })}
           selectedAggregateApi={selectedAggregateApi}
           reloadAfterSwitch={state.reloadAfterSwitch}
           aggregateApiLabel={aggregateApiLabel}
@@ -202,8 +208,14 @@ export default function PlatformModePage() {
           onGatewayAuthModeChange={state.setGatewayAuthModeDraft}
           supportsWebsockets={state.supportsWebsockets}
           onSupportsWebsocketsChange={state.setSupportsWebsocketsDraft}
-          onApply={() => state.applyGatewayMutation.mutate()}
-          isPending={state.applyGatewayMutation.isPending}
+          onApply={() => state.applyGatewayMutation.mutateAsync({
+            apiKeyId: state.selectedApiKeyId,
+            codexHome: state.codexHomeInput,
+            baseUrl: state.gatewayBaseUrl,
+            authMode: state.gatewayAuthMode,
+            supportsWebsockets: state.supportsWebsockets,
+            reloadAfterSwitch: state.reloadAfterSwitch,
+          })}
           selectedApiKey={selectedApiKey}
           reloadAfterSwitch={state.reloadAfterSwitch}
           keyLabel={keyLabel}

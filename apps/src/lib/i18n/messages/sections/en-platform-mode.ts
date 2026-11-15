@@ -24,6 +24,8 @@ export const EN_PLATFORM_MODE_MESSAGES: MessageCatalog = {
   "日志与统计": "Logs and analytics",
   重载行为: "Reload behavior",
   应用后: "After applying",
+  应用接入配置: "Apply connection settings",
+  确认应用: "Confirm and apply",
   "OpenAI 官方目录": "Official OpenAI catalog",
   "CodexManager 本地目录": "CodexManager local catalog",
   "聚合 API": "Aggregated API",
