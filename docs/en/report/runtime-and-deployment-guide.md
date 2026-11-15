@@ -13,11 +13,11 @@
 4. Refresh usage and confirm the account status.
 
 ## Connect through ccswitch
-To use CodexManager through ccswitch or Codex CLI, keep Codex's existing ChatGPT or API key authentication and put the platform key only in `config.toml`. There is no need to switch sign-in methods:
+To use CodexManager through ccswitch or Codex CLI, the default mode keeps Codex's existing ChatGPT or API key authentication and puts the platform key in `config.toml`. You can also choose pure API Key mode on the connection page:
 
 1. Confirm the target Codex profile. With a custom `CODEX_HOME`, Codex CLI and CodexManager must use the same directory.
 2. Open `Platform Keys` and create a general-purpose key. For a fixed key, fill `Custom API key`; otherwise leave it empty to generate one.
-3. Apply `Use CodexManager` on the Codex Connection page, or use ccswitch to update only `config.toml` as shown below. Put the platform key in `experimental_bearer_token` and preserve the existing authentication settings.
+3. Choose `Use CodexManager` on the Codex Connection page, select whether to preserve account information or use pure API Key mode, and apply. Alternatively, use ccswitch to update only `config.toml` as shown below: put the platform key in `experimental_bearer_token` and preserve the existing authentication settings.
 4. Restart Codex CLI after applying the configuration.
 
 Common paths:
@@ -28,8 +28,10 @@ Common paths:
 - Account connections write `auth.json` to switch to the selected account. Direct aggregate API connections update only `config.toml`, write the selected aggregate API key to the provider field `experimental_bearer_token`, and preserve any existing `auth.json`.
 - Account switches and restoring the original profile carry local project directories, project order, and local chat assignments into the target account while preserving its existing project data. Recent Codex versions rebuild the current profile's local project mapping on the next launch so an outdated mapping cannot block import. Project files, chats, and project deletion records stay intact. Remote projects, account preferences, drafts, and directory permissions are not copied.
 - If the selected `CODEX_HOME` has desktop account state, fully quit Codex desktop before switching accounts or restoring the profile, then reopen it. A running desktop produces `Close Codex desktop before switching accounts to preserve local projects`: reloading only the background server cannot prevent the desktop from overwriting project state from memory. Before changing project state, CodexManager saves `desktop-state-before-switch.json` in the managed storage directory shown in connection status. Quit Codex before restoring that backup as well.
-- Gateway setup preserves `auth.json` byte for byte and puts the platform key only in `config.toml`. Starting CodexManager does not write `auth.json` either.
-- Both ChatGPT and API key authentication (`auth_mode = "chatgpt"` or `"apikey"`) are supported. Gateway setup does not require `codex login`, check ChatGPT login tokens, or block configuration writes when `auth.json` is missing. It does not create an auth file.
+- Gateway setup defaults to preserving account information: it keeps any existing `auth.json` byte for byte, puts the platform key in `config.toml`, and does not create an auth file. Existing ChatGPT and API key authentication are supported without `codex login` or ChatGPT login-token checks.
+- Applying pure API Key mode backs up the existing authentication and writes `auth.json` with only `auth_mode: "apikey"` and `OPENAI_API_KEY` set to the selected platform key, without account tokens. Switching back restores the saved authentication unless the file was changed outside CodexManager. Startup synchronization follows the saved mode and updates API Key credentials still managed by CodexManager.
+- Pure API Key mode also sets `cli_auth_credentials_store = "file"` and removes `forced_login_method` / `forced_chatgpt_workspace_id` restrictions. Switching back restores their original values unless they were changed externally.
+- Authentication-mode changes also protect desktop account state: quit Codex desktop using the target `CODEX_HOME` before switching, then reopen it. Existing Codex processes read the new configuration on their next start.
 - The gateway provider always uses `name = "cm"` and `requires_openai_auth = true`; there is no switch to remove this field.
 
 Example `config.toml`:
@@ -65,7 +67,7 @@ supports_websockets = true
 
 ### Account still displayed, or request logs show 499
 
-Connecting through CodexManager preserves Codex's sign-in state, so Codex may still display the existing ChatGPT account. Model requests use the selected provider's `base_url` and platform key. The account label alone does not establish that requests bypass the gateway, and there is no need to delete `auth.json` or sign out for this reason.
+The default gateway mode preserves Codex's sign-in state, so Codex may still display the existing ChatGPT account. To use only the platform key, enable pure API Key mode and apply. Model requests use the selected provider's `base_url` and platform key. The account label alone does not establish that requests bypass the gateway, and there is no need to manually delete `auth.json` or sign out for this reason.
 
 Confirm that Codex and CodexManager use the same `CODEX_HOME`, restart Codex after applying the configuration, and correlate requests by time in the gateway logs. A request recorded by CodexManager has reached the gateway; its upstream address identifies the route selected by the gateway.
 

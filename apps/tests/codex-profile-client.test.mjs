@@ -43,6 +43,37 @@ async function loadClientModule() {
 
 const client = await loadClientModule();
 
+test("gateway authentication defaults to preserving credentials and reads both status formats", () => {
+  assert.equal(client.normalizeCodexProfileStatus({}).gatewayAuthMode, "preserve");
+  assert.equal(
+    client.normalizeCodexProfileStatus({ gateway_auth_mode: "apikey" }).gatewayAuthMode,
+    "apikey",
+  );
+  assert.equal(
+    client.normalizeCodexProfileStatus({ gatewayAuthMode: "apikey" }).gatewayAuthMode,
+    "apikey",
+  );
+});
+
+test("applyGateway sends the authentication selection through the shared transport", async () => {
+  globalThis.__codexProfileInvokeCalls = [];
+  globalThis.__codexProfileInvokeResult = { mode: "gateway", gatewayAuthMode: "apikey" };
+  const params = {
+    apiKeyId: "platform-key-fixture",
+    codexHome: "/srv/codex-fixture",
+    baseUrl: "http://localhost:48760/v1",
+    supportsWebsockets: false,
+    reloadAfterSwitch: false,
+  };
+  const status = await client.codexProfileClient.applyGateway({ ...params, authMode: "apikey" });
+  await client.codexProfileClient.applyGateway(params);
+  assert.deepEqual(globalThis.__codexProfileInvokeCalls, [
+    { command: "service_codex_profile_apply_gateway", params: { ...params, authMode: "apikey" } },
+    { command: "service_codex_profile_apply_gateway", params: { ...params, authMode: "preserve" } },
+  ]);
+  assert.equal(status.gatewayAuthMode, "apikey");
+});
+
 test("normalizeCodexProfileStatus reads the managed catalog state", () => {
   assert.equal(
     client.normalizeCodexProfileStatus({

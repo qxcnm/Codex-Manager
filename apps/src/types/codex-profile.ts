@@ -6,6 +6,8 @@ export type CodexProfileMode =
   | "gateway"
   | "managed_unknown";
 
+export type CodexGatewayAuthMode = "preserve" | "apikey";
+
 export interface CodexProfileStatus {
   codexHome: string;
   authPath: string;
@@ -23,6 +25,7 @@ export interface CodexProfileStatus {
   gatewayBaseUrl: string | null;
   aggregateApiBaseUrl: string | null;
   supportsWebsockets: boolean;
+  gatewayAuthMode: CodexGatewayAuthMode;
   providerId: string;
   hasBackup: boolean;
   lastAppliedAt: number | null;

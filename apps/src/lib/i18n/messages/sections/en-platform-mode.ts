@@ -3,6 +3,15 @@
 import type { MessageCatalog } from "../types";
 
 export const EN_PLATFORM_MODE_MESSAGES: MessageCatalog = {
+  "认证模式": "Authentication mode",
+  "纯 API Key 模式": "API key only",
+  "保留账号信息": "Preserve account information",
+  "通过 CodexManager 接入只需可用的平台密钥。选择认证模式后，点击下方按钮应用。": "Connecting through CodexManager only requires an available platform key. Choose an authentication mode, then apply it below.",
+  "保留账号信息；从纯 API Key 模式切回时恢复原认证，并保留外部修改。认证切换前请关闭对应 Codex 桌面端。": "Preserve account information. Switching back from API-key-only mode restores the original credentials and preserves external changes. Close the affected Codex Desktop before changing authentication.",
+  "仅使用所选平台密钥；备份原认证信息后重写 auth.json，切回保留模式可恢复。切换前请关闭使用此配置的 Codex 桌面端。": "Use only the selected platform key. The original credentials are backed up before auth.json is rewritten and can be restored by switching back. Close Codex Desktop instances using this profile before switching.",
+  "选择接入方式后应用配置；账号直连会更新 auth.json，聚合 API 直连保留认证，网关可选择保留账号信息或纯 API Key 模式。": "Apply your chosen connection. Direct account setup updates auth.json; direct aggregate API connections preserve credentials. Gateway connections offer preserved account information or API-key-only authentication.",
+  "账号直连会更新 auth.json；聚合 API 直连保留认证；网关默认保留账号信息，也可选择纯 API Key 模式。": "Direct account setup updates auth.json; direct aggregate API setup preserves credentials. Gateway setup preserves account information by default and also offers an API-key-only mode.",
+  "通过本地网关接入只需可用的平台密钥，默认保留现有认证；可在 Codex 接入方式页面选择纯 API Key 模式。": "The local gateway only requires an available platform key and preserves existing credentials by default. Choose API-key-only mode on the Codex Connection page.",
   "Codex 接入方式": "Codex Connection",
   "选择 Codex 直接连接 OpenAI，或通过 CodexManager 进行转发与管理。":
     "Choose whether Codex connects directly to OpenAI or is routed and managed through CodexManager.",

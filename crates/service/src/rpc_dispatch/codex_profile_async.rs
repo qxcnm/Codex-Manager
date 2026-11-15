@@ -24,6 +24,7 @@ pub(super) async fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> 
                 super::str_param(req, "codexHome"),
                 super::str_param(req, "baseUrl"),
                 super::bool_param(req, "supportsWebsockets"),
+                super::codex_profile::gateway_auth_mode_param(req),
                 super::bool_param(req, "reloadAfterSwitch").unwrap_or(false),
             )
             .await,

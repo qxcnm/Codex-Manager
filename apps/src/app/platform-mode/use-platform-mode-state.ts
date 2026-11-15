@@ -18,6 +18,7 @@ import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
 import { useDesktopPageActive } from "@/hooks/useDesktopPageActive";
 import { useAppStore } from "@/lib/store/useAppStore";
 import type {
+  CodexGatewayAuthMode,
   CodexProfileHistoryRepairSummary,
   CodexProfileMode,
   CodexRuntimeReloadResult,
@@ -108,7 +109,7 @@ export function modeImpact(
   if (mode === "gateway") {
     return t("Codex 请求由 CodexManager 转发；实际路由和模型目录取决于当前平台密钥的配置。");
   }
-  return t("选择接入方式后应用配置；账号直连会更新 auth.json，网关和聚合 API 接入保留 auth.json，仅更新 config.toml。");
+  return t("选择接入方式后应用配置；账号直连会更新 auth.json，聚合 API 直连保留认证，网关可选择保留账号信息或纯 API Key 模式。");
 }
 
 export function usePlatformModePageState(
@@ -126,6 +127,8 @@ export function usePlatformModePageState(
     string | null
   >(null);
   const [gatewayBaseUrlDraft, setGatewayBaseUrlDraft] = useState<string | null>(null);
+  const [gatewayAuthModeDraft, setGatewayAuthModeDraft] =
+    useState<CodexGatewayAuthMode | null>(null);
   const [supportsWebsocketsDraft, setSupportsWebsocketsDraft] = useState<boolean | null>(
     null,
   );
@@ -199,6 +202,7 @@ export function usePlatformModePageState(
     gatewayBaseUrlDraft ?? status?.gatewayBaseUrl ?? defaultGatewayBaseUrl;
   const supportsWebsockets =
     supportsWebsocketsDraft ?? status?.supportsWebsockets ?? false;
+  const gatewayAuthMode = gatewayAuthModeDraft ?? status?.gatewayAuthMode ?? "preserve";
   const isDirectActive = status?.mode === "direct_account";
   const isDirectAggregateActive = status?.mode === "direct_aggregate";
   const isGatewayActive = status?.mode === "gateway";
@@ -261,6 +265,8 @@ export function usePlatformModePageState(
     mutationFn: () => codexProfileClient.setConfig(codexHomeInput),
     onSuccess: async (nextStatus) => {
       setCodexHomeDraft(nextStatus.codexHome);
+      queryClient.setQueryData(CODEX_PROFILE_STATUS_QUERY_KEY, nextStatus);
+      setGatewayAuthModeDraft(null);
       await refreshAll();
       toast.success(t("Codex profile 路径已保存"));
     },
@@ -277,6 +283,7 @@ export function usePlatformModePageState(
         reloadAfterSwitch,
       }),
     onSuccess: async (nextStatus) => {
+      setGatewayAuthModeDraft(null);
       await refreshAll();
       toast.success(t("已切换为直接连接 OpenAI"));
       showHistoryRepairToast(nextStatus.historyRepair);
@@ -295,6 +302,7 @@ export function usePlatformModePageState(
         reloadAfterSwitch,
       }),
     onSuccess: async (nextStatus) => {
+      setGatewayAuthModeDraft(null);
       await refreshAll();
       toast.success(t("已切换为直连聚合 API"));
       showHistoryRepairToast(nextStatus.historyRepair);
@@ -311,10 +319,13 @@ export function usePlatformModePageState(
         apiKeyId: selectedApiKeyId,
         codexHome: codexHomeInput,
         baseUrl: gatewayBaseUrl,
+        authMode: gatewayAuthMode,
         supportsWebsockets,
         reloadAfterSwitch,
       }),
     onSuccess: async (nextStatus) => {
+      queryClient.setQueryData(CODEX_PROFILE_STATUS_QUERY_KEY, nextStatus);
+      setGatewayAuthModeDraft(null);
       await refreshAll();
       toast.success(t("已切换为通过 CodexManager"));
       showHistoryRepairToast(nextStatus.historyRepair);
@@ -327,7 +338,9 @@ export function usePlatformModePageState(
 
   const restoreMutation = useMutation({
     mutationFn: () => codexProfileClient.restore(codexHomeInput),
-    onSuccess: async () => {
+    onSuccess: async (nextStatus) => {
+      queryClient.setQueryData(CODEX_PROFILE_STATUS_QUERY_KEY, nextStatus);
+      setGatewayAuthModeDraft(null);
       await refreshAll();
       toast.success(t("已恢复接管前的 Codex 配置"));
     },
@@ -400,6 +413,7 @@ export function usePlatformModePageState(
     selectedApiKeyId,
     selectedAggregateApiId,
     gatewayBaseUrl,
+    gatewayAuthMode,
     supportsWebsockets,
     reloadAfterSwitch,
     defaultGatewayBaseUrl,
@@ -414,6 +428,7 @@ export function usePlatformModePageState(
     setSelectedApiKeyIdDraft,
     setSelectedAggregateApiIdDraft,
     setGatewayBaseUrlDraft,
+    setGatewayAuthModeDraft,
     setSupportsWebsocketsDraft,
     setReloadAfterSwitch,
     refreshAll,

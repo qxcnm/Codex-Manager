@@ -48,7 +48,7 @@ pnpm exec playwright test
 - 模型管理页的“应用模型”在未勾选时把完整目录写入 `gateway-models.json`，存在勾选项时只写入所选模型，并在目标 `CODEX_HOME/config.toml` 更新 `model_catalog_json`；它不要求平台密钥，也不会改写现有认证、模型提供方或网关地址。
 - 应用时不按 enabled、`supportedInApi`、visibility 或文本生成能力过滤，`gpt-image-2`、两个 Image 2.5 模型和明确勾选的隐藏模型也能进入 Codex 模型列表。操作不会终止 Codex 后台进程；关闭并重新打开 Codex 后读取新目录。
 - 模型管理页不提供写入或下载 `~/.codex/models_cache.json` 的入口；Codex 通过 `model_catalog_json` 指向的 `gateway-models.json` 读取已应用的模型列表。
-- 平台模式页支持 OpenAI 账号直连、Codex/Compatible Responses 聚合 API 直连和 CodexManager 本地网关三种接入方式；聚合 API 直连只接纳可映射为 Responses `base_url` 的 API-key 条目。应用账号直连会更新 `auth.json` 以切换所选账号；网关和聚合 API 接入仅更新 `config.toml`（包括对应密钥），保留现有 `auth.json`。
+- 平台模式页支持 OpenAI 账号直连、Codex/Compatible Responses 聚合 API 直连和 CodexManager 本地网关三种接入方式；聚合 API 直连只接纳可映射为 Responses `base_url` 的 API-key 条目。应用账号直连会更新 `auth.json` 以切换所选账号；聚合 API 接入仅更新 `config.toml`（包括对应密钥），保留现有 `auth.json`。网关默认保留账号信息；启用“纯 API Key 模式”后备份原认证，将 `auth.json` 改为仅含 `auth_mode: "apikey"` 和所选平台 Key 的 `OPENAI_API_KEY`，切回时恢复原认证，保留外部修改。认证切换前请关闭对应 Codex 桌面端，应用后重启 Codex。
 - 网关和聚合 API 的 provider 配置都写入 `experimental_bearer_token`：网关使用所选平台 Key，聚合 API 使用所选聚合 API Key。
 - 平台模式页提供“切换后重载 Codex 后台”开关；默认开启，只匹配使用目标 `CODEX_HOME` 的 app-server，不会终止前台 Codex CLI。
 
@@ -69,7 +69,7 @@ pnpm exec playwright test
 - 平台密钥页默认优先展示 `supportedInApi = true` 的模型。
 - 所有主要列表页的“操作”列都已做右侧冻结，横向滚动时不会丢失操作入口。
 - 页面切换使用 keep-alive 缓存与整区加载遮罩，减少桌面端与 Web 版回访时的重载体感。
-- 首次接入引导说明本地网关只需可用的平台密钥；网关接入兼容现有 ChatGPT 或 API key 认证，逐字节保留 `auth.json`，只更新 `config.toml`。
+- 首次接入引导说明本地网关只需可用的平台密钥；默认保留现有 ChatGPT 或 API key 认证，也可在接入方式页启用纯 API Key 模式。
 - 设置页网关配置包含上游代理、请求总超时、流式空闲超时与 SSE 保活间隔。
 
 ## 开发约定

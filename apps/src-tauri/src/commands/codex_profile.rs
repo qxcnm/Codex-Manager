@@ -123,6 +123,7 @@ pub async fn service_codex_profile_apply_gateway(
     api_key_id: String,
     codex_home: Option<String>,
     base_url: Option<String>,
+    auth_mode: Option<String>,
     supports_websockets: Option<bool>,
     reload_after_switch: Option<bool>,
 ) -> Result<serde_json::Value, String> {
@@ -130,6 +131,7 @@ pub async fn service_codex_profile_apply_gateway(
         "apiKeyId": api_key_id,
         "codexHome": codex_home,
         "baseUrl": base_url,
+        "authMode": auth_mode,
         "supportsWebsockets": supports_websockets,
         "reloadAfterSwitch": reload_after_switch.unwrap_or(false),
     });

@@ -21,10 +21,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
+import { Field, FieldContent, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { buildStaticRouteUrl } from "@/lib/utils/static-routes";
 import { cn } from "@/lib/utils";
 import { CODEX_PROFILE_MODE_LABELS } from "@/hooks/useCodexProfileModeStatus";
 import type {
+  CodexGatewayAuthMode,
   CodexProfileAccountCandidate,
   CodexProfileAggregateApiCandidate,
   CodexProfileApiKeyCandidate,
@@ -146,6 +148,7 @@ function ConnectionPreview({
   route,
   catalog,
   telemetry,
+  authentication,
   reloadAfterSwitch,
 }: {
   t: Translate;
@@ -153,6 +156,7 @@ function ConnectionPreview({
   route: string;
   catalog: string;
   telemetry: string;
+  authentication?: string;
   reloadAfterSwitch: boolean;
 }) {
   const facts = [
@@ -160,6 +164,7 @@ function ConnectionPreview({
     [t("请求路由"), route],
     [t("模型来源"), catalog],
     [t("日志与统计"), telemetry],
+    ...(authentication ? [[t("认证模式"), authentication]] : []),
     [
       t("重载行为"),
       reloadAfterSwitch ? t("切换后尝试重载后台") : t("下次启动时生效"),
@@ -281,6 +286,7 @@ export function CurrentModeCard({
   status:
     | {
         mode: CodexProfileMode;
+        gatewayAuthMode?: CodexGatewayAuthMode;
       }
     | null
     | undefined;
@@ -354,6 +360,12 @@ export function CurrentModeCard({
         <ModeFact label={t("请求路由")} value={route} />
         <ModeFact label={t("模型来源")} value={catalog} />
         <ModeFact label={t("日志与统计")} value={telemetry} />
+        {isGatewayActive ? (
+          <ModeFact
+            label={t("认证模式")}
+            value={t(status?.gatewayAuthMode === "apikey" ? "纯 API Key 模式" : "保留账号信息")}
+          />
+        ) : null}
         <ModeFact label={t("最后应用")} value={lastAppliedAtLabel} />
       </CardContent>
     </Card>
@@ -631,6 +643,8 @@ export function GatewayModeCard({
   selectedApiKeyId,
   onSelectApiKey,
   gatewayBaseUrl,
+  gatewayAuthMode,
+  onGatewayAuthModeChange,
   supportsWebsockets,
   onSupportsWebsocketsChange,
   onApply,
@@ -648,6 +662,8 @@ export function GatewayModeCard({
   selectedApiKeyId: string;
   onSelectApiKey: (value: string | null) => void;
   gatewayBaseUrl: string;
+  gatewayAuthMode: CodexGatewayAuthMode;
+  onGatewayAuthModeChange: (mode: CodexGatewayAuthMode) => void;
   supportsWebsockets: boolean;
   onSupportsWebsocketsChange: (enabled: boolean) => void;
   onApply: () => void;
@@ -680,7 +696,7 @@ export function GatewayModeCard({
       </CardHeader>
       <CardContent className="grid gap-2.5">
         <p className="text-xs leading-5 text-muted-foreground">
-          {t("通过 CodexManager 接入只需可用的平台密钥。应用网关配置会保留 auth.json，兼容现有 ChatGPT 或 API key 认证，仅更新 config.toml。")}
+          {t("通过 CodexManager 接入只需可用的平台密钥。选择认证模式后，点击下方按钮应用。")}
         </p>
         {candidates.length === 0 && !isLoading ? (
           <div className="grid gap-2 rounded-md border border-dashed border-border/70 bg-muted/25 p-2.5 text-sm text-muted-foreground">
@@ -732,6 +748,28 @@ export function GatewayModeCard({
             </p>
           </div>
         )}
+        <Field
+          orientation="horizontal"
+          data-disabled={!isServiceReady || isMutating}
+          className="rounded-md border border-border/70 bg-background/45 p-2.5"
+        >
+          <FieldContent>
+            <FieldLabel htmlFor="gateway-apikey-auth">{t("纯 API Key 模式")}</FieldLabel>
+            <FieldDescription id="gateway-apikey-auth-description">
+              {gatewayAuthMode === "apikey"
+                ? t("仅使用所选平台密钥；备份原认证信息后重写 auth.json，切回保留模式可恢复。切换前请关闭使用此配置的 Codex 桌面端。")
+                : t("保留账号信息；从纯 API Key 模式切回时恢复原认证，并保留外部修改。认证切换前请关闭对应 Codex 桌面端。")}
+            </FieldDescription>
+          </FieldContent>
+          <Switch
+            id="gateway-apikey-auth"
+            checked={gatewayAuthMode === "apikey"}
+            onCheckedChange={(enabled) => onGatewayAuthModeChange(enabled ? "apikey" : "preserve")}
+            disabled={!isServiceReady || isMutating}
+            aria-label={t("纯 API Key 模式")}
+            aria-describedby="gateway-apikey-auth-description"
+          />
+        </Field>
         <div className="flex items-center justify-between gap-2 rounded-md border border-border/70 bg-background/45 p-2.5">
           <div className="grid gap-0.5">
             <Label htmlFor="gateway-responses-websocket">
@@ -764,6 +802,7 @@ export function GatewayModeCard({
           }
           catalog={catalogSourceLabel(selectedApiKey?.catalogSource, t)}
           telemetry={t("CodexManager 可记录")}
+          authentication={t(gatewayAuthMode === "apikey" ? "纯 API Key 模式" : "保留账号信息")}
           reloadAfterSwitch={reloadAfterSwitch}
         />
         <Button

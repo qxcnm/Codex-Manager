@@ -1,5 +1,13 @@
 use codexmanager_core::rpc::types::{JsonRpcRequest, JsonRpcResponse};
 
+pub(super) fn gateway_auth_mode_param(req: &JsonRpcRequest) -> Option<&str> {
+    req.params
+        .as_ref()?
+        .get("authMode")
+        .filter(|value| !value.is_null())
+        .map(|value| value.as_str().unwrap_or("invalid"))
+}
+
 /// 函数 `try_handle`
 ///
 /// 作者: gaohongshun
@@ -41,6 +49,7 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
             super::str_param(req, "codexHome"),
             super::str_param(req, "baseUrl"),
             super::bool_param(req, "supportsWebsockets"),
+            gateway_auth_mode_param(req),
             super::bool_param(req, "reloadAfterSwitch").unwrap_or(false),
         )),
         "codexProfile/applyModels" => super::value_or_error(crate::codex_profile::apply_models(

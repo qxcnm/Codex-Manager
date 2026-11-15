@@ -19,6 +19,9 @@ use crate::codex_runtime::CodexRuntimeReloadResult;
 
 #[path = "codex_profile_desktop_state.rs"]
 mod desktop_state;
+#[path = "codex_profile_gateway_auth.rs"]
+mod gateway_auth;
+use gateway_auth::GatewayAuthMode;
 #[path = "codex_profile_rollout.rs"]
 mod rollout;
 
@@ -120,6 +123,7 @@ pub(crate) struct CodexProfileStatus {
     pub gateway_base_url: Option<String>,
     pub aggregate_api_base_url: Option<String>,
     pub supports_websockets: bool,
+    pub gateway_auth_mode: GatewayAuthMode,
     pub provider_id: String,
     pub has_backup: bool,
     pub last_applied_at: Option<i64>,
@@ -261,6 +265,8 @@ struct ManagedState {
     aggregate_api_base_url: Option<String>,
     #[serde(default)]
     supports_websockets: Option<bool>,
+    #[serde(default)]
+    gateway_auth_mode: GatewayAuthMode,
     provider_id: String,
     #[serde(default)]
     previous_model_catalog_json: Option<String>,
@@ -331,6 +337,8 @@ struct MarkerFile {
     aggregate_api_base_url: Option<String>,
     #[serde(default)]
     supports_websockets: Option<bool>,
+    #[serde(default)]
+    gateway_auth_mode: GatewayAuthMode,
     provider_id: String,
     #[serde(default)]
     managed_model_slugs: Vec<String>,
@@ -712,6 +720,7 @@ pub(crate) async fn apply_direct_account_async(
                 provider_id: DEFAULT_HISTORY_PROVIDER_ID.to_string(),
                 previous_model_catalog_json: None,
                 managed_model_slugs: Vec::new(),
+                gateway_auth_mode: GatewayAuthMode::Preserve,
                 updated_at: now_ts(),
             },
         )?;
@@ -888,6 +897,7 @@ pub(crate) async fn apply_direct_aggregate_async(
                 provider_id: DIRECT_AGGREGATE_PROVIDER_ID.to_string(),
                 previous_model_catalog_json,
                 managed_model_slugs: canonical_model_slugs,
+                gateway_auth_mode: GatewayAuthMode::Preserve,
                 updated_at: now_ts(),
             },
         )?;
@@ -906,6 +916,7 @@ pub(crate) fn apply_gateway(
     codex_home: Option<&str>,
     base_url: Option<&str>,
     supports_websockets: Option<bool>,
+    auth_mode: Option<&str>,
     reload_after_switch: bool,
 ) -> Result<CodexProfileStatus, String> {
     crate::gateway::run_upstream_io(apply_gateway_async(
@@ -913,6 +924,7 @@ pub(crate) fn apply_gateway(
         codex_home,
         base_url,
         supports_websockets,
+        auth_mode,
         reload_after_switch,
     ))?
 }
@@ -922,8 +934,10 @@ pub(crate) async fn apply_gateway_async(
     codex_home: Option<&str>,
     base_url: Option<&str>,
     supports_websockets: Option<bool>,
+    auth_mode: Option<&str>,
     reload_after_switch: bool,
 ) -> Result<CodexProfileStatus, String> {
+    let auth_mode = GatewayAuthMode::parse(auth_mode)?;
     let api_key_id = normalize_required(api_key_id, "missing apiKeyId")?.to_owned();
     let codex_home = codex_home.map(str::to_owned);
     let gateway_base_url = normalize_gateway_base_url(base_url);
@@ -990,8 +1004,6 @@ pub(crate) async fn apply_gateway_async(
     .await?;
     drop(storage);
     profile_commit(&lease, move || {
-        // Gateway credentials live in the provider config. Preserve Codex's own
-        // authentication file without requiring a particular sign-in mode.
         let config_toml = patch_config_for_gateway(
             current_config,
             &gateway_base_url,
@@ -999,28 +1011,36 @@ pub(crate) async fn apply_gateway_async(
             supports_websockets,
             &secret,
         )?;
+        let auth_change =
+            gateway_auth::prepare(&profile_dir, &paths, auth_mode, &secret, true, &config_toml)?;
+        let config_toml = auth_change.config_toml.clone();
         let _ = ensure_managed_profile_migrated(&profile_dir);
-        ensure_backup(&profile_dir)?;
-        write_atomic(&paths.gateway_model_catalog_path, &catalog_content)?;
-        write_atomic(&profile_dir.join(CONFIG_FILE), &config_toml)?;
-        write_managed_state(
-            &profile_dir,
-            &ManagedState {
-                profile_dir: profile_key(&profile_dir),
-                mode: CodexProfileMode::Gateway,
-                account_id: None,
-                api_key_id: Some(gateway_auth.id),
-                aggregate_api_id: None,
-                gateway_base_url: Some(gateway_base_url),
-                aggregate_api_base_url: None,
-                supports_websockets: Some(supports_websockets),
-                provider_id: PROVIDER_ID.to_string(),
-                previous_model_catalog_json,
-                managed_model_slugs: Vec::new(),
-                updated_at: now_ts(),
-            },
-        )?;
-        persist_codex_home(&profile_dir)?;
+        gateway_auth::commit(&profile_dir, &paths, || {
+            ensure_backup(&profile_dir)?;
+            auth_change.apply(&profile_dir, &paths)?;
+            write_atomic(&paths.gateway_model_catalog_path, &catalog_content)?;
+            write_atomic(&profile_dir.join(CONFIG_FILE), &config_toml)?;
+            write_managed_state(
+                &profile_dir,
+                &ManagedState {
+                    profile_dir: profile_key(&profile_dir),
+                    mode: CodexProfileMode::Gateway,
+                    account_id: None,
+                    api_key_id: Some(gateway_auth.id),
+                    aggregate_api_id: None,
+                    gateway_base_url: Some(gateway_base_url),
+                    aggregate_api_base_url: None,
+                    supports_websockets: Some(supports_websockets),
+                    gateway_auth_mode: auth_mode,
+                    provider_id: PROVIDER_ID.to_string(),
+                    previous_model_catalog_json,
+                    managed_model_slugs: Vec::new(),
+                    updated_at: now_ts(),
+                },
+            )?;
+            persist_codex_home(&profile_dir)?;
+            Ok(())
+        })?;
         status_for_profile_after_apply(&profile_dir, Some(PROVIDER_ID), reload_after_switch)
     })
     .await
@@ -1274,6 +1294,7 @@ fn restore_locked(codex_home: Option<&str>) -> Result<CodexProfileStatus, String
     )?;
     remove_file_if_exists(&paths.marker_path)?;
     remove_file_if_exists(&paths.legacy_marker_path)?;
+    gateway_auth::clear_snapshot(&paths)?;
     save_backups(&backups)?;
     if load_state().is_some_and(|state| state.profile_dir == key) {
         crate::app_settings::save_persisted_app_setting(APP_SETTING_STATE_KEY, None)?;
@@ -1396,7 +1417,7 @@ fn normalize_gateway_base_url(base_url: Option<&str>) -> String {
 }
 
 fn persist_codex_home(profile_dir: &Path) -> Result<(), String> {
-    crate::app_settings::save_persisted_app_setting(
+    save_profile_setting(
         APP_SETTING_CODEX_HOME_KEY,
         Some(&profile_dir.to_string_lossy()),
     )
@@ -1568,6 +1589,7 @@ fn status_for_profile(profile_dir: &Path) -> Result<CodexProfileStatus, String> 
             gateway_base_url: marker.gateway_base_url,
             aggregate_api_base_url: marker.aggregate_api_base_url,
             supports_websockets: marker.supports_websockets,
+            gateway_auth_mode: marker.gateway_auth_mode,
             provider_id: marker.provider_id,
             previous_model_catalog_json: None,
             managed_model_slugs: marker.managed_model_slugs,
@@ -1638,6 +1660,11 @@ fn status_for_profile(profile_dir: &Path) -> Result<CodexProfileStatus, String> 
             .map(|gateway| gateway.supports_websockets)
             .or_else(|| state.as_ref().and_then(|state| state.supports_websockets))
             .unwrap_or(false),
+        gateway_auth_mode: state
+            .as_ref()
+            .filter(|state| matches!(state.mode, CodexProfileMode::Gateway))
+            .map(|state| state.gateway_auth_mode)
+            .unwrap_or_default(),
         provider_id: detected_gateway
             .as_ref()
             .map(|gateway| gateway.provider_id.clone())
@@ -2988,6 +3015,7 @@ fn managed_state_for_model_apply(
             gateway_base_url: marker.gateway_base_url,
             aggregate_api_base_url: marker.aggregate_api_base_url,
             supports_websockets: marker.supports_websockets,
+            gateway_auth_mode: marker.gateway_auth_mode,
             provider_id: marker.provider_id,
             previous_model_catalog_json: None,
             managed_model_slugs: marker.managed_model_slugs,
@@ -3043,6 +3071,7 @@ fn managed_state_for_model_apply(
         provider_id,
         previous_model_catalog_json,
         managed_model_slugs: Vec::new(),
+        gateway_auth_mode: GatewayAuthMode::Preserve,
         updated_at: now_ts(),
     })
 }
@@ -3211,6 +3240,7 @@ async fn sync_active_gateway_profile_from_storage_with_changes_async(
         }
     };
     profile_commit(&lease, move || {
+        let mut auth_change = None;
         let config_toml = if detach_managed_catalog {
             let current_config = read_optional(&profile_dir.join(CONFIG_FILE))?;
             Some(patch_config_to_restore_previous_catalog(
@@ -3235,42 +3265,62 @@ async fn sync_active_gateway_profile_from_storage_with_changes_async(
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .ok_or_else(|| "api key secret not found".to_string())?;
-                    Some(patch_config_for_gateway(
+                    let config = patch_config_for_gateway(
                         current_config,
                         &gateway_base_url,
                         &paths.gateway_model_catalog_path,
                         supports_websockets,
                         secret,
-                    )?)
+                    )?;
+                    if state.gateway_auth_mode == GatewayAuthMode::Apikey {
+                        let change = gateway_auth::prepare(
+                            &profile_dir,
+                            &paths,
+                            state.gateway_auth_mode,
+                            secret,
+                            false,
+                            &config,
+                        )?;
+                        let config = change.config_toml.clone();
+                        auth_change = Some(change);
+                        Some(config)
+                    } else {
+                        Some(config)
+                    }
                 }
                 _ => None,
             }
         };
 
-        if let Some(catalog_content) = catalog_content {
-            write_atomic(&paths.gateway_model_catalog_path, &catalog_content)?;
-        }
-        if let Some(config_toml) = config_toml {
-            write_atomic(&profile_dir.join(CONFIG_FILE), &config_toml)?;
-        }
+        gateway_auth::commit(&profile_dir, &paths, || {
+            if let Some(change) = auth_change {
+                change.apply(&profile_dir, &paths)?;
+            }
+            if let Some(catalog_content) = catalog_content {
+                write_atomic(&paths.gateway_model_catalog_path, &catalog_content)?;
+            }
+            if let Some(config_toml) = config_toml {
+                write_atomic(&profile_dir.join(CONFIG_FILE), &config_toml)?;
+            }
 
-        let mut state_changed = selection_changed;
-        if let Some(supports_websockets) = supports_websockets {
-            if state.supports_websockets != Some(supports_websockets) {
-                state.supports_websockets = Some(supports_websockets);
-                state_changed = true;
+            let mut state_changed = selection_changed;
+            if let Some(supports_websockets) = supports_websockets {
+                if state.supports_websockets != Some(supports_websockets) {
+                    state.supports_websockets = Some(supports_websockets);
+                    state_changed = true;
+                }
             }
-        }
-        if let Some(canonical_model_slugs) = canonical_model_slugs {
-            if state.managed_model_slugs != canonical_model_slugs {
-                state.managed_model_slugs = canonical_model_slugs;
-                state_changed = true;
+            if let Some(canonical_model_slugs) = canonical_model_slugs {
+                if state.managed_model_slugs != canonical_model_slugs {
+                    state.managed_model_slugs = canonical_model_slugs;
+                    state_changed = true;
+                }
             }
-        }
-        if state_changed {
-            write_managed_state(&profile_dir, &state)?;
-        }
-        Ok(true)
+            if state_changed {
+                write_managed_state(&profile_dir, &state)?;
+            }
+            Ok(true)
+        })
     })
     .await
 }
@@ -3376,6 +3426,7 @@ fn write_managed_marker(profile_dir: &Path, state: &ManagedState) -> Result<(), 
         gateway_base_url: state.gateway_base_url.clone(),
         aggregate_api_base_url: state.aggregate_api_base_url.clone(),
         supports_websockets: state.supports_websockets,
+        gateway_auth_mode: state.gateway_auth_mode,
         provider_id: state.provider_id.clone(),
         managed_model_slugs: state.managed_model_slugs.clone(),
         updated_at: state.updated_at,
@@ -3415,7 +3466,7 @@ fn load_state() -> Option<ManagedState> {
 fn save_state(state: &ManagedState) -> Result<(), String> {
     let value =
         serde_json::to_string(state).map_err(|err| format!("serialize state failed: {err}"))?;
-    crate::app_settings::save_persisted_app_setting(APP_SETTING_STATE_KEY, Some(&value))
+    save_profile_setting(APP_SETTING_STATE_KEY, Some(&value))
 }
 
 fn load_backups() -> HashMap<String, BackupEntry> {
@@ -3440,7 +3491,13 @@ fn load_profile_settings_snapshot() -> CodexProfileSettingsSnapshot {
 fn save_backups(backups: &HashMap<String, BackupEntry>) -> Result<(), String> {
     let value =
         serde_json::to_string(backups).map_err(|err| format!("serialize backups failed: {err}"))?;
-    crate::app_settings::save_persisted_app_setting(APP_SETTING_BACKUPS_KEY, Some(&value))
+    save_profile_setting(APP_SETTING_BACKUPS_KEY, Some(&value))
+}
+
+fn save_profile_setting(key: &str, content: Option<&str>) -> Result<(), String> {
+    crate::app_settings::save_persisted_app_setting(key, content)?;
+    gateway_auth::record_setting_write(key, content);
+    Ok(())
 }
 
 fn read_marker(path: &Path) -> Result<MarkerFile, String> {
@@ -3466,7 +3523,10 @@ fn restore_optional_file(path: &Path, content: Option<&str>) -> Result<(), Strin
 
 fn remove_file_if_exists(path: &Path) -> Result<(), String> {
     match fs::remove_file(path) {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            gateway_auth::record_file_write(path, None);
+            Ok(())
+        }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(format!("remove file failed ({}): {err}", path.display())),
     }
@@ -3482,7 +3542,10 @@ fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
     fs::write(&temp_path, content)
         .map_err(|err| format!("write temp file failed ({}): {err}", temp_path.display()))?;
     match fs::rename(&temp_path, path) {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            gateway_auth::record_file_write(path, Some(content));
+            Ok(())
+        }
         Err(err) => {
             let _ = fs::remove_file(&temp_path);
             Err(format!("replace file failed ({}): {err}", path.display()))

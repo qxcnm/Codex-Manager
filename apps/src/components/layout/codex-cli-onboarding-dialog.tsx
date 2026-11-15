@@ -51,7 +51,7 @@ const GUIDE_STEPS = [
     description:
       "选择接入方式与目标后点击应用，页面会调用现有 profile 接口写入配置。",
     details: [
-      "直接连接 OpenAI 会更新 auth.json 以切换所选账号；网关和聚合 API 接入保留 auth.json，仅更新 config.toml。",
+      "账号直连会更新 auth.json；聚合 API 直连保留认证；网关默认保留账号信息，也可选择纯 API Key 模式。",
       "无需复制配置模板，也不要把账号 token 手动写进 auth.json。",
     ],
   },
@@ -157,7 +157,7 @@ export function CodexCliOnboardingDialog({
               </DialogTitle>
               <DialogDescription className="text-xs leading-5 md:text-sm">
                 {t(
-                  "通过本地网关接入只需可用的平台密钥。应用网关配置会保留 auth.json 中现有的 ChatGPT 或 API key 认证，仅更新 config.toml。",
+                  "通过本地网关接入只需可用的平台密钥，默认保留现有认证；可在 Codex 接入方式页面选择纯 API Key 模式。",
                 )}
               </DialogDescription>
             </div>

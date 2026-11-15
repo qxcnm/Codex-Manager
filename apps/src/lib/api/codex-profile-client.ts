@@ -1,6 +1,7 @@
 import { invoke, withAddr } from "./transport";
 import type {
   CodexProfileAccountCandidate,
+  CodexGatewayAuthMode,
   CodexProfileAggregateApiCandidate,
   CodexProfileApiKeyCandidate,
   CodexProfileCandidates,
@@ -113,6 +114,10 @@ export function normalizeCodexProfileStatus(payload: unknown): CodexProfileStatu
     supportsWebsockets: asBoolean(
       source.supportsWebsockets ?? source.supports_websockets,
     ),
+    gatewayAuthMode:
+      (source.gatewayAuthMode ?? source.gateway_auth_mode) === "apikey"
+        ? "apikey"
+        : "preserve",
     providerId: asString(source.providerId ?? source.provider_id) || "cm",
     hasBackup: asBoolean(source.hasBackup ?? source.has_backup),
     lastAppliedAt: toNullableNumber(source.lastAppliedAt ?? source.last_applied_at),
@@ -348,6 +353,7 @@ export const codexProfileClient = {
   },
   async applyGateway(params: {
     apiKeyId: string;
+    authMode?: CodexGatewayAuthMode;
     codexHome?: string | null;
     baseUrl?: string | null;
     supportsWebsockets: boolean;
@@ -357,6 +363,7 @@ export const codexProfileClient = {
       "service_codex_profile_apply_gateway",
       withAddr({
         apiKeyId: params.apiKeyId,
+        authMode: params.authMode ?? "preserve",
         codexHome: params.codexHome || null,
         baseUrl: params.baseUrl || null,
         supportsWebsockets: params.supportsWebsockets,

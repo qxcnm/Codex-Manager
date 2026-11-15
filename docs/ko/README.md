@@ -295,9 +295,9 @@ PatewayAI는 공식 고품질 모델 API 중계에 집중하며 Claude와 Codex 
 
 - 계정 관리: 계정과 사용량 가져오기, 내보내기, 새로고침, 낮은 한도/차단 필터와 초기화 시간.
 - 플랫폼 Key: 모델, 추론 등급, 서비스 등급별 Key 바인딩과 호출 로그.
-- Codex 연결 방식: OpenAI 계정 직접 연결, Responses에 안전하게 매핑할 수 있는 집계 API 직접 연결, CodexManager 로컬 게이트웨이 연결을 지원합니다. 계정 직접 연결은 계정을 전환하기 위해 `auth.json`을 기록합니다. 집계 API 직접 연결과 게이트웨이는 `auth.json`을 유지하고 `config.toml`만 업데이트하며, provider의 `experimental_bearer_token`에는 집계 API 직접 연결 시 선택한 집계 API Key를, 게이트웨이 연결 시 CodexManager 플랫폼 Key를 기록합니다. 집계 API 직접 연결은 로컬 게이트웨이를 거치지 않으므로 게이트웨이 요청 로그에 기록되지 않습니다.
+- Codex 연결 방식: OpenAI 계정 직접 연결, Responses에 안전하게 매핑할 수 있는 집계 API 직접 연결, CodexManager 로컬 게이트웨이 연결을 지원합니다. 계정 직접 연결은 계정을 전환하기 위해 `auth.json`을 기록합니다. 집계 API 직접 연결은 `auth.json`을 유지하고 `config.toml`만 업데이트합니다. 게이트웨이는 기본적으로 계정 정보를 유지하며 순수 API Key 모드를 선택할 수도 있습니다. provider의 `experimental_bearer_token`에는 집계 API 직접 연결 시 선택한 집계 API Key를, 게이트웨이 연결 시 CodexManager 플랫폼 Key를 기록합니다. 집계 API 직접 연결은 로컬 게이트웨이를 거치지 않으므로 게이트웨이 요청 로그에 기록되지 않습니다.
 - 모델 관리: 데스크톱/Web은 `~/.codex/models_cache.json`을 기록하거나 다운로드하지 않습니다. 직접 계정은 공식 카탈로그, 로컬 게이트웨이는 독립 관리 카탈로그를 사용합니다.
-- 로컬 게이트웨이는 기존 ChatGPT 또는 API Key 인증(`auth_mode = "chatgpt"` 또는 `"apikey"`)을 지원하며 특정 로그인 방식을 요구하지 않습니다. 게이트웨이 설정은 `config.toml`만 업데이트하고 기존 `auth.json`을 바이트 단위로 유지합니다. 인증 파일을 생성하거나 ChatGPT 로그인 토큰을 요구하지 않습니다. `cm` provider는 `name = "cm"`, `requires_openai_auth = true`를 사용하며 플랫폼 Key는 `experimental_bearer_token`에 기록합니다.
+- 로컬 게이트웨이는 기본적으로 계정 정보를 유지합니다. `config.toml`만 업데이트하고 기존 `auth.json`을 바이트 단위로 보존하며 ChatGPT 로그인 토큰을 요구하지 않습니다. 순수 API Key 모드는 기존 인증을 백업한 뒤 `auth.json`에 `auth_mode: "apikey"`와 선택한 플랫폼 Key의 `OPENAI_API_KEY`만 기록합니다. 유지 모드로 돌아가면 백업을 복원하지만 외부에서 변경한 인증은 덮어쓰지 않습니다. 인증 변경 전에 해당 Codex 데스크톱을 종료하고 적용 후 Codex를 다시 시작하세요. `cm` provider는 `name = "cm"`, `requires_openai_auth = true`를 사용하며 플랫폼 Key는 `experimental_bearer_token`에 기록합니다.
 - 플러그인 센터: `/plugins/` marketplace 전환, 설치·활성화, 작업, 로그, Rhai.
 - Skills와 플러그인: `/skills/` 별도 탭, GitHub/skills.sh 설치, ZIP/폴더 가져오기, 안전한 제거, Marketplace, 읽기 전용 시스템 Skills. 서비스를 실행하는 사용자의 `~/.agents/skills`도 읽기 전용으로 표시하며, 설치와 제거는 기존 관리 스킬 디렉터리로 제한됩니다.
 - 프로젝트 실행: 데스크톱은 로컬 폴더를 저장하고 Windows/macOS는 ChatGPT Codex App으로 엽니다. 세션은 로컬 CLI를 사용하며 Web/Docker는 장치 폴더에 접근하지 않습니다.

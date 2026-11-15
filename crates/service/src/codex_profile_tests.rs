@@ -580,6 +580,7 @@ async fn reapplying_gateway_profile_refreshes_catalog_and_requests_runtime_reloa
         Some(&codex_home),
         Some("http://127.0.0.1:48760"),
         Some(false),
+        None,
         false,
     )
     .await
@@ -630,6 +631,7 @@ async fn reapplying_gateway_profile_refreshes_catalog_and_requests_runtime_reloa
         Some(&codex_home),
         first.gateway_base_url.as_deref(),
         Some(first.supports_websockets),
+        None,
         true,
     )
     .await
@@ -780,6 +782,7 @@ async fn service_startup_reconciles_stale_gateway_model_selection() {
         Some(&codex_home),
         Some("http://127.0.0.1:48760"),
         Some(false),
+        None,
         false,
     )
     .expect("apply gateway profile");
@@ -1239,6 +1242,7 @@ custom_setting = true
         provider_id: "external".to_string(),
         previous_model_catalog_json: Some("C:/previous-models.json".to_string()),
         managed_model_slugs: vec!["previous-model".to_string()],
+        gateway_auth_mode: GatewayAuthMode::Preserve,
         updated_at: 123,
     };
     write_managed_state(&dir, &baseline_state).expect("write baseline managed state");
@@ -1532,6 +1536,7 @@ fn direct_mode_preserves_previous_catalog_from_config_and_state() {
         provider_id: DIRECT_AGGREGATE_PROVIDER_ID.to_string(),
         previous_model_catalog_json: Some("C:/user-models.json".to_string()),
         managed_model_slugs: vec!["aggregate-model".to_string()],
+        gateway_auth_mode: GatewayAuthMode::Preserve,
         updated_at: now_ts(),
     };
     write_managed_state(&dir, &state).expect("write direct aggregate state");
@@ -1622,6 +1627,7 @@ async fn gateway_apply_preserves_auth_until_account_switch() {
                 Some(&profile_path),
                 Some("http://127.0.0.1:48760"),
                 Some(false),
+                None,
                 false,
             )
             .await
@@ -1790,6 +1796,7 @@ async fn gateway_ignores_legacy_auth_cleanup_setting_and_preserves_chatgpt_login
                     Some(&profile_path),
                     Some("http://127.0.0.1:48760"),
                     Some(false),
+                    None,
                     false,
                 )
                 .await
@@ -2574,6 +2581,7 @@ experimental_bearer_token = "cm-key"
         supports_websockets: None,
         provider_id: PROVIDER_ID.to_string(),
         managed_model_slugs: Vec::new(),
+        gateway_auth_mode: GatewayAuthMode::Preserve,
         updated_at: now_ts(),
     };
 
@@ -2647,6 +2655,7 @@ fn write_profile_files_uses_internal_marker() {
         provider_id: PROVIDER_ID.to_string(),
         previous_model_catalog_json: None,
         managed_model_slugs: Vec::new(),
+        gateway_auth_mode: GatewayAuthMode::Preserve,
         updated_at: now_ts(),
     };
 
@@ -2708,6 +2717,7 @@ fn legacy_marker_migrates_to_internal_marker() {
         supports_websockets: None,
         provider_id: PROVIDER_ID.to_string(),
         managed_model_slugs: Vec::new(),
+        gateway_auth_mode: GatewayAuthMode::Preserve,
         updated_at: now_ts(),
     };
     fs::write(
@@ -2886,5 +2896,259 @@ fn history_repair_reports_sqlite_lock_as_warning() {
         summary.warnings
     );
     drop(lock_conn);
+    cleanup_profile(&dir);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn gateway_apikey_mode_restores_auth_and_syncs_rotated_key_without_overwriting_external_login(
+) {
+    let _env_lock = crate::test_env_guard();
+    let dir = temp_profile("gateway-apikey-mode");
+    let _db_guard = set_test_db(&dir);
+    let _backend_guard = EnvGuard::remove("CODEXMANAGER_STORAGE_BACKEND");
+    let _database_url_guard = EnvGuard::remove("CODEXMANAGER_DATABASE_URL");
+    let managed_root = dir.join("managed");
+    let _managed_root_guard = EnvGuard::set(
+        "CODEXMANAGER_TEST_DB_DIR",
+        managed_root.to_string_lossy().as_ref(),
+    );
+    let storage = Storage::open(dir.join("codexmanager.db")).unwrap();
+    storage.init().unwrap();
+    let key = ApiKey {
+        id: "key-auth-mode".into(),
+        name: None,
+        model_slug: None,
+        reasoning_effort: None,
+        service_tier: None,
+        rotation_strategy: crate::apikey_profile::ROTATION_HYBRID.into(),
+        aggregate_api_id: None,
+        account_plan_filter: None,
+        aggregate_api_url: None,
+        client_type: crate::apikey_profile::CLIENT_CODEX.into(),
+        protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT.into(),
+        auth_scheme: crate::apikey_profile::AUTH_BEARER.into(),
+        upstream_base_url: None,
+        static_headers_json: None,
+        key_hash: "auth-mode-hash".into(),
+        status: "active".into(),
+        created_at: now_ts(),
+        last_used_at: None,
+    };
+    storage.insert_api_key(&key).unwrap();
+    storage
+        .upsert_api_key_secret(&key.id, "cm-auth-mode-secret")
+        .unwrap();
+    let codex_home = dir.to_string_lossy().to_string();
+    let original_auth = write_chatgpt_auth_fixture(&dir);
+    let original_config = "cli_auth_credentials_store = \"keyring\"\nforced_login_method = \"chatgpt\"\nforced_chatgpt_workspace_id = \"workspace-1\"\ncustom_setting = true\n";
+    fs::write(dir.join(CONFIG_FILE), original_config).unwrap();
+    let paths = managed_profile_paths(&dir).unwrap();
+    let apply = |mode| {
+        apply_gateway_async(
+            Some(&key.id),
+            Some(&codex_home),
+            Some("http://127.0.0.1:48760"),
+            Some(false),
+            mode,
+            false,
+        )
+    };
+    let legacy = apply(None).await.unwrap();
+    assert_eq!(legacy.gateway_auth_mode, GatewayAuthMode::Preserve);
+    assert_eq!(fs::read(dir.join(AUTH_FILE)).unwrap(), original_auth);
+    let pure = apply(Some("apikey")).await.unwrap();
+    assert_eq!(pure.gateway_auth_mode, GatewayAuthMode::Apikey);
+    assert_eq!(
+        status_for_profile(&dir).unwrap().gateway_auth_mode,
+        GatewayAuthMode::Apikey
+    );
+    let read_auth = || {
+        serde_json::from_str::<serde_json::Value>(&fs::read_to_string(dir.join(AUTH_FILE)).unwrap())
+            .unwrap()
+    };
+    assert_eq!(
+        read_auth(),
+        serde_json::json!({"auth_mode":"apikey", "OPENAI_API_KEY":"cm-auth-mode-secret"})
+    );
+    let pure_config = parse_config(&fs::read_to_string(dir.join(CONFIG_FILE)).unwrap()).unwrap();
+    assert_eq!(
+        pure_config["cli_auth_credentials_store"].as_str(),
+        Some("file")
+    );
+    assert!(pure_config.get("forced_login_method").is_none());
+    assert!(pure_config.get("forced_chatgpt_workspace_id").is_none());
+    storage
+        .upsert_api_key_secret(&key.id, "cm-rotated-auth-mode-secret")
+        .unwrap();
+    assert!(sync_active_gateway_profile_from_storage_async(&storage)
+        .await
+        .unwrap());
+    assert_eq!(read_auth()["OPENAI_API_KEY"], "cm-rotated-auth-mode-secret");
+    let preserved = apply(Some("preserve")).await.unwrap();
+    assert_eq!(preserved.gateway_auth_mode, GatewayAuthMode::Preserve);
+    assert_eq!(fs::read(dir.join(AUTH_FILE)).unwrap(), original_auth);
+    let restored_config =
+        parse_config(&fs::read_to_string(dir.join(CONFIG_FILE)).unwrap()).unwrap();
+    assert_eq!(
+        restored_config["cli_auth_credentials_store"].as_str(),
+        Some("keyring")
+    );
+    assert_eq!(
+        restored_config["forced_login_method"].as_str(),
+        Some("chatgpt")
+    );
+    assert_eq!(
+        restored_config["forced_chatgpt_workspace_id"].as_str(),
+        Some("workspace-1")
+    );
+    assert!(!paths.root.join("gateway-auth-before-apikey.json").exists());
+    apply(Some("apikey")).await.unwrap();
+    let external_auth =
+        "{\"auth_mode\":\"chatgpt\",\"tokens\":{\"access_token\":\"external-login\"}}";
+    fs::write(dir.join(AUTH_FILE), external_auth).unwrap();
+    assert!(sync_active_gateway_profile_from_storage_async(&storage)
+        .await
+        .unwrap_err()
+        .contains("changed outside"));
+    assert_eq!(
+        fs::read_to_string(dir.join(AUTH_FILE)).unwrap(),
+        external_auth
+    );
+    apply(Some("preserve")).await.unwrap();
+    assert_eq!(
+        fs::read_to_string(dir.join(AUTH_FILE)).unwrap(),
+        external_auth
+    );
+    apply(Some("apikey")).await.unwrap();
+    let error = apply(Some("unsupported")).await.unwrap_err();
+    assert!(error.contains("invalid authMode"));
+    assert_eq!(read_auth()["auth_mode"], "apikey");
+    let restored = restore_async(Some(&codex_home)).await.unwrap();
+    assert_eq!(restored.gateway_auth_mode, GatewayAuthMode::Preserve);
+    assert_eq!(fs::read(dir.join(AUTH_FILE)).unwrap(), original_auth);
+    assert_eq!(
+        fs::read_to_string(dir.join(CONFIG_FILE)).unwrap(),
+        original_config
+    );
+    assert!(!paths.root.join("gateway-auth-before-apikey.json").exists());
+    cleanup_profile(&dir);
+}
+
+#[test]
+fn gateway_apikey_mode_without_prior_auth_restores_missing_file() {
+    let dir = temp_profile("gateway-apikey-no-auth");
+    fs::create_dir_all(&dir).unwrap();
+    let paths = ManagedProfilePaths {
+        root: dir.join("managed"),
+        marker_path: dir.join("marker"),
+        gateway_model_catalog_path: dir.join("catalog"),
+        history_backup_root: dir.join("history"),
+        legacy_marker_path: dir.join("legacy-marker"),
+        legacy_history_backup_root: dir.join("legacy-history"),
+    };
+    let change =
+        gateway_auth::prepare(&dir, &paths, GatewayAuthMode::Apikey, "cm-key", true, "").unwrap();
+    let config = change.config_toml.clone();
+    change.apply(&dir, &paths).unwrap();
+    assert!(dir.join(AUTH_FILE).exists());
+    gateway_auth::prepare(
+        &dir,
+        &paths,
+        GatewayAuthMode::Preserve,
+        "cm-key",
+        true,
+        &config,
+    )
+    .unwrap()
+    .apply(&dir, &paths)
+    .unwrap();
+    assert!(!dir.join(AUTH_FILE).exists());
+    cleanup_profile(&dir);
+}
+
+#[test]
+fn gateway_auth_commit_rolls_back_owned_changes_and_keeps_external_edits() {
+    let _env_lock = crate::test_env_guard();
+    let dir = temp_profile("gateway-auth-rollback");
+    let _db_guard = set_test_db(&dir);
+    let managed_root = dir.join("managed");
+    let _managed_root_guard = EnvGuard::set(
+        "CODEXMANAGER_TEST_DB_DIR",
+        managed_root.to_string_lossy().as_ref(),
+    );
+    let paths = managed_profile_paths(&dir).unwrap();
+    let original_auth = write_chatgpt_auth_fixture(&dir);
+    let config = "custom_setting = true\n";
+    fs::write(dir.join(CONFIG_FILE), config).unwrap();
+    let pure = gateway_auth::prepare(
+        &dir,
+        &paths,
+        GatewayAuthMode::Apikey,
+        "cm-key",
+        true,
+        config,
+    )
+    .unwrap();
+    let pure_config = pure.config_toml.clone();
+    let result: Result<(), String> = gateway_auth::commit(&dir, &paths, || {
+        ensure_backup(&dir)?;
+        pure.apply(&dir, &paths)?;
+        write_atomic(&dir.join(CONFIG_FILE), &pure_config)?;
+        Err("injected failure after auth and config".to_string())
+    });
+    assert_eq!(
+        result.unwrap_err(),
+        "injected failure after auth and config"
+    );
+    assert_eq!(fs::read(dir.join(AUTH_FILE)).unwrap(), original_auth);
+    assert_eq!(fs::read_to_string(dir.join(CONFIG_FILE)).unwrap(), config);
+    assert!(!paths.root.join("gateway-auth-before-apikey.json").exists());
+    assert!(!load_backups().contains_key(&profile_key(&dir)));
+    let pure = gateway_auth::prepare(
+        &dir,
+        &paths,
+        GatewayAuthMode::Apikey,
+        "cm-key",
+        true,
+        config,
+    )
+    .unwrap();
+    pure.apply(&dir, &paths).unwrap();
+    let pure_auth = fs::read(dir.join(AUTH_FILE)).unwrap();
+    let preserved = gateway_auth::prepare(
+        &dir,
+        &paths,
+        GatewayAuthMode::Preserve,
+        "cm-key",
+        true,
+        &pure_config,
+    )
+    .unwrap();
+    let result: Result<(), String> = gateway_auth::commit(&dir, &paths, || {
+        preserved.apply(&dir, &paths)?;
+        Err("injected failure after account restoration".to_string())
+    });
+    assert!(result.is_err());
+    assert_eq!(fs::read(dir.join(AUTH_FILE)).unwrap(), pure_auth);
+    assert!(paths.root.join("gateway-auth-before-apikey.json").exists());
+    let pure = gateway_auth::prepare(
+        &dir,
+        &paths,
+        GatewayAuthMode::Apikey,
+        "cm-next-key",
+        true,
+        config,
+    )
+    .unwrap();
+    let result: Result<(), String> = gateway_auth::commit(&dir, &paths, || {
+        pure.apply(&dir, &paths)?;
+        fs::write(dir.join(AUTH_FILE), "external-login-during-failure").unwrap();
+        Err("injected failure with external edit".to_string())
+    });
+    assert!(result.unwrap_err().contains("externally changed file kept"));
+    assert_eq!(
+        fs::read_to_string(dir.join(AUTH_FILE)).unwrap(),
+        "external-login-during-failure"
+    );
     cleanup_profile(&dir);
 }
