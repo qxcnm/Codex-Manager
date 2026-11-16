@@ -1,2 +1,2 @@
-aiohttp==3.14.3
+aiohttp==3.14.4
 psutil==7.2.2
