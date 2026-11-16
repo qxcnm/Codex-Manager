@@ -182,6 +182,22 @@ fn failed(error: &str) -> BpsLoginStatus {
     }
 }
 
+fn authorization_http_client(proxy: Option<&str>) -> Result<reqwest::Client, String> {
+    // Inherit the system/environment proxy unless an account, pool or global
+    // proxy was selected. An explicit reqwest proxy disables auto-detection.
+    let mut builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(30));
+    if let Some(proxy) = proxy {
+        builder = builder
+            .proxy(reqwest::Proxy::all(proxy).map_err(|_| "BPS authorization proxy is invalid")?);
+    }
+    builder
+        .build()
+        .map_err(|_| "BPS authorization client unavailable".into())
+}
+
 pub(crate) async fn login_start(account_id: &str) -> Result<BpsLoginStart, String> {
     let id = account_id.trim().to_owned();
     if id.is_empty() {
@@ -214,18 +230,7 @@ pub(crate) async fn login_start(account_id: &str) -> Result<BpsLoginStart, Strin
             .map_err(|_| "BPS authorization proxy is unavailable".into())
     })
     .await?;
-    let mut builder = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(30));
-    if let Some(proxy) = proxy {
-        builder = builder
-            .proxy(reqwest::Proxy::all(proxy).map_err(|_| "BPS authorization proxy is invalid")?);
-    }
-    let client = builder
-        .build()
-        .map_err(|_| "BPS authorization client unavailable")?;
+    let client = authorization_http_client(proxy.as_deref())?;
     let login_id = codexmanager_core::auth::generate_state();
     {
         let mut sessions = sessions()
@@ -580,3 +585,7 @@ fn validate_credentials(
 #[cfg(test)]
 #[path = "bps_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "bps_proxy_tests.rs"]
+mod proxy_tests;
