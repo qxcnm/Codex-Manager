@@ -104,6 +104,204 @@ fn assert_denied(value: &Value, method: &str) {
 }
 
 #[test]
+fn member_response_settings_preserve_bootstrap_without_deployment_configuration() {
+    let _guard = crate::test_env_guard();
+    let _fixture = PoolFixture::new();
+    let member = RpcActor::from_parts(Some("member"), Some("member-user"));
+    let settings = result(handle_request_with_actor(
+        request("appSettings/get", None),
+        member,
+    ));
+    for field in [
+        "serviceAddr",
+        "theme",
+        "appearancePreset",
+        "locale",
+        "lowTransparency",
+        "webAuthMode",
+    ] {
+        assert!(
+            settings.get(field).is_some(),
+            "missing bootstrap field {field}"
+        );
+    }
+    for field in [
+        "envOverrides",
+        "envOverrideCatalog",
+        "upstreamProxyUrl",
+        "pluginMarketSourceUrl",
+        "gatewayUserAgent",
+    ] {
+        assert!(
+            settings.get(field).is_none(),
+            "member received deployment field {field}"
+        );
+    }
+    let admin = result(handle_request_with_actor(
+        request("appSettings/get", None),
+        RpcActor::system_admin(),
+    ));
+    for field in ["envOverrides", "envOverrideCatalog", "upstreamProxyUrl"] {
+        assert!(
+            admin.get(field).is_some(),
+            "admin lost configuration field {field}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn member_response_key_list_and_startup_hide_operator_credentials() {
+    use codexmanager_core::storage::{ApiKey, ApiKeyOwner};
+    let _guard = crate::test_env_guard();
+    let fixture = PoolFixture::new();
+    for user_id in ["member-user", "other-user"] {
+        fixture
+            .storage
+            .insert_app_user(&codexmanager_core::storage::AppUser {
+                id: user_id.into(),
+                username: format!("fixture-{user_id}"),
+                display_name: None,
+                password_hash: "fixture-only".into(),
+                role: "member".into(),
+                status: "active".into(),
+                created_at: 1,
+                updated_at: 1,
+                last_login_at: None,
+            })
+            .unwrap();
+    }
+    for id in ["member-owned", "other-owned"] {
+        fixture.storage.insert_api_key(&ApiKey {
+            id: id.into(), name: Some(id.into()), model_slug: Some("gpt-5".into()),
+            reasoning_effort: None, service_tier: None, rotation_strategy: "account_rotation".into(),
+            aggregate_api_id: None, account_plan_filter: Some("operator-plan".into()),
+            aggregate_api_url: None, client_type: "codex".into(), protocol_type: "openai_compat".into(),
+            auth_scheme: "authorization_bearer".into(),
+            upstream_base_url: Some("https://fixture.invalid/?token=operator-secret".into()),
+            static_headers_json: Some(r#"{"Authorization":"Bearer fixture-upstream-secret","Cookie":"fixture-cookie"}"#.into()),
+            key_hash: format!("fixture-{id}"), status: "active".into(), created_at: 1, last_used_at: None,
+        }).unwrap();
+        fixture
+            .storage
+            .upsert_api_key_owner(&ApiKeyOwner {
+                key_id: id.into(),
+                owner_kind: "user".into(),
+                owner_user_id: Some(
+                    if id == "member-owned" {
+                        "member-user"
+                    } else {
+                        "other-user"
+                    }
+                    .into(),
+                ),
+                project_id: None,
+                updated_at: 1,
+            })
+            .unwrap();
+    }
+    let member = RpcActor::from_parts(Some("member"), Some("member-user"));
+    let listed = result(handle_request_with_actor(
+        request("apikey/list", None),
+        member.clone(),
+    ));
+    let startup = crate::startup_snapshot::read_startup_snapshot_for_actor(
+        &member,
+        Some(1),
+        None,
+        None,
+        false,
+        true,
+        false,
+        false,
+        false,
+        false,
+    )
+    .unwrap();
+    for keys in [
+        listed["items"].clone(),
+        serde_json::to_value(startup.api_keys).unwrap(),
+    ] {
+        assert_eq!(keys.as_array().unwrap().len(), 1);
+        assert_eq!(keys[0]["id"], "member-owned");
+        assert_eq!(keys[0]["modelSlug"], "gpt-5");
+        for field in [
+            "upstreamBaseUrl",
+            "staticHeadersJson",
+            "aggregateApiUrl",
+            "aggregateApiId",
+            "accountPlanFilter",
+            "accountGroupFilter",
+        ] {
+            assert!(
+                keys[0][field].is_null(),
+                "member received operator field {field}"
+            );
+        }
+    }
+    let admin = result(handle_request_with_actor(
+        request("apikey/list", None),
+        RpcActor::system_admin(),
+    ));
+    assert_eq!(admin["items"].as_array().unwrap().len(), 2);
+    assert!(admin["items"][0]["staticHeadersJson"]
+        .as_str()
+        .unwrap()
+        .contains("fixture-upstream-secret"));
+
+    // Exercise the real listener, trusted actor headers, and both RPC dispatch paths.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(crate::http::router::serve(
+        listener,
+        crate::http::state::AppState::new(),
+        async move {
+            let _ = stop_rx.await;
+        },
+    ));
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    for req in [
+        request("apikey/list", None),
+        request("appSettings/get", None),
+        request(
+            "startup/snapshot",
+            Some(serde_json::json!({
+                "includeApiModels": false, "includeAccounts": false,
+                "includeUsageSnapshots": false, "includeAccountRuntime": false,
+                "includeAccountDetails": false,
+            })),
+        ),
+    ] {
+        let response = client
+            .post(format!("http://{addr}/rpc"))
+            .header("x-codexmanager-rpc-token", crate::rpc_auth_token())
+            .header("x-codexmanager-rpc-actor-role", "member")
+            .header("x-codexmanager-rpc-actor-user-id", "member-user")
+            .json(&req)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let payload: Value = response.json().await.unwrap();
+        assert!(
+            payload["result"].get("error").is_none(),
+            "RPC {} failed",
+            req.method
+        );
+        let serialized = payload.to_string();
+        assert!(!serialized.contains("fixture-upstream-secret"));
+        assert!(!serialized.contains("fixture-cookie"));
+        assert!(!serialized.contains("operator-secret"));
+        assert!(!serialized.contains("envOverrideCatalog"));
+        if req.method == "apikey/list" {
+            assert_eq!(payload["result"]["items"].as_array().unwrap().len(), 1);
+        }
+    }
+    stop_tx.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+#[test]
 fn account_pool_policy_is_admin_only_in_every_auth_mode() {
     let _guard = crate::test_env_guard();
     let fixture = PoolFixture::new();

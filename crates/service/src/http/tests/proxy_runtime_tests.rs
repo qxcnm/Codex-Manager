@@ -175,6 +175,223 @@ impl Drop for EnvGuard {
     }
 }
 
+pub(super) struct GatewayAuthFixture {
+    _guards: Vec<EnvGuard>,
+    storage: Storage,
+}
+
+impl GatewayAuthFixture {
+    pub(super) const KEY: &'static str = "fixture-front-proxy-upload-key";
+
+    pub(super) fn new() -> Self {
+        let db_path = new_test_db_path("codexmanager-front-proxy-upload-auth");
+        let storage = init_test_storage(&db_path);
+        let guards = vec![
+            EnvGuard::set("CODEXMANAGER_STORAGE_BACKEND", "sqlite"),
+            EnvGuard::clear("CODEXMANAGER_DATABASE_URL"),
+            EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref()),
+            EnvGuard::set("CODEXMANAGER_FRONT_PROXY_MAX_BODY_BYTES", "0"),
+        ];
+        insert_api_key_record(
+            &storage,
+            Self::KEY,
+            crate::apikey_profile::ROTATION_ACCOUNT,
+            None,
+        );
+        crate::gateway::reload_runtime_config_from_env();
+        Self {
+            _guards: guards,
+            storage,
+        }
+    }
+}
+
+impl Drop for GatewayAuthFixture {
+    fn drop(&mut self) {
+        self._guards.clear();
+        crate::gateway::reload_runtime_config_from_env();
+    }
+}
+
+#[tokio::test]
+async fn unauthorized_gateway_upload_is_rejected_without_polling_body() {
+    use std::sync::Arc;
+    use tower::ServiceExt;
+    let _guard = crate::test_env_guard();
+    let fixture = GatewayAuthFixture::new();
+    for path in [
+        "/v1/responses",
+        "/v1/chat/completions",
+        "/v1/images/generations",
+    ] {
+        for encoding in [None, Some("zstd")] {
+            for (key, expected) in [
+                (None, StatusCode::UNAUTHORIZED),
+                (Some("invalid-key"), StatusCode::FORBIDDEN),
+                (Some(GatewayAuthFixture::KEY), StatusCode::FORBIDDEN),
+            ] {
+                fixture
+                    .storage
+                    .update_api_key_status("gk_proxy_runtime_ws", "disabled")
+                    .unwrap();
+                let polls = Arc::new(AtomicU64::new(0));
+                let body_polls = polls.clone();
+                let body = Body::from_stream(futures_util::stream::poll_fn(move |_| {
+                    let poll = body_polls.fetch_add(1, Ordering::SeqCst);
+                    std::task::Poll::Ready((poll == 0).then(|| {
+                        Ok::<_, std::convert::Infallible>(Bytes::from_static(b"untrusted chunk"))
+                    }))
+                }));
+                let mut request = HttpRequest::builder().method("POST").uri(path);
+                if let Some(key) = key {
+                    request = request.header(header::AUTHORIZATION, format!("Bearer {key}"));
+                }
+                if let Some(encoding) = encoding {
+                    request = request.header(header::CONTENT_ENCODING, encoding);
+                }
+                let response =
+                    crate::http::router::build_router(crate::http::router::AppState::new())
+                        .oneshot(request.body(body).unwrap())
+                        .await
+                        .unwrap();
+                assert_eq!(
+                    polls.load(Ordering::SeqCst),
+                    0,
+                    "rejected {path} upload was read"
+                );
+                assert_eq!(response.status(), expected);
+                assert!(response.headers().contains_key("x-request-id"));
+                assert!(response.headers()[header::CONTENT_TYPE]
+                    .to_str()
+                    .unwrap()
+                    .starts_with("application/json"));
+                assert!(response
+                    .headers()
+                    .contains_key(crate::error_codes::TRACE_ID_HEADER_NAME));
+                let code = response.headers()[crate::error_codes::ERROR_CODE_HEADER_NAME]
+                    .to_str()
+                    .unwrap()
+                    .to_owned();
+                let error: serde_json::Value =
+                    serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap())
+                        .unwrap();
+                assert_eq!(error["error"]["code"], code);
+                assert!(error["error"]["message"]
+                    .as_str()
+                    .is_some_and(|message| !message.is_empty()));
+                assert_eq!(
+                    error["error"]["type"],
+                    if expected == StatusCode::UNAUTHORIZED {
+                        "authentication_error"
+                    } else {
+                        "permission_error"
+                    }
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn gateway_preflight_does_not_read_an_unauthenticated_upload() {
+    use std::sync::Arc;
+    use tower::ServiceExt;
+    let polls = Arc::new(AtomicU64::new(0));
+    let body_polls = polls.clone();
+    let body = Body::from_stream(futures_util::stream::poll_fn(move |_| {
+        body_polls.fetch_add(1, Ordering::SeqCst);
+        std::task::Poll::<Option<Result<Bytes, std::convert::Infallible>>>::Ready(None)
+    }));
+    let response = crate::http::router::build_router(crate::http::router::AppState::new())
+        .oneshot(
+            HttpRequest::builder()
+                .method("OPTIONS")
+                .uri("/v1/responses")
+                .body(body)
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(polls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn authenticated_gateway_upload_preserves_chunked_compressed_stream_and_tools() {
+    use tower::ServiceExt;
+    let _guard = crate::test_env_guard();
+    let _fixture = GatewayAuthFixture::new();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let backend =
+        axum::Router::new().fallback(axum::routing::any(|request: HttpRequest<Body>| async {
+            let body = to_bytes(request.into_body(), 4096).await.unwrap();
+            axum::http::Response::builder()
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap()
+        }));
+    let server = tokio::spawn(async move { axum::serve(listener, backend).await.unwrap() });
+    let app = super::build_front_proxy_app(ProxyState {
+        backend_base_url: format!("http://{address}"),
+        client: build_local_backend_client().unwrap(),
+    });
+    for path in ["/v1/responses", "/v1/chat/completions"] {
+        for streaming in [false, true] {
+            let plain = serde_json::to_vec(&serde_json::json!({
+                "model":"fixture-model", "stream":streaming,
+                "messages":[{"role":"assistant", "tool_calls":[{"id":"call_1","type":"function","function":{"name":"weather","arguments":"{}"}}]}],
+                "tools":[{"type":"function","name":"weather","function":{"name":"weather","parameters":{"type":"object"}}}]
+            })).unwrap();
+            for encoding in ["raw", "zstd", "zstd-magic"] {
+                let wire = if encoding == "raw" {
+                    plain.clone()
+                } else {
+                    zstd::stream::encode_all(plain.as_slice(), 1).unwrap()
+                };
+                let chunks: Vec<_> = wire
+                    .chunks(7)
+                    .map(|chunk| Ok::<_, std::convert::Infallible>(Bytes::copy_from_slice(chunk)))
+                    .collect();
+                let mut request = HttpRequest::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header(header::CONTENT_TYPE, "application/json");
+                request = match encoding {
+                    "raw" => request.header("x-api-key", GatewayAuthFixture::KEY),
+                    "zstd" => request
+                        .header("x-goog-api-key", GatewayAuthFixture::KEY)
+                        .header(header::CONTENT_ENCODING, "zstd"),
+                    _ => request.header(
+                        header::AUTHORIZATION,
+                        format!("Bearer {}", GatewayAuthFixture::KEY),
+                    ),
+                };
+                let response = app
+                    .clone()
+                    .oneshot(
+                        request
+                            .body(Body::from_stream(futures_util::stream::iter(chunks)))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    StatusCode::OK,
+                    "{path} {encoding} stream={streaming}"
+                );
+                assert_eq!(
+                    to_bytes(response.into_body(), 4096).await.unwrap().as_ref(),
+                    plain
+                );
+            }
+        }
+    }
+    server.abort();
+    let _ = server.await;
+}
+
 fn normalize_body_for_test(
     headers: &mut HeaderMap,
     body: Bytes,
@@ -397,6 +614,7 @@ fn decompressed_zstd_request_body_respects_front_proxy_limit() {
 #[test]
 fn zero_front_proxy_limit_does_not_reject_large_declared_zstd_body() {
     let _guard = crate::test_env_guard();
+    let _fixture = GatewayAuthFixture::new();
     let _ = crate::gateway::front_proxy_max_body_bytes();
     let body_limit_guard = EnvGuard::set("CODEXMANAGER_FRONT_PROXY_MAX_BODY_BYTES", "0");
     let zstd_limit_guard = EnvGuard::set(
@@ -417,6 +635,7 @@ fn zero_front_proxy_limit_does_not_reject_large_declared_zstd_body() {
     let request = HttpRequest::builder()
         .method("POST")
         .uri("/v1/responses")
+        .header("x-api-key", GatewayAuthFixture::KEY)
         .header(header::CONTENT_ENCODING, "zstd")
         .header(header::CONTENT_LENGTH, oversized.to_string())
         .body(Body::empty())
@@ -433,6 +652,7 @@ fn zero_front_proxy_limit_does_not_reject_large_declared_zstd_body() {
 #[test]
 fn zstd_safety_limit_rejects_oversized_declared_body_when_generic_limit_is_disabled() {
     let _guard = crate::test_env_guard();
+    let _fixture = GatewayAuthFixture::new();
     let _ = crate::gateway::front_proxy_zstd_max_body_bytes();
     let body_limit_guard = EnvGuard::set("CODEXMANAGER_FRONT_PROXY_MAX_BODY_BYTES", "0");
     let zstd_limit_guard = EnvGuard::set("CODEXMANAGER_FRONT_PROXY_ZSTD_MAX_BODY_BYTES", "32");
@@ -450,6 +670,7 @@ fn zstd_safety_limit_rejects_oversized_declared_body_when_generic_limit_is_disab
     let request = HttpRequest::builder()
         .method("POST")
         .uri("/v1/responses")
+        .header("x-api-key", GatewayAuthFixture::KEY)
         .header(header::CONTENT_ENCODING, "zstd")
         .header(header::CONTENT_LENGTH, "33")
         .body(Body::empty())
@@ -477,6 +698,7 @@ fn zstd_safety_limit_rejects_oversized_declared_body_when_generic_limit_is_disab
 #[test]
 fn request_without_content_length_over_limit_returns_413() {
     let _guard = crate::test_env_guard();
+    let _fixture = GatewayAuthFixture::new();
     let _guard = EnvGuard::set("CODEXMANAGER_FRONT_PROXY_MAX_BODY_BYTES", "8");
     crate::gateway::reload_runtime_config_from_env();
 
@@ -490,7 +712,8 @@ fn request_without_content_length_over_limit_returns_413() {
     };
     let request = HttpRequest::builder()
         .method("POST")
-        .uri("/rpc")
+        .uri("/v1/responses")
+        .header("x-api-key", GatewayAuthFixture::KEY)
         .body(Body::from(vec![b'x'; 9]))
         .expect("request");
 
@@ -506,6 +729,7 @@ fn request_without_content_length_over_limit_returns_413() {
 #[test]
 fn zero_front_proxy_limit_disables_body_rejection() {
     let _guard = crate::test_env_guard();
+    let _fixture = GatewayAuthFixture::new();
     let _guard = EnvGuard::set("CODEXMANAGER_FRONT_PROXY_MAX_BODY_BYTES", "0");
     crate::gateway::reload_runtime_config_from_env();
 
@@ -519,7 +743,8 @@ fn zero_front_proxy_limit_disables_body_rejection() {
     };
     let request = HttpRequest::builder()
         .method("POST")
-        .uri("/rpc")
+        .uri("/v1/responses")
+        .header("x-api-key", GatewayAuthFixture::KEY)
         .body(Body::from(vec![b'x'; 64]))
         .expect("request");
 
@@ -540,6 +765,8 @@ fn zero_front_proxy_limit_disables_body_rejection() {
 /// 无
 #[test]
 fn backend_send_failure_returns_502() {
+    let _guard = crate::test_env_guard();
+    let _fixture = GatewayAuthFixture::new();
     let _ = crate::gateway::front_proxy_max_body_bytes();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -552,6 +779,7 @@ fn backend_send_failure_returns_502() {
     let request = HttpRequest::builder()
         .method("GET")
         .uri("/backend-proxy-health")
+        .header("x-api-key", GatewayAuthFixture::KEY)
         .body(Body::empty())
         .expect("request");
 

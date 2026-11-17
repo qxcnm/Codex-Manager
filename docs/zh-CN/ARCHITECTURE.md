@@ -245,8 +245,11 @@ SSE/WS、取消和背压通过 Tokio 通道管理。每个请求在联系 provid
 Service 和 Web 的 WebSocket relay 收到 Close 后，限时 flush 自动排队的应答再释放连接；
 正常关闭测试覆盖发起请求前、响应后及 Web 双向转发的关闭码和原因。
 独立 Service 的 `GET /__shutdown` 要求 RPC token、管理员 actor 和 RPC 相同的来源校验，
-不占用普通请求槽；`request_shutdown` 的跨进程通知携带该 token。Web 的 `/__quit` 仍需要
-有效 Web 登录会话。收到 HTTP 成功或进程最终消失本身不能证明优雅关闭，应核对退出码和排空结果。
+不占用普通请求槽；`request_shutdown` 的跨进程通知携带该 token。Web 的 `GET /__quit` 仅展示
+管理员确认页；实际关闭需要管理员会话和带 `X-CodexManager-Action: shutdown` 的同源 `POST /__quit`。
+启动器使用携带 RPC token 的 `POST /__quit`，该 token 特例不适用于其他 Web 接口。
+反向代理必须保留原始 `Host`，供关闭接口核对浏览器 `Origin`；不使用客户端可伪造的转发头绕过检查。
+收到 HTTP 成功或进程最终消失本身不能证明优雅关闭，应核对退出码和排空结果。
 同步数据库 facade 在生产多线程 runtime 的底层短操作边界让出 Tokio 执行线程，SeaORM 池和 SQLite SQLx 池
 由进程复用。ZIP、文件操作、Rhai 同步脚本 ABI 和旧同步兼容接口仍有受控阻塞边界。
 普通同步 RPC、Rhai 和插件调度使用固定 worker，避免等待异步结果时阻塞其内部文件/数据库

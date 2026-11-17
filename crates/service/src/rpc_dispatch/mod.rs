@@ -340,7 +340,7 @@ pub(crate) fn handle_request_with_actor(req: JsonRpcRequest, actor: RpcActor) ->
     if let Some(resp) = apikey::try_handle(&req, &actor) {
         return JsonRpcMessage::Response(resp);
     }
-    if let Some(resp) = app_settings::try_handle(&req) {
+    if let Some(resp) = app_settings::try_handle(&req, &actor) {
         return JsonRpcMessage::Response(resp);
     }
     if let Some(resp) = codex_profile::try_handle(&req) {

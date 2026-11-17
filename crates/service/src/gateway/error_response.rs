@@ -1,6 +1,56 @@
 use crate::http::gateway_response::{Header, Response};
 use serde_json::json;
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_rejected_request(
+    storage: Option<&codexmanager_core::storage::Storage>,
+    trace_id: &str,
+    path: &str,
+    method: &str,
+    request_type: &str,
+    status: u16,
+    message: &str,
+    key_id: Option<&str>,
+) {
+    super::trace_log::log_request_start(
+        trace_id,
+        "-",
+        method,
+        path,
+        None,
+        None,
+        None,
+        false,
+        request_type,
+        "-",
+    );
+    super::trace_log::log_request_final(trace_id, status, None, None, Some(message), 0);
+    super::record_gateway_request_outcome(path, status, None);
+    if let Some(storage) = storage {
+        super::write_request_log(
+            storage,
+            super::request_log::RequestLogTraceContext {
+                trace_id: Some(trace_id),
+                original_path: Some(path),
+                adapted_path: Some(path),
+                request_type: Some(request_type),
+                ..Default::default()
+            },
+            key_id,
+            None,
+            path,
+            method,
+            None,
+            None,
+            None,
+            Some(status),
+            super::request_log::RequestLogUsage::default(),
+            Some(message),
+            None,
+        );
+    }
+}
+
 /// 函数 `with_trace_id_header`
 ///
 /// 作者: gaohongshun
@@ -38,7 +88,7 @@ pub(super) fn with_trace_id_header<R: std::io::Read>(
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(super) fn terminal_text_response(
+pub(crate) fn terminal_text_response(
     status_code: u16,
     message: impl Into<String>,
     trace_id: Option<&str>,

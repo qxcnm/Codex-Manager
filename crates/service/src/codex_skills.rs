@@ -500,6 +500,11 @@ fn plan_archive_entries<R: Read + std::io::Seek>(
         if entry.is_symlink() || zip_mode_is_unsupported(entry.unix_mode(), entry.is_dir()) {
             return Err("ZIP archive contains a symlink or special file".to_string());
         }
+        let name = entry
+            .name()
+            .map_err(|err| format!("unable to read ZIP entry name: {err}"))?;
+        // Validate before ZIP normalizes away absolute or parent components.
+        validate_relative_path(Path::new(name.as_ref()), MAX_PATH_DEPTH + 1)?;
         let path = entry
             .enclosed_name()
             .ok_or_else(|| "ZIP archive contains an unsafe path".to_string())?;

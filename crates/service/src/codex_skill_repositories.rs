@@ -1228,11 +1228,22 @@ fn collect_skill_roots<R: Read + std::io::Seek>(
     Ok(roots)
 }
 
-fn repository_relative_path(entry: &zip::read::ZipFile<'_>) -> Option<PathBuf> {
-    if entry.name().contains('\\') {
+fn repository_relative_path<R: Read + ?Sized>(
+    entry: &zip::read::ZipFile<'_, R>,
+) -> Option<PathBuf> {
+    let name = entry.name().ok()?;
+    let raw_path = Path::new(name.as_ref());
+    if name.contains('\\')
+        || raw_path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
         return None;
     }
     let enclosed = entry.enclosed_name()?;
+    if enclosed != raw_path {
+        return None;
+    }
     let mut components = enclosed.components();
     match components.next()? {
         Component::Normal(_) => {}

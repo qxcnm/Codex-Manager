@@ -46,55 +46,16 @@ async fn handle_gateway_request_inner(mut request: Request) -> Result<(), String
         {
             Ok(v) => v,
             Err(err) => {
-                super::trace_log::log_request_start(
+                super::record_rejected_request(
+                    super::open_storage().as_deref(),
                     trace_id.as_str(),
-                    "-",
+                    request_path_for_log.as_str(),
                     request_method_for_log.as_str(),
-                    request_path_for_log.as_str(),
-                    None,
-                    None,
-                    None,
-                    false,
                     request_type_for_log,
-                    "-",
-                );
-                super::trace_log::log_request_final(
-                    trace_id.as_str(),
                     err.status_code,
-                    None,
-                    None,
-                    Some(err.message.as_str()),
-                    0,
+                    err.message.as_str(),
+                    err.key_id.as_deref(),
                 );
-                super::record_gateway_request_outcome(
-                    request_path_for_log.as_str(),
-                    err.status_code,
-                    None,
-                );
-                if let Some(storage) = super::open_storage() {
-                    super::write_request_log(
-                        &storage,
-                        super::request_log::RequestLogTraceContext {
-                            trace_id: Some(trace_id.as_str()),
-                            original_path: Some(request_path_for_log.as_str()),
-                            adapted_path: Some(request_path_for_log.as_str()),
-                            response_adapter: None,
-                            request_type: Some(request_type_for_log),
-                            ..Default::default()
-                        },
-                        err.key_id.as_deref(),
-                        None,
-                        &request_path_for_log,
-                        &request_method_for_log,
-                        None,
-                        None,
-                        None,
-                        Some(err.status_code),
-                        super::request_log::RequestLogUsage::default(),
-                        Some(err.message.as_str()),
-                        None,
-                    );
-                }
                 let response_message = super::error_message_for_client(
                     super::prefers_raw_errors_for_gateway_request(&request),
                     err.message.as_str(),

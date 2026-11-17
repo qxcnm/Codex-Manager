@@ -83,6 +83,102 @@ mod tests {
             Some("local-secret")
         );
     }
+
+    #[test]
+    fn member_response_remote_list_and_id_snapshot_hide_operator_headers() {
+        if crate::loopback_proxy_test::run_proxy_control_in_isolated_process() {
+            return;
+        }
+        let _guard = crate::test_env_guard();
+        let _restore = EnvRestore(
+            ["CODEXMANAGER_STORAGE_BACKEND", "CODEXMANAGER_DATABASE_URL"]
+                .into_iter()
+                .map(|key| (key, std::env::var_os(key)))
+                .collect(),
+        );
+        crate::storage::seaorm_runtime::clear_for_tests();
+        std::env::set_var("CODEXMANAGER_STORAGE_BACKEND", "sqlite");
+        std::env::set_var("CODEXMANAGER_DATABASE_URL", "sqlite::memory:");
+        seaorm_block_on(|storage| async move {
+            let key = ApiKeyRecord {
+                id: "owned".into(),
+                name: Some("Member key".into()),
+                model_slug: None,
+                reasoning_effort: None,
+                service_tier: None,
+                rotation_strategy: "account_rotation".into(),
+                aggregate_api_id: None,
+                account_plan_filter: Some("operator-plan".into()),
+                account_group_filter: Some("operator-group".into()),
+                client_type: "codex".into(),
+                protocol_type: "openai_compat".into(),
+                auth_scheme: "authorization_bearer".into(),
+                upstream_base_url: Some("https://fixture.invalid/?token=operator-secret".into()),
+                static_headers_json: Some(r#"{"Authorization":"Bearer fixture-secret"}"#.into()),
+                key_hash: "fixture-only-hash".into(),
+                status: "active".into(),
+                created_at: 1,
+                last_used_at: None,
+            };
+            UsersRepository::put(
+                storage.connection(),
+                codexmanager_core::storage::AppUser {
+                    id: "alice".into(),
+                    username: "fixture-alice".into(),
+                    display_name: None,
+                    password_hash: "fixture-only".into(),
+                    role: "member".into(),
+                    status: "active".into(),
+                    created_at: 1,
+                    updated_at: 1,
+                    last_login_at: None,
+                },
+            )
+            .await
+            .map_err(|err| err.to_string())?;
+            ApiKeysRepository::upsert(storage.connection(), key)
+                .await
+                .map_err(|err| err.to_string())?;
+            UsersRepository::put_owner(
+                storage.connection(),
+                codexmanager_core::storage::ApiKeyOwner {
+                    key_id: "owned".into(),
+                    owner_kind: "user".into(),
+                    owner_user_id: Some("alice".into()),
+                    project_id: None,
+                    updated_at: 1,
+                },
+            )
+            .await
+            .map_err(|err| err.to_string())
+        })
+        .unwrap();
+        let member = crate::RpcActor::from_parts(Some("member"), Some("alice"));
+        let local = Storage::open_in_memory().unwrap();
+        for keys in [
+            list(&member).unwrap(),
+            super::super::list::read_api_keys_for_ids_with_storage(
+                &local,
+                &["owned".into()],
+                &member,
+            )
+            .unwrap(),
+        ] {
+            assert_eq!(keys.len(), 1);
+            assert_eq!(keys[0].id, "owned");
+            assert!(keys[0].static_headers_json.is_none());
+            assert!(keys[0].upstream_base_url.is_none());
+            assert!(keys[0].account_group_filter.is_none());
+            assert!(keys[0].account_plan_filter.is_none());
+        }
+        let admin = list(&crate::RpcActor::system_admin()).unwrap();
+        assert!(admin[0]
+            .static_headers_json
+            .as_deref()
+            .unwrap()
+            .contains("fixture-secret"));
+        crate::storage::seaorm_runtime::clear_for_tests();
+    }
 }
 
 pub(crate) fn find_by_id(storage: &Storage, id: &str) -> Result<Option<ApiKey>, String> {
@@ -274,7 +370,7 @@ pub(crate) fn list(
                 .ok_or_else(|| "permission_denied: apikey requires user session".to_owned())?,
         )
     };
-    seaorm_block_on(move |storage| async move {
+    let keys = seaorm_block_on(move |storage| async move {
         let allowed = match user_id {
             Some(user_id) => Some(
                 UsersRepository::list_owners(storage.connection())
@@ -309,7 +405,11 @@ pub(crate) fn list(
             keys.push(summary);
         }
         Ok(keys)
-    })
+    })?;
+    Ok(keys
+        .into_iter()
+        .map(|key| super::list::summary_for_actor(key, actor))
+        .collect())
 }
 
 #[allow(clippy::too_many_arguments)]

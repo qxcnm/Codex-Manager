@@ -30,7 +30,7 @@ webbrowser = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 semver = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-zip = { version = "2.2", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 rfd = "0.15"
 rusqlite = { path = "../../crates/rusqlite", features = ["bundled", "backup"] }
 
@@ -44,6 +44,8 @@ glib = "0.18"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [patch.crates-io]
+glib = { path = "../../vendor/glib" }
+phf_generator = { path = "../../vendor/phf_generator" }
 tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "0e5b2d73aa18dd9f0a50ee9ff199d5aef7594186" }
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "4fffad30fe373adbdcffab9545e9e9bf4f2fc19f" }
 

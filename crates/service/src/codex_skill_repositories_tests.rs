@@ -223,6 +223,27 @@ fn repository_scan_rejects_empty_and_bounded_metadata_abuse() {
 }
 
 #[test]
+fn repository_zip_paths_preserve_unicode_and_reject_normalized_unsafe_names() {
+    let archive = repository_zip(&[
+        ("repo-main/skills/变体/SKILL.md", b"valid", None),
+        ("/repo-main/skills/absolute/SKILL.md", b"absolute", None),
+        ("repo-main/skills/../parent/SKILL.md", b"parent", None),
+        ("repo-main\\skills\\backslash\\SKILL.md", b"backslash", None),
+        ("C:/repo-main/skills/drive/SKILL.md", b"drive", None),
+    ]);
+    let mut archive = ZipArchive::new(Cursor::new(archive)).expect("open repository zip");
+    assert_eq!(
+        repository_relative_path(&archive.by_index(0).expect("Unicode entry")),
+        Some(PathBuf::from("skills/变体/SKILL.md"))
+    );
+    for index in 1..archive.len() {
+        assert!(
+            repository_relative_path(&archive.by_index(index).expect("unsafe entry")).is_none()
+        );
+    }
+}
+
+#[test]
 fn selected_skill_archive_contains_only_the_requested_skill() {
     let parent = skill_markdown("parent-skill", "Parent");
     let nested = skill_markdown("nested-skill", "Nested");
@@ -237,7 +258,14 @@ fn selected_skill_archive_contains_only_the_requested_skill() {
     let selected = build_selected_skill_archive(&archive, "skills/parent").expect("select skill");
     let mut selected = ZipArchive::new(Cursor::new(selected)).expect("open selected zip");
     let mut names = (0..selected.len())
-        .map(|index| selected.by_index(index).expect("entry").name().to_string())
+        .map(|index| {
+            selected
+                .by_index(index)
+                .expect("entry")
+                .name()
+                .expect("entry name")
+                .into_owned()
+        })
         .collect::<Vec<_>>();
     names.sort();
     assert_eq!(names, vec!["SKILL.md", "reference.md"]);
@@ -266,7 +294,14 @@ fn root_level_skill_is_scanned_and_packaged_without_nested_skills() {
     let selected = build_selected_skill_archive(&archive, ".").expect("package root Skill");
     let mut selected = ZipArchive::new(Cursor::new(selected)).expect("open selected zip");
     let mut names = (0..selected.len())
-        .map(|index| selected.by_index(index).expect("entry").name().to_string())
+        .map(|index| {
+            selected
+                .by_index(index)
+                .expect("entry")
+                .name()
+                .expect("entry name")
+                .into_owned()
+        })
         .collect::<Vec<_>>();
     names.sort();
     assert_eq!(names, vec!["SKILL.md", "reference.md"]);

@@ -329,6 +329,23 @@ fn zip_install_accepts_one_skill_and_refuses_overwrite() {
 }
 
 #[test]
+fn zip_install_rejects_raw_absolute_and_parent_paths_before_normalization() {
+    let tree = TempTree::new("zip-raw-paths");
+    let skills_root = tree.path.join("skills");
+    let markdown = skill_markdown("raw-path-skill", "Raw path validation");
+    for path in ["/raw/SKILL.md", "raw/../SKILL.md", "C:/raw/SKILL.md"] {
+        let archive = zip_bytes(&[(path, markdown.as_bytes(), Some(0o100644))]);
+        let error = install_zip_into_root(&skills_root, &archive)
+            .expect_err("raw unsafe names must not be normalized into accepted paths");
+        assert!(
+            error.contains("unsafe path") || error.contains("not portable to Windows"),
+            "{path}: {error}"
+        );
+        assert!(!skills_root.join("raw-path-skill").exists());
+    }
+}
+
+#[test]
 fn zip_install_rejects_path_traversal_and_symlink_entries() {
     let tree = TempTree::new("zip-unsafe");
     let skills_root = tree.path.join("skills");

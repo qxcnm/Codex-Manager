@@ -454,7 +454,7 @@ fn wait_for_service_ready(addr: &str, attempts: usize) -> bool {
     false
 }
 
-fn simple_get_best_effort(addr: &str, path: &str) {
+fn request_web_shutdown_best_effort(addr: &str) {
     let addr_trimmed = addr.trim();
     if addr_trimmed.is_empty() {
         return;
@@ -475,7 +475,11 @@ fn simple_get_best_effort(addr: &str, path: &str) {
     };
     let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
     let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
-    let req = format!("GET {path} HTTP/1.1\r\nHost: {addr_trimmed}\r\nConnection: close\r\n\r\n");
+    let token = codexmanager_service::rpc_auth_token();
+    if token.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
+        return;
+    }
+    let req = format!("POST /__quit HTTP/1.1\r\nHost: {addr_trimmed}\r\nX-CodexManager-Rpc-Token: {token}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
     let _ = stream.write_all(req.as_bytes());
 }
 
@@ -530,9 +534,9 @@ fn stop_existing_service_best_effort(addr: &str) -> bool {
 /// # 返回
 /// 返回函数执行结果
 fn stop_existing_web_best_effort(bind_addr: &str, open_addr: &str) -> bool {
-    simple_get_best_effort(open_addr, "/__quit");
+    request_web_shutdown_best_effort(open_addr);
     if !open_addr.eq_ignore_ascii_case(bind_addr) {
-        simple_get_best_effort(bind_addr, "/__quit");
+        request_web_shutdown_best_effort(bind_addr);
     }
     wait_for_port_closed(open_addr, 30)
 }
@@ -739,8 +743,8 @@ fn main() {
     println!("正在关闭...");
 
     // 先关 web，再关 service。
-    simple_get_best_effort(&web_addr, "/__quit");
-    simple_get_best_effort(&service_addr, "/__shutdown");
+    request_web_shutdown_best_effort(&web_open_addr);
+    codexmanager_service::request_shutdown(&service_addr);
 
     // 最后兜底：短等后强杀
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
@@ -763,6 +767,58 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn web_shutdown_uses_authenticated_post() {
+        const CHILD_ENV: &str = "CODEXMANAGER_START_SHUTDOWN_CHILD_TEST";
+        let current_thread = std::thread::current();
+        let test_name = current_thread.name().unwrap();
+        if std::env::var(CHILD_ENV).as_deref() != Ok(test_name) {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", test_name, "--nocapture"])
+                .env(CHILD_ENV, test_name)
+                .env("CODEXMANAGER_RPC_TOKEN", "launcher-shutdown-fixture-token")
+                .output()
+                .expect("run isolated launcher shutdown test");
+            assert!(
+                output.status.success(),
+                "launcher test failed: {}\n{}\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return;
+        }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let request = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(std::time::Instant::now() < deadline, "no shutdown request");
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("accept shutdown request: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = String::new();
+            std::io::Read::read_to_string(&mut stream, &mut request).unwrap();
+            request
+        });
+        request_web_shutdown_best_effort(&address);
+        let request = request.join().unwrap();
+        assert!(request.starts_with("POST /__quit HTTP/1.1\r\n"));
+        assert!(
+            request.contains("\r\nX-CodexManager-Rpc-Token: launcher-shutdown-fixture-token\r\n")
+        );
+        assert!(request.contains("\r\nContent-Length: 0\r\n"));
+    }
 
     /// 函数 `normalize_connect_addr_maps_all_interfaces_to_localhost`
     ///

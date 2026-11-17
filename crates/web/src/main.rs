@@ -4,6 +4,7 @@ mod auth;
 mod embedded_ui;
 mod gateway_websocket;
 mod service_gateway;
+mod shutdown;
 mod ui_assets;
 
 use std::path::{Path, PathBuf};
@@ -526,7 +527,7 @@ async fn async_main() {
             "/api/events/account-test",
             get(service_gateway::account_test_events),
         )
-        .route("/__quit", get(service_gateway::quit));
+        .route("/__quit", get(shutdown::confirmation).post(shutdown::quit));
 
     let disk_ok = ensure_index_file(&index);
     let using_explicit_root = read_env_trim("CODEXMANAGER_WEB_ROOT").is_some();

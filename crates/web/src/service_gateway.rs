@@ -766,29 +766,6 @@ fn format_upstream_error_message(service_addr: &str, err: impl std::fmt::Display
     message
 }
 
-/// 函数 `quit`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - super: 参数 super
-///
-/// # 返回
-/// 返回函数执行结果
-pub(super) async fn quit(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    if *state.spawned_service.lock().await {
-        let addr = state.service_addr.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            codexmanager_service::request_shutdown(&addr);
-        })
-        .await;
-    }
-    let _ = state.shutdown_tx.send(true);
-    Html("<html><body>OK</body></html>")
-}
-
 #[cfg(test)]
 #[path = "service_gateway_tests.rs"]
 mod tests;

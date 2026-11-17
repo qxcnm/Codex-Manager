@@ -20,6 +20,7 @@ pub(super) async fn api_keys(
         .await?
         .into_iter()
         .map(crate::apikey_list::map_api_key_list_summary)
+        .map(|key| crate::apikey_list::summary_for_actor(key, actor))
         .collect();
     Ok(super::as_json(ApiKeyListResult { items }))
 }

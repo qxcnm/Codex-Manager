@@ -647,6 +647,12 @@ pub(super) async fn web_auth_middleware(
     if path == "/__login" || path == "/__logout" || is_public_static_asset_path(&path) {
         return next.run(request).await;
     }
+    if crate::shutdown::is_launcher_request(&request) {
+        request
+            .extensions_mut()
+            .insert(codexmanager_service::RpcActor::system_admin());
+        return next.run(request).await;
+    }
     if let Some(actor) = authenticated_rpc_actor(request.headers(), state.as_ref()) {
         request.extensions_mut().insert(actor);
         return next.run(request).await;

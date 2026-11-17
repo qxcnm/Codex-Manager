@@ -67,6 +67,7 @@ impl MiddlewareAuthDatabase {
             "CODEXMANAGER_STORAGE_BACKEND",
             "CODEXMANAGER_DATABASE_URL",
             "CODEXMANAGER_DB_PATH",
+            "CODEXMANAGER_RPC_TOKEN",
         ]
         .into_iter()
         .map(|key| (key, std::env::var_os(key)))
@@ -77,6 +78,7 @@ impl MiddlewareAuthDatabase {
         };
         std::env::set_var("CODEXMANAGER_STORAGE_BACKEND", "sqlite");
         std::env::remove_var("CODEXMANAGER_DATABASE_URL");
+        std::env::set_var("CODEXMANAGER_RPC_TOKEN", "web-auth-fixture-rpc-token");
         std::env::set_var(
             "CODEXMANAGER_DB_PATH",
             fixture.directory.join("auth.sqlite"),
@@ -243,6 +245,223 @@ async fn middleware_carries_the_authenticated_actor_through_session_revocation()
             StatusCode::UNAUTHORIZED
         );
     }
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn web_shutdown_requires_admin_and_explicit_post_action() {
+    const CHILD_TEST_ENV: &str = "CODEXMANAGER_WEB_SHUTDOWN_CHILD_TEST";
+    let current_thread = std::thread::current();
+    let test_name = current_thread.name().unwrap();
+    if std::env::var(CHILD_TEST_ENV).as_deref() != Ok(test_name) {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test_name, "--nocapture"])
+            .env(CHILD_TEST_ENV, test_name)
+            .output()
+            .expect("start isolated shutdown test");
+        assert!(
+            output.status.success(),
+            "shutdown test failed: {}\n{}\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
+    let _lock = test_env_guard();
+    let _database = MiddlewareAuthDatabase::new();
+    let mut test_state = actor_auth_test_state();
+    test_state.rpc_token = codexmanager_service::rpc_auth_token().to_string();
+    let state = Arc::new(test_state);
+    let shutdown = state.shutdown_tx.subscribe();
+    let app = axum::Router::new()
+        .route(
+            "/__quit",
+            axum::routing::get(crate::shutdown::confirmation).post(crate::shutdown::quit),
+        )
+        .route(
+            "/api/actor",
+            axum::routing::post(
+                |axum::Extension(actor): axum::Extension<codexmanager_service::RpcActor>| async move {
+                    axum::Json(actor)
+                },
+            ),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            web_auth_middleware,
+        ))
+        .with_state(state.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let quit_url = format!("{base}/__quit");
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap();
+
+    codexmanager_service::set_web_auth_mode("accounts").unwrap();
+    let admin = codexmanager_service::bootstrap_app_admin(
+        "shutdown-admin",
+        "shutdown-admin-password",
+        None,
+    )
+    .unwrap();
+    codexmanager_service::create_app_user(codexmanager_service::AppUserCreateInput {
+        username: "shutdown-member".into(),
+        password: "shutdown-member-password".into(),
+        role: Some("member".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    let member =
+        codexmanager_service::login_app_user("shutdown-member", "shutdown-member-password")
+            .unwrap();
+    let admin_cookie = format!("{WEB_AUTH_COOKIE_NAME}={}", admin.token);
+    let member_cookie = format!("{WEB_AUTH_COOKIE_NAME}={}", member.token);
+
+    // A top-level GET carries SameSite=Lax cookies, including on a hostile link.
+    let response = client
+        .get(&quit_url)
+        .header(header::COOKIE, &admin_cookie)
+        .header("sec-fetch-site", "cross-site")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(!*shutdown.borrow(), "GET must never signal shutdown");
+    let page = response.text().await.unwrap();
+    assert!(page.contains("确认关闭"));
+    assert!(!page.contains(&state.rpc_token));
+    assert_eq!(
+        client
+            .get(&quit_url)
+            .header(header::COOKIE, &member_cookie)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_ne!(
+        client
+            .get(&quit_url)
+            .header("x-codexmanager-rpc-token", &state.rpc_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert!(!*shutdown.borrow());
+
+    let denied = client
+        .post(&quit_url)
+        .header(header::COOKIE, &member_cookie)
+        .header("x-codexmanager-action", "shutdown")
+        .header("x-codexmanager-rpc-actor-role", "system_admin")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    assert!(!*shutdown.borrow());
+
+    // Forms and no-CORS requests cannot supply the required action header.
+    for origin in [None, Some("https://attacker.invalid"), Some("null")] {
+        let mut request = client
+            .post(&quit_url)
+            .header(header::COOKIE, &admin_cookie)
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+        if let Some(origin) = origin {
+            request = request.header(header::ORIGIN, origin);
+        }
+        assert_eq!(
+            request.send().await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        assert!(!*shutdown.borrow());
+    }
+    for (name, value) in [
+        ("origin", "https://attacker.invalid"),
+        ("origin", "null"),
+        ("origin", "http://127.0.0.1:1"),
+        ("sec-fetch-site", "same-site"),
+        ("sec-fetch-site", "cross-site"),
+    ] {
+        assert_eq!(
+            client
+                .post(&quit_url)
+                .header(header::COOKIE, &admin_cookie)
+                .header("x-codexmanager-action", "shutdown")
+                .header(name, value)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert!(!*shutdown.borrow());
+    }
+
+    // A launcher token is narrowly scoped to POST /__quit; it cannot bypass
+    // Web account authentication or elevate an authenticated member elsewhere.
+    for cookie in [None, Some(&member_cookie)] {
+        let mut request = client
+            .post(format!("{base}/api/actor"))
+            .header("x-codexmanager-rpc-token", &state.rpc_token);
+        if let Some(cookie) = cookie {
+            request = request.header(header::COOKIE, cookie);
+        }
+        let response = request.send().await.unwrap();
+        if cookie.is_some() {
+            assert_eq!(
+                response.json::<serde_json::Value>().await.unwrap()["role"],
+                "member"
+            );
+        } else {
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+    }
+    let response = client
+        .post(&quit_url)
+        .header("x-codexmanager-rpc-token", "invalid-token")
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(response.status(), StatusCode::OK);
+    assert!(!*shutdown.borrow());
+
+    // An explicit same-origin admin action and the authenticated launcher work.
+    assert_eq!(
+        client
+            .post(&quit_url)
+            .header(header::COOKIE, &admin_cookie)
+            .header("x-codexmanager-action", "shutdown")
+            .header(header::ORIGIN, &base)
+            .header("sec-fetch-site", "same-origin")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert!(*shutdown.borrow());
+    state.shutdown_tx.send_replace(false);
+    assert_eq!(
+        client
+            .post(&quit_url)
+            .header("x-codexmanager-rpc-token", &state.rpc_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert!(*shutdown.borrow());
     server.abort();
     let _ = server.await;
 }

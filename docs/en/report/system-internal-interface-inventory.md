@@ -155,7 +155,7 @@
 | `/__auth_status` | `GET` | Web 鉴权状态 |
 | `/__login` | `GET` / `POST` | Web 登录页与提交入口 |
 | `/__logout` | `GET` / `POST` | Web 登出 |
-| `/__quit` | `GET` | 请求 Web 进程退出 |
+| `/__quit` | `GET` / `POST` | GET shows an admin confirmation page; POST requires an admin session and same-origin action header, or the launcher's RPC token, to stop Web |
 | `/`、`/{*path}` | `GET` | 静态 UI、内嵌 UI 或缺省提示页 |
 
 ## 5. 导入 / 导出链路补充

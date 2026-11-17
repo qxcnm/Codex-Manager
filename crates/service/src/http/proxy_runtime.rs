@@ -317,6 +317,64 @@ async fn normalize_incoming_request_body(
     Ok(Bytes::from(decoded))
 }
 
+async fn authorize_gateway_upload(
+    headers: &HeaderMap,
+    path: &str,
+    method: &str,
+    request_type: &'static str,
+    trace_id: &str,
+    permit: tokio::sync::OwnedSemaphorePermit,
+) -> Result<tokio::sync::OwnedSemaphorePermit, (u16, String)> {
+    let incoming_headers = crate::gateway::IncomingHeaderSnapshot::from_http_headers(headers);
+    let platform_key = incoming_headers.platform_key().map(str::to_owned);
+    let path = path.to_owned();
+    let method = method.to_owned();
+    let trace_id = trace_id.to_owned();
+    tokio::task::spawn_blocking(move || {
+        // Keep the preparation slot inside the task, including if the client
+        // disconnects while a storage lookup is still running.
+        let storage = crate::storage_helpers::open_storage();
+        let authorization = match platform_key {
+            None => Err((
+                401,
+                crate::gateway::bilingual_error("缺少 API Key", "missing api key"),
+            )),
+            Some(platform_key) => storage
+                .as_deref()
+                .ok_or_else(|| {
+                    (
+                        500,
+                        crate::gateway::bilingual_error("存储不可用", "storage unavailable"),
+                    )
+                })
+                .and_then(|storage| {
+                    crate::gateway::load_active_gateway_api_key(storage, &platform_key, &path)
+                }),
+        };
+        if let Err((status, message)) = &authorization {
+            crate::gateway::record_rejected_request(
+                storage.as_deref(),
+                &trace_id,
+                &crate::gateway::normalize_models_path(&path),
+                &method,
+                request_type,
+                *status,
+                message,
+                None,
+            );
+        }
+        authorization?;
+        Ok(permit)
+    })
+    .await
+    .map_err(|_| {
+        (
+            500,
+            crate::gateway::bilingual_error("请求鉴权失败", "request authentication failed"),
+        )
+    })?
+}
+
 /// 函数 `proxy_handler`
 ///
 /// 作者: gaohongshun
@@ -335,6 +393,13 @@ async fn proxy_handler(
 ) -> Response<Body> {
     let started = std::time::Instant::now();
     let (mut parts, body) = request.into_parts();
+    // Preserve unauthenticated preflight without ever collecting its body.
+    if parts.method == axum::http::Method::OPTIONS {
+        return Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .body(Body::empty())
+            .unwrap();
+    }
     let deferred_policy = crate::http::middleware::defer_gateway_policy(parts.uri.path());
     let limits = crate::http::middleware::RequestLimits::from_extensions(&parts.extensions);
     // Bound requests retained while the body is read/decompressed/classified.
@@ -348,6 +413,53 @@ async fn proxy_handler(
     let zstd_max_body_bytes = crate::gateway::front_proxy_zstd_max_body_bytes();
     let prefer_raw_errors = crate::gateway::prefers_raw_errors_for_http_headers(&parts.headers);
     let target_url = format!("http://gateway.local{}", parts.uri.path());
+    let mut outbound_headers = filter_request_headers(&parts.headers);
+    // Authenticate the exact headers the domain will see, before the first
+    // body poll, decompression or JSON classification. The domain validates
+    // again after upload so key revocation during an upload still takes effect.
+    let trace_id = crate::gateway::next_trace_id();
+    let request_type = if parts
+        .extensions
+        .get::<crate::http::gateway_request::WebSocketHttpBridge>()
+        .is_some()
+    {
+        "ws"
+    } else {
+        "http"
+    };
+    let authorization = authorize_gateway_upload(
+        &outbound_headers,
+        parts.uri.path(),
+        parts.method.as_str(),
+        request_type,
+        &trace_id,
+        preparation_permit,
+    );
+    let authorization = match crate::http::middleware::http_request_timeout() {
+        Some(timeout) => {
+            match tokio::time::timeout(timeout.saturating_sub(started.elapsed()), authorization)
+                .await
+            {
+                Ok(result) => result,
+                Err(_) => {
+                    return text_error_response(StatusCode::REQUEST_TIMEOUT, "request timed out")
+                }
+            }
+        }
+        None => authorization.await,
+    };
+    let preparation_permit = match authorization {
+        Ok(permit) => permit,
+        Err((status, message)) => {
+            let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            log_proxy_error(status, target_url.as_str(), message.as_str());
+            return crate::http::proxy_response::gateway_error_response(
+                status,
+                crate::gateway::error_message_for_client(prefer_raw_errors, message),
+                &trace_id,
+            );
+        }
+    };
     let zstd_decode_limit = zstd_body_limit(max_body_bytes, zstd_max_body_bytes);
     let declared_zstd = has_zstd_content_encoding(&parts.headers);
     let zstd_decode_permit = if declared_zstd {
@@ -393,7 +505,6 @@ async fn proxy_handler(
         }
     }
 
-    let mut outbound_headers = filter_request_headers(&parts.headers);
     let read_limit = if request_body_limit == 0 {
         usize::MAX
     } else {

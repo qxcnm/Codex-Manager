@@ -611,7 +611,7 @@ pub(crate) fn read_member_dashboard_summary(
     let key_ids = crate::dashboard_storage::DashboardStorage::new(&storage)
         .list_api_key_ids_for_user(&user_id)
         .map_err(|err| format!("list api key ids for user failed: {err}"))?;
-    let api_keys = apikey_list::read_api_keys_for_ids_with_storage(&storage, &key_ids)?;
+    let api_keys = apikey_list::read_api_keys_for_ids_with_storage(&storage, &key_ids, actor)?;
     let api_key_summary = build_api_key_summary(&api_keys);
     let wallet = read_member_wallet(&storage, &user_id)?;
 

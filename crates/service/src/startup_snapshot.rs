@@ -186,7 +186,7 @@ pub(crate) fn read_startup_snapshot_for_actor(
         .list_api_key_ids_for_user(user_id)
         .map_err(|err| format!("list api key ids for user failed: {err}"))?;
     let api_keys = if include_api_keys {
-        apikey_list::read_api_keys_for_ids_with_storage(&storage, &key_ids)?
+        apikey_list::read_api_keys_for_ids_with_storage(&storage, &key_ids, actor)?
     } else {
         Vec::new()
     };

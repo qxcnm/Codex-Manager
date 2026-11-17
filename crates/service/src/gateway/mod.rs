@@ -158,6 +158,7 @@ pub(crate) mod conversation_binding;
 #[path = "routing/cooldown.rs"]
 mod cooldown;
 mod error_response;
+pub(crate) use error_response::{record_rejected_request, terminal_text_response};
 #[path = "routing/failover.rs"]
 mod failover;
 #[path = "observability/http_bridge/mod.rs"]

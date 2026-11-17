@@ -102,7 +102,9 @@ The model editor's **Routes** tab also supports handles and arrows. An explicit 
 3. You can also start only `codexmanager-web`; it automatically launches `codexmanager-service` from the same directory and opens the browser.
 4. Or start `codexmanager-service` first, then `codexmanager-web`.
 5. Default addresses: service `localhost:48760`, Web UI `http://localhost:48761/`.
-6. To stop everything, visit `http://localhost:48761/__quit`. If the web process launched the service automatically, it will try to stop both.
+6. To stop everything, sign in as an administrator, visit `http://localhost:48761/__quit`, and confirm shutdown. Opening the page alone does not stop anything. If the web process launched the service automatically, it will try to stop both. The launcher uses `POST /__quit` with its RPC token.
+   When upgrading, stop the old Web process manually before starting the new version; old launchers' GET shutdown requests no longer stop the new Web version.
+   Reverse proxies must preserve the browser's original `Host` header so the shutdown endpoint can validate `Origin`.
 7. If you reverse-proxy or split-deploy frontend assets yourself, you must forward both `/api/runtime` and `/api/rpc`. Serving static assets alone is not enough.
 
 ### Run the source build with embedded UI

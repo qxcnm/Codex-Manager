@@ -161,6 +161,51 @@ async fn call(
     response.result
 }
 
+#[tokio::test]
+async fn member_response_injected_key_lists_hide_operator_configuration_on_both_backends() {
+    for seaorm in [false, true] {
+        let store = fixture(seaorm).await;
+        store
+            .update_api_key(
+                "owned".into(),
+                codexmanager_core::storage::ApiKeyConfigPatch {
+                    upstream_base_url: Some(Some(
+                        "https://fixture.invalid/?token=operator-secret".into(),
+                    )),
+                    static_headers_json: Some(Some(
+                        r#"{"Authorization":"Bearer fixture-secret"}"#.into(),
+                    )),
+                    account_group_filter: Some(Some("operator-group".into())),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let state = AppState::with_storage(store);
+        let member = RpcActor::from_parts(Some("member"), Some("alice"));
+        let response = call(state.clone(), "apikey/list", None, &member).await;
+        assert_eq!(response["items"].as_array().unwrap().len(), 1);
+        assert_eq!(response["items"][0]["id"], "owned");
+        for field in ["upstreamBaseUrl", "staticHeadersJson", "accountGroupFilter"] {
+            assert!(
+                response["items"][0][field].is_null(),
+                "backend {seaorm}: member received {field}"
+            );
+        }
+        let admin = call(state, "apikey/list", None, &RpcActor::system_admin()).await;
+        let owned = admin["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|key| key["id"] == "owned")
+            .unwrap();
+        assert!(owned["staticHeadersJson"]
+            .as_str()
+            .unwrap()
+            .contains("fixture-secret"));
+    }
+}
+
 async fn plugin_status_contract(seaorm: bool) {
     let store = fixture(seaorm).await;
     let state = AppState::with_storage(store.clone());

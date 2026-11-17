@@ -37,7 +37,7 @@ pub(super) fn builtin_missing_ui_html(detail: &str) -> String {
       <p>解决方式：</p>
       <p>1) 使用官方发行物（已内置前端资源）；或</p>
       <p>2) 从源码运行：先执行 <code>pnpm -C apps run build:desktop</code>，再设置 <code>CODEXMANAGER_WEB_ROOT=.../apps/out</code> 启动。</p>
-      <p>关闭：访问 <a href="/__quit">/__quit</a>。</p>
+      <p>关闭：管理员可打开 <a href="/__quit">关闭确认页</a>，确认后停止服务。</p>
     </div>
   </body>
 </html>

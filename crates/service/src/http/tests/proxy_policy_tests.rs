@@ -1,3 +1,4 @@
+use super::tests::GatewayAuthFixture;
 use super::*;
 use futures_util::{stream, StreamExt};
 use std::convert::Infallible;
@@ -7,6 +8,7 @@ use std::time::Duration;
 async fn unfinished_gateway_upload_times_out_before_domain_dispatch() {
     use tower::ServiceExt;
     let _env_lock = crate::test_env_guard();
+    let _fixture = GatewayAuthFixture::new();
     let previous = std::env::var_os(crate::http::middleware::ENV_HTTP_TIMEOUT_MS);
     std::env::set_var(crate::http::middleware::ENV_HTTP_TIMEOUT_MS, "20");
     let response = crate::http::router::build_router(crate::http::router::AppState::new())
@@ -14,6 +16,7 @@ async fn unfinished_gateway_upload_times_out_before_domain_dispatch() {
             HttpRequest::builder()
                 .method("POST")
                 .uri("/v1/responses")
+                .header("x-api-key", GatewayAuthFixture::KEY)
                 .header(header::ACCEPT, "text/event-stream")
                 .body(Body::from_stream(stream::pending::<
                     Result<Bytes, Infallible>,
@@ -33,6 +36,7 @@ async fn unfinished_gateway_upload_times_out_before_domain_dispatch() {
 #[tokio::test]
 async fn real_json_stream_and_zstd_use_stream_pool_and_skip_ordinary_deadline() {
     let _env_lock = crate::test_env_guard();
+    let _fixture = GatewayAuthFixture::new();
     let previous = std::env::var_os(crate::http::middleware::ENV_HTTP_TIMEOUT_MS);
     std::env::set_var(crate::http::middleware::ENV_HTTP_TIMEOUT_MS, "20");
     let backend = Router::new().fallback(any(|| async {
@@ -65,6 +69,7 @@ async fn real_json_stream_and_zstd_use_stream_pool_and_skip_ordinary_deadline() 
         zstd::stream::encode_all(br#"{"stream":true,"model":"test"}"#.as_slice(), 0).unwrap();
     let mut active = client
         .post(format!("http://{address}/v1/responses"))
+        .header("x-api-key", GatewayAuthFixture::KEY)
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::CONTENT_ENCODING, "zstd")
         .body(compressed)
@@ -75,6 +80,7 @@ async fn real_json_stream_and_zstd_use_stream_pool_and_skip_ordinary_deadline() 
     active.chunk().await.unwrap().unwrap();
     let rejected = client
         .post(format!("http://{address}/v1/chat/completions"))
+        .header("x-api-key", GatewayAuthFixture::KEY)
         .json(&serde_json::json!({"stream": true}))
         .send()
         .await
@@ -82,6 +88,7 @@ async fn real_json_stream_and_zstd_use_stream_pool_and_skip_ordinary_deadline() 
     assert_eq!(rejected.status(), StatusCode::SERVICE_UNAVAILABLE);
     let ordinary = client
         .post(format!("http://{address}/v1/responses"))
+        .header("x-api-key", GatewayAuthFixture::KEY)
         .json(&serde_json::json!({"stream": false}))
         .send()
         .await
@@ -104,6 +111,7 @@ async fn real_json_stream_and_zstd_use_stream_pool_and_skip_ordinary_deadline() 
         loop {
             let response = client
                 .post(format!("http://{address}/v1/chat/completions"))
+                .header("x-api-key", GatewayAuthFixture::KEY)
                 .json(&serde_json::json!({"stream": true}))
                 .send()
                 .await

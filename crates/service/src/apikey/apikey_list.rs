@@ -19,7 +19,23 @@ pub(crate) fn read_api_keys_for_actor(actor: &RpcActor) -> Result<Vec<ApiKeySumm
     let keys = storage
         .list_api_key_summaries_for_user(user_id)
         .map_err(|err| format!("list user api key summaries failed: {err}"))?;
-    Ok(keys.into_iter().map(map_api_key_list_summary).collect())
+    Ok(keys
+        .into_iter()
+        .map(map_api_key_list_summary)
+        .map(|key| summary_for_actor(key, actor))
+        .collect())
+}
+
+pub(crate) fn summary_for_actor(mut key: ApiKeySummary, actor: &RpcActor) -> ApiKeySummary {
+    if !actor.is_admin() {
+        key.upstream_base_url = None;
+        key.static_headers_json = None;
+        key.aggregate_api_url = None;
+        key.aggregate_api_id = None;
+        key.account_plan_filter = None;
+        key.account_group_filter = None;
+    }
+    key
 }
 
 pub(super) fn map_seaorm_api_key(key: codexmanager_storage_seaorm::ApiKeyRecord) -> ApiKeySummary {
@@ -59,16 +75,24 @@ pub(crate) fn read_api_keys_with_storage(storage: &Storage) -> Result<Vec<ApiKey
 pub(crate) fn read_api_keys_for_ids_with_storage(
     storage: &Storage,
     key_ids: &[String],
+    actor: &RpcActor,
 ) -> Result<Vec<ApiKeySummary>, String> {
     if crate::storage_helpers::seaorm_enabled() {
         let mut keys = super::remote::list(&RpcActor::system_admin())?;
         keys.retain(|key| key_ids.contains(&key.id));
-        return Ok(keys);
+        return Ok(keys
+            .into_iter()
+            .map(|key| summary_for_actor(key, actor))
+            .collect());
     }
     let keys = storage
         .list_api_key_summaries_for_ids(key_ids)
         .map_err(|err| format!("list api key summaries failed: {err}"))?;
-    Ok(keys.into_iter().map(map_api_key_list_summary).collect())
+    Ok(keys
+        .into_iter()
+        .map(map_api_key_list_summary)
+        .map(|key| summary_for_actor(key, actor))
+        .collect())
 }
 
 pub(crate) fn map_api_key_list_summary(key: ApiKeyListSummary) -> ApiKeySummary {

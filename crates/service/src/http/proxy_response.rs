@@ -47,6 +47,23 @@ pub(crate) fn text_error_response(status: StatusCode, body: impl Into<String>) -
     response
 }
 
+/// Preserve the domain gateway's JSON error and diagnostic headers for errors
+/// rejected before an upload is read.
+pub(crate) fn gateway_error_response(
+    status: StatusCode,
+    message: impl Into<String>,
+    trace_id: &str,
+) -> Response<Body> {
+    let error = crate::gateway::terminal_text_response(status.as_u16(), message, Some(trace_id));
+    let mut response = Response::builder().status(status);
+    for header in error.headers() {
+        response = response.header(header.field.as_str(), header.value.as_str());
+    }
+    response
+        .body(Body::from(error.into_reader().into_inner()))
+        .expect("validated gateway response headers")
+}
+
 /// 函数 `merge_upstream_headers`
 ///
 /// 作者: gaohongshun
