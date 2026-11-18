@@ -617,7 +617,7 @@ fn serialize_account_pool_model_catalog(official_models: &[Value]) -> Result<Str
     Ok(content)
 }
 
-fn prepare_managed_model(model: &mut codexmanager_core::rpc::types::ModelInfo) {
+pub(crate) fn prepare_managed_codex_model(model: &mut codexmanager_core::rpc::types::ModelInfo) {
     if model
         .shell_type
         .as_deref()
@@ -627,7 +627,15 @@ fn prepare_managed_model(model: &mut codexmanager_core::rpc::types::ModelInfo) {
     {
         model.shell_type = Some("shell_command".to_string());
     }
-    model.visibility = Some("list".to_string());
+    model.visibility = match model.visibility.as_deref().map(str::trim) {
+        Some(value)
+            if value.eq_ignore_ascii_case("hide") || value.eq_ignore_ascii_case("hidden") =>
+        {
+            Some("hide".to_string())
+        }
+        Some(value) if value.eq_ignore_ascii_case("none") => Some("none".to_string()),
+        _ => Some("list".to_string()),
+    };
     model.base_instructions.get_or_insert_with(String::new);
     model
         .availability_nux
@@ -702,6 +710,11 @@ fn prepare_managed_model(model: &mut codexmanager_core::rpc::types::ModelInfo) {
         .extra
         .entry("include_skills_usage_instructions".to_string())
         .or_insert(serde_json::Value::Bool(false));
+}
+
+fn prepare_managed_model(model: &mut codexmanager_core::rpc::types::ModelInfo) {
+    prepare_managed_codex_model(model);
+    model.visibility = Some("list".to_string());
 }
 
 fn write_atomic(path: &Path, content: &str) -> Result<(), String> {

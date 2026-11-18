@@ -339,3 +339,131 @@ fn local_models_lists_each_image_model_once_with_image_only_capabilities() {
         );
     }
 }
+
+#[derive(serde::Deserialize)]
+struct StrictCodexModelsResponse {
+    models: Vec<StrictCodexModelInfo>,
+}
+
+#[allow(dead_code)]
+#[derive(serde::Deserialize)]
+struct StrictCodexModelInfo {
+    slug: String,
+    display_name: String,
+    supported_reasoning_levels: Vec<StrictCodexReasoningLevel>,
+    shell_type: String,
+    visibility: String,
+    supported_in_api: bool,
+    priority: i64,
+    base_instructions: String,
+    support_verbosity: bool,
+    truncation_policy: StrictCodexTruncationPolicy,
+    supports_parallel_tool_calls: bool,
+    experimental_supported_tools: Vec<String>,
+}
+
+#[allow(dead_code)]
+#[derive(serde::Deserialize)]
+struct StrictCodexReasoningLevel {
+    effort: String,
+    description: String,
+}
+
+#[allow(dead_code)]
+#[derive(serde::Deserialize)]
+struct StrictCodexTruncationPolicy {
+    mode: String,
+    limit: i64,
+}
+
+#[test]
+fn managed_local_models_excludes_image_models_from_codex_catalog_and_satisfies_strict_codex_schema()
+{
+    let storage = codexmanager_core::storage::Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+
+    storage
+        .upsert_managed_model_v2(&codexmanager_core::storage::ManagedModelV2Upsert {
+            model: codexmanager_core::storage::ManagedModelV2 {
+                slug: "custom-minimal-text".to_string(),
+                display_name: "Custom Minimal Text".to_string(),
+                origin: "custom".to_string(),
+                enabled: true,
+                supported_in_api: true,
+                visibility: "list".to_string(),
+                capabilities: serde_json::json!({
+                    "supports_text_generation": true,
+                }),
+                instructions_mode: "passthrough".to_string(),
+                price: codexmanager_core::storage::ModelPriceV2 {
+                    price_status: "missing".to_string(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .expect("insert custom minimal text model");
+
+    let response = crate::models_v2::models_response_with_storage(&storage)
+        .expect("read managed local models");
+    let raw_json = serialize_models_response_for_policy(
+        &response,
+        crate::codex_model_catalog::GatewayCatalogPolicy::Managed,
+    );
+
+    let parsed: Value = serde_json::from_str(&raw_json).expect("valid json");
+    let data = parsed["data"].as_array().expect("data array");
+    assert!(data.iter().any(|item| item["id"] == "gpt-image-2"));
+    assert!(data.iter().any(|item| item["id"] == "custom-minimal-text"));
+
+    let strict: StrictCodexModelsResponse = serde_json::from_str(&raw_json)
+        .expect("Managed /v1/models must decode as strict Codex ModelsResponse");
+    assert!(
+        !strict
+            .models
+            .iter()
+            .any(|model| model.slug == "gpt-image-2"),
+        "image-only models must not appear in Codex private models catalog"
+    );
+    let custom = strict
+        .models
+        .iter()
+        .find(|model| model.slug == "custom-minimal-text")
+        .expect("custom text model present in Codex catalog");
+    assert_eq!(custom.shell_type, "shell_command");
+    assert_eq!(custom.visibility, "list");
+    assert!(!custom.support_verbosity);
+    assert!(!custom.supports_parallel_tool_calls);
+    assert_eq!(custom.truncation_policy.mode, "tokens");
+    assert_eq!(custom.truncation_policy.limit, 10_000);
+}
+
+#[test]
+fn official_account_pool_local_models_preserves_raw_catalog_without_managed_defaults() {
+    let mut raw_model = ModelInfo {
+        slug: "future-official-model".to_string(),
+        display_name: "Future Official Model".to_string(),
+        supported_in_api: true,
+        ..Default::default()
+    };
+    raw_model.extra.insert(
+        "future_codex_field".to_string(),
+        serde_json::json!({"revision": 7}),
+    );
+    let response = ModelsResponse {
+        models: vec![raw_model],
+        ..Default::default()
+    };
+
+    let output = serialize_models_response_for_policy(
+        &response,
+        crate::codex_model_catalog::GatewayCatalogPolicy::OfficialAccountPool,
+    );
+    let value: Value = serde_json::from_str(&output).expect("valid json");
+    let model = &value["models"][0];
+    assert_eq!(model["slug"], "future-official-model");
+    assert_eq!(model["future_codex_field"]["revision"], 7);
+    assert!(model.get("truncation_policy").is_none());
+    assert!(model.get("max_context_window").is_none());
+}

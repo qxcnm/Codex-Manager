@@ -18,7 +18,18 @@ struct ApiModelInfo<'a> {
     description: Option<&'a str>,
 }
 
-fn serialize_models_response_body(models: &ModelsResponse) -> String {
+fn supports_codex_text_catalog(model: &ModelInfo) -> bool {
+    model
+        .extra
+        .get("supports_text_generation")
+        .and_then(serde_json::Value::as_bool)
+        != Some(false)
+}
+
+fn serialize_models_response_for_policy(
+    models: &ModelsResponse,
+    policy: crate::codex_model_catalog::GatewayCatalogPolicy,
+) -> String {
     let data = models
         .models
         .iter()
@@ -32,18 +43,46 @@ fn serialize_models_response_body(models: &ModelsResponse) -> String {
             description: model.description.as_deref(),
         })
         .collect::<Vec<_>>();
-    serde_json::to_string(&CompatibleModelsResponse {
-        object: "list",
-        data,
-        // Codex CLI consumes the private `models` catalog while generic OpenAI
-        // clients consume `data`, so both representations must stay populated.
-        models: &models.models,
-    })
-    .unwrap_or_else(|_| "{\"object\":\"list\",\"data\":[],\"models\":[]}".to_string())
+    match policy {
+        crate::codex_model_catalog::GatewayCatalogPolicy::OfficialAccountPool => {
+            serde_json::to_string(&CompatibleModelsResponse {
+                object: "list",
+                data,
+                // Codex CLI consumes the private `models` catalog while generic OpenAI
+                // clients consume `data`, so both representations must stay populated.
+                models: &models.models,
+            })
+            .unwrap_or_else(|_| "{\"object\":\"list\",\"data\":[],\"models\":[]}".to_string())
+        }
+        crate::codex_model_catalog::GatewayCatalogPolicy::Managed => {
+            let prepared_models = models
+                .models
+                .iter()
+                .filter(|model| supports_codex_text_catalog(model))
+                .enumerate()
+                .map(|(position, model)| {
+                    let mut prepared = model.clone();
+                    prepared.priority = position as i64;
+                    crate::codex_model_catalog::prepare_managed_codex_model(&mut prepared);
+                    prepared
+                })
+                .collect::<Vec<_>>();
+            serde_json::to_string(&CompatibleModelsResponse {
+                object: "list",
+                data,
+                models: &prepared_models,
+            })
+            .unwrap_or_else(|_| "{\"object\":\"list\",\"data\":[],\"models\":[]}".to_string())
+        }
+    }
 }
 
+#[cfg(test)]
 fn serialize_models_response(models: &ModelsResponse) -> String {
-    serialize_models_response_body(models)
+    serialize_models_response_for_policy(
+        models,
+        crate::codex_model_catalog::GatewayCatalogPolicy::Managed,
+    )
 }
 
 fn filter_models_for_key(
@@ -170,13 +209,9 @@ pub(super) async fn maybe_respond_local_models(
         }
     };
 
-    let (output_models, include_implicit_models) =
+    let (output_models, _include_implicit_models) =
         filter_models_for_catalog_policy(storage, key_id, cached, catalog_policy)?;
-    let output = if include_implicit_models {
-        serialize_models_response(&output_models)
-    } else {
-        serialize_models_response_body(&output_models)
-    };
+    let output = serialize_models_response_for_policy(&output_models, catalog_policy);
     let extra_headers = models_etag_header(&output_models)?.into_iter().collect();
     super::local_response::respond_local_json_with_headers(
         request,
