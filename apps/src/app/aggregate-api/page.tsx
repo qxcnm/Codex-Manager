@@ -373,11 +373,17 @@ export default function AggregateApiPage() {
           .filter((item) => selectedSet.has(item.upstreamModel) && item.displayName)
           .map((item) => [item.upstreamModel, item.displayName as string]),
       );
+      const modelMetadata = Object.fromEntries(
+        associationItems
+          .filter((item) => selectedSet.has(item.upstreamModel) && item.metadata)
+          .map((item) => [item.upstreamModel, item.metadata as Record<string, unknown>]),
+      );
       const result = await accountClient.associateAggregateApiModels(
         associationApiId,
         upstreamModels,
         displayNames,
         serviceAddr,
+        modelMetadata,
       );
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: aggregateApiListQueryKey }),

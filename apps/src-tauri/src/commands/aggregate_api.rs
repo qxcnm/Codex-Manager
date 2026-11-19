@@ -240,7 +240,8 @@ pub async fn service_aggregate_api_associate_models(
     api_id: String,
     upstream_models: Vec<String>,
     display_names: Option<serde_json::Value>,
+    model_metadata: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
-    let params = serde_json::json!({ "apiId": api_id, "upstreamModels": upstream_models, "displayNames": display_names });
+    let params = serde_json::json!({ "apiId": api_id, "upstreamModels": upstream_models, "displayNames": display_names, "modelMetadata": model_metadata });
     rpc_call_in_background("aggregateApi/associateModels", addr, Some(params)).await
 }

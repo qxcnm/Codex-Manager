@@ -99,6 +99,7 @@ export interface AggregateApiBalanceRefreshResult {
 export interface AggregateApiFetchedModel {
   upstreamModel: string;
   displayName: string | null;
+  metadata?: Record<string, unknown> | null;
   existingModelSlug: string | null;
   alreadyLinked: boolean;
 }

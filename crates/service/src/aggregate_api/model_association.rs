@@ -6,7 +6,7 @@ use codexmanager_core::storage::{
     AggregateApi, ManagedModelRouteEnsureV2, ManagedModelV2, ManagedModelV2Upsert,
     ModelFastPolicyV2, ModelPriceV2, ModelRouteV2,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 
 use super::{
     normalize_fetched_model_id, normalize_provider_type_value, AGGREGATE_API_PROVIDER_GEMINI,
@@ -21,6 +21,7 @@ pub(super) fn associate(
     api_id: &str,
     upstream_models: Vec<String>,
     display_names: BTreeMap<String, String>,
+    model_metadata: BTreeMap<String, Value>,
 ) -> Result<AggregateApiAssociateModelsResult, String> {
     let api_id = api_id.trim();
     if api_id.is_empty() {
@@ -36,7 +37,13 @@ pub(super) fn associate(
     let models = storage
         .list_managed_models_v2(true)
         .map_err(|err| format!("read model catalog V2 failed: {err}"))?;
-    let plan = prepare(&api, &models, upstream_models, &display_names)?;
+    let plan = prepare_with_metadata(
+        &api,
+        &models,
+        upstream_models,
+        &display_names,
+        &model_metadata,
+    )?;
     let result = storage
         .upsert_missing_managed_models_and_ensure_routes_v2(&plan.candidates, &plan.routes)
         .map_err(|err| format!("associate models transaction failed: {err}"))?;
@@ -47,11 +54,28 @@ pub(super) fn associate(
     })
 }
 
+#[cfg(test)]
 fn prepare(
     api: &AggregateApi,
     models: &[ManagedModelV2],
     upstream_models: Vec<String>,
     display_names: &BTreeMap<String, String>,
+) -> Result<AssociationPlan, String> {
+    prepare_with_metadata(
+        api,
+        models,
+        upstream_models,
+        display_names,
+        &BTreeMap::new(),
+    )
+}
+
+fn prepare_with_metadata(
+    api: &AggregateApi,
+    models: &[ManagedModelV2],
+    upstream_models: Vec<String>,
+    display_names: &BTreeMap<String, String>,
+    model_metadata: &BTreeMap<String, Value>,
 ) -> Result<AssociationPlan, String> {
     let provider_type = normalize_provider_type_value(&api.provider_type);
     let mut requested = Vec::new();
@@ -98,29 +122,34 @@ fn prepare(
                 .map(|(_, value)| value.trim().to_owned())
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| upstream_model.clone());
-            plan.candidates.push(ManagedModelV2Upsert {
-                model: ManagedModelV2 {
-                    slug: upstream_model.clone(),
-                    display_name,
-                    provider: provider.clone(),
-                    origin: "custom".to_owned(),
-                    enabled: true,
-                    supported_in_api: true,
-                    visibility: "list".to_owned(),
-                    sort_order: next_sort + index as i64,
-                    capabilities: json!({
-                        "supports_text_generation": true,
-                        "input_modalities": ["text"],
-                        "output_modalities": ["text"]
-                    }),
-                    instructions_mode: "passthrough".to_owned(),
-                    fast_policy: ModelFastPolicyV2::Passthrough,
-                    price: ModelPriceV2 {
-                        price_status: "missing".to_owned(),
-                        ..Default::default()
-                    },
+            let mut model = ManagedModelV2 {
+                slug: upstream_model.clone(),
+                display_name,
+                provider: provider.clone(),
+                origin: "custom".to_owned(),
+                enabled: true,
+                supported_in_api: true,
+                visibility: "list".to_owned(),
+                sort_order: next_sort + index as i64,
+                capabilities: json!({
+                    "supports_text_generation": true,
+                    "output_modalities": ["text"]
+                }),
+                instructions_mode: "passthrough".to_owned(),
+                fast_policy: ModelFastPolicyV2::Passthrough,
+                price: ModelPriceV2 {
+                    price_status: "missing".to_owned(),
                     ..Default::default()
                 },
+                ..Default::default()
+            };
+            let metadata = model_metadata
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(&upstream_model))
+                .map(|(_, value)| value);
+            crate::models_v2::discovery_metadata::apply_metadata(&mut model, metadata);
+            plan.candidates.push(ManagedModelV2Upsert {
+                model,
                 ..Default::default()
             });
             (upstream_model.clone(), 0, 1)

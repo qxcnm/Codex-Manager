@@ -326,15 +326,15 @@ export default function ModelsPage() {
     codexModeStatus.status?.profileWritable === true;
   const localCatalogEffect =
     isLocalCatalogActive === true
-      ? t("当前生效")
+      ? t("已配置")
       : isLocalCatalogActive === false
-        ? t("当前不生效")
+        ? t("未配置")
         : t("无法确认");
   const catalogImpactDescription =
     isLocalCatalogActive === true
-      ? t("当前 Codex 已应用本地模型目录；下方模型、路由和可见性设置会影响当前 Codex。")
+      ? t("Codex 配置已指向本地模型目录；目录变更后请关闭并重新打开 Codex，以刷新模型列表。")
       : isLocalCatalogActive === false
-        ? t("当前 Codex 尚未应用本地模型目录；点击应用模型后，模型列表将使用下方目录。")
+        ? t("Codex 配置尚未指向本地模型目录；点击应用模型写入目录后，请关闭并重新打开 Codex。")
         : t("尚未确认当前 Codex 的目录来源；请先在 Codex 接入方式页面检查配置。");
 
   const [search, setSearch] = useState("");
@@ -537,7 +537,7 @@ export default function ModelsPage() {
               <div>
                 <CardTitle className="flex items-center gap-2">
                   <Cable className="h-4 w-4 text-primary" />
-                  {t("当前 Codex 模型来源")}
+                  {t("Codex 配置的模型来源")}
                 </CardTitle>
                 <CardDescription className="mt-1">
                   {catalogImpactDescription}

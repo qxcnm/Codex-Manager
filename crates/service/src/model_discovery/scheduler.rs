@@ -211,36 +211,41 @@ pub(super) fn claim_due() -> Result<Vec<RunLease>, String> {
 pub(super) struct Fetched {
     pub models: Vec<String>,
     pub names: BTreeMap<String, String>,
+    pub metadata: BTreeMap<String, serde_json::Value>,
 }
 
 async fn fetch(source: &Source) -> Result<Fetched, String> {
-    let items: Vec<(String, Option<String>)> = if source.source_kind == "openai_account" {
-        crate::account::models::fetch_account_models_async(&source.source_id)
-            .await
-            .map_err(|_| {
-                "model discovery fetch failed; check source authorization and connectivity"
-                    .to_owned()
-            })?
-            .items
-            .into_iter()
-            .map(|item| (item.upstream_model, item.display_name))
-            .collect()
-    } else {
-        crate::aggregate_api::fetch_aggregate_api_models_async(&source.source_id)
-            .await
-            .map_err(|_| {
-                "model discovery fetch failed; check source authorization and connectivity"
-                    .to_owned()
-            })?
-            .items
-            .into_iter()
-            .map(|item| (item.upstream_model, item.display_name))
-            .collect()
-    };
+    let items: Vec<(String, Option<String>, Option<serde_json::Value>)> =
+        if source.source_kind == "openai_account" {
+            crate::account::models::fetch_account_models_async(&source.source_id)
+                .await
+                .map_err(|_| {
+                    "model discovery fetch failed; check source authorization and connectivity"
+                        .to_owned()
+                })?
+                .items
+                .into_iter()
+                .map(|item| (item.upstream_model, item.display_name, item.metadata))
+                .collect()
+        } else {
+            crate::aggregate_api::fetch_aggregate_api_models_async(&source.source_id)
+                .await
+                .map_err(|_| {
+                    "model discovery fetch failed; check source authorization and connectivity"
+                        .to_owned()
+                })?
+                .items
+                .into_iter()
+                .map(|item| (item.upstream_model, item.display_name, item.metadata))
+                .collect()
+        };
     let mut fetched = Fetched::default();
-    for (model, name) in items {
+    for (model, name, metadata) in items {
         if let Some(name) = name {
             fetched.names.insert(model.clone(), name);
+        }
+        if let Some(metadata) = metadata {
+            fetched.metadata.insert(model.clone(), metadata);
         }
         fetched.models.push(model);
     }
@@ -300,16 +305,18 @@ fn associate(
     fetched: Fetched,
 ) -> Result<AggregateApiAssociateModelsResult, String> {
     if source.source_kind == "openai_account" {
-        crate::account::models::associate_account_models(
+        crate::account::models::associate_account_models_with_metadata(
             &source.source_id,
             fetched.models,
             fetched.names,
+            fetched.metadata,
         )
     } else {
-        crate::aggregate_api::associate_aggregate_api_models(
+        crate::aggregate_api::associate_aggregate_api_models_with_metadata(
             &source.source_id,
             fetched.models,
             fetched.names,
+            fetched.metadata,
         )
     }
     .map_err(|_| "model discovery catalog update failed".to_owned())

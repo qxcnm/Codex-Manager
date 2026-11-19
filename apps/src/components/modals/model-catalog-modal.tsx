@@ -74,6 +74,8 @@ type ModelDraft = {
   sortOrder: string;
   contextWindow: string;
   maxContextWindow: string;
+  contextWindowEdited: boolean;
+  maxContextWindowEdited: boolean;
   defaultReasoningEffort: string;
   fastPolicy: ModelFastPolicyV2;
   capabilitiesJson: string;
@@ -115,6 +117,11 @@ const DEFAULT_CAPABILITIES = {
 };
 
 const REASONING_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh", "max", "ultra"];
+
+function hasReasoningEfforts(capabilities: Record<string, unknown>): boolean {
+  return Object.hasOwn(capabilities, "reasoning_efforts") ||
+    Object.hasOwn(capabilities, "reasoningEfforts");
+}
 
 function reasoningEffortsFromCapabilities(capabilities: Record<string, unknown>): string[] {
   const value = Object.hasOwn(capabilities, "reasoning_efforts")
@@ -181,9 +188,10 @@ function buildDraft(model: ManagedModelV2 | null | undefined, nextSortOrder: num
     supportedInApi: model?.supportedInApi ?? true,
     visibility: model?.visibility || "list",
     sortOrder: String(model?.sortOrder ?? nextSortOrder),
-    contextWindow: model?.contextWindow == null ? "" : String(model.contextWindow),
-    maxContextWindow:
-      model?.maxContextWindow == null ? "" : String(model.maxContextWindow),
+    contextWindow: String(model?.contextWindow ?? model?.resolvedCapabilities?.contextWindow ?? ""),
+    maxContextWindow: String(model?.maxContextWindow ?? model?.resolvedCapabilities?.maxContextWindow ?? ""),
+    contextWindowEdited: false,
+    maxContextWindowEdited: false,
     defaultReasoningEffort: model?.defaultReasoningEffort || "",
     fastPolicy: model?.fastPolicy || "passthrough",
     capabilitiesJson: JSON.stringify(capabilities, null, 2),
@@ -356,6 +364,7 @@ export function ModelCatalogModal({
     buildDraft(model, nextSortOrder),
   );
   const [error, setError] = useState<string | null>(null);
+  const [manualReasoningTemplate, setManualReasoningTemplate] = useState(false);
   const [seenReasoningEfforts, setSeenReasoningEfforts] = useState<string[]>(() =>
     reasoningEffortsFromCapabilities(model?.capabilities || DEFAULT_CAPABILITIES),
   );
@@ -366,9 +375,25 @@ export function ModelCatalogModal({
       return null;
     }
   }, [draft.capabilitiesJson]);
-  const reasoningEfforts = capabilities
-    ? reasoningEffortsFromCapabilities(capabilities)
-    : [];
+  const resolved = model?.resolvedCapabilities;
+  const reasoningEffortsFor = (value: Record<string, unknown>): string[] =>
+    hasReasoningEfforts(value)
+      ? reasoningEffortsFromCapabilities(value)
+      : resolved?.reasoningEfforts || [];
+  const reasoningEfforts = capabilities ? reasoningEffortsFor(capabilities) : [];
+  const inheritedReasoning = capabilities !== null && !hasReasoningEfforts(capabilities);
+  const inheritedDefaultEffort = inheritedReasoning ? resolved?.defaultReasoningEffort || "" : "";
+  const defaultEffortValue = draft.defaultReasoningEffort ||
+    (inheritedReasoning ? "__auto__" : "__none__");
+  const capabilitySourceLabel = (source: string): string => {
+    switch (source) {
+      case "official_cache": return t("官方缓存");
+      case "official_builtin": return t("官方内置目录");
+      case "codex_default": return t("Codex 默认值");
+      case "stored": return t("已保存配置");
+      default: return source;
+    }
+  };
   const reasoningEffortOptions = [
     ...new Set([
       ...REASONING_EFFORT_OPTIONS,
@@ -388,7 +413,12 @@ export function ModelCatalogModal({
   );
 
   const updateDraft = <K extends keyof ModelDraft>(key: K, value: ModelDraft[K]) => {
-    setDraft((current) => ({ ...current, [key]: value }));
+    setDraft((current) => ({
+      ...current,
+      [key]: value,
+      ...(key === "contextWindow" ? { contextWindowEdited: true } : {}),
+      ...(key === "maxContextWindow" ? { maxContextWindowEdited: true } : {}),
+    }));
   };
 
   const updateCapabilitiesJson = (value: string) => {
@@ -437,25 +467,59 @@ export function ModelCatalogModal({
       } catch {
         return current;
       }
-      const previous = reasoningEffortsFromCapabilities(currentCapabilities);
+      const previous = reasoningEffortsFor(currentCapabilities);
       const next = orderReasoningEfforts(checked
         ? [...new Set([...previous, effort])]
         : previous.filter((value) => value !== effort));
-      const key = Object.hasOwn(currentCapabilities, "reasoning_efforts")
-        ? "reasoning_efforts"
-        : "reasoningEfforts";
       const updatedCapabilities = { ...currentCapabilities };
       delete updatedCapabilities.reasoning_efforts;
       delete updatedCapabilities.reasoningEfforts;
-      updatedCapabilities[key] = next;
+      updatedCapabilities.reasoning_efforts = next;
+      const previousDefault = current.defaultReasoningEffort ||
+        (!hasReasoningEfforts(currentCapabilities) ? resolved?.defaultReasoningEffort || "" : "");
       return {
         ...current,
         capabilitiesJson: JSON.stringify(updatedCapabilities, null, 2),
-        defaultReasoningEffort: next.includes(current.defaultReasoningEffort)
-          ? current.defaultReasoningEffort
+        defaultReasoningEffort: next.includes(previousDefault)
+          ? previousDefault
           : "",
       };
     });
+  };
+
+  const updateDefaultReasoningEffort = (value: string | null) => {
+    setDraft((current) => {
+      const nextDefault = value === "__none__" || value === "__auto__" ? "" : value || "";
+      if (value !== "__none__") return { ...current, defaultReasoningEffort: nextDefault };
+      try {
+        const currentCapabilities = parseCapabilities(current.capabilitiesJson);
+        if (hasReasoningEfforts(currentCapabilities)) {
+          return { ...current, defaultReasoningEffort: "" };
+        }
+        return {
+          ...current,
+          defaultReasoningEffort: "",
+          capabilitiesJson: JSON.stringify({
+            ...currentCapabilities,
+            reasoning_efforts: reasoningEffortsFor(currentCapabilities),
+          }, null, 2),
+        };
+      } catch {
+        return current;
+      }
+    });
+  };
+
+  const fillCommonReasoningTemplate = () => {
+    if (!capabilities) return;
+    const next: Record<string, unknown> = { ...capabilities, reasoning_efforts: ["low", "medium", "high"] };
+    delete next.reasoningEfforts;
+    setDraft((current) => ({
+      ...current,
+      defaultReasoningEffort: "medium",
+      capabilitiesJson: JSON.stringify(next, null, 2),
+    }));
+    setManualReasoningTemplate(true);
   };
 
   const updateRoute = <K extends keyof RouteDraft>(
@@ -507,7 +571,7 @@ export function ModelCatalogModal({
       const slug = draft.slug.trim();
       if (!slug) throw new Error("模型 slug 不能为空");
       const modelCapabilities = parseCapabilities(draft.capabilitiesJson);
-      const supportedEfforts = reasoningEffortsFromCapabilities(modelCapabilities);
+      const supportedEfforts = reasoningEffortsFor(modelCapabilities);
       const defaultEffort = draft.defaultReasoningEffort.trim();
       if (defaultEffort && !supportedEfforts.includes(defaultEffort)) {
         throw new Error(t("默认推理强度必须属于支持的档位"));
@@ -559,11 +623,15 @@ export function ModelCatalogModal({
         supportedInApi: draft.supportedInApi,
         visibility: draft.visibility,
         sortOrder: integer(draft.sortOrder, "排序"),
-        contextWindow: optionalPositiveInteger(draft.contextWindow, "上下文窗口"),
-        maxContextWindow: optionalPositiveInteger(
-          draft.maxContextWindow,
-          "最大上下文窗口",
-        ),
+        contextWindow: model && !draft.contextWindowEdited
+          ? model.contextWindow
+          : optionalPositiveInteger(draft.contextWindow, "上下文窗口"),
+        maxContextWindow: model && !draft.maxContextWindowEdited
+          ? model.maxContextWindow
+          : optionalPositiveInteger(
+            draft.maxContextWindow,
+            "最大上下文窗口",
+          ),
         defaultReasoningEffort: defaultEffort || null,
         fastPolicy: draft.fastPolicy,
         capabilities: modelCapabilities,
@@ -690,28 +758,49 @@ export function ModelCatalogModal({
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="model-context-window">{t("上下文窗口")}</Label>
+                  <Label htmlFor="model-context-window">{t("上下文窗口（tokens）")}</Label>
                   <Input
                     id="model-context-window"
                     type="number"
                     min="1"
+                    placeholder="272000"
+                    aria-describedby="model-context-window-unit"
                     value={draft.contextWindow}
                     onChange={(event) => updateDraft("contextWindow", event.target.value)}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="model-max-context-window">{t("最大上下文窗口")}</Label>
+                  <Label htmlFor="model-max-context-window">{t("最大上下文窗口（tokens）")}</Label>
                   <Input
                     id="model-max-context-window"
                     type="number"
                     min="1"
+                    placeholder="272000"
+                    aria-describedby="model-context-window-unit"
                     value={draft.maxContextWindow}
                     onChange={(event) =>
                       updateDraft("maxContextWindow", event.target.value)
                     }
                   />
                 </div>
+                <p id="model-context-window-unit" className="text-xs text-muted-foreground md:col-span-2 md:col-start-2">
+                  {t("单位为 tokens，例如 272k 请填写 272000；不会自动换算。")}
+                </p>
+                {resolved ? (
+                  <p className="text-xs text-muted-foreground md:col-span-2 md:col-start-2">
+                    {t("上下文来源")}：{capabilitySourceLabel(resolved.contextSource)}。
+                    {t("自动识别的值不会因保存其他字段而写成手动配置。")}
+                  </p>
+                ) : null}
               </div>
+
+              {resolved ? (
+                <div className="flex flex-wrap gap-x-5 gap-y-1 rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground" data-testid="model-resolved-capabilities">
+                  <span>{t("能力识别来源")}：{capabilitySourceLabel(resolved.source)}{resolved.matchedSlug ? ` (${resolved.matchedSlug})` : ""}</span>
+                  <span>{t("输入类型")}：{resolved.inputModalities.join(", ") || t("未指定")}</span>
+                  <span>{t("推理来源")}：{capabilitySourceLabel(resolved.reasoningSource)}</span>
+                </div>
+              ) : null}
 
               <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(180px,240px)]">
                 <div className="space-y-2">
@@ -743,27 +832,47 @@ export function ModelCatalogModal({
                       </div>
                     ))}
                   </div>
+                  {reasoningEfforts.length === 0 || manualReasoningTemplate ? (
+                    <div className="space-y-2">
+                      {reasoningEfforts.length === 0 && inheritedReasoning ? (
+                        <p className="text-xs text-muted-foreground">{t("未识别到推理档位，可手动配置。")}</p>
+                      ) : null}
+                      <Button type="button" variant="outline" size="sm" disabled={!capabilities} onClick={fillCommonReasoningTemplate}>
+                        {t("填入常用推理档位")}
+                      </Button>
+                      <p className="text-xs text-muted-foreground">{t("手动模板：low、medium、high，默认 medium；不代表官方或上游支持。")}</p>
+                    </div>
+                  ) : null}
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="model-reasoning-effort">{t("默认推理强度")}</Label>
                   <Select
-                    value={draft.defaultReasoningEffort || "__none__"}
+                    value={defaultEffortValue}
                     disabled={!capabilities || (reasoningEfforts.length === 0 && !draft.defaultReasoningEffort)}
-                    onValueChange={(value) =>
-                      updateDraft("defaultReasoningEffort", value === "__none__" ? "" : value || "")
-                    }
+                    onValueChange={updateDefaultReasoningEffort}
                   >
                     <SelectTrigger id="model-reasoning-effort" aria-label={t("默认推理强度")} className="w-full">
                       <SelectValue>
-                        {(value) => value === "__none__"
-                          ? t("不指定")
-                          : value === unsupportedDefaultEffort
-                            ? `${value} (${t("未在支持档位中")})`
-                            : value}
+                        {(value) => value === "__auto__"
+                          ? inheritedDefaultEffort
+                            ? t("自动（{effort}）", { effort: inheritedDefaultEffort })
+                            : t("自动（未指定）")
+                          : value === "__none__"
+                            ? t("不指定")
+                            : value === unsupportedDefaultEffort
+                              ? `${value} (${t("未在支持档位中")})`
+                              : value}
                       </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
+                        {inheritedReasoning ? (
+                          <SelectItem value="__auto__">
+                            {inheritedDefaultEffort
+                              ? t("自动（{effort}）", { effort: inheritedDefaultEffort })
+                              : t("自动（未指定）")}
+                          </SelectItem>
+                        ) : null}
                         <SelectItem value="__none__">{t("不指定")}</SelectItem>
                         {unsupportedDefaultEffort ? (
                           <SelectItem value={unsupportedDefaultEffort} disabled>

@@ -3133,7 +3133,7 @@ async fn sync_active_gateway_profile_from_storage_with_changes_async(
     let storage = storage.shared_handle();
     let phase_storage = storage.shared_handle();
     let prepared = profile_commit(&lease, move || {
-        let Some(mut state) = load_state() else {
+        let Some(mut state) = load_state_with_storage(&phase_storage) else {
             return Ok(None);
         };
         let profile_dir = PathBuf::from(&state.profile_dir);
@@ -3459,7 +3459,27 @@ fn ensure_backup(profile_dir: &Path) -> Result<(), String> {
 }
 
 fn load_state() -> Option<ManagedState> {
-    crate::app_settings::get_persisted_app_setting(APP_SETTING_STATE_KEY)
+    parse_managed_state(crate::app_settings::get_persisted_app_setting(
+        APP_SETTING_STATE_KEY,
+    ))
+}
+
+fn load_state_with_storage(storage: &Storage) -> Option<ManagedState> {
+    if crate::storage_helpers::seaorm_enabled() {
+        return load_state();
+    }
+    // Reconciliation already holds a pooled handle. A second acquisition here
+    // would block startup when the pool permits only one connection.
+    parse_managed_state(
+        storage
+            .get_app_setting(APP_SETTING_STATE_KEY)
+            .ok()
+            .flatten(),
+    )
+}
+
+fn parse_managed_state(value: Option<String>) -> Option<ManagedState> {
+    crate::app_settings::normalize_optional_text(value.as_deref())
         .and_then(|value| serde_json::from_str(&value).ok())
 }
 

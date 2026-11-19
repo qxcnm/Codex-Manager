@@ -67,7 +67,7 @@ pub use model_catalog_v2::{
     validate_managed_model_price_v2, validate_managed_model_v2, ManagedModelBatchStateV2Update,
     ManagedModelPriceV2Update, ManagedModelRouteEnsureResultV2, ManagedModelRouteEnsureV2,
     ManagedModelStateV2Update, ManagedModelV2, ManagedModelV2Upsert, ModelCatalogV2Stats,
-    ModelFastPolicyV2, ModelPriceV2, ModelRouteV2,
+    ModelFastPolicyV2, ModelPriceV2, ModelRouteV2, ResolvedModelCapabilitiesV2,
 };
 pub use model_display_order::{validate_managed_model_reorder_v2, ManagedModelReorderV2Params};
 pub use proxy_profiles::derive_proxy_profile_url_metadata;

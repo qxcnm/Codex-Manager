@@ -1653,7 +1653,18 @@ fn normalize_fetched_model_id(raw: &str, gemini: bool) -> Option<String> {
     Some(value.to_string())
 }
 
+#[cfg(test)]
 fn parse_fetched_models(body: &Value, gemini: bool) -> Vec<(String, Option<String>)> {
+    parse_fetched_models_with_metadata(body, gemini)
+        .into_iter()
+        .map(|(slug, name, _)| (slug, name))
+        .collect()
+}
+
+fn parse_fetched_models_with_metadata(
+    body: &Value,
+    gemini: bool,
+) -> Vec<(String, Option<String>, Option<Value>)> {
     let candidates = body
         .as_array()
         .cloned()
@@ -1680,7 +1691,11 @@ fn parse_fetched_models(body: &Value, gemini: bool) -> Vec<(String, Option<Strin
                 Some(display_name)
             }
         });
-        items.push((upstream_model, display_name));
+        items.push((
+            upstream_model,
+            display_name,
+            crate::models_v2::discovery_metadata::sanitize_metadata(&value),
+        ));
         if items.len() >= MAX_FETCHED_MODELS {
             break;
         }
@@ -1717,7 +1732,21 @@ pub(crate) fn associate_aggregate_api_models(
     upstream_models: Vec<String>,
     display_names: BTreeMap<String, String>,
 ) -> Result<AggregateApiAssociateModelsResult, String> {
-    model_association::associate(api_id, upstream_models, display_names)
+    associate_aggregate_api_models_with_metadata(
+        api_id,
+        upstream_models,
+        display_names,
+        BTreeMap::new(),
+    )
+}
+
+pub(crate) fn associate_aggregate_api_models_with_metadata(
+    api_id: &str,
+    upstream_models: Vec<String>,
+    display_names: BTreeMap<String, String>,
+    model_metadata: BTreeMap<String, Value>,
+) -> Result<AggregateApiAssociateModelsResult, String> {
+    model_association::associate(api_id, upstream_models, display_names, model_metadata)
 }
 
 /// 函数 `test_aggregate_api_connection`

@@ -222,35 +222,36 @@ function integerCapability(
 }
 
 function truncationPolicy(model: ManagedModelV2): ModelInfo["truncationPolicy"] {
-  const mode = nullableString(capability(model, "truncationMode", "truncation_mode"));
-  const limit = integerCapability(model, null, "truncationLimit", "truncation_limit");
+  const mode = nullableString(capability(model, "truncation_mode", "truncationMode"));
+  const limit = integerCapability(model, null, "truncation_limit", "truncationLimit");
   return mode && limit !== null ? { mode, limit } : null;
 }
 
 export function managedModelV2ToModelInfo(model: ManagedModelV2): ModelInfo {
-  const reasoningEfforts = stringList(
-    capability(model, "reasoningEfforts", "reasoning_efforts"),
+  const resolved = model.resolvedCapabilities;
+  const reasoningEfforts = resolved?.reasoningEfforts ?? stringList(
+    capability(model, "reasoning_efforts", "reasoningEfforts"),
   );
   const serviceTiers = stringList(
-    capability(model, "serviceTiers", "service_tiers"),
+    capability(model, "service_tiers", "serviceTiers"),
   );
   return {
     slug: model.slug,
     displayName: model.displayName,
     description: model.description,
-    defaultReasoningLevel: model.defaultReasoningEffort,
+    defaultReasoningLevel: resolved ? resolved.defaultReasoningEffort : model.defaultReasoningEffort,
     supportedReasoningLevels: reasoningEfforts.map((effort) => ({
       effort,
       description: "",
     })),
     shellType:
-      nullableString(capability(model, "shellType", "shell_type")) ||
+      nullableString(capability(model, "shell_type", "shellType")) ||
       "shell_command",
     visibility: model.visibility,
     supportedInApi: model.supportedInApi,
     priority: model.sortOrder,
     additionalSpeedTiers: stringList(
-      capability(model, "additionalSpeedTiers", "additional_speed_tiers"),
+      capability(model, "additional_speed_tiers", "additionalSpeedTiers"),
     ),
     serviceTiers: serviceTiers.map((id) => ({
       id,
@@ -258,7 +259,7 @@ export function managedModelV2ToModelInfo(model: ManagedModelV2): ModelInfo {
       description: serviceTierDescription(model.slug, id),
     })),
     defaultServiceTier: nullableString(
-      capability(model, "defaultServiceTier", "default_service_tier"),
+      capability(model, "default_service_tier", "defaultServiceTier"),
     ),
     availabilityNux: null,
     upgrade: null,
@@ -269,94 +270,94 @@ export function managedModelV2ToModelInfo(model: ManagedModelV2): ModelInfo {
       model,
       false,
       "supports_reasoning_summary_parameter",
-      "supportsReasoningSummaries",
       "supports_reasoning_summaries",
+      "supportsReasoningSummaries",
     ),
     defaultReasoningSummary: nullableString(
-      capability(model, "defaultReasoningSummary", "default_reasoning_summary"),
+      capability(model, "default_reasoning_summary", "defaultReasoningSummary"),
     ),
     supportVerbosity: booleanCapability(
       model,
       false,
-      "supportsVerbosity",
       "supports_verbosity",
+      "supportsVerbosity",
     ),
     defaultVerbosity:
-      capability(model, "defaultVerbosity", "default_verbosity") ?? null,
+      capability(model, "default_verbosity", "defaultVerbosity") ?? null,
     applyPatchToolType: nullableString(
-      capability(model, "applyPatchToolType", "apply_patch_tool_type"),
+      capability(model, "apply_patch_tool_type", "applyPatchToolType"),
     ),
     webSearchToolType: nullableString(
-      capability(model, "webSearchToolType", "web_search_tool_type"),
+      capability(model, "web_search_tool_type", "webSearchToolType"),
     ),
     truncationPolicy: truncationPolicy(model),
     supportsParallelToolCalls: booleanCapability(
       model,
       false,
-      "supportsParallelToolCalls",
       "supports_parallel_tool_calls",
+      "supportsParallelToolCalls",
     ),
     supportsImageDetailOriginal: booleanCapability(
       model,
       false,
-      "supportsImageDetailOriginal",
       "supports_image_detail_original",
+      "supportsImageDetailOriginal",
     ),
-    contextWindow: model.contextWindow,
+    contextWindow: resolved ? resolved.contextWindow : model.contextWindow,
     autoCompactTokenLimit: integerCapability(
       model,
       null,
-      "autoCompactTokenLimit",
       "auto_compact_token_limit",
+      "autoCompactTokenLimit",
     ),
     effectiveContextWindowPercent: integerCapability(
       model,
       95,
-      "effectiveContextWindowPercent",
       "effective_context_window_percent",
+      "effectiveContextWindowPercent",
     ),
     experimentalSupportedTools: stringList(
       capability(
         model,
-        "experimentalSupportedTools",
         "experimental_supported_tools",
+        "experimentalSupportedTools",
       ),
     ),
-    inputModalities: stringList(
-      capability(model, "inputModalities", "input_modalities"),
+    inputModalities: resolved?.inputModalities ?? stringList(
+      capability(model, "input_modalities", "inputModalities"),
     ),
     outputModalities: stringList(
-      capability(model, "outputModalities", "output_modalities"),
+      capability(model, "output_modalities", "outputModalities"),
     ),
     supportedEndpoints: stringList(
-      capability(model, "supportedEndpoints", "supported_endpoints"),
+      capability(model, "supported_endpoints", "supportedEndpoints"),
     ),
     supportsTextGeneration: booleanCapability(
       model,
       true,
-      "supportsTextGeneration",
       "supports_text_generation",
+      "supportsTextGeneration",
     ),
     minimalClientVersion:
-      capability(model, "minimalClientVersion", "minimal_client_version") ?? null,
+      capability(model, "minimal_client_version", "minimalClientVersion") ?? null,
     supportsSearchTool: booleanCapability(
       model,
       false,
-      "supportsSearchTool",
       "supports_search_tool",
+      "supportsSearchTool",
     ),
     availableInPlans: [],
-    maxContextWindow: model.maxContextWindow,
-    compHash: nullableString(capability(model, "compHash", "comp_hash")),
+    maxContextWindow: resolved ? resolved.maxContextWindow : model.maxContextWindow,
+    compHash: nullableString(capability(model, "comp_hash", "compHash")),
     useResponsesLite: booleanCapability(
       model,
       false,
-      "useResponsesLite",
       "use_responses_lite",
+      "useResponsesLite",
     ),
-    toolMode: nullableString(capability(model, "toolMode", "tool_mode")),
+    toolMode: nullableString(capability(model, "tool_mode", "toolMode")),
     multiAgentVersion: nullableString(
-      capability(model, "multiAgentVersion", "multi_agent_version"),
+      capability(model, "multi_agent_version", "multiAgentVersion"),
     ),
     includeSkillsUsageInstructions: false,
   };

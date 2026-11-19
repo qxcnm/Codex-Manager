@@ -1026,6 +1026,7 @@ export function normalizeAggregateApiFetchModelsResult(
     return {
       upstreamModel: asString(value.upstreamModel ?? value.upstream_model),
       displayName: asString(value.displayName ?? value.display_name) || null,
+      metadata: toNullableObject(value.metadata),
       existingModelSlug:
         asString(value.existingModelSlug ?? value.existing_model_slug) || null,
       alreadyLinked: asBoolean(value.alreadyLinked ?? value.already_linked, false),
@@ -1048,6 +1049,7 @@ export function normalizeAccountFetchModelsResult(
     return {
       upstreamModel: asString(value.upstreamModel ?? value.upstream_model),
       displayName: asString(value.displayName ?? value.display_name) || null,
+      metadata: toNullableObject(value.metadata),
       existingModelSlug:
         asString(value.existingModelSlug ?? value.existing_model_slug) || null,
       alreadyLinked: asBoolean(value.alreadyLinked ?? value.already_linked, false),

@@ -491,13 +491,17 @@ fn scheduler_completion_imports_real_account_routes_without_overwriting_manual_c
         &run,
         Ok(Fetched {
             models: vec!["discovery-new-model".into()],
+            metadata: std::collections::BTreeMap::from([("discovery-new-model".into(), serde_json::json!({
+                "context_window":272000,"max_context_window":872000,"input_modalities":["text","image"]
+            }))]),
             ..Default::default()
         }),
         |source, fetched| {
-            crate::account::models::associate_account_models(
+            crate::account::models::associate_account_models_with_metadata(
                 &source.source_id,
                 fetched.models,
                 fetched.names,
+                fetched.metadata,
             )
         },
         || Ok(()),
@@ -512,7 +516,15 @@ fn scheduler_completion_imports_real_account_routes_without_overwriting_manual_c
         .find(|m| m.slug == "discovery-new-model")
         .unwrap();
     assert_eq!(model.routes[0].source_kind, "account_pool");
+    assert_eq!(model.context_window, Some(272000));
+    assert_eq!(model.max_context_window, Some(872000));
+    assert_eq!(
+        model.capabilities["input_modalities"],
+        serde_json::json!(["text", "image"])
+    );
     model.display_name = "Manual label".into();
+    model.context_window = Some(123456);
+    model.capabilities["input_modalities"] = serde_json::json!(["text"]);
     model.routes[0].enabled = false;
     db.storage()
         .upsert_managed_models_v2(&[codexmanager_core::storage::ManagedModelV2Upsert {
@@ -527,13 +539,17 @@ fn scheduler_completion_imports_real_account_routes_without_overwriting_manual_c
         &run,
         Ok(Fetched {
             models: vec!["discovery-new-model".into()],
+            metadata: std::collections::BTreeMap::from([("discovery-new-model".into(), serde_json::json!({
+                "context_window":272000,"max_context_window":872000,"input_modalities":["text","image"]
+            }))]),
             ..Default::default()
         }),
         |source, fetched| {
-            crate::account::models::associate_account_models(
+            crate::account::models::associate_account_models_with_metadata(
                 &source.source_id,
                 fetched.models,
                 fetched.names,
+                fetched.metadata,
             )
         },
         || panic!("unchanged catalog should not sync profile"),
@@ -548,6 +564,11 @@ fn scheduler_completion_imports_real_account_routes_without_overwriting_manual_c
         .find(|m| m.slug == "discovery-new-model")
         .unwrap();
     assert_eq!(model.display_name, "Manual label");
+    assert_eq!(model.context_window, Some(123456));
+    assert_eq!(
+        model.capabilities["input_modalities"],
+        serde_json::json!(["text"])
+    );
     assert!(!model.routes[0].enabled);
     assert_eq!(model.routes.len(), 1);
     let task = list_tasks().unwrap().items.remove(0);

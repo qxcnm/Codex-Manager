@@ -1,9 +1,13 @@
+pub(crate) mod codex_capabilities;
+pub(crate) mod discovery_metadata;
 pub(crate) mod fast_policy;
 mod import;
 pub(crate) mod instructions;
+mod official_capabilities;
 mod official_pricing;
 mod ordering;
 mod pricing_sync;
+mod resolved_capabilities;
 mod seaorm;
 
 use codexmanager_core::rpc::types::{
@@ -32,7 +36,7 @@ pub(crate) struct ManagedModelListV2Result {
 
 pub(crate) fn list(include_hidden: bool) -> Result<ManagedModelListV2Result, String> {
     if crate::storage_helpers::seaorm_enabled() {
-        return seaorm::list(include_hidden);
+        return seaorm::list(include_hidden).map(resolved_capabilities::decorate_list);
     }
     let storage =
         crate::storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
@@ -44,27 +48,33 @@ pub(crate) fn list_with_storage(
     include_hidden: bool,
 ) -> Result<ManagedModelListV2Result, String> {
     if crate::storage_helpers::seaorm_enabled() {
-        return seaorm::list(include_hidden);
+        return seaorm::list(include_hidden).map(resolved_capabilities::decorate_list);
     }
-    Ok(ManagedModelListV2Result {
-        items: storage
-            .list_managed_models_v2(include_hidden)
-            .map_err(|err| format!("list managed models V2 failed: {err}"))?,
-        stats: storage
-            .model_catalog_v2_stats()
-            .map_err(|err| format!("read model catalog V2 stats failed: {err}"))?,
-    })
+    Ok(resolved_capabilities::decorate_list_with_storage(
+        ManagedModelListV2Result {
+            items: storage
+                .list_managed_models_v2(include_hidden)
+                .map_err(|err| format!("list managed models V2 failed: {err}"))?,
+            stats: storage
+                .model_catalog_v2_stats()
+                .map_err(|err| format!("read model catalog V2 stats failed: {err}"))?,
+        },
+        storage,
+    ))
 }
 
 pub(crate) fn get(slug: &str) -> Result<ManagedModelV2, String> {
     if crate::storage_helpers::seaorm_enabled() {
-        return seaorm::get(slug)?.ok_or_else(|| "model_not_found".into());
+        return seaorm::get(slug)?
+            .map(resolved_capabilities::decorate)
+            .ok_or_else(|| "model_not_found".into());
     }
     let storage =
         crate::storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     storage
         .get_managed_model_v2(slug)
         .map_err(|err| format!("read managed model V2 failed: {err}"))?
+        .map(|model| resolved_capabilities::decorate_with_storage(model, &storage))
         .ok_or_else(|| "model_not_found".to_string())
 }
 
@@ -75,7 +85,7 @@ pub(crate) fn upsert(input: ManagedModelV2Upsert) -> Result<ManagedModelV2, Stri
             .pop()
             .ok_or_else(|| "model_not_found".to_string())?;
         sync_active_gateway_catalog_for_current_backend_best_effort(changes);
-        return Ok(model);
+        return Ok(resolved_capabilities::decorate(model));
     }
     let storage =
         crate::storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
@@ -83,7 +93,9 @@ pub(crate) fn upsert(input: ManagedModelV2Upsert) -> Result<ManagedModelV2, Stri
         .upsert_managed_model_v2(&input)
         .map_err(|err| format!("save managed model V2 failed: {err}"))?;
     sync_active_gateway_catalog_after_model_changes_best_effort(&storage, changes);
-    Ok(model)
+    Ok(resolved_capabilities::decorate_with_storage(
+        model, &storage,
+    ))
 }
 
 pub(crate) fn update_state(input: ManagedModelStateV2Update) -> Result<ManagedModelV2, String> {
@@ -97,7 +109,7 @@ pub(crate) fn update_state(input: ManagedModelStateV2Update) -> Result<ManagedMo
         .pop()
         .ok_or_else(|| "model_not_found".to_string())?;
         sync_active_gateway_catalog_for_current_backend_best_effort(changes);
-        return Ok(model);
+        return Ok(resolved_capabilities::decorate(model));
     }
     let storage =
         crate::storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
@@ -105,7 +117,9 @@ pub(crate) fn update_state(input: ManagedModelStateV2Update) -> Result<ManagedMo
         .update_managed_model_state_v2(&input)
         .map_err(|err| format!("update managed model V2 state failed: {err}"))?;
     sync_active_gateway_catalog_after_model_changes_best_effort(&storage, changes);
-    Ok(model)
+    Ok(resolved_capabilities::decorate_with_storage(
+        model, &storage,
+    ))
 }
 
 pub(crate) fn batch_update_state(
@@ -115,7 +129,7 @@ pub(crate) fn batch_update_state(
     if crate::storage_helpers::seaorm_enabled() {
         let models = seaorm::update_states(input)?;
         sync_active_gateway_catalog_for_current_backend_best_effort(changes);
-        return Ok(models);
+        return Ok(resolved_capabilities::decorate_models(models, None));
     }
     let storage =
         crate::storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
@@ -123,7 +137,10 @@ pub(crate) fn batch_update_state(
         .update_managed_models_state_v2(&input)
         .map_err(|err| format!("batch update managed model V2 state failed: {err}"))?;
     sync_active_gateway_catalog_after_model_changes_best_effort(&storage, changes);
-    Ok(models)
+    Ok(resolved_capabilities::decorate_models(
+        models,
+        Some(&storage),
+    ))
 }
 
 pub(crate) fn delete(slug: &str) -> Result<(), String> {
@@ -407,7 +424,17 @@ fn service_tier_description(model_slug: &str, id: &str) -> &'static str {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn model_info(model: &ManagedModelV2) -> ModelInfo {
+    model_info_with_catalog(model, &official_capabilities::Catalog::default())
+}
+
+fn model_info_with_catalog(
+    model: &ManagedModelV2,
+    catalog: &official_capabilities::Catalog,
+) -> ModelInfo {
+    let (resolved_model, _) = resolved_capabilities::resolve_with_catalog(model, catalog);
+    let model = &resolved_model;
     let string_list = |keys: &[&str]| {
         capability(model, keys)
             .and_then(Value::as_array)
@@ -456,6 +483,20 @@ pub(crate) fn model_info(model: &ManagedModelV2) -> ModelInfo {
     let experimental_supported_tools =
         string_list(&["experimental_supported_tools", "experimentalSupportedTools"]);
     let available_in_plans = string_list(&["available_in_plans", "availableInPlans"]);
+    let context_window = model
+        .context_window
+        .filter(|value| *value > 0)
+        .or(model.max_context_window.filter(|value| *value > 0))
+        .or_else(|| {
+            supports_text_generation(model).then_some(codex_capabilities::DEFAULT_CONTEXT_WINDOW)
+        });
+    let mut input_modalities = string_list(&["input_modalities", "inputModalities"]);
+    if capability(model, &["input_modalities", "inputModalities"])
+        .and_then(Value::as_array)
+        .is_none()
+    {
+        input_modalities = ModelInfo::default().input_modalities;
+    }
     let extra = std::collections::BTreeMap::from([
         (
             "output_modalities".to_string(),
@@ -552,8 +593,9 @@ pub(crate) fn model_info(model: &ManagedModelV2) -> ModelInfo {
             "max_context_window".to_string(),
             serde_json::json!(model
                 .max_context_window
-                .or(model.context_window)
-                .unwrap_or(200_000)),
+                .filter(|value| *value > 0)
+                .or(context_window)
+                .unwrap_or(codex_capabilities::DEFAULT_CONTEXT_WINDOW)),
         ),
         (
             "comp_hash".to_string(),
@@ -666,7 +708,7 @@ pub(crate) fn model_info(model: &ManagedModelV2) -> ModelInfo {
             ],
         )
         .and_then(Value::as_bool),
-        context_window: model.context_window,
+        context_window,
         auto_compact_token_limit: capability(
             model,
             &["auto_compact_token_limit", "autoCompactTokenLimit"],
@@ -682,7 +724,7 @@ pub(crate) fn model_info(model: &ManagedModelV2) -> ModelInfo {
         .and_then(Value::as_i64)
         .or(Some(95)),
         experimental_supported_tools,
-        input_modalities: string_list(&["input_modalities", "inputModalities"]),
+        input_modalities,
         minimal_client_version: capability(
             model,
             &["minimal_client_version", "minimalClientVersion"],
@@ -699,13 +741,9 @@ pub(crate) fn model_info(model: &ManagedModelV2) -> ModelInfo {
 pub(crate) fn models_response_with_storage(
     storage: &codexmanager_core::storage::Storage,
 ) -> Result<ModelsResponse, String> {
+    let models = api_models(storage).map_err(|err| format!("list API models V2 failed: {err}"))?;
     Ok(ModelsResponse {
-        models: api_models(storage)
-            .map_err(|err| format!("list API models V2 failed: {err}"))?
-            .iter()
-            .enumerate()
-            .map(|(position, model)| ordered_model_info(position, model))
-            .collect(),
+        models: ordered_model_infos_with_storage(storage, &models),
         extra: Default::default(),
     })
 }
@@ -713,22 +751,31 @@ pub(crate) fn models_response_with_storage(
 pub(crate) fn text_generation_models_response_with_storage(
     storage: &codexmanager_core::storage::Storage,
 ) -> Result<ModelsResponse, String> {
+    let models = api_models(storage)
+        .map_err(|err| format!("list API models V2 failed: {err}"))?
+        .into_iter()
+        .filter(|model| supports_text_generation(model))
+        .collect::<Vec<_>>();
     Ok(ModelsResponse {
-        models: api_models(storage)
-            .map_err(|err| format!("list API models V2 failed: {err}"))?
-            .iter()
-            .filter(|model| supports_text_generation(model))
-            .enumerate()
-            .map(|(position, model)| ordered_model_info(position, model))
-            .collect(),
+        models: ordered_model_infos_with_storage(storage, &models),
         extra: Default::default(),
     })
 }
 
-pub(crate) fn ordered_model_info(position: usize, model: &ManagedModelV2) -> ModelInfo {
-    let mut info = model_info(model);
-    info.priority = position as i64;
-    info
+pub(crate) fn ordered_model_infos_with_storage(
+    storage: &codexmanager_core::storage::Storage,
+    models: &[ManagedModelV2],
+) -> Vec<ModelInfo> {
+    let catalog = official_capabilities::Catalog::load(Some(storage));
+    models
+        .iter()
+        .enumerate()
+        .map(|(position, model)| {
+            let mut info = model_info_with_catalog(model, &catalog);
+            info.priority = position as i64;
+            info
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -996,9 +1043,117 @@ mod tests {
         let info = model_info(&model);
         assert_eq!(info.base_instructions.as_deref(), Some(""));
         assert_eq!(info.effective_context_window_percent, Some(95));
-        assert_eq!(info.extra["max_context_window"], 200_000);
+        assert_eq!(info.context_window, Some(272_000));
+        assert_eq!(info.extra["max_context_window"], 272_000);
+        assert_eq!(info.input_modalities, ["text", "image"]);
         assert_eq!(info.extra["comp_hash"], Value::Null);
         assert_eq!(info.extra["use_responses_lite"], false);
+    }
+
+    #[test]
+    fn explicit_input_modalities_are_not_replaced_by_codex_defaults() {
+        for modalities in [serde_json::json!([]), serde_json::json!(["text"])] {
+            let model = ManagedModelV2 {
+                slug: "explicit-input-model".to_string(),
+                capabilities: serde_json::json!({ "input_modalities": modalities }),
+                ..Default::default()
+            };
+            assert_eq!(
+                serde_json::json!(model_info(&model).input_modalities),
+                modalities
+            );
+        }
+    }
+
+    #[test]
+    fn manual_text_only_without_metadata_or_context_is_preserved_in_list_and_export() {
+        use codexmanager_core::storage::{ModelPriceV2, ModelRouteV2};
+
+        let _guard = crate::test_env_guard();
+        let storage = Storage::open_in_memory().unwrap();
+        storage.init().unwrap();
+        let raw = ManagedModelV2 {
+            slug: "manual-text-only".into(),
+            display_name: "Manual Text Only".into(),
+            origin: "custom".into(),
+            enabled: true,
+            supported_in_api: true,
+            visibility: "list".into(),
+            instructions_mode: "passthrough".into(),
+            price: ModelPriceV2 {
+                price_status: "missing".into(),
+                ..Default::default()
+            },
+            routes: vec![ModelRouteV2 {
+                source_kind: "account_pool".into(),
+                source_id: "default".into(),
+                upstream_model: "manual-text-only".into(),
+                enabled: true,
+                weight: 1,
+                ..Default::default()
+            }],
+            capabilities: serde_json::json!({
+                "supports_text_generation": true,
+                "input_modalities": ["text"],
+                "output_modalities": ["text"]
+            }),
+            ..Default::default()
+        };
+        storage
+            .upsert_managed_model_v2(&ManagedModelV2Upsert {
+                model: raw.clone(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let listed = list_with_storage(&storage, false)
+            .unwrap()
+            .items
+            .into_iter()
+            .find(|model| model.slug == raw.slug)
+            .unwrap();
+        assert!(supports_text_generation(&listed));
+        assert_eq!(listed.capabilities, raw.capabilities);
+        assert!(listed.context_window.is_none());
+        assert!(listed.max_context_window.is_none());
+        assert_eq!(
+            listed.resolved_capabilities.unwrap().input_modalities,
+            ["text"]
+        );
+
+        for catalog in [
+            models_response_with_storage(&storage).unwrap(),
+            text_generation_models_response_with_storage(&storage).unwrap(),
+        ] {
+            let model = catalog
+                .models
+                .iter()
+                .find(|model| model.slug == raw.slug)
+                .unwrap();
+            assert_eq!(model.input_modalities, ["text"]);
+        }
+
+        let (content, _) = crate::gateway::run_upstream_io(
+            crate::codex_model_catalog::managed_model_catalog_content_async(&storage),
+        )
+        .unwrap()
+        .unwrap();
+        let catalog: Value = serde_json::from_str(&content).unwrap();
+        let exported = catalog["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["slug"] == raw.slug)
+            .unwrap();
+        assert_eq!(exported["input_modalities"], serde_json::json!(["text"]));
+        assert_eq!(
+            storage
+                .get_managed_model_v2(&raw.slug)
+                .unwrap()
+                .unwrap()
+                .capabilities,
+            raw.capabilities
+        );
     }
 
     #[test]

@@ -27,6 +27,8 @@ pub(crate) struct AccountFetchedModel {
     pub(crate) display_name: Option<String>,
     pub(crate) existing_model_slug: Option<String>,
     pub(crate) already_linked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) metadata: Option<Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -76,7 +78,17 @@ fn model_display_name_from_value(value: &Value) -> Option<String> {
         .filter(|value: &String| !value.is_empty())
 }
 
+#[cfg(test)]
 fn parse_account_models(body: &Value) -> Vec<(String, Option<String>)> {
+    parse_account_models_with_metadata(body)
+        .into_iter()
+        .map(|(slug, name, _)| (slug, name))
+        .collect()
+}
+
+fn parse_account_models_with_metadata(
+    body: &Value,
+) -> Vec<(String, Option<String>, Option<Value>)> {
     let candidates = body
         .get("models")
         .and_then(Value::as_array)
@@ -93,7 +105,11 @@ fn parse_account_models(body: &Value) -> Vec<(String, Option<String>)> {
         if !seen.insert(upstream_model.to_ascii_lowercase()) {
             continue;
         }
-        parsed.push((upstream_model, model_display_name_from_value(&value)));
+        parsed.push((
+            upstream_model,
+            model_display_name_from_value(&value),
+            crate::models_v2::discovery_metadata::sanitize_metadata(&value),
+        ));
         if parsed.len() >= MAX_FETCHED_MODELS {
             break;
         }
@@ -128,6 +144,7 @@ fn account_fetched_model(
         display_name,
         existing_model_slug: model.map(|model| model.slug.clone()),
         already_linked,
+        metadata: None,
     }
 }
 
@@ -273,14 +290,16 @@ pub(crate) async fn fetch_account_models_async(
         .await
         .map_err(|_| "account models request failed".to_string())?;
     let body = read_models_response(response).await?;
-    let parsed = parse_account_models(&body);
+    let parsed = parse_account_models_with_metadata(&body);
     let existing = storage
         .list_managed_models_v2(true)
         .map_err(|err| format!("read model catalog V2 failed: {err}"))?;
     let items = parsed
         .into_iter()
-        .map(|(upstream_model, display_name)| {
-            account_fetched_model(existing.as_slice(), upstream_model, display_name)
+        .map(|(upstream_model, display_name, metadata)| {
+            let mut item = account_fetched_model(existing.as_slice(), upstream_model, display_name);
+            item.metadata = metadata;
+            item
         })
         .collect();
 
@@ -296,6 +315,20 @@ pub(crate) fn associate_account_models(
     upstream_models: Vec<String>,
     display_names: BTreeMap<String, String>,
 ) -> Result<AggregateApiAssociateModelsResult, String> {
+    associate_account_models_with_metadata(
+        account_id,
+        upstream_models,
+        display_names,
+        BTreeMap::new(),
+    )
+}
+
+pub(crate) fn associate_account_models_with_metadata(
+    account_id: &str,
+    upstream_models: Vec<String>,
+    display_names: BTreeMap<String, String>,
+    model_metadata: BTreeMap<String, Value>,
+) -> Result<AggregateApiAssociateModelsResult, String> {
     let account_id = account_id.trim();
     if account_id.is_empty() {
         return Err("account id required".to_string());
@@ -309,13 +342,33 @@ pub(crate) fn associate_account_models(
     {
         return Err("account not found".to_string());
     }
-    associate_account_models_with_storage(&storage, upstream_models, display_names)
+    associate_account_models_with_storage_and_metadata(
+        &storage,
+        upstream_models,
+        display_names,
+        model_metadata,
+    )
 }
 
+#[cfg(test)]
 fn associate_account_models_with_storage(
     storage: &Storage,
     upstream_models: Vec<String>,
     display_names: BTreeMap<String, String>,
+) -> Result<AggregateApiAssociateModelsResult, String> {
+    associate_account_models_with_storage_and_metadata(
+        storage,
+        upstream_models,
+        display_names,
+        BTreeMap::new(),
+    )
+}
+
+fn associate_account_models_with_storage_and_metadata(
+    storage: &Storage,
+    upstream_models: Vec<String>,
+    display_names: BTreeMap<String, String>,
+    model_metadata: BTreeMap<String, Value>,
 ) -> Result<AggregateApiAssociateModelsResult, String> {
     let storage = &crate::account::remote_storage::AccountStorage::new(storage);
     let mut requested = Vec::new();
@@ -390,7 +443,7 @@ fn associate_account_models_with_storage(
             })
             .and_then(|(_, value)| model_display_name_from_value(&json!({ "name": value })))
             .unwrap_or_else(|| catalog_model.clone());
-        let model = ManagedModelV2 {
+        let mut model = ManagedModelV2 {
             slug: catalog_model.clone(),
             display_name,
             provider: Some("OpenAI".to_string()),
@@ -401,7 +454,6 @@ fn associate_account_models_with_storage(
             sort_order: next_sort + create_candidates.len() as i64,
             capabilities: json!({
                 "supports_text_generation": true,
-                "input_modalities": ["text"],
                 "output_modalities": ["text"]
             }),
             instructions_mode: "passthrough".to_string(),
@@ -412,6 +464,13 @@ fn associate_account_models_with_storage(
             },
             ..Default::default()
         };
+        let metadata = model_metadata
+            .iter()
+            .find(|(key, _)| {
+                key.eq_ignore_ascii_case(upstream_model) || key.eq_ignore_ascii_case(catalog_model)
+            })
+            .map(|(_, value)| value);
+        crate::models_v2::discovery_metadata::apply_metadata(&mut model, metadata);
         create_candidates.push(ManagedModelV2Upsert {
             model,
             ..Default::default()
@@ -484,6 +543,78 @@ mod tests {
             ("gpt-small".to_string(), Some("GPT Small".to_string()))
         );
         assert_eq!(parsed[2], ("gpt-string".to_string(), None));
+    }
+
+    #[test]
+    fn account_discovery_preserves_real_metadata_through_association_and_keeps_existing_edits() {
+        let storage = Storage::open_in_memory().unwrap();
+        storage.init().unwrap();
+        let parsed = parse_account_models_with_metadata(&json!({"models":[{
+            "slug":"future-account-multimodal", "display_name":"Future Account",
+            "context_window":272000,"max_context_window":872000,
+            "input_modalities":["text","image"],"supports_parallel_tool_calls":false,
+            "supported_reasoning_levels":[{"effort":"high"}],
+            "base_instructions":"upstream prompt must not be imported"
+        }]}));
+        let (slug, name, metadata) = parsed.into_iter().next().unwrap();
+        let metadata = metadata.unwrap();
+        assert!(metadata.get("base_instructions").is_none());
+        let names = BTreeMap::from([(slug.clone(), name.unwrap())]);
+        let metadata = BTreeMap::from([(slug.clone(), metadata)]);
+        associate_account_models_with_storage_and_metadata(
+            &storage,
+            vec![slug.clone()],
+            names.clone(),
+            metadata.clone(),
+        )
+        .unwrap();
+        let mut model = storage.get_managed_model_v2(&slug).unwrap().unwrap();
+        assert_eq!(model.context_window, Some(272000));
+        assert_eq!(model.max_context_window, Some(872000));
+        assert_eq!(
+            model.capabilities["input_modalities"],
+            json!(["text", "image"])
+        );
+        assert_eq!(model.capabilities["supports_parallel_tool_calls"], false);
+        assert_eq!(model.capabilities["reasoning_efforts"], json!(["high"]));
+        assert_eq!(model.capabilities["discovery_metadata_version"], 1);
+        model.context_window = Some(123456);
+        model.capabilities["input_modalities"] = json!(["text"]);
+        storage
+            .upsert_managed_model_v2(&ManagedModelV2Upsert {
+                model: model.clone(),
+                ..Default::default()
+            })
+            .unwrap();
+        associate_account_models_with_storage_and_metadata(
+            &storage,
+            vec![slug.clone()],
+            names,
+            metadata,
+        )
+        .unwrap();
+        let saved = storage.get_managed_model_v2(&slug).unwrap().unwrap();
+        assert_eq!(saved.context_window, model.context_window);
+        assert_eq!(saved.capabilities, model.capabilities);
+        assert_eq!(saved.routes.len(), 1);
+    }
+
+    #[test]
+    fn account_discovery_without_metadata_does_not_claim_text_only_input() {
+        let storage = Storage::open_in_memory().unwrap();
+        storage.init().unwrap();
+        associate_account_models_with_storage(
+            &storage,
+            vec!["future-account-unknown".into()],
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let saved = storage
+            .get_managed_model_v2("future-account-unknown")
+            .unwrap()
+            .unwrap();
+        assert!(saved.context_window.is_none());
+        assert!(saved.capabilities.get("input_modalities").is_none());
     }
 
     #[test]

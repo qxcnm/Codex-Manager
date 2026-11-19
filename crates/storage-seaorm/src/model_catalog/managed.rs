@@ -170,6 +170,7 @@ impl ManagedModelsRepository {
             .map(|r| r.group_id)
             .collect();
         Ok(ManagedModelV2 {
+            resolved_capabilities: None,
             id: record.id,
             slug: record.slug,
             display_name: record.display_name,

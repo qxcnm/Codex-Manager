@@ -131,7 +131,7 @@ fn parse_codex_model(
         .or_else(|| object.get("inputModalities"))
         .and_then(Value::as_array)
         .cloned()
-        .unwrap_or_default();
+        .unwrap_or_else(|| vec![Value::from("text"), Value::from("image")]);
     let service_tiers = object
         .get("service_tiers")
         .or_else(|| object.get("serviceTiers"))
@@ -329,5 +329,26 @@ mod tests {
         assert!(models[0].instructions_text.is_none());
         assert!(ignored.contains("base_instructions"));
         assert!(ignored.contains("model_messages"));
+        assert_eq!(
+            models[0].capabilities["inputModalities"],
+            serde_json::json!(["text", "image"])
+        );
+        assert_eq!(
+            super::super::model_info(&models[0]).input_modalities,
+            ["text", "image"]
+        );
+    }
+
+    #[test]
+    fn codex_import_preserves_explicit_input_restrictions() {
+        let (models, _, errors) = parse_models(r#"{"models":[{"slug":"text-only","input_modalities":["text"]},{"slug":"no-input","input_modalities":[]}]}"#).unwrap();
+        assert!(errors.is_empty());
+        assert_eq!(
+            super::super::model_info(&models[0]).input_modalities,
+            ["text"]
+        );
+        assert!(super::super::model_info(&models[1])
+            .input_modalities
+            .is_empty());
     }
 }
