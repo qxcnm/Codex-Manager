@@ -14,7 +14,12 @@ use super::super::conversation_binding::RouteConversationSource;
 use super::{LocalValidationError, LocalValidationResult};
 
 const ENV_GATEWAY_BLOCKED_PATHS: &str = "CODEXMANAGER_GATEWAY_BLOCKED_PATHS";
-const DEFAULT_GATEWAY_BLOCKED_PATHS: &[&str] = &["/v1/props"];
+const DEFAULT_GATEWAY_BLOCKED_PATHS: &[&str] = &["/v1/props", "/v1/analytics/*"];
+
+// Codex CLI 的用量遥测（/v1/analytics/codex/turn-costs 等）实际位于
+// api.chatgpt.com，而非 codex 后端（chatgpt.com/backend-api/codex）。
+// 透传过去只会得到上游 404，还会触发按账号轮换的重试风暴。
+// 该遥测失败对 CLI 是非致命的，本地直接屏蔽即可。
 
 /// 函数 `resolve_effective_request_overrides`
 ///
