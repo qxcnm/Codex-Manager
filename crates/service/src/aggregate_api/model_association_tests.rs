@@ -184,3 +184,73 @@ fn discovery_normalizes_gemini_names_and_validates_entire_batch() {
     )
     .is_err());
 }
+
+#[test]
+fn discovery_metadata_round_trips_to_new_models_and_does_not_overwrite_existing_models() {
+    let storage = Storage::open_in_memory().unwrap();
+    storage.init().unwrap();
+    let parsed = super::super::parse_fetched_models_with_metadata(
+        &json!({"data":[{
+            "id":"future-aggregate-multimodal", "name":"Future Aggregate",
+            "context_window":200000,"max_context_window":400000,
+            "input_modalities":["text","image"],"supports_parallel_tool_calls":false,
+            "api_key":"never imported", "base_instructions":"never imported"
+        }]}),
+        false,
+    );
+    let (slug, _, metadata) = parsed.into_iter().next().unwrap();
+    let metadata = BTreeMap::from([(slug.clone(), metadata.unwrap())]);
+    let plan = prepare_with_metadata(&api(), &[], vec![slug.clone()], &BTreeMap::new(), &metadata)
+        .unwrap();
+    storage
+        .upsert_missing_managed_models_and_ensure_routes_v2(&plan.candidates, &plan.routes)
+        .unwrap();
+    let mut saved = storage.get_managed_model_v2(&slug).unwrap().unwrap();
+    assert_eq!(saved.context_window, Some(200000));
+    assert_eq!(saved.max_context_window, Some(400000));
+    assert_eq!(
+        saved.capabilities["input_modalities"],
+        json!(["text", "image"])
+    );
+    assert_eq!(saved.capabilities["supports_parallel_tool_calls"], false);
+    assert_eq!(saved.capabilities["discovery_metadata_version"], 1);
+    assert!(saved.capabilities.get("api_key").is_none());
+    assert!(saved.capabilities.get("base_instructions").is_none());
+    saved.context_window = Some(123456);
+    saved.capabilities["input_modalities"] = json!(["text"]);
+    save(&storage, saved.clone());
+    let snapshot = storage.list_managed_models_v2(true).unwrap();
+    let plan = prepare_with_metadata(
+        &api(),
+        &snapshot,
+        vec![slug.clone()],
+        &BTreeMap::new(),
+        &metadata,
+    )
+    .unwrap();
+    assert!(plan.candidates.is_empty());
+    storage
+        .upsert_missing_managed_models_and_ensure_routes_v2(&plan.candidates, &plan.routes)
+        .unwrap();
+    let current = storage.get_managed_model_v2(&slug).unwrap().unwrap();
+    assert_eq!(current.context_window, saved.context_window);
+    assert_eq!(current.capabilities, saved.capabilities);
+    assert_eq!(current.routes.len(), 1);
+}
+
+#[test]
+fn discovery_without_metadata_keeps_input_capability_unknown() {
+    let plan = prepare(
+        &api(),
+        &[],
+        vec!["unknown-aggregate-model".into()],
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert!(plan.candidates[0].model.context_window.is_none());
+    assert!(plan.candidates[0]
+        .model
+        .capabilities
+        .get("input_modalities")
+        .is_none());
+}

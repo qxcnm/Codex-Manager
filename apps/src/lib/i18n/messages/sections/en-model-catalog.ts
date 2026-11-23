@@ -21,6 +21,24 @@ export const EN_MODEL_CATALOG_MESSAGES: MessageCatalog = {
   支持的推理强度: "Supported reasoning efforts",
   默认推理强度: "Default reasoning effort",
   不指定: "Not specified",
+  "自动（{effort}）": "Automatic ({effort})",
+  "自动（未指定）": "Automatic (not specified)",
+  官方缓存: "Official cache",
+  官方内置目录: "Official bundled catalog",
+  "Codex 默认值": "Codex defaults",
+  已保存配置: "Saved configuration",
+  上下文来源: "Context source",
+  能力识别来源: "Capability source",
+  输入类型: "Input modalities",
+  未指定: "Not specified",
+  推理来源: "Reasoning source",
+  "自动识别的值不会因保存其他字段而写成手动配置。":
+    "Saving other fields does not turn automatically resolved values into manual overrides.",
+  "未识别到推理档位，可手动配置。":
+    "No reasoning efforts were identified. You can configure them manually.",
+  填入常用推理档位: "Fill common reasoning efforts",
+  "手动模板：low、medium、high，默认 medium；不代表官方或上游支持。":
+    "Manual template: low, medium, high; default medium. This is not an official or upstream capability declaration.",
   未在支持档位中: "not supported",
   默认推理强度必须属于支持的档位:
     "Default reasoning effort must be one of the supported efforts",
@@ -100,6 +118,10 @@ export const EN_MODEL_CATALOG_MESSAGES: MessageCatalog = {
     "A model with missing prices cannot remain in a billing permission group",
   上下文窗口: "Context window",
   最大上下文窗口: "Maximum context window",
+  "上下文窗口（tokens）": "Context window (tokens)",
+  "最大上下文窗口（tokens）": "Maximum context window (tokens)",
+  "单位为 tokens，例如 272k 请填写 272000；不会自动换算。":
+    "Enter the token count: for 272k, enter 272000. Values are not converted automatically.",
   正: "positive ",
   保存模型: "Save model",
   保存中: "Saving",

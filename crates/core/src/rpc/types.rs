@@ -1046,6 +1046,8 @@ pub struct AggregateApiFetchedModel {
     pub display_name: Option<String>,
     pub existing_model_slug: Option<String>,
     pub already_linked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1064,6 +1066,8 @@ pub struct AggregateApiAssociateModelsParams {
     pub upstream_models: Vec<String>,
     #[serde(default)]
     pub display_names: BTreeMap<String, String>,
+    #[serde(default)]
+    pub model_metadata: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -444,6 +444,7 @@ export const accountClient = {
     upstreamModels: string[],
     displayNames?: Record<string, string>,
     addr?: string | null,
+    modelMetadata?: Record<string, Record<string, unknown>>,
   ): Promise<AggregateApiAssociateModelsResult> {
     const result = await invoke<unknown>(
       "service_account_associate_models",
@@ -451,6 +452,7 @@ export const accountClient = {
         accountId,
         upstreamModels,
         displayNames: displayNames || null,
+        modelMetadata: modelMetadata || {},
         ...(addr === undefined ? {} : { addr: addr || null }),
       }),
     );
@@ -1024,6 +1026,7 @@ export const accountClient = {
     upstreamModels: string[],
     displayNames?: Record<string, string>,
     addr?: string | null,
+    modelMetadata?: Record<string, Record<string, unknown>>,
   ): Promise<AggregateApiAssociateModelsResult> {
     const result = await invoke<unknown>(
       "service_aggregate_api_associate_models",
@@ -1031,6 +1034,7 @@ export const accountClient = {
         apiId,
         upstreamModels,
         displayNames: displayNames || null,
+        modelMetadata: modelMetadata || {},
         ...(addr === undefined ? {} : { addr: addr || null }),
       }),
     );

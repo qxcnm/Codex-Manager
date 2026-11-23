@@ -94,7 +94,7 @@ test("模型目录不再暴露 Codex models_cache 覆盖入口", async () => {
   assert.doesNotMatch(tauriService, /service_export_codex_models_cache|models_cache\.json/);
   assert.doesNotMatch(tauriRegistry, /service_export_codex_models_cache/);
   assert.match(readme, /不提供写入或下载 `~\/\.codex\/models_cache\.json`/);
-  assert.match(page, /当前 Codex 模型来源/);
+  assert.match(page, /Codex 配置的模型来源/);
   assert.match(page, /本地目录是否影响当前 Codex/);
   assert.match(page, /<Card className="glass-card">/);
   assert.match(page, /应用模型/);

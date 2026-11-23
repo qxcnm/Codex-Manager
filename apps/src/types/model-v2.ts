@@ -52,6 +52,19 @@ export interface ManagedModelBatchRouteResultV2 {
   failed: Array<{ slug: string; reason: string }>;
 }
 
+export interface ModelResolvedCapabilitiesV2 {
+  source: "stored" | "official_cache" | "official_builtin" | "codex_default";
+  matchedSlug: string | null;
+  contextWindow: number | null;
+  maxContextWindow: number | null;
+  defaultReasoningEffort: string | null;
+  reasoningEfforts: string[];
+  inputModalities: string[];
+  reasoningSource: string;
+  contextSource: string;
+  inputSource: string;
+}
+
 export interface ManagedModelV2 {
   id: string;
   slug: string;
@@ -70,6 +83,8 @@ export interface ManagedModelV2 {
   maxContextWindow: number | null;
   defaultReasoningEffort: string | null;
   capabilities: Record<string, unknown>;
+  /** Read-only runtime resolution; never copied into saved overrides. */
+  resolvedCapabilities?: ModelResolvedCapabilitiesV2;
   instructionsMode: ModelInstructionsModeV2;
   instructionsText: string | null;
   fastPolicy: ModelFastPolicyV2;

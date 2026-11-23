@@ -1,9 +1,9 @@
 use codexmanager_core::rpc::types::{AggregateApiListResult, JsonRpcRequest, JsonRpcResponse};
 
 use crate::{
-    associate_aggregate_api_models, create_aggregate_api, delete_aggregate_api,
-    fetch_aggregate_api_models, list_aggregate_apis, read_aggregate_api_secret,
-    refresh_aggregate_api_balance, test_aggregate_api_connection, update_aggregate_api, RpcActor,
+    create_aggregate_api, delete_aggregate_api, fetch_aggregate_api_models, list_aggregate_apis,
+    read_aggregate_api_secret, refresh_aggregate_api_balance, test_aggregate_api_connection,
+    update_aggregate_api, RpcActor,
 };
 
 /// 函数 `api_id_param`
@@ -194,11 +194,21 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                 .cloned()
                 .and_then(|value| serde_json::from_value(value).ok())
                 .unwrap_or_default();
-            super::value_or_error(associate_aggregate_api_models(
-                &api_id,
-                upstream_models,
-                display_names,
-            ))
+            let model_metadata = req
+                .params
+                .as_ref()
+                .and_then(|params| params.get("modelMetadata"))
+                .cloned()
+                .and_then(|value| serde_json::from_value(value).ok())
+                .unwrap_or_default();
+            super::value_or_error(
+                crate::aggregate_api::associate_aggregate_api_models_with_metadata(
+                    &api_id,
+                    upstream_models,
+                    display_names,
+                    model_metadata,
+                ),
+            )
         }
         _ => return None,
     };

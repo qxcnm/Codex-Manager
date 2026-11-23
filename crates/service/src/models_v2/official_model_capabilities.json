@@ -1,0 +1,528 @@
+{
+  "codex_version": "0.169.0-alpha.11.1",
+  "source": "https://github.com/openai/codex/blob/rust-v0.169.0-alpha.11.1/codex-rs/models-manager/models.json",
+  "source_sha256": "1384625c0b6b3e67d3c60da29becea2b017f2c283fc1e2d05b8edafb4698eb10",
+  "models": [
+    {
+      "slug": "gpt-6-astra",
+      "metadata": {
+        "context_window": 272000,
+        "max_context_window": 872000,
+        "supports_parallel_tool_calls": true,
+        "supports_reasoning_summaries": true,
+        "supports_verbosity": true,
+        "supports_image_detail_original": true,
+        "supports_search_tool": true,
+        "prefer_websockets": true,
+        "default_reasoning_level": "low",
+        "shell_type": "shell_command",
+        "default_reasoning_summary": "none",
+        "default_verbosity": "low",
+        "apply_patch_tool_type": "freeform",
+        "web_search_tool_type": "text_and_image",
+        "multi_agent_reasoning_effort": "xhigh",
+        "tool_mode": "code_mode_only",
+        "multi_agent_version": "v2",
+        "comp_hash": "3000",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "service_tiers": [
+          "priority"
+        ],
+        "additional_speed_tiers": [
+          "fast"
+        ],
+        "experimental_supported_tools": [
+          "send_user_message_async",
+          "clock"
+        ],
+        "truncation_mode": "tokens",
+        "truncation_limit": 10000
+      }
+    },
+    {
+      "slug": "gpt-6.1-sol",
+      "metadata": {
+        "context_window": 272000,
+        "max_context_window": 872000,
+        "supports_parallel_tool_calls": true,
+        "supports_reasoning_summaries": true,
+        "supports_verbosity": true,
+        "supports_image_detail_original": true,
+        "supports_search_tool": true,
+        "prefer_websockets": true,
+        "default_reasoning_level": "low",
+        "shell_type": "shell_command",
+        "default_reasoning_summary": "none",
+        "default_verbosity": "low",
+        "apply_patch_tool_type": "freeform",
+        "web_search_tool_type": "text_and_image",
+        "multi_agent_reasoning_effort": "xhigh",
+        "tool_mode": "code_mode_only",
+        "multi_agent_version": "v2",
+        "comp_hash": "3000",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "service_tiers": [
+          "priority"
+        ],
+        "additional_speed_tiers": [
+          "fast"
+        ],
+        "experimental_supported_tools": [
+          "send_user_message_async",
+          "clock"
+        ],
+        "truncation_mode": "tokens",
+        "truncation_limit": 10000
+      }
+    },
+    {
+      "slug": "gpt-6.1-terra",
+      "metadata": {
+        "context_window": 500000,
+        "max_context_window": 872000,
+        "supports_parallel_tool_calls": true,
+        "supports_reasoning_summaries": true,
+        "supports_verbosity": true,
+        "supports_image_detail_original": true,
+        "supports_search_tool": true,
+        "prefer_websockets": true,
+        "default_reasoning_level": "low",
+        "shell_type": "shell_command",
+        "default_reasoning_summary": "none",
+        "default_verbosity": "low",
+        "apply_patch_tool_type": "freeform",
+        "web_search_tool_type": "text_and_image",
+        "multi_agent_reasoning_effort": "xhigh",
+        "tool_mode": "code_mode_only",
+        "multi_agent_version": "v2",
+        "comp_hash": "3000",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "service_tiers": [
+          "priority"
+        ],
+        "additional_speed_tiers": [
+          "fast"
+        ],
+        "experimental_supported_tools": [
+          "send_user_message_async",
+          "clock"
+        ],
+        "truncation_mode": "tokens",
+        "truncation_limit": 10000
+      }
+    },
+    {
+      "slug": "gpt-6-sol",
+      "metadata": {
+        "context_window": 272000,
+        "max_context_window": 872000,
+        "supports_parallel_tool_calls": true,
+        "supports_reasoning_summaries": true,
+        "supports_verbosity": true,
+        "supports_image_detail_original": true,
+        "supports_search_tool": true,
+        "prefer_websockets": true,
+        "default_reasoning_level": "medium",
+        "shell_type": "shell_command",
+        "default_reasoning_summary": "none",
+        "default_verbosity": "low",
+        "apply_patch_tool_type": "freeform",
+        "web_search_tool_type": "text_and_image",
+        "tool_mode": "code_mode_only",
+        "multi_agent_version": "v2",
+        "comp_hash": "3000",
+        "default_service_tier": "priority",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "service_tiers": [
+          "priority"
+        ],
+        "additional_speed_tiers": [
+          "fast"
+        ],
+        "experimental_supported_tools": [
+          "send_user_message_async",
+          "clock"
+        ],
+        "truncation_mode": "tokens",
+        "truncation_limit": 10000
+      }
+    },
+    {
+      "slug": "gpt-6-luna",
+      "metadata": {
+        "context_window": 272000,
+        "max_context_window": 872000,
+        "supports_parallel_tool_calls": true,
+        "supports_reasoning_summaries": true,
+        "supports_verbosity": true,
+        "supports_image_detail_original": true,
+        "supports_search_tool": true,
+        "prefer_websockets": true,
+        "default_reasoning_level": "medium",
+        "shell_type": "shell_command",
+        "default_reasoning_summary": "none",
+        "default_verbosity": "low",
+        "apply_patch_tool_type": "freeform",
+        "web_search_tool_type": "text_and_image",
+        "tool_mode": "code_mode_only",
+        "multi_agent_version": "v2",
+        "comp_hash": "3000",
+        "default_service_tier": "priority",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "service_tiers": [
+          "priority"
+        ],
+        "additional_speed_tiers": [
+          "fast"
+        ],
+        "experimental_supported_tools": [
+          "send_user_message_async",
+          "clock"
+        ],
+        "truncation_mode": "tokens",
+        "truncation_limit": 10000
+      }
+    },
+    {
+      "slug": "gpt-5.6-sol",
+      "metadata": {
+        "context_window": 272000,
+        "max_context_window": 872000,
+        "supports_parallel_tool_calls": true,
+        "supports_reasoning_summaries": true,
+        "supports_verbosity": true,
+        "supports_image_detail_original": true,
+        "supports_search_tool": true,
+        "prefer_websockets": true,
+        "default_reasoning_level": "low",
+        "shell_type": "shell_command",
+        "default_reasoning_summary": "none",
+        "default_verbosity": "low",
+        "apply_patch_tool_type": "freeform",
+        "web_search_tool_type": "text_and_image",
+        "tool_mode": "code_mode_only",
+        "multi_agent_version": "v2",
+        "comp_hash": "3000",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "service_tiers": [
+          "priority"
+        ],
+        "additional_speed_tiers": [
+          "fast"
+        ],
+        "experimental_supported_tools": [],
+        "truncation_mode": "tokens",
+        "truncation_limit": 10000
+      }
+    },
+    {
+      "slug": "gpt-5.6-terra",
+      "metadata": {
+        "context_window": 272000,
+        "max_context_window": 872000,
+        "supports_parallel_tool_calls": true,
+        "supports_reasoning_summaries": true,
+        "supports_verbosity": true,
+        "supports_image_detail_original": true,
+        "supports_search_tool": true,
+        "prefer_websockets": true,
+        "default_reasoning_level": "medium",
+        "shell_type": "shell_command",
+        "default_reasoning_summary": "none",
+        "default_verbosity": "low",
+        "apply_patch_tool_type": "freeform",
+        "web_search_tool_type": "text_and_image",
+        "tool_mode": "code_mode_only",
+        "multi_agent_version": "v2",
+        "comp_hash": "3000",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "service_tiers": [
+          "priority"
+        ],
+        "additional_speed_tiers": [
+          "fast"
+        ],
+        "experimental_supported_tools": [],
+        "truncation_mode": "tokens",
+        "truncation_limit": 10000
+      }
+    },
+    {
+      "slug": "gpt-5.6-luna",
+      "metadata": {
+        "context_window": 272000,
+        "max_context_window": 872000,
+        "supports_parallel_tool_calls": true,
+        "supports_reasoning_summaries": true,
+        "supports_verbosity": true,
+        "supports_image_detail_original": true,
+        "supports_search_tool": true,
+        "prefer_websockets": true,
+        "default_reasoning_level": "medium",
+        "shell_type": "shell_command",
+        "default_reasoning_summary": "none",
+        "default_verbosity": "low",
+        "apply_patch_tool_type": "freeform",
+        "web_search_tool_type": "text_and_image",
+        "tool_mode": "code_mode_only",
+        "multi_agent_version": "v1",
+        "comp_hash": "3000",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "service_tiers": [
+          "priority"
+        ],
+        "additional_speed_tiers": [
+          "fast"
+        ],
+        "experimental_supported_tools": [],
+        "truncation_mode": "tokens",
+        "truncation_limit": 10000
+      }
+    },
+    {
+      "slug": "gpt-daybreak-blue-latest",
+      "metadata": {
+        "context_window": 272000,
+        "max_context_window": 872000,
+        "supports_parallel_tool_calls": true,
+        "supports_reasoning_summaries": true,
+        "supports_verbosity": true,
+        "supports_image_detail_original": true,
+        "supports_search_tool": true,
+        "prefer_websockets": true,
+        "default_reasoning_level": "low",
+        "shell_type": "shell_command",
+        "default_reasoning_summary": "none",
+        "default_verbosity": "low",
+        "apply_patch_tool_type": "freeform",
+        "web_search_tool_type": "text_and_image",
+        "tool_mode": "code_mode_only",
+        "multi_agent_version": "v2",
+        "comp_hash": "3000",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "service_tiers": [],
+        "additional_speed_tiers": [],
+        "experimental_supported_tools": [],
+        "truncation_mode": "tokens",
+        "truncation_limit": 10000
+      }
+    },
+    {
+      "slug": "gpt-daybreak-red-latest",
+      "metadata": {
+        "context_window": 372000,
+        "max_context_window": 372000,
+        "supports_parallel_tool_calls": true,
+        "supports_reasoning_summaries": true,
+        "supports_verbosity": true,
+        "supports_image_detail_original": true,
+        "supports_search_tool": true,
+        "prefer_websockets": true,
+        "default_reasoning_level": "medium",
+        "shell_type": "shell_command",
+        "default_reasoning_summary": "none",
+        "default_verbosity": "high",
+        "apply_patch_tool_type": "freeform",
+        "web_search_tool_type": "text_and_image",
+        "tool_mode": "code_mode_only",
+        "multi_agent_version": "v2",
+        "comp_hash": "3000",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "service_tiers": [],
+        "additional_speed_tiers": [],
+        "experimental_supported_tools": [],
+        "truncation_mode": "tokens",
+        "truncation_limit": 10000
+      }
+    },
+    {
+      "slug": "gpt-5.5",
+      "metadata": {
+        "context_window": 272000,
+        "max_context_window": 272000,
+        "supports_parallel_tool_calls": true,
+        "supports_reasoning_summaries": true,
+        "supports_verbosity": true,
+        "supports_image_detail_original": true,
+        "supports_search_tool": true,
+        "prefer_websockets": true,
+        "default_reasoning_level": "medium",
+        "shell_type": "shell_command",
+        "default_reasoning_summary": "none",
+        "default_verbosity": "low",
+        "apply_patch_tool_type": "freeform",
+        "web_search_tool_type": "text_and_image",
+        "comp_hash": "2911",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "service_tiers": [
+          "priority"
+        ],
+        "additional_speed_tiers": [
+          "fast"
+        ],
+        "experimental_supported_tools": [],
+        "truncation_mode": "tokens",
+        "truncation_limit": 10000
+      }
+    },
+    {
+      "slug": "codex-auto-review",
+      "metadata": {
+        "context_window": 272000,
+        "max_context_window": 872000,
+        "supports_parallel_tool_calls": true,
+        "supports_reasoning_summaries": true,
+        "supports_verbosity": true,
+        "supports_image_detail_original": true,
+        "supports_search_tool": true,
+        "prefer_websockets": true,
+        "default_reasoning_level": "medium",
+        "shell_type": "shell_command",
+        "default_reasoning_summary": "none",
+        "default_verbosity": "low",
+        "apply_patch_tool_type": "freeform",
+        "web_search_tool_type": "text_and_image",
+        "tool_mode": "code_mode_only",
+        "multi_agent_version": "v1",
+        "comp_hash": "3000",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "service_tiers": [
+          "priority"
+        ],
+        "additional_speed_tiers": [
+          "fast"
+        ],
+        "experimental_supported_tools": [],
+        "truncation_mode": "tokens",
+        "truncation_limit": 10000
+      }
+    }
+  ]
+}

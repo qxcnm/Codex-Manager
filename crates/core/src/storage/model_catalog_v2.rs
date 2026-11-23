@@ -127,6 +127,22 @@ impl ModelFastPolicyV2 {
     }
 }
 
+/// Derived service response fields. These are never stored as model overrides.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedModelCapabilitiesV2 {
+    pub source: String,
+    pub matched_slug: Option<String>,
+    pub context_window: Option<i64>,
+    pub max_context_window: Option<i64>,
+    pub default_reasoning_effort: Option<String>,
+    pub reasoning_efforts: Vec<String>,
+    pub input_modalities: Vec<String>,
+    pub reasoning_source: String,
+    pub context_source: String,
+    pub input_source: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedModelV2 {
@@ -156,6 +172,8 @@ pub struct ManagedModelV2 {
     pub default_reasoning_effort: Option<String>,
     #[serde(default)]
     pub capabilities: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_capabilities: Option<ResolvedModelCapabilitiesV2>,
     pub instructions_mode: String,
     #[serde(default)]
     pub instructions_text: Option<String>,
@@ -506,6 +524,7 @@ fn map_model(conn: &Connection, row: &rusqlite::Row<'_>) -> Result<ManagedModelV
     let tags_json: String = row.get(7)?;
     let capabilities_json: String = row.get(16)?;
     let mut model = ManagedModelV2 {
+        resolved_capabilities: None,
         id: id.clone(),
         slug: row.get(1)?,
         display_name: row.get(2)?,

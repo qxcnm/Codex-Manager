@@ -181,10 +181,18 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                     .cloned()
                     .and_then(|value| serde_json::from_value(value).ok())
                     .unwrap_or_default();
-                super::value_or_error(account_models::associate_account_models(
+                let model_metadata = req
+                    .params
+                    .as_ref()
+                    .and_then(|params| params.get("modelMetadata"))
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .unwrap_or_default();
+                super::value_or_error(account_models::associate_account_models_with_metadata(
                     account_id,
                     upstream_models,
                     display_names,
+                    model_metadata,
                 ))
             }
         }

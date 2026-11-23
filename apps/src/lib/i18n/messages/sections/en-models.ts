@@ -49,15 +49,15 @@ export const EN_MODELS_MESSAGES: MessageCatalog = {
     "With no selection, price sync covers all models and preserves custom prices; selected models allow external prices to overwrite custom prices.",
   "导入到本地网关目录": "Import into local gateway catalog",
   "新增网关自定义模型": "Add custom gateway model",
-  "当前 Codex 模型来源": "Current Codex model source",
-  当前生效: "Currently active",
-  当前不生效: "Not active for current Codex",
+  "Codex 配置的模型来源": "Model source in Codex configuration",
+  已配置: "Configured",
+  未配置: "Not configured",
   本地目录: "Local catalog",
   "本地目录是否影响当前 Codex": "Does the local catalog affect current Codex?",
-  "当前 Codex 已应用本地模型目录；下方模型、路由和可见性设置会影响当前 Codex。":
-    "The local model catalog is applied to the current Codex. The models, routes, and visibility settings below affect the current Codex.",
-  "当前 Codex 尚未应用本地模型目录；点击应用模型后，模型列表将使用下方目录。":
-    "The local model catalog is not yet applied to the current Codex. Apply models to use the catalog below for its model list.",
+  "Codex 配置已指向本地模型目录；目录变更后请关闭并重新打开 Codex，以刷新模型列表。":
+    "The Codex configuration points to the local model catalog. After changing the catalog, close and reopen Codex to refresh its model list.",
+  "Codex 配置尚未指向本地模型目录；点击应用模型写入目录后，请关闭并重新打开 Codex。":
+    "The Codex configuration does not point to the local model catalog. Click Apply models to write the catalog, then close and reopen Codex.",
   "尚未确认当前 Codex 的目录来源；请先在 Codex 接入方式页面检查配置。":
     "The current Codex catalog source is not confirmed. Check the configuration on the Codex Connection page.",
   本地网关模型目录: "Local gateway model catalog",

@@ -112,6 +112,7 @@ export interface AccountListResult {
 export interface AccountFetchedModel {
   upstreamModel: string;
   displayName: string | null;
+  metadata?: Record<string, unknown> | null;
   existingModelSlug: string | null;
   alreadyLinked: boolean;
 }

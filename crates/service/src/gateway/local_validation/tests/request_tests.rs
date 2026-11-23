@@ -507,6 +507,18 @@ fn gateway_blocked_path_matches_default_props_probe() {
 }
 
 #[test]
+fn gateway_blocked_path_matches_default_analytics_telemetry() {
+    // Codex CLI 用量遥测位于 api.chatgpt.com，透传到 codex 后端只会 404。
+    assert!(is_gateway_blocked_request_path(
+        "/v1/analytics/codex/turn-costs"
+    ));
+    assert!(is_gateway_blocked_request_path(
+        "/v1/analytics/codex/turn-costs?thread_id=abc"
+    ));
+    assert!(!is_gateway_blocked_request_path("/v1/analytics-cache"));
+}
+
+#[test]
 fn gateway_blocked_path_patterns_support_custom_exact_and_prefix_rules() {
     let patterns = parse_gateway_blocked_path_patterns("/internal/health; /v1/debug/*\n/v1/audit");
 

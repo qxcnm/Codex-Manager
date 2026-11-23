@@ -251,3 +251,113 @@ test("managed model adapter does not invent Fast speed copy for custom models", 
     { id: "priority", name: "Fast", description: "" },
   ]);
 });
+
+test("managed model adapter uses resolved capabilities without rewriting stored overrides", () => {
+  const stored = model({
+    contextWindow: null,
+    maxContextWindow: null,
+    defaultReasoningEffort: null,
+    capabilities: { supports_text_generation: true },
+    resolvedCapabilities: {
+      source: "official_cache", matchedSlug: "gpt-6-sol",
+      contextWindow: 272000, maxContextWindow: 872000,
+      defaultReasoningEffort: "low", reasoningEfforts: ["low", "medium", "high"],
+      inputModalities: ["text", "image"],
+      reasoningSource: "official_cache", contextSource: "official_cache", inputSource: "official_cache",
+    },
+  });
+  const before = structuredClone(stored);
+  const info = managedModelV2ToModelInfo(stored);
+  assert.equal(info.defaultReasoningLevel, "low");
+  assert.deepEqual(info.supportedReasoningLevels.map(({ effort }) => effort), ["low", "medium", "high"]);
+  assert.equal(info.contextWindow, 272000);
+  assert.equal(info.maxContextWindow, 872000);
+  assert.deepEqual(info.inputModalities, ["text", "image"]);
+  assert.deepEqual(stored, before);
+});
+
+test("managed model adapter preserves resolved empty reasoning and text-only inputs", () => {
+  const info = managedModelV2ToModelInfo(model({
+    defaultReasoningEffort: null,
+    capabilities: { reasoning_efforts: [], input_modalities: ["text"] },
+    resolvedCapabilities: {
+      source: "stored", matchedSlug: "gpt-6-sol",
+      contextWindow: 12345, maxContextWindow: 54321,
+      defaultReasoningEffort: null, reasoningEfforts: [], inputModalities: ["text"],
+      reasoningSource: "stored", contextSource: "stored", inputSource: "stored",
+    },
+  }));
+  assert.equal(info.defaultReasoningLevel, null);
+  assert.deepEqual(info.supportedReasoningLevels, []);
+  assert.deepEqual(info.inputModalities, ["text"]);
+  assert.equal(info.contextWindow, 12345);
+});
+
+test("managed model adapter gives snake_case restrictions precedence over aliases", () => {
+  const info = managedModelV2ToModelInfo(model({
+    capabilities: {
+      reasoning_efforts: [], reasoningEfforts: ["high"],
+      input_modalities: ["text"], inputModalities: ["text", "image"],
+    },
+  }));
+  assert.deepEqual(info.supportedReasoningLevels, []);
+  assert.deepEqual(info.inputModalities, ["text"]);
+});
+
+test("managed model adapter resolves mixed scalar and collection aliases with snake_case precedence", () => {
+  const info = managedModelV2ToModelInfo(model({
+    capabilities: {
+      supports_text_generation: false, supportsTextGeneration: true,
+      supports_reasoning_summaries: false, supportsReasoningSummaries: true,
+      supports_verbosity: false, supportsVerbosity: true,
+      supports_parallel_tool_calls: false, supportsParallelToolCalls: true,
+      supports_image_detail_original: false, supportsImageDetailOriginal: true,
+      supports_search_tool: false, supportsSearchTool: true,
+      use_responses_lite: false, useResponsesLite: true,
+      auto_compact_token_limit: 240000, autoCompactTokenLimit: 1,
+      effective_context_window_percent: 95, effectiveContextWindowPercent: 1,
+      truncation_mode: "tokens", truncationMode: "bytes",
+      truncation_limit: 10000, truncationLimit: 1,
+      shell_type: "disabled", shellType: "unified_exec",
+      default_reasoning_summary: "none", defaultReasoningSummary: "auto",
+      default_verbosity: "low", defaultVerbosity: "high",
+      apply_patch_tool_type: "freeform", applyPatchToolType: "alias",
+      web_search_tool_type: "text_and_image", webSearchToolType: "text",
+      default_service_tier: "flex", defaultServiceTier: "priority",
+      comp_hash: "canonical", compHash: "alias",
+      tool_mode: "canonical", toolMode: "alias",
+      multi_agent_version: "v2", multiAgentVersion: "v1",
+      minimal_client_version: "0.169.0", minimalClientVersion: "0.1.0",
+      service_tiers: [], serviceTiers: ["priority"],
+      additional_speed_tiers: [], additionalSpeedTiers: ["fast"],
+      output_modalities: ["text"], outputModalities: ["image"],
+      supported_endpoints: ["/v1/responses"], supportedEndpoints: ["/v1/images/generations"],
+      experimental_supported_tools: [], experimentalSupportedTools: ["alias_tool"],
+    },
+  }));
+  assert.equal(info.supportsTextGeneration, false);
+  assert.equal(info.supportsReasoningSummaries, false);
+  assert.equal(info.supportVerbosity, false);
+  assert.equal(info.supportsParallelToolCalls, false);
+  assert.equal(info.supportsImageDetailOriginal, false);
+  assert.equal(info.supportsSearchTool, false);
+  assert.equal(info.useResponsesLite, false);
+  assert.equal(info.autoCompactTokenLimit, 240000);
+  assert.equal(info.effectiveContextWindowPercent, 95);
+  assert.deepEqual(info.truncationPolicy, { mode: "tokens", limit: 10000 });
+  assert.equal(info.shellType, "disabled");
+  assert.equal(info.defaultReasoningSummary, "none");
+  assert.equal(info.defaultVerbosity, "low");
+  assert.equal(info.applyPatchToolType, "freeform");
+  assert.equal(info.webSearchToolType, "text_and_image");
+  assert.equal(info.defaultServiceTier, "flex");
+  assert.equal(info.compHash, "canonical");
+  assert.equal(info.toolMode, "canonical");
+  assert.equal(info.multiAgentVersion, "v2");
+  assert.equal(info.minimalClientVersion, "0.169.0");
+  assert.deepEqual(info.serviceTiers, []);
+  assert.deepEqual(info.additionalSpeedTiers, []);
+  assert.deepEqual(info.outputModalities, ["text"]);
+  assert.deepEqual(info.supportedEndpoints, ["/v1/responses"]);
+  assert.deepEqual(info.experimentalSupportedTools, []);
+});

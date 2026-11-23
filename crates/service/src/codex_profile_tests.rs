@@ -77,6 +77,155 @@ fn insert_custom_model_clone(storage: &Storage, source_slug: &str, slug: &str) {
         .expect("insert custom model clone");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn applied_discovered_models_expose_usable_context_and_image_input_without_mutating_storage()
+{
+    use codexmanager_core::storage::{ManagedModelV2, ModelPriceV2, ModelRouteV2};
+
+    let _env_lock = crate::test_env_guard();
+    let dir = temp_profile("discovered-model-capabilities");
+    let _db_guard = set_test_db(&dir);
+    let _backend_guard = EnvGuard::remove("CODEXMANAGER_STORAGE_BACKEND");
+    let _database_url_guard = EnvGuard::remove("CODEXMANAGER_DATABASE_URL");
+    let managed_root = dir.join("managed");
+    let _managed_root_guard = EnvGuard::set(
+        "CODEXMANAGER_TEST_DB_DIR",
+        managed_root.to_string_lossy().as_ref(),
+    );
+    let storage = Storage::open(dir.join("codexmanager.db")).unwrap();
+    storage.init().unwrap();
+    let legacy_capabilities = serde_json::json!({
+        "supports_text_generation": true,
+        "input_modalities": ["text"],
+        "output_modalities": ["text"]
+    });
+    let mut explicit_capabilities = legacy_capabilities.clone();
+    explicit_capabilities["discovery_metadata_version"] = serde_json::json!(1);
+    for (slug, capabilities, context, maximum) in [
+        ("legacy-discovered", legacy_capabilities.clone(), None, None),
+        (
+            "explicit-text-only",
+            explicit_capabilities.clone(),
+            None,
+            None,
+        ),
+        (
+            "max-only-discovered",
+            serde_json::json!({}),
+            None,
+            Some(512_000),
+        ),
+        (
+            "official-context",
+            serde_json::json!({"input_modalities": ["text", "image"]}),
+            Some(272_000),
+            Some(872_000),
+        ),
+    ] {
+        storage
+            .upsert_managed_model_v2(&ManagedModelV2Upsert {
+                model: ManagedModelV2 {
+                    slug: slug.to_string(),
+                    display_name: slug.to_string(),
+                    origin: "custom".to_string(),
+                    enabled: true,
+                    supported_in_api: true,
+                    visibility: "list".to_string(),
+                    context_window: context,
+                    max_context_window: maximum,
+                    capabilities,
+                    instructions_mode: "passthrough".to_string(),
+                    price: ModelPriceV2 {
+                        price_status: "missing".to_string(),
+                        ..Default::default()
+                    },
+                    routes: vec![ModelRouteV2 {
+                        source_kind: "aggregate_api".to_string(),
+                        source_id: "discovery-source".to_string(),
+                        upstream_model: slug.to_string(),
+                        enabled: true,
+                        weight: 1,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    let slugs = [
+        "legacy-discovered",
+        "explicit-text-only",
+        "max-only-discovered",
+        "official-context",
+    ];
+    let status = apply_models_async(
+        Some(dir.to_string_lossy().as_ref()),
+        slugs.iter().map(|slug| slug.to_string()).collect(),
+        false,
+    )
+    .await
+    .unwrap();
+    assert!(status.managed_catalog_active);
+    let config = parse_config(&fs::read_to_string(dir.join(CONFIG_FILE)).unwrap()).unwrap();
+    let catalog_path = config
+        .get("model_catalog_json")
+        .and_then(Item::as_str)
+        .unwrap();
+    let catalog: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(catalog_path).unwrap()).unwrap();
+    let models = catalog["models"].as_array().unwrap();
+    assert_eq!(models.len(), slugs.len());
+    for (slug, context, maximum, modalities) in [
+        (
+            "legacy-discovered",
+            272_000,
+            272_000,
+            serde_json::json!(["text"]),
+        ),
+        (
+            "explicit-text-only",
+            272_000,
+            272_000,
+            serde_json::json!(["text"]),
+        ),
+        (
+            "max-only-discovered",
+            512_000,
+            512_000,
+            serde_json::json!(["text", "image"]),
+        ),
+        (
+            "official-context",
+            272_000,
+            872_000,
+            serde_json::json!(["text", "image"]),
+        ),
+    ] {
+        let model = models.iter().find(|model| model["slug"] == slug).unwrap();
+        assert_eq!(model["context_window"], context, "{slug}");
+        assert_eq!(model["max_context_window"], maximum, "{slug}");
+        assert_eq!(model["input_modalities"], modalities, "{slug}");
+    }
+    let legacy = storage
+        .get_managed_model_v2("legacy-discovered")
+        .unwrap()
+        .unwrap();
+    assert_eq!(legacy.capabilities, legacy_capabilities);
+    assert_eq!(legacy.context_window, None);
+    assert_eq!(legacy.max_context_window, None);
+    assert_eq!(
+        storage
+            .get_managed_model_v2("explicit-text-only")
+            .unwrap()
+            .unwrap()
+            .capabilities,
+        explicit_capabilities
+    );
+    drop(storage);
+    cleanup_profile(&dir);
+}
+
 fn provider_http_header<'a>(provider: &'a Table, name: &str) -> Option<&'a str> {
     let headers = provider.get("http_headers")?;
     if let Some(table) = headers.as_table() {
@@ -125,6 +274,111 @@ fn set_test_db(dir: &Path) -> EnvGuard {
     storage.init().expect("init test storage");
     drop(storage);
     EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref())
+}
+
+#[test]
+fn startup_reconciliation_reuses_the_only_storage_connection() {
+    const CHILD_TEST: &str = "CODEXMANAGER_PROFILE_SINGLE_CONNECTION_CHILD_TEST";
+    const CHILD_DIRECTORY: &str = "CODEXMANAGER_PROFILE_SINGLE_CONNECTION_CHILD_DIRECTORY";
+    let current = std::thread::current();
+    let test_name = current.name().expect("named profile regression test");
+    if std::env::var(CHILD_TEST).as_deref() != Ok(test_name) {
+        let directory = temp_profile("startup-single-connection");
+        fs::create_dir(&directory).expect("create isolated regression directory");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test_name, "--nocapture"])
+            .env(CHILD_TEST, test_name)
+            .env(CHILD_DIRECTORY, &directory)
+            .output()
+            .expect("start isolated profile regression");
+        assert!(
+            output.status.success(),
+            "profile regression failed; fixture retained at {}\n{}\n{}",
+            directory.display(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // The child exits before cleanup, so no pooled connection remains open.
+        fs::remove_dir_all(directory).expect("cleanup isolated profile regression");
+        return;
+    }
+
+    let _env_lock = crate::test_env_guard();
+    let directory = PathBuf::from(std::env::var_os(CHILD_DIRECTORY).unwrap());
+    let _backend = EnvGuard::set("CODEXMANAGER_STORAGE_BACKEND", "sqlite");
+    let _database_url = EnvGuard::remove("CODEXMANAGER_DATABASE_URL");
+    let _db = set_test_db(&directory);
+    let _codex_home = EnvGuard::set("CODEX_HOME", directory.to_string_lossy().as_ref());
+    let _managed_root = EnvGuard::set(
+        "CODEXMANAGER_TEST_DB_DIR",
+        directory.join("managed").to_string_lossy().as_ref(),
+    );
+    let _max_connections = EnvGuard::set("CODEXMANAGER_STORAGE_MAX_CONNECTIONS", "1");
+    let _acquire_timeout = EnvGuard::set("CODEXMANAGER_STORAGE_ACQUIRE_TIMEOUT_MS", "1000");
+    crate::storage_helpers::initialize_storage().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let mutation_lease = profile_mutation_lease().await;
+        let mut reconciliation = std::pin::pin!(
+            crate::lifecycle::startup::reconcile_active_gateway_profile_after_startup_async()
+        );
+        // Poll the real startup future until it waits on the held profile lock.
+        // Its database acquisition has now run, without a scheduling race.
+        std::future::poll_fn(|context| {
+            assert!(std::future::Future::poll(reconciliation.as_mut(), context).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        let available = tokio::task::spawn_blocking(crate::storage_helpers::open_storage)
+            .await
+            .unwrap()
+            .expect("startup must return the outer storage lease before waiting on profile work");
+        drop(available);
+        drop(mutation_lease);
+        tokio::time::timeout(Duration::from_millis(750), reconciliation)
+            .await
+            .expect("startup must reuse its held connection when no managed state exists");
+
+        let storage = crate::storage_helpers::open_storage().unwrap();
+        let state = serde_json::json!({
+            "profileDir": directory.to_string_lossy(),
+            "mode": "gateway",
+            "providerId": PROVIDER_ID,
+            "updatedAt": 0
+        });
+        storage
+            .set_app_setting(APP_SETTING_STATE_KEY, &format!("  {state}\n"), now_ts())
+            .unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_millis(750),
+            sync_active_gateway_profile_from_storage_async(&storage),
+        )
+        .await
+        .expect("state reads must not reacquire the caller's only connection");
+        assert_eq!(
+            result.unwrap_err(),
+            "active gateway profile is missing api key id",
+            "valid persisted state must retain the original validation behavior"
+        );
+        storage
+            .set_app_setting(APP_SETTING_STATE_KEY, " malformed state ", now_ts())
+            .unwrap();
+        assert!(!sync_active_gateway_profile_from_storage_async(&storage)
+            .await
+            .unwrap());
+        assert_eq!(
+            storage
+                .get_app_setting(APP_SETTING_STATE_KEY)
+                .unwrap()
+                .as_deref(),
+            Some(" malformed state ")
+        );
+    });
 }
 
 fn write_chatgpt_auth_fixture(dir: &Path) -> Vec<u8> {

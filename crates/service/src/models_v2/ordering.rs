@@ -14,5 +14,5 @@ pub(crate) fn reorder(input: ManagedModelReorderV2Params) -> Result<Vec<ManagedM
         super::sync_active_gateway_catalog_after_model_changes_best_effort(&storage, Vec::new());
         models
     };
-    Ok(models)
+    Ok(super::resolved_capabilities::decorate_models(models, None))
 }

@@ -2,10 +2,15 @@ use std::io;
 use std::thread;
 
 pub(crate) async fn reconcile_active_gateway_profile_after_startup_async() {
-    let Some(storage) = crate::storage_helpers::open_storage() else {
+    let Some(storage) =
+        crate::storage_helpers::open_storage().map(|storage| storage.shared_handle())
+    else {
         log::warn!("event=startup_gateway_profile_reconciliation_failed error=storage unavailable");
         return;
     };
+    // Profile reconciliation waits for bounded blocking phases. Return the
+    // outer pool lease first so another worker cannot occupy that capacity
+    // waiting for the same lease while reconciliation is queued behind it.
     if let Err(err) =
         crate::codex_profile::sync_active_gateway_profile_from_storage_async(&storage).await
     {

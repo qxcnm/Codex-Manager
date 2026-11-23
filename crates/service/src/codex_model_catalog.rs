@@ -208,10 +208,9 @@ pub(crate) async fn selected_managed_model_catalog_content_async(
 
         let canonical_slugs = selected.iter().map(|model| model.slug.clone()).collect();
         let catalog = ModelsResponse {
-            models: selected
-                .iter()
-                .enumerate()
-                .map(|(position, model)| selected_codex_model_info(position, model))
+            models: crate::models_v2::ordered_model_infos_with_storage(&storage, &selected)
+                .into_iter()
+                .map(selected_codex_model_info)
                 .collect(),
             ..ModelsResponse::default()
         };
@@ -242,10 +241,9 @@ pub(crate) async fn reconciled_managed_model_catalog_content_async(
 
         let canonical_slugs = selected.iter().map(|model| model.slug.clone()).collect();
         let catalog = ModelsResponse {
-            models: selected
-                .iter()
-                .enumerate()
-                .map(|(position, model)| selected_codex_model_info(position, model))
+            models: crate::models_v2::ordered_model_infos_with_storage(&storage, &selected)
+                .into_iter()
+                .map(selected_codex_model_info)
                 .collect(),
             ..ModelsResponse::default()
         };
@@ -258,10 +256,8 @@ pub(crate) async fn reconciled_managed_model_catalog_content_async(
 }
 
 fn selected_codex_model_info(
-    position: usize,
-    model: &codexmanager_core::storage::ManagedModelV2,
+    mut info: codexmanager_core::rpc::types::ModelInfo,
 ) -> codexmanager_core::rpc::types::ModelInfo {
-    let mut info = crate::models_v2::ordered_model_info(position, model);
     // Applying an explicit selection is the user's allowlist for Codex's picker.
     // Keep the stored flags unchanged for gateway/API behavior, but do not let
     // Codex hide an explicitly selected entry when it reads this dedicated file.
@@ -684,11 +680,28 @@ pub(crate) fn prepare_managed_codex_model(model: &mut codexmanager_core::rpc::ty
     model.supports_parallel_tool_calls.get_or_insert(false);
     model.effective_context_window_percent.get_or_insert(95);
 
-    let max_context_window = model.context_window.unwrap_or(200_000);
-    model
+    let context_window = model
+        .context_window
+        .filter(|value| *value > 0)
+        .or_else(|| {
+            model
+                .extra
+                .get("max_context_window")
+                .and_then(Value::as_i64)
+                .filter(|value| *value > 0)
+        })
+        .unwrap_or(crate::models_v2::codex_capabilities::DEFAULT_CONTEXT_WINDOW);
+    model.context_window = Some(context_window);
+    let max_context_window = model
         .extra
-        .entry("max_context_window".to_string())
-        .or_insert_with(|| serde_json::json!(max_context_window));
+        .get("max_context_window")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .unwrap_or(context_window);
+    model.extra.insert(
+        "max_context_window".to_string(),
+        serde_json::json!(max_context_window),
+    );
     for key in ["comp_hash", "tool_mode", "multi_agent_version"] {
         model
             .extra
@@ -1059,7 +1072,7 @@ mod tests {
         );
         assert_eq!(
             value["models"][0]["max_context_window"].as_i64(),
-            Some(200_000)
+            Some(272_000)
         );
         assert!(value["models"][0]["comp_hash"].is_null());
         assert!(value["models"][0]["tool_mode"].is_null());
@@ -1265,6 +1278,65 @@ mod tests {
         let err = serialize_gateway_model_catalog(&ModelsResponse::default())
             .expect_err("empty catalog must fail");
         assert!(err.contains("empty"));
+    }
+
+    #[test]
+    fn managed_catalog_uses_codex_defaults_for_missing_or_invalid_context() {
+        for context in [None, Some(0), Some(-1)] {
+            for maximum in [Value::Null, serde_json::json!(0), serde_json::json!(-1)] {
+                let mut model = ModelInfo {
+                    slug: "future-model".to_string(),
+                    display_name: "Future Model".to_string(),
+                    context_window: context,
+                    ..ModelInfo::default()
+                };
+                model
+                    .extra
+                    .insert("max_context_window".to_string(), maximum);
+                let content = serialize_gateway_model_catalog(&ModelsResponse {
+                    models: vec![model],
+                    ..Default::default()
+                })
+                .expect("serialize catalog");
+                let catalog: Value = serde_json::from_str(&content).unwrap();
+                let model = &catalog["models"][0];
+                assert_eq!(model["context_window"], 272_000);
+                assert_eq!(model["max_context_window"], 272_000);
+                assert_eq!(
+                    model["input_modalities"],
+                    serde_json::json!(["text", "image"])
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn managed_catalog_preserves_distinct_context_limits_and_explicit_text_only() {
+        for context in [None, Some(0), Some(-1), Some(128_000)] {
+            let mut model = ModelInfo {
+                slug: "text-only-model".to_string(),
+                display_name: "Text Only".to_string(),
+                context_window: context,
+                input_modalities: vec!["text".to_string()],
+                ..Default::default()
+            };
+            model
+                .extra
+                .insert("max_context_window".to_string(), serde_json::json!(512_000));
+            let content = serialize_gateway_model_catalog(&ModelsResponse {
+                models: vec![model],
+                ..Default::default()
+            })
+            .unwrap();
+            let catalog: Value = serde_json::from_str(&content).unwrap();
+            let model = &catalog["models"][0];
+            assert_eq!(
+                model["context_window"],
+                context.filter(|value| *value > 0).unwrap_or(512_000)
+            );
+            assert_eq!(model["max_context_window"], 512_000);
+            assert_eq!(model["input_modalities"], serde_json::json!(["text"]));
+        }
     }
 
     #[test]

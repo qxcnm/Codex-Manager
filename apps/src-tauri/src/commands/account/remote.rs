@@ -299,11 +299,13 @@ pub async fn service_account_associate_models(
     account_id: String,
     upstream_models: Vec<String>,
     display_names: Option<serde_json::Value>,
+    model_metadata: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
     let params = serde_json::json!({
         "accountId": account_id,
         "upstreamModels": upstream_models,
         "displayNames": display_names,
+        "modelMetadata": model_metadata,
     });
     rpc_call_in_background("account/associateModels", addr, Some(params)).await
 }

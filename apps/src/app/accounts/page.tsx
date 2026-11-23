@@ -473,11 +473,17 @@ function AccountsPageContent({ serviceAddr }: AccountsPageContentProps) {
           .filter((item) => selected.has(item.upstreamModel) && item.displayName)
           .map((item) => [item.upstreamModel, item.displayName as string]),
       );
+      const modelMetadata = Object.fromEntries(
+        modelAssociationItems
+          .filter((item) => selected.has(item.upstreamModel) && item.metadata)
+          .map((item) => [item.upstreamModel, item.metadata as Record<string, unknown>]),
+      );
       const result = await accountClient.associateAccountModels(
         modelAssociationAccount.id,
         upstreamModels,
         displayNames,
         serviceAddr,
+        modelMetadata,
       );
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["managed-models-v2"] }),

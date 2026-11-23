@@ -75,7 +75,8 @@ pub(crate) async fn fetch_aggregate_api_models_async(
     }
     .map_err(|err| format!("models request failed: {err}"))?;
     let body = read_models_response(response).await?;
-    let parsed = parse_fetched_models(&body, provider_type == AGGREGATE_API_PROVIDER_GEMINI);
+    let parsed =
+        parse_fetched_models_with_metadata(&body, provider_type == AGGREGATE_API_PROVIDER_GEMINI);
     let existing = run_aggregate_storage(|| {
         let handle = open_storage().ok_or_else(|| "storage unavailable".to_owned())?;
         let storage = crate::account::remote_storage::AccountStorage::new(&handle);
@@ -85,7 +86,7 @@ pub(crate) async fn fetch_aggregate_api_models_async(
     })
     .await?;
     let mut items = Vec::with_capacity(parsed.len());
-    for (upstream_model, display_name) in parsed {
+    for (upstream_model, display_name, metadata) in parsed {
         let model = existing
             .iter()
             .find(|model| model.slug.eq_ignore_ascii_case(upstream_model.as_str()));
@@ -103,6 +104,7 @@ pub(crate) async fn fetch_aggregate_api_models_async(
             display_name,
             existing_model_slug: model.map(|model| model.slug.clone()),
             already_linked,
+            metadata,
         });
     }
     Ok(AggregateApiFetchModelsResult {
