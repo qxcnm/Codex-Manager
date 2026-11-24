@@ -292,7 +292,7 @@ async fn retry_chatgpt_responses_bad_request_without_session_headers(
     }
     if debug {
         log::warn!(
-            "event=gateway_chatgpt_responses_retry_without_session_headers path={} status={} account_id={} upstream_url={}",
+            "event=gateway_chatgpt_responses_retry_without_session_headers compression=none path={} status={} account_id={} upstream_url={}",
             request_ctx.request_path,
             status.as_u16(),
             account.id,
@@ -316,7 +316,7 @@ async fn retry_chatgpt_responses_bad_request_without_session_headers(
         Ok(response) if response.status().is_success() => Some(response),
         Ok(response) => {
             log::warn!(
-                "event=gateway_chatgpt_responses_retry_without_session_headers_failed path={} original_status={} retry_status={} account_id={} upstream_url={}",
+                "event=gateway_chatgpt_responses_retry_without_session_headers_failed compression=none path={} original_status={} retry_status={} account_id={} upstream_url={}",
                 request_ctx.request_path,
                 status.as_u16(),
                 response.status().as_u16(),
@@ -327,7 +327,7 @@ async fn retry_chatgpt_responses_bad_request_without_session_headers(
         }
         Err(err) => {
             log::warn!(
-                "event=gateway_chatgpt_responses_retry_without_session_headers_error path={} original_status={} account_id={} upstream_url={} err={}",
+                "event=gateway_chatgpt_responses_retry_without_session_headers_error compression=none path={} original_status={} account_id={} upstream_url={} err={}",
                 request_ctx.request_path,
                 status.as_u16(),
                 account.id,

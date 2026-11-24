@@ -645,6 +645,257 @@ fn chatgpt_responses_stripped_candidate_does_not_retry_without_session_headers_a
     }
 }
 
+struct RequestCompressionFixture {
+    original: Option<std::ffi::OsString>,
+}
+
+impl RequestCompressionFixture {
+    fn enable() -> Self {
+        let original = std::env::var_os("CODEXMANAGER_ENABLE_REQUEST_COMPRESSION");
+        std::env::set_var("CODEXMANAGER_ENABLE_REQUEST_COMPRESSION", "1");
+        crate::gateway::reload_runtime_config_from_env();
+        Self { original }
+    }
+}
+
+impl Drop for RequestCompressionFixture {
+    fn drop(&mut self) {
+        match &self.original {
+            Some(value) => std::env::set_var("CODEXMANAGER_ENABLE_REQUEST_COMPRESSION", value),
+            None => std::env::remove_var("CODEXMANAGER_ENABLE_REQUEST_COMPRESSION"),
+        }
+        crate::gateway::reload_runtime_config_from_env();
+    }
+}
+
+fn compressed_responses_bad_request_case(accept_plain_retry: bool) {
+    let _environment = crate::test_env_guard();
+    let _compression = RequestCompressionFixture::enable();
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    let now = now_ts();
+    let account = build_account("acc-compressed-responses-400", now);
+    let mut token = build_token(account.id.as_str(), now);
+    storage.insert_account(&account).expect("insert account");
+    storage.insert_token(&token).expect("insert token");
+
+    let input = serde_json::json!({
+        "model":"gpt-6-astra",
+        "stream":true,
+        "store":false,
+        "prompt_cache_key":"thread-compressed-context",
+        "previous_response_id":"resp-before-compaction",
+        "input":[
+            {"type":"compaction","id":"cmp-original","encrypted_content":"opaque-compacted-history"},
+            {"type":"reasoning","id":"rs-original","encrypted_content":"opaque-reasoning","summary":[]},
+            {"type":"custom_tool_call","id":"ct-original","call_id":"call-original","name":"exec","input":"original command"},
+            {"type":"custom_tool_call_output","call_id":"call-original","output":"complete original result"},
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"继续原来的会话"}]}
+        ]
+    });
+    let body = Bytes::from(serde_json::to_vec(&input).expect("serialize original request"));
+    let expected_body = body.clone();
+    let server = Server::http("127.0.0.1:0").expect("start local server");
+    // The path selects the production ChatGPT compression policy, but the host
+    // and explicit no_proxy client keep every fixture request on loopback.
+    let url = format!(
+        "http://{}/chatgpt.com/backend-api/codex/responses",
+        server.server_addr()
+    );
+    let (capture_tx, capture_rx) = mpsc::channel();
+    let join = thread::spawn(move || {
+        for attempt in 0..2 {
+            let Some(mut request) = server
+                .recv_timeout(Duration::from_secs(3))
+                .expect("receive compatibility attempt")
+            else {
+                break;
+            };
+            let encoding = request_header_value(&request, "Content-Encoding");
+            let headers = (
+                request.url().to_string(),
+                captured_session_headers(&request),
+                request_header_value(&request, "Authorization"),
+                request_header_value(&request, "ChatGPT-Account-ID"),
+            );
+            let mut received = Vec::new();
+            std::io::Read::read_to_end(request.as_reader(), &mut received)
+                .expect("read compatibility request body");
+            let plain = if encoding.as_deref() == Some("zstd") {
+                zstd::stream::decode_all(std::io::Cursor::new(&received))
+                    .expect("decode initial zstd request")
+            } else {
+                received
+            };
+            let accepts_request = attempt == 1
+                && accept_plain_retry
+                && encoding.is_none()
+                && plain == expected_body.as_ref();
+            capture_tx
+                .send((headers, encoding, plain))
+                .expect("capture compatibility request");
+            let (status, response_body, content_type) = if accepts_request {
+                (
+                    200,
+                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-recovered\"}}\n\n",
+                    "text/event-stream",
+                )
+            } else if attempt == 0 {
+                (
+                    400,
+                    r#"{"detail":"original bad request"}"#,
+                    "application/json",
+                )
+            } else {
+                (
+                    400,
+                    r#"{"detail":"retry still invalid"}"#,
+                    "application/json",
+                )
+            };
+            request
+                .respond(
+                    Response::from_string(response_body)
+                        .with_status_code(StatusCode(status))
+                        .with_header(
+                            tiny_http::Header::from_bytes("Content-Type", content_type)
+                                .expect("response content type"),
+                        ),
+                )
+                .expect("respond compatibility attempt");
+        }
+        if let Some(mut request) = server
+            .recv_timeout(Duration::from_millis(250))
+            .expect("check compatibility retry bound")
+        {
+            let mut body = Vec::new();
+            std::io::Read::read_to_end(request.as_reader(), &mut body)
+                .expect("read unexpected third attempt");
+            capture_tx
+                .send(((request.url().to_string(), vec![], None, None), None, body))
+                .expect("capture unexpected third attempt");
+            request
+                .respond(
+                    Response::from_string("unexpected extra attempt")
+                        .with_status_code(StatusCode(400)),
+                )
+                .expect("reject unexpected third attempt");
+        }
+    });
+
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("build loopback-only fixture client");
+    let incoming_headers = codex_session_headers();
+    let request_ctx = UpstreamRequestContext {
+        request_path: "/v1/responses",
+        protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        is_fedramp: false,
+        capture: None,
+        replay_guard: None,
+        original_body: Some(body.as_ref()),
+    };
+    let authorization = oauth_authorization(&token.access_token);
+    let upstream = crate::gateway::run_upstream_io(super::super::transport::send_upstream_request(
+        &client,
+        &reqwest::Method::POST,
+        &url,
+        None,
+        request_ctx,
+        &incoming_headers,
+        &body,
+        true,
+        &authorization.value,
+        &account,
+        false,
+    ))
+    .expect("gateway async test runtime")
+    .expect("send initial compressed request");
+    let decision = crate::gateway::run_upstream_io(process_upstream_post_retry_flow(
+        &client,
+        &storage,
+        &reqwest::Method::POST,
+        "https://chatgpt.com/backend-api/codex",
+        "/v1/responses",
+        &url,
+        None,
+        None,
+        request_ctx,
+        &incoming_headers,
+        &body,
+        true,
+        &authorization,
+        &account,
+        &mut token,
+        None,
+        false,
+        false,
+        false,
+        false,
+        false,
+        upstream,
+        |_, _, _| {},
+    ))
+    .expect("gateway async test runtime");
+    let final_status = match decision {
+        PostRetryFlowDecision::RespondUpstream(response) => {
+            let status = response.status().as_u16();
+            let (delivered, _) = crate::gateway::run_upstream_io(response.into_buffered_async())
+                .expect("gateway async test runtime")
+                .expect("read final response");
+            if !accept_plain_retry {
+                assert_eq!(delivered.as_ref(), br#"{"detail":"original bad request"}"#);
+            }
+            status
+        }
+        _ => panic!("compatibility retry must return an upstream response"),
+    };
+    join.join().expect("join compatibility server");
+    let captured: Vec<_> = capture_rx.into_iter().collect();
+    assert_eq!(
+        captured.len(),
+        2,
+        "one initial request and at most one compatibility retry"
+    );
+    assert_eq!(captured[0].1.as_deref(), Some("zstd"));
+    assert_eq!(
+        captured[1].1, None,
+        "a compressed 400 retry must try plain JSON"
+    );
+    assert_eq!(
+        captured[0].0 .0, captured[1].0 .0,
+        "retry must use the same path"
+    );
+    assert_eq!(captured[0].0 .1, vec![true; 5]);
+    assert_eq!(captured[1].0 .1, vec![false; 5]);
+    for (headers, _, plain) in &captured {
+        assert_eq!(
+            plain.as_slice(),
+            body.as_ref(),
+            "compaction and valid tool context must survive byte-for-byte"
+        );
+        assert_eq!(headers.2.as_deref(), Some("Bearer access-token"));
+        assert_eq!(headers.3.as_deref(), Some("chatgpt-account"));
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(plain).unwrap(),
+            input
+        );
+    }
+    assert_eq!(final_status, if accept_plain_retry { 200 } else { 400 });
+}
+
+#[test]
+fn chatgpt_responses_compressed_400_retries_plain_without_losing_context() {
+    compressed_responses_bad_request_case(true);
+}
+
+#[test]
+fn chatgpt_responses_compressed_payload_400_keeps_original_error_and_retry_bound() {
+    compressed_responses_bad_request_case(false);
+}
+
 /// 函数 `retries_server_error_once_before_final_decision`
 ///
 /// 作者: gaohongshun

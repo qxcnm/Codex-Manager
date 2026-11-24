@@ -18,6 +18,7 @@
         "width": 1100,
         "height": 720,
         "resizable": true,
+        "dragDropEnabled": false,
         "visible": false,
         "create": false
       }

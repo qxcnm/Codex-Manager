@@ -9,6 +9,8 @@ enum ToolContextOutcome {
     RejectRetry,
     SubstantiveOutput,
     UnknownCall,
+    CustomModelSwitch,
+    MetadataOnly,
 }
 
 async fn next_context_json<S>(socket: &mut tokio_tungstenite::WebSocketStream<S>) -> Value
@@ -78,10 +80,20 @@ where
 }
 
 async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
+    let session_id = format!("session_tool_context_{tool_search}_{outcome:?}");
+    let custom = matches!(
+        outcome,
+        ToolContextOutcome::CustomModelSwitch | ToolContextOutcome::MetadataOnly
+    );
     let call = if tool_search {
         json!({
             "type": "tool_search_call", "id": "ts_context", "call_id": "call_context",
             "execution": "client", "status": "completed", "arguments": {"paths": ["lookup"]}
+        })
+    } else if custom {
+        json!({
+            "type": "custom_tool_call", "id": "ct_context", "call_id": "call_context",
+            "name": "exec", "input": "original custom input", "status": "completed"
         })
     } else {
         json!({
@@ -99,6 +111,8 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
             "type": "tool_search_output", "call_id": output_call_id, "execution": "client",
             "tools": [{"type": "function", "name": "lookup", "description": "keep the real tool schema", "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}, "strict": true}]
         })
+    } else if custom {
+        json!({"type": "custom_tool_call_output", "call_id": output_call_id, "output": "complete real custom result"})
     } else {
         json!({"type": "function_call_output", "call_id": output_call_id, "output": "complete real tool result"})
     };
@@ -111,6 +125,18 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
             output
         ]
     });
+    if custom {
+        follow_up["model"] = json!(
+            if matches!(outcome, ToolContextOutcome::CustomModelSwitch) {
+                "gpt-6.1-sol"
+            } else {
+                "gpt-6-sol"
+            }
+        );
+    }
+    if matches!(outcome, ToolContextOutcome::MetadataOnly) {
+        follow_up["client_metadata"]["session_id"] = json!(session_id);
+    }
     let mut seed_calls = vec![call.clone()];
     let extra_pair = matches!(outcome, ToolContextOutcome::MixedKnownCalls).then(|| {
         assert!(!tool_search, "the first rejected output must be a function result");
@@ -177,6 +203,10 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
         let initial = next_context_json(&mut resumed).await;
         assert_eq!(initial["previous_response_id"], "resp_tool_context_seed");
         assert_eq!(initial["input"], expected_follow_up["input"]);
+        if custom {
+            assert_eq!(seed_request["model"], "gpt-6-sol");
+            assert_eq!(initial["model"], expected_follow_up["model"]);
+        }
         send_context_json(
             &mut resumed,
             json!({"type": "response.created", "response": {"id": "resp_tool_context_attempt"}}),
@@ -191,6 +221,8 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
         }
         let tool_label = if tool_search {
             "tool search"
+        } else if custom {
+            "custom tool call"
         } else {
             "function call"
         };
@@ -204,6 +236,8 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
             ToolContextOutcome::Recover
                 | ToolContextOutcome::MixedKnownCalls
                 | ToolContextOutcome::RejectRetry
+                | ToolContextOutcome::CustomModelSwitch
+                | ToolContextOutcome::MetadataOnly
         ) {
             let retry = next_context_json(&mut resumed).await;
             assert_eq!(
@@ -211,6 +245,9 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
                 "tool repair must preserve the only reference to original history"
             );
             assert_eq!(retry["client_metadata"]["trace_label"], "keep_metadata");
+            if custom {
+                assert_eq!(retry["model"], expected_follow_up["model"]);
+            }
             assert_eq!(
                 retry["input"].as_array().unwrap().len(),
                 if extra_pair.is_some() { 4 } else { 3 }
@@ -292,6 +329,11 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
         )),
     );
     insert_account_and_token(&storage);
+    if custom {
+        storage
+            .update_api_key_model_config("gk_proxy_runtime_ws", None, None, None)
+            .unwrap();
+    }
     tokio::task::spawn_blocking(crate::gateway::reload_runtime_config_from_env)
         .await
         .unwrap();
@@ -300,11 +342,10 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
         client: Client::new(),
     })
     .await;
-    let session_id = format!("session_tool_context_{tool_search}_{outcome:?}");
-    let headers = [
-        ("OpenAI-Beta", "responses_websockets=2026-02-06"),
-        ("session_id", session_id.as_str()),
-    ];
+    let mut headers = vec![("OpenAI-Beta", "responses_websockets=2026-02-06")];
+    if !matches!(outcome, ToolContextOutcome::MetadataOnly) {
+        headers.push(("session_id", session_id.as_str()));
+    }
     let url = format!("ws://{addr}/v1/responses");
     let (mut seed, _) = connect_async(build_ws_request(
         &url,
@@ -313,11 +354,11 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
     ))
     .await
     .unwrap();
-    send_context_json(
-        &mut seed,
-        json!({"type": "response.create", "model": "gpt-4.1", "store": false, "input": "Original instruction: preserve the full conversation."}),
-    )
-    .await;
+    let mut seed_frame = json!({"type": "response.create", "model": if custom { "gpt-6-sol" } else { "gpt-4.1" }, "store": false, "input": "Original instruction: preserve the full conversation."});
+    if matches!(outcome, ToolContextOutcome::MetadataOnly) {
+        seed_frame["client_metadata"] = json!({"session_id":session_id});
+    }
+    send_context_json(&mut seed, seed_frame).await;
     let seed_events = receive_context_terminal(&mut seed).await;
     assert_eq!(seed_events.last().unwrap()["type"], "response.completed");
     seed.close(None).await.unwrap();
@@ -333,7 +374,10 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
     let events = receive_context_terminal(&mut resumed).await;
     let expected_terminal = if matches!(
         outcome,
-        ToolContextOutcome::Recover | ToolContextOutcome::MixedKnownCalls
+        ToolContextOutcome::Recover
+            | ToolContextOutcome::MixedKnownCalls
+            | ToolContextOutcome::CustomModelSwitch
+            | ToolContextOutcome::MetadataOnly
     ) {
         "response.completed"
     } else {
@@ -352,7 +396,10 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
     );
     if matches!(
         outcome,
-        ToolContextOutcome::Recover | ToolContextOutcome::MixedKnownCalls
+        ToolContextOutcome::Recover
+            | ToolContextOutcome::MixedKnownCalls
+            | ToolContextOutcome::CustomModelSwitch
+            | ToolContextOutcome::MetadataOnly
     ) {
         assert_eq!(
             events.last().unwrap()["response"]["id"],
@@ -395,6 +442,18 @@ async fn official_responses_websocket_tool_context_recovery_preserves_history_ac
     for tool_search in [false, true] {
         tool_context_case(tool_search, ToolContextOutcome::Recover).await;
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn official_responses_websocket_tool_context_recovers_custom_calls_after_model_switch() {
+    let _guard = crate::test_env_guard();
+    tool_context_case(false, ToolContextOutcome::CustomModelSwitch).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn official_responses_websocket_tool_context_recovers_metadata_only_sessions() {
+    let _guard = crate::test_env_guard();
+    tool_context_case(false, ToolContextOutcome::MetadataOnly).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

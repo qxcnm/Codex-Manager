@@ -101,6 +101,7 @@ struct PreparedClientFrame {
     client_model: Option<String>,
     model: Option<String>,
     prompt_cache_key: Option<String>,
+    tool_call_registry_session_id: Option<String>,
     previous_response_id: Option<String>,
     store: bool,
     model_source: Option<String>,
@@ -410,31 +411,45 @@ fn ws_tool_call_registry_key(
     context: &WsRequestContext,
     prepared: &PreparedClientFrame,
 ) -> Option<String> {
-    // The frontend can add or omit prompt_cache_key when it opens the next task. If a
-    // session_id exists, use that stable root anchor instead of making the registry depend on
-    // the shape of an individual response.create frame.
-    let (route_conversation_id, _) = if context
+    // Tool descriptors belong to the conversation, not its currently selected model.
+    // Account routing remains model-scoped, but reusing its route id here loses the
+    // observed call when Desktop changes models or resumes on a fresh socket.
+    let session_id = context
         .cache_affinity_key
-        .as_deref()
-        .is_some_and(|value| !value.trim().is_empty())
-    {
-        ws_route_binding(context)
-    } else {
-        ws_route_binding_for_frame(context, prepared)
-    };
-    let route_conversation_id = route_conversation_id?.trim().to_string();
-    if route_conversation_id.is_empty() {
-        return None;
-    }
-    let model = prepared
-        .model
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("-");
+        .or(prepared.tool_call_registry_session_id.as_deref());
+    let registry_conversation_id = if let Some(session_id) = session_id {
+        crate::gateway::conversation_binding::cache_affinity_route_id(
+            &context.api_key.key_hash,
+            &context.api_key.protocol_type,
+            None,
+            crate::gateway::conversation_binding::CacheAffinityKeySource::SessionId,
+            session_id,
+        )
+    } else if let Some(prompt_cache_key) = prepared
+        .prompt_cache_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        crate::gateway::conversation_binding::cache_affinity_route_id(
+            &context.api_key.key_hash,
+            &context.api_key.protocol_type,
+            None,
+            crate::gateway::conversation_binding::CacheAffinityKeySource::PromptCacheKey,
+            prompt_cache_key,
+        )
+    } else {
+        context.route_conversation_id.as_deref()?.trim().to_string()
+    };
+    if registry_conversation_id.is_empty() {
+        return None;
+    }
     Some(format!(
-        "{}:{}:{}:{}",
-        context.api_key.key_hash, context.api_key.protocol_type, model, route_conversation_id,
+        "{}:{}:{}",
+        context.api_key.key_hash, context.api_key.protocol_type, registry_conversation_id,
     ))
 }
 
@@ -2044,6 +2059,22 @@ fn rewrite_response_create(
             )
         })?;
 
+    // Some Desktop transports put their stable session only in response.create.
+    // Extract it once instead of reparsing the full (possibly image-heavy) frame
+    // on every tool event. Turn/request ids are deliberately not session anchors.
+    let tool_call_registry_session_id = request.client_metadata.as_ref().and_then(|metadata| {
+        ["session_id", "session-id", "thread_id", "thread-id"]
+            .into_iter()
+            .find_map(|key| {
+                metadata
+                    .get(key)
+                    .map(String::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+            })
+            .map(str::to_string)
+    });
+
     Ok(PreparedClientFrame {
         text,
         raw_body,
@@ -2053,6 +2084,7 @@ fn rewrite_response_create(
         // 中文注释：只把客户端显式缓存键作为 PCK 路由来源；由根 session
         // 注入到上游 body 的缺省键仍应使用 SessionAffinity 路由命名空间。
         prompt_cache_key: client_prompt_cache_key_for_route,
+        tool_call_registry_session_id,
         previous_response_id: request.previous_response_id,
         store: request.store,
         model_source,

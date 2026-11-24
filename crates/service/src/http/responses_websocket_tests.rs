@@ -66,7 +66,10 @@ fn companion_page_websocket_context_preserves_real_outputs_and_raw_capture() {
                 "type":"response.create", "model":"gpt-5.4", "stream":stream,
                 "input":[real_output,
                     {"type":"function_call_output","id":"fco_page","name":"codex_apps_open_page","namespace":"agent","output":"{\"page_id\":null}"},
-                    {"type":"function_call_output","id":"fco_snapshot","name":"codex_apps_selected_page_part_1_of_1","namespace":"agent","output":"Companion Page snapshot part1\n页面正文\n"}
+                    {"type":"function_call_output","id":"fco_snapshot","name":"codex_apps_selected_page_part_1_of_1","namespace":"agent","output":"Companion Page snapshot part1\n页面正文\n"},
+                    {"type":"function_call_output","namespace":"agent","name":"goal_objective","call_id":null,"output":"Keep the real objective"},
+                    {"type":"custom_tool_call_output","name":"automation_update","call_id":" \t ","output":{"heartbeat":"active"}},
+                    {"type":"tool_search_output","output":{"tools":[]}}
                 ]
             }).to_string();
             let prepared =
@@ -79,6 +82,20 @@ fn companion_page_websocket_context_preserves_real_outputs_and_raw_capture() {
             assert_eq!(upstream["input"][1]["role"], "user");
             assert_eq!(upstream["input"][2]["role"], "user");
             assert_eq!(upstream["input"][2]["content"][0]["text"], "Companion Page context (agent.codex_apps_selected_page_part_1_of_1):\nCompanion Page snapshot part1\n页面正文\n");
+            assert_eq!(upstream["input"].as_array().unwrap().len(), 6);
+            for index in 3..6 {
+                assert_eq!(upstream["input"][index]["type"], "message");
+                assert_eq!(upstream["input"][index]["role"], "user");
+                assert!(upstream["input"][index].get("call_id").is_none());
+            }
+            assert!(upstream["input"][3]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Keep the real objective"));
+            assert!(upstream["input"][4]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("heartbeat"));
         }
     }
 }
@@ -584,6 +601,118 @@ fn websocket_terminal_retry_ignores_preamble_but_stops_after_real_output() {
     );
     assert!(!should_attempt_ws_terminal_retry(400, true));
     assert!(!should_attempt_ws_terminal_retry(200, false));
+}
+
+#[test]
+fn websocket_tool_registry_survives_model_changes_and_preserves_scope() {
+    let _guard = crate::test_env_guard();
+    for anchor in ["header", "metadata", "thread_metadata", "prompt_cache_key"] {
+        let session = format!("model-switch-{anchor}-{}-{}", std::process::id(), now_ts());
+        let mut headers = HeaderMap::new();
+        if anchor == "header" {
+            headers.insert("session_id", HeaderValue::from_str(&session).unwrap());
+        }
+        let context = WsRequestContext {
+            api_key: sample_api_key(),
+            incoming_headers: crate::gateway::IncomingHeaderSnapshot::from_http_headers(&headers),
+            prompt_cache_key: None,
+            cache_affinity_key: (anchor == "header").then(|| session.clone()),
+            route_conversation_id: None,
+            route_conversation_source: None,
+            effective_upstream_base: "https://chatgpt.com/backend-api/codex".into(),
+            prefer_raw_errors: false,
+        };
+        let frame = |model: &str, input: Value, session: &str| {
+            let mut value = json!({"type":"response.create", "model":model, "input":input});
+            match anchor {
+                "header" => {
+                    value["client_metadata"] =
+                        json!({"session_id":format!("conflicting-metadata-{session}-{model}")});
+                    value["prompt_cache_key"] = json!(format!("per-task-{session}-{model}"));
+                }
+                "metadata" => value["client_metadata"] = json!({"session_id":session}),
+                "thread_metadata" => {
+                    value["client_metadata"] =
+                        json!({"session_id":" \t ","session-id":" ","thread_id":session})
+                }
+                "prompt_cache_key" => value["prompt_cache_key"] = json!(session),
+                _ => {}
+            }
+            if matches!(anchor, "metadata" | "thread_metadata") {
+                value["prompt_cache_key"] = json!(format!("per-task-{session}-{model}"));
+            }
+            value.to_string()
+        };
+        let seed = rewrite_client_frame(
+            &frame("gpt-5.4", json!("Run the original task"), &session),
+            &context,
+        )
+        .unwrap();
+        let call = json!({"type":"custom_tool_call", "call_id":"call_model_switch", "name":"exec", "input":"original input", "status":"completed"});
+        remember_ws_tool_calls_from_upstream_event(
+            &context,
+            &seed,
+            &json!({"type":"response.output_item.done", "item":call}).to_string(),
+        );
+        let mut different_namespace = context.clone();
+        different_namespace.cache_affinity_key = None;
+        let mut same_text_other_namespace =
+            json!({"type":"response.create", "model":"gpt-5.4", "input":[]});
+        if anchor == "prompt_cache_key" {
+            same_text_other_namespace["client_metadata"] = json!({"session_id":session});
+        } else {
+            same_text_other_namespace["prompt_cache_key"] = json!(session);
+        }
+        let other_namespace =
+            rewrite_client_frame(&same_text_other_namespace.to_string(), &different_namespace)
+                .unwrap();
+        assert!(load_ws_tool_call_registry(&different_namespace, &other_namespace).is_none(), "session ids and prompt cache keys must not share a registry merely because their text matches");
+
+        for model in ["gpt-5.4", "gpt-5.5"] {
+            let output = json!({"type":"custom_tool_call_output", "call_id":"call_model_switch", "output":"complete real result"});
+            let resumed =
+                rewrite_client_frame(&frame(model, json!([output]), &session), &context).unwrap();
+            let cached = load_ws_tool_call_registry(&context, &resumed).expect("the same conversation must retain observed calls across models and new frontend tasks");
+            let terminal = inspect_ws_terminal_event(r#"{"type":"error","status":400,"error":{"message":"No tool call found for custom tool call output with call_id call_model_switch."}}"#).unwrap();
+            let recovered = prepare_missing_ws_tool_call_retry(
+                &resumed.text,
+                &cached,
+                &terminal,
+                &mut Default::default(),
+            )
+            .unwrap()
+            .unwrap();
+            let recovered: Value = serde_json::from_str(&recovered).unwrap();
+            assert_eq!(recovered["model"], model);
+            assert_eq!(recovered["input"], json!([call, output]));
+
+            let mut other = context.clone();
+            other.api_key.key_hash = "another-platform-key".into();
+            assert!(
+                load_ws_tool_call_registry(&other, &resumed).is_none(),
+                "API keys must never share recovered calls"
+            );
+            other = context.clone();
+            other.api_key.protocol_type = "another-protocol".into();
+            assert!(
+                load_ws_tool_call_registry(&other, &resumed).is_none(),
+                "protocols must remain isolated"
+            );
+            other = context.clone();
+            if anchor == "header" {
+                other.cache_affinity_key = Some(format!("{session}-other"));
+            }
+            let other_frame = rewrite_client_frame(
+                &frame(model, json!([output]), &format!("{session}-other")),
+                &other,
+            )
+            .unwrap();
+            assert!(
+                load_ws_tool_call_registry(&other, &other_frame).is_none(),
+                "separate conversations must never share recovered calls"
+            );
+        }
+    }
 }
 
 #[test]

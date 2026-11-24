@@ -1060,6 +1060,9 @@ pub(in super::super) async fn send_upstream_request_without_session_headers(
     auth_token: &str,
     account: &Account,
 ) -> Result<GatewayUpstreamResponse, String> {
+    // This is the existing same-account 400 compatibility attempt. Repeating
+    // zstd would leave an encoding-related rejection unchanged after stripping
+    // session headers. Keep the exact JSON/history and try plain transport once.
     send_upstream_request_with_compression_override(
         client,
         method,
@@ -1073,7 +1076,7 @@ pub(in super::super) async fn send_upstream_request_without_session_headers(
         account,
         true,
         true,
-        None,
+        Some(RequestCompression::None),
     )
     .await
 }
