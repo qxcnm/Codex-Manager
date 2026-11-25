@@ -1252,6 +1252,33 @@ fn websocket_created_event_is_buffered_but_actual_output_is_not() {
 }
 
 #[test]
+fn websocket_official_notifications_are_preamble_but_unknown_events_are_not() {
+    for kind in [
+        "codex.rate_limits",
+        "codex.response.metadata",
+        "responsesapi.websocket_timing",
+    ] {
+        let text = json!({"type": kind}).to_string();
+        assert!(should_buffer_ws_upstream_preamble(&text, 0));
+        assert!(!should_buffer_ws_upstream_preamble(
+            &text,
+            super::MAX_BUFFERED_WS_PREAMBLE_EVENTS,
+        ));
+    }
+    for kind in [
+        "response.output_text.delta",
+        "response.function_call_arguments.delta",
+        "response.output_item.added",
+        "codex.future_output",
+    ] {
+        assert!(!should_buffer_ws_upstream_preamble(
+            &json!({"type": kind}).to_string(),
+            0,
+        ));
+    }
+}
+
+#[test]
 fn websocket_tool_output_request_keeps_retry_preamble_buffered() {
     assert!(ws_request_has_tool_call_output(
         json!({

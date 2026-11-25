@@ -3790,7 +3790,17 @@ fn should_buffer_ws_upstream_preamble(text: &str, buffered_count: usize) -> bool
     });
     matches!(
         event_type.as_deref(),
-        Some("response.created" | "response.queued" | "response.in_progress")
+        Some(
+            "response.created"
+                | "response.queued"
+                | "response.in_progress"
+                // Official WebSockets send these before validating tool history.
+                // They contain accounting/transport metadata, not model output;
+                // forwarding them must not disable bounded context recovery.
+                | "codex.rate_limits"
+                | "codex.response.metadata"
+                | "responsesapi.websocket_timing"
+        )
     )
 }
 

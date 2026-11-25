@@ -11,6 +11,7 @@ enum ToolContextOutcome {
     UnknownCall,
     CustomModelSwitch,
     MetadataOnly,
+    NativeReconnect,
 }
 
 async fn next_context_json<S>(socket: &mut tokio_tungstenite::WebSocketStream<S>) -> Value
@@ -81,6 +82,7 @@ where
 
 async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
     let session_id = format!("session_tool_context_{tool_search}_{outcome:?}");
+    let native_reconnect = matches!(outcome, ToolContextOutcome::NativeReconnect);
     let custom = matches!(
         outcome,
         ToolContextOutcome::CustomModelSwitch | ToolContextOutcome::MetadataOnly
@@ -137,6 +139,10 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
     if matches!(outcome, ToolContextOutcome::MetadataOnly) {
         follow_up["client_metadata"]["session_id"] = json!(session_id);
     }
+    if native_reconnect {
+        follow_up.as_object_mut().unwrap().remove("previous_response_id");
+        follow_up["model"] = json!("gpt-5.6-terra");
+    }
     let mut seed_calls = vec![call.clone()];
     let extra_pair = matches!(outcome, ToolContextOutcome::MixedKnownCalls).then(|| {
         assert!(!tool_search, "the first rejected output must be a function result");
@@ -176,12 +182,27 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
             json!({"type": "response.created", "response": {"id": "resp_tool_context_seed"}}),
         )
         .await;
+        if native_reconnect {
+            send_context_json(
+                &mut seed,
+                json!({"type":"response.in_progress","response":{"id":"resp_tool_context_seed"}}),
+            ).await;
+            let mut partial = expected_call.clone();
+            partial["arguments"] = json!("");
+            partial["status"] = json!("in_progress");
+            send_context_json(&mut seed, json!({"type":"response.output_item.added", "output_index":0,"item":partial})).await;
+            send_context_json(&mut seed, json!({"type":"response.function_call_arguments.delta", "delta":expected_call["arguments"]})).await;
+            send_context_json(&mut seed, json!({"type":"response.function_call_arguments.done", "arguments":expected_call["arguments"]})).await;
+        }
         for (output_index, item) in seed_calls.iter().enumerate() {
             send_context_json(
                 &mut seed,
                 json!({"type": "response.output_item.done", "response_id": "resp_tool_context_seed", "output_index": output_index, "item": item}),
             )
             .await;
+        }
+        if native_reconnect {
+            send_context_json(&mut seed, json!({"type":"responsesapi.websocket_timing"})).await;
         }
         send_context_json(
             &mut seed,
@@ -201,12 +222,22 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
         .await
         .unwrap();
         let initial = next_context_json(&mut resumed).await;
-        assert_eq!(initial["previous_response_id"], "resp_tool_context_seed");
+        assert_eq!(initial["previous_response_id"], expected_follow_up["previous_response_id"]);
         assert_eq!(initial["input"], expected_follow_up["input"]);
         if custom {
             assert_eq!(seed_request["model"], "gpt-6-sol");
             assert_eq!(initial["model"], expected_follow_up["model"]);
         }
+        // Exercise recovery and its safety guards with the real backend's
+        // accounting/transport notifications, including the cross-model case.
+        send_context_json(
+            &mut resumed,
+            json!({"type":"codex.rate_limits","plan_type":"free","rate_limits":{}}),
+        ).await;
+        send_context_json(
+            &mut resumed,
+            json!({"type":"codex.response.metadata","headers":{}}),
+        ).await;
         send_context_json(
             &mut resumed,
             json!({"type": "response.created", "response": {"id": "resp_tool_context_attempt"}}),
@@ -238,10 +269,11 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
                 | ToolContextOutcome::RejectRetry
                 | ToolContextOutcome::CustomModelSwitch
                 | ToolContextOutcome::MetadataOnly
+                | ToolContextOutcome::NativeReconnect
         ) {
             let retry = next_context_json(&mut resumed).await;
             assert_eq!(
-                retry["previous_response_id"], "resp_tool_context_seed",
+                retry["previous_response_id"], expected_follow_up["previous_response_id"],
                 "tool repair must preserve the only reference to original history"
             );
             assert_eq!(retry["client_metadata"]["trace_label"], "keep_metadata");
@@ -329,7 +361,7 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
         )),
     );
     insert_account_and_token(&storage);
-    if custom {
+    if custom || native_reconnect {
         storage
             .update_api_key_model_config("gk_proxy_runtime_ws", None, None, None)
             .unwrap();
@@ -355,6 +387,9 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
     .await
     .unwrap();
     let mut seed_frame = json!({"type": "response.create", "model": if custom { "gpt-6-sol" } else { "gpt-4.1" }, "store": false, "input": "Original instruction: preserve the full conversation."});
+    if native_reconnect {
+        seed_frame["model"] = json!("gpt-5.6-terra");
+    }
     if matches!(outcome, ToolContextOutcome::MetadataOnly) {
         seed_frame["client_metadata"] = json!({"session_id":session_id});
     }
@@ -378,6 +413,7 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
             | ToolContextOutcome::MixedKnownCalls
             | ToolContextOutcome::CustomModelSwitch
             | ToolContextOutcome::MetadataOnly
+            | ToolContextOutcome::NativeReconnect
     ) {
         "response.completed"
     } else {
@@ -400,11 +436,16 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
             | ToolContextOutcome::MixedKnownCalls
             | ToolContextOutcome::CustomModelSwitch
             | ToolContextOutcome::MetadataOnly
+                | ToolContextOutcome::NativeReconnect
     ) {
         assert_eq!(
             events.last().unwrap()["response"]["id"],
             "resp_tool_context_recovered"
         );
+        assert!(events.iter().all(|event| !matches!(
+            event["type"].as_str(),
+            Some("codex.rate_limits" | "codex.response.metadata")
+        )), "failed attempt notifications must not escape before recovery");
         assert_eq!(
             events
                 .iter()
@@ -422,7 +463,10 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
                 .count(),
             1
         );
-        assert_eq!(events[1]["delta"], "already delivered");
+        assert_eq!(
+            events.iter().find(|event| event["type"] == "response.output_text.delta").unwrap()["delta"],
+            "already delivered"
+        );
     }
     resumed.close(None).await.unwrap();
     let _ = shutdown.send(());
@@ -477,4 +521,10 @@ async fn official_responses_websocket_tool_context_never_replays_real_output_or_
         tool_context_case(tool_search, ToolContextOutcome::SubstantiveOutput).await;
         tool_context_case(tool_search, ToolContextOutcome::UnknownCall).await;
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn official_responses_websocket_tool_context_native_reconnect_without_response_id() {
+    let _guard = crate::test_env_guard();
+    tool_context_case(false, ToolContextOutcome::NativeReconnect).await;
 }

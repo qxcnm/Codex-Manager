@@ -492,3 +492,202 @@ fn scheduled_weighted_first_hops_share_state_across_requests() {
         2
     );
 }
+
+#[test]
+fn scheduled_distinct_sources_follow_priority_for_json_sse_and_both_endpoints() {
+    let _lock = test_env_guard();
+    for path in ["/v1/responses", "/v1/chat/completions"] {
+        for stream in [false, true] {
+            let dir = new_test_dir("model-route-independent-sources");
+            let db = dir.join("codexmanager.db");
+            let _db = EnvGuard::set("CODEXMANAGER_DB_PATH", db.to_str().unwrap());
+            let (first, first_rx, first_join) = start_mock_upstream_sequence_lenient(
+                vec![(
+                    503,
+                    r#"{"error":{"message":"source A unavailable"}}"#.into(),
+                )],
+                Duration::from_secs(2),
+            );
+            let (ok, content_type) = success(path, stream);
+            let (second, second_rx, second_join) =
+                start_mock_upstream_sequence_lenient_with_content_types(
+                    vec![(200, ok, content_type)],
+                    Duration::from_secs(2),
+                );
+            assert_ne!(first, second);
+            let storage = Storage::open(&db).unwrap();
+            insert_aggregate_api(&storage, "agg_distinct_a", &first, path, now_ts());
+            insert_aggregate_api(&storage, "agg_distinct_b", &second, path, now_ts());
+            configure(
+                &storage,
+                "weighted",
+                vec![
+                    route("agg_distinct_b", "backup", 0, 1),
+                    route("agg_distinct_a", "primary", 10, 1),
+                ],
+            );
+            insert_hybrid_key(&storage, "gk_model_schedule", "pk_model_schedule", now_ts());
+            let server = codexmanager_service::start_one_shot_server().unwrap();
+            let (status, body) = send(&server.addr, path, stream);
+            server.join();
+            first_join.join().unwrap();
+            second_join.join().unwrap();
+            assert_eq!(status, 200, "{path}, stream={stream}: {body}");
+            assert!(
+                body.contains("call_lookup"),
+                "tool call survives fallback: {body}"
+            );
+            for (rx, expected) in [(first_rx, "primary"), (second_rx, "backup")] {
+                let requests = rx.try_iter().collect::<Vec<_>>();
+                assert_eq!(requests.len(), 1, "one attempt per independent source");
+                let sent: serde_json::Value =
+                    serde_json::from_slice(&decode_upstream_request_body(&requests[0])).unwrap();
+                assert_eq!(sent["model"], expected);
+                assert_eq!(sent["tools"].as_array().unwrap().len(), 1);
+            }
+            let logs = storage
+                .list_request_logs(Some("key:=gk_model_schedule"), 10)
+                .unwrap();
+            assert_eq!(logs.len(), 1);
+            assert_eq!(logs[0].actual_source_id.as_deref(), Some("agg_distinct_b"));
+        }
+    }
+}
+
+#[test]
+fn scheduled_distinct_sources_have_weighted_first_hops() {
+    let _lock = test_env_guard();
+    let dir = new_test_dir("model-route-independent-weights");
+    let db = dir.join("codexmanager.db");
+    let _db = EnvGuard::set("CODEXMANAGER_DB_PATH", db.to_str().unwrap());
+    let (first, first_rx, first_join) = start_mock_upstream_sequence_lenient(
+        vec![(200, response_json("resp_weighted_source_a")); 12],
+        Duration::from_secs(2),
+    );
+    let (second, second_rx, second_join) = start_mock_upstream_sequence_lenient(
+        vec![(200, response_json("resp_weighted_source_b")); 12],
+        Duration::from_secs(2),
+    );
+    assert_ne!(first, second);
+    let storage = Storage::open(&db).unwrap();
+    insert_aggregate_api(&storage, "agg_weight_a", &first, "/responses", now_ts());
+    insert_aggregate_api(&storage, "agg_weight_b", &second, "/responses", now_ts());
+    configure(
+        &storage,
+        "weighted",
+        vec![
+            route("agg_weight_a", "weighted-three", 10, 3),
+            route("agg_weight_b", "weighted-one", 10, 1),
+        ],
+    );
+    insert_hybrid_key(&storage, "gk_model_schedule", "pk_model_schedule", now_ts());
+    let mut counts = [0; 2];
+    for _ in 0..12 {
+        let server = codexmanager_service::start_one_shot_server().unwrap();
+        let (status, body) = send(&server.addr, "/v1/responses", false);
+        server.join();
+        assert_eq!(status, 200, "{body}");
+        if body.contains("resp_weighted_source_a") {
+            counts[0] += 1;
+        } else {
+            assert!(body.contains("resp_weighted_source_b"));
+            counts[1] += 1;
+        }
+    }
+    first_join.join().unwrap();
+    second_join.join().unwrap();
+    assert_eq!(counts, [9, 3]);
+    assert_eq!(first_rx.try_iter().count(), 9);
+    assert_eq!(second_rx.try_iter().count(), 3);
+    assert_eq!(
+        storage
+            .list_request_logs(Some("key:=gk_model_schedule"), 20)
+            .unwrap()
+            .len(),
+        12
+    );
+}
+
+#[test]
+fn scheduled_account_and_aggregate_sources_fallback_in_both_directions() {
+    let _lock = test_env_guard();
+    for policy in ["account_first", "aggregate_first"] {
+        let dir = new_test_dir("model-route-cross-kind-fallback");
+        let db = dir.join("codexmanager.db");
+        let _db = EnvGuard::set("CODEXMANAGER_DB_PATH", db.to_str().unwrap());
+        let failure = (
+            503,
+            r#"{"error":{"message":"temporary unavailable"}}"#.into(),
+        );
+        let (account_addr, account_rx, account_join) = start_mock_upstream_sequence_lenient(
+            if policy == "account_first" {
+                vec![failure.clone(); 16]
+            } else {
+                vec![(200, response_json("resp_cross_kind_account"))]
+            },
+            Duration::from_secs(2),
+        );
+        let base = format!("http://{account_addr}/backend-api/codex");
+        let _upstream = EnvGuard::set("CODEXMANAGER_UPSTREAM_BASE_URL", &base);
+        let _fallback = EnvGuard::set("CODEXMANAGER_UPSTREAM_FALLBACK_BASE_URL", &base);
+        let (aggregate_addr, aggregate_rx, aggregate_join) = start_mock_upstream_sequence_lenient(
+            if policy == "aggregate_first" {
+                vec![failure]
+            } else {
+                vec![(200, response_json("resp_cross_kind_aggregate"))]
+            },
+            Duration::from_secs(2),
+        );
+        let storage = Storage::open(&db).unwrap();
+        insert_active_account(&storage, &format!("acc_cross_kind_{policy}"), now_ts());
+        insert_aggregate_api(
+            &storage,
+            "agg_cross_kind",
+            &aggregate_addr,
+            "/responses",
+            now_ts(),
+        );
+        configure(
+            &storage,
+            policy,
+            vec![
+                route("default", "pool-model", 0, 1),
+                route("agg_cross_kind", "aggregate-model", 10, 1),
+            ],
+        );
+        insert_hybrid_key(&storage, "gk_model_schedule", "pk_model_schedule", now_ts());
+        let server = codexmanager_service::start_one_shot_server().unwrap();
+        let (status, body) = send(&server.addr, "/v1/responses", false);
+        server.join();
+        account_join.join().unwrap();
+        aggregate_join.join().unwrap();
+        assert_eq!(status, 200, "{policy}: {body}");
+        assert!(
+            body.contains(if policy == "account_first" {
+                "resp_cross_kind_aggregate"
+            } else {
+                "resp_cross_kind_account"
+            }),
+            "{policy}: {body}"
+        );
+        let account_count = account_rx.try_iter().count();
+        let aggregate_count = aggregate_rx.try_iter().count();
+        assert!(
+            (1..16).contains(&account_count),
+            "bounded account attempts: {account_count}"
+        );
+        assert_eq!(aggregate_count, 1);
+        let logs = storage
+            .list_request_logs(Some("key:=gk_model_schedule"), 10)
+            .unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(
+            logs[0].actual_source_kind.as_deref(),
+            Some(if policy == "account_first" {
+                "aggregate_api"
+            } else {
+                "openai_account"
+            })
+        );
+    }
+}
