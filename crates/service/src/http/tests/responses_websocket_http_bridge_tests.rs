@@ -104,12 +104,31 @@ async fn mock_http(
 ) -> axum::response::Response {
     let (parts, body) = request.into_parts();
     let body = to_bytes(body, 1024 * 1024).await.unwrap();
+    let body = if parts
+        .headers
+        .get("content-encoding")
+        .and_then(|value| value.to_str().ok())
+        == Some("zstd")
+    {
+        zstd::stream::decode_all(body.as_ref()).unwrap()
+    } else {
+        body.to_vec()
+    };
     let _ = state.capture.send(Capture {
         method: parts.method.to_string(),
         path: parts.uri.path().to_string(),
         body: serde_json::from_slice(&body).unwrap(),
     });
     let round = state.calls.fetch_add(1, Ordering::SeqCst) + 1;
+    if state.mode == "scheduled" && round % 2 == 1 {
+        return axum::response::Response::builder()
+            .status(503)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"error":{"message":"scheduled first branch unavailable"}}"#,
+            ))
+            .unwrap();
+    }
     let tools = state.mode == "tools" && round == 1;
     let payload = if state.mode == "failed" {
         sse(vec![
@@ -241,6 +260,13 @@ fn seed_aggregate(storage: &Storage, addr: &str, protocol: &str, rotation: &str)
         priority: 0,
         weight: 1,
     }];
+    if protocol == "scheduled" {
+        model.capabilities["route_policy"] = json!("weighted");
+        let mut preferred = model.routes[0].clone();
+        preferred.upstream_model = "unavailable-model".into();
+        preferred.priority = 100;
+        model.routes.insert(0, preferred);
+    }
     storage
         .upsert_managed_model_v2(&ManagedModelV2Upsert {
             previous_slug: None,
@@ -478,6 +504,136 @@ async fn tools_and_history_case(protocol: &'static str, rotation: &str) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn responses_websocket_http_bridge_responses_preserves_warmup_tools_and_history() {
     tools_and_history_case("responses", crate::apikey_profile::ROTATION_AGGREGATE_API).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn responses_websocket_http_bridge_schedules_same_source_branches_per_turn() {
+    let _guard = crate::test_env_guard();
+    let db = new_test_db_path("codexmanager-ws-model-route-schedule");
+    let storage = init_test_storage(&db);
+    let _db = EnvGuard::set("CODEXMANAGER_DB_PATH", db.to_str().unwrap());
+    let (addr, mock, mut captures, upstream) = start_mock("scheduled", "scheduled").await;
+    let (mut socket, signal, server) = connect_bridge(
+        &storage,
+        &addr,
+        "scheduled",
+        crate::apikey_profile::ROTATION_HYBRID,
+    )
+    .await;
+    for _ in 0..2 {
+        send(
+            &mut socket,
+            json!({"type":"response.create","model":"gpt-6-luna","input":"route test",
+            "tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}]}),
+        )
+        .await;
+        assert_eq!(terminal(&mut socket).await["type"], "response.completed");
+        let first = captures.recv().await.unwrap();
+        let second = captures.recv().await.unwrap();
+        assert_eq!(first.body["model"], "unavailable-model");
+        assert_eq!(second.body["model"], "mock-model");
+        assert_eq!(second.body["tools"][0]["name"], "lookup");
+    }
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 4);
+    shutdown(socket, signal, server, upstream).await;
+    let logs = storage.list_request_logs(None, 10).unwrap();
+    assert_eq!(logs.len(), 2);
+    assert!(logs
+        .iter()
+        .all(|log| log.status_code == Some(200) && log.request_type.as_deref() == Some("ws")));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn responses_websocket_account_key_uses_http_for_opt_in_model_routes() {
+    let _guard = crate::test_env_guard();
+    let db = new_test_db_path("codexmanager-ws-account-model-schedule");
+    let storage = init_test_storage(&db);
+    let _db = EnvGuard::set("CODEXMANAGER_DB_PATH", db.to_string_lossy().as_ref());
+    let (addr, mock, mut captures, upstream) = start_mock("responses", "normal").await;
+    // Native WebSocket and HTTP account executors resolve their bases through
+    // different configuration paths. Keep both, including fallback, loopback-only.
+    let base = format!("http://{addr}/chatgpt.com/backend-api/codex");
+    let _upstream = EnvGuard::set("CODEXMANAGER_UPSTREAM_BASE_URL", &base);
+    let _fallback = EnvGuard::set("CODEXMANAGER_UPSTREAM_FALLBACK_BASE_URL", &base);
+    insert_api_key_record(
+        &storage,
+        PLATFORM_KEY,
+        crate::apikey_profile::ROTATION_ACCOUNT,
+        Some(base),
+    );
+    storage
+        .update_api_key_model_config("gk_proxy_runtime_ws", None, None, None)
+        .unwrap();
+    assert!(storage
+        .find_api_key_by_id("gk_proxy_runtime_ws")
+        .unwrap()
+        .unwrap()
+        .model_slug
+        .is_none());
+    insert_account_and_token(&storage);
+    let mut model = storage.get_managed_model_v2("gpt-6-sol").unwrap().unwrap();
+    model.id.clear();
+    model.slug = "scheduled-account-model".into();
+    model.origin = "custom".into();
+    model.capabilities["route_policy"] = json!("weighted");
+    model.routes = vec![
+        ModelRouteV2 {
+            source_kind: "account_pool".into(),
+            source_id: "default".into(),
+            upstream_model: "mock-account-primary".into(),
+            enabled: true,
+            priority: 100,
+            weight: 1,
+            ..Default::default()
+        },
+        ModelRouteV2 {
+            source_kind: "account_pool".into(),
+            source_id: "default".into(),
+            upstream_model: "mock-account-secondary".into(),
+            enabled: true,
+            priority: 0,
+            weight: 1,
+            ..Default::default()
+        },
+    ];
+    storage
+        .upsert_managed_model_v2(&ManagedModelV2Upsert {
+            previous_slug: None,
+            model,
+        })
+        .unwrap();
+    assert!(storage.get_managed_model_v2("gpt-6-sol").unwrap().is_some());
+    tokio::task::spawn_blocking(crate::gateway::reload_runtime_config_from_env)
+        .await
+        .unwrap();
+    let (front, signal, server) = start_front_proxy_test_server(ProxyState {
+        backend_base_url: String::new(),
+        client: Client::new(),
+    })
+    .await;
+    let (mut socket, _) = connect_async(build_ws_request(
+        &format!("ws://{front}/v1/responses"),
+        PLATFORM_KEY,
+        &[],
+    ))
+    .await
+    .unwrap();
+    for (model, expected) in [
+        ("scheduled-account-model", "mock-account-primary"),
+        ("gpt-6-sol", "gpt-6-sol"),
+    ] {
+        send(
+            &mut socket,
+            json!({"type":"response.create", "model":model, "input":"test account routing"}),
+        )
+        .await;
+        assert_eq!(terminal(&mut socket).await["type"], "response.completed");
+        let capture = captures.recv().await.unwrap();
+        assert_eq!(capture.method, "POST");
+        assert_eq!(capture.body["model"], expected);
+    }
+    assert_eq!(mock.calls.load(Ordering::SeqCst), 2);
+    shutdown(socket, signal, server, upstream).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

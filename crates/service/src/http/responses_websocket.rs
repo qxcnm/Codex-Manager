@@ -364,7 +364,49 @@ pub(super) async fn upgrade_responses_websocket(request: HttpRequest<Body>) -> R
                 "BPS routing configuration could not be read",
             )
         })?;
-        Ok::<_, Response<Body>>((context, bps_enabled))
+        // The model is carried in response.create, not the upgrade. Once an
+        // account route opts into model scheduling, use the per-turn HTTP
+        // router for this Key's socket as well (including later model changes).
+        // A catalog with only legacy routes retains native official WebSockets.
+        let scheduled_account_routes = if !bps_enabled
+            && crate::gateway::gateway_supports_official_responses_websocket(&context.api_key)
+        {
+            let storage = open_storage().ok_or_else(|| {
+                text_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "model routing storage unavailable",
+                )
+            })?;
+            crate::models_v2::list_with_storage(&storage, true)
+                .map_err(|_| {
+                    text_error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "model routing configuration could not be read",
+                    )
+                })?
+                .items
+                .iter()
+                .any(|model| {
+                    model.enabled
+                        && context.api_key.model_slug.as_deref().is_none_or(|slug| {
+                            crate::models_v2::policy_catalog_slug(slug) == model.slug
+                        })
+                        && codexmanager_core::storage::ModelRoutePolicyV2::from_capabilities(
+                            &model.capabilities,
+                        )
+                        .is_ok_and(|policy| {
+                            policy != codexmanager_core::storage::ModelRoutePolicyV2::Legacy
+                        })
+                        && model.routes.iter().any(|route| {
+                            route.enabled
+                                && route.source_kind == "account_pool"
+                                && route.source_id == "default"
+                        })
+                })
+        } else {
+            false
+        };
+        Ok::<_, Response<Body>>((context, bps_enabled || scheduled_account_routes))
     })
     .await
     {

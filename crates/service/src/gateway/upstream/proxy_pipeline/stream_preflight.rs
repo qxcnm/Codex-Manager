@@ -106,6 +106,36 @@ fn actionable_message_from_error_body(body: &[u8]) -> Option<String> {
     (!text.is_empty() && is_actionable_gateway_error(text)).then(|| text.to_string())
 }
 
+fn recoverable_model_route_error(value: &Value) -> Option<String> {
+    if !super::super::model_route_scheduler::is_scheduled_request() {
+        return None;
+    }
+    let error = value
+        .get("error")
+        .or_else(|| value.get("response")?.get("error"))?;
+    let recoverable = ["code", "type"]
+        .iter()
+        .filter_map(|key| error.get(key)?.as_str())
+        .any(|code| {
+            matches!(
+                code,
+                "server_error"
+                    | "overloaded_error"
+                    | "rate_limit_exceeded"
+                    | "rate_limit_error"
+                    | "timeout"
+                    | "service_unavailable"
+            )
+        });
+    recoverable.then(|| {
+        error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("recoverable upstream model route failure")
+            .to_owned()
+    })
+}
+
 fn summarize_non_200_status_failover(status_code: u16, body: Option<&[u8]>) -> String {
     let body_hint = body
         .and_then(|body| crate::gateway::summarize_upstream_error_hint_from_body(status_code, body))
@@ -153,7 +183,11 @@ fn is_possible_usage_limit_delta_prefix(message: &str) -> bool {
 }
 
 fn normalized_frames(prefix: &[u8], include_incomplete_frame: bool) -> (Vec<String>, bool) {
-    let normalized = String::from_utf8_lossy(prefix).replace("\r\n", "\n");
+    // SSE permits CR, LF and CRLF line endings. Preflight must accept the
+    // same framing as delivery, including CR/CRLF split across body chunks.
+    let normalized = String::from_utf8_lossy(prefix)
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
     let has_incomplete_trailing_frame = include_incomplete_frame && !normalized.ends_with("\n\n");
     let mut parts = normalized.split("\n\n").collect::<Vec<_>>();
     if !include_incomplete_frame && !normalized.ends_with("\n\n") {
@@ -261,6 +295,10 @@ fn classify_prefix(prefix: &[u8], include_incomplete_frame: bool) -> PrefixDecis
             .map(str::to_string);
         let event_type = payload_event_type.clone().or(declared_event_type.clone());
 
+        if let Some(message) = parsed.as_ref().and_then(recoverable_model_route_error) {
+            return PrefixDecision::Failover(message);
+        }
+
         if let Some(message) = parsed
             .as_ref()
             .and_then(actionable_message_from_explicit_error)
@@ -348,13 +386,18 @@ async fn preflight_stream_response_with_idle_timeout(
     has_more_candidates: bool,
     idle_timeout: Option<std::time::Duration>,
 ) -> StreamPreflightOutcome {
+    let route_remaining = super::super::model_route_scheduler::remaining_request_deadline();
     preflight_stream_response_with_timeouts(
         response,
         request_path,
         upstream_is_stream,
         has_more_candidates,
         idle_timeout,
-        Some(STREAM_PREFLIGHT_WALL_CLOCK_TIMEOUT),
+        Some(
+            route_remaining.map_or(STREAM_PREFLIGHT_WALL_CLOCK_TIMEOUT, |left| {
+                left.min(STREAM_PREFLIGHT_WALL_CLOCK_TIMEOUT)
+            }),
+        ),
     )
     .await
 }
@@ -368,6 +411,10 @@ async fn preflight_stream_response_with_timeouts(
     wall_clock_timeout: Option<Duration>,
 ) -> StreamPreflightOutcome {
     let status_code = response.status().as_u16();
+    if status_code == 400 && super::super::model_route_scheduler::is_scheduled_request() {
+        // A malformed request is not a recoverable model-route failure.
+        return StreamPreflightOutcome::Ready(response);
+    }
     if status_code == 400 {
         // Classification has independent byte, idle and wall-clock bounds, including
         // non-streaming requests and the final candidate. All consumed bytes replay.
@@ -481,6 +528,13 @@ async fn preflight_stream_response_with_timeouts(
                 )
             }
             GatewayStreamPrefetchTerminal::WallClockTimeout => {
+                if super::super::model_route_scheduler::remaining_request_deadline()
+                    .is_some_and(|left| left.is_zero())
+                {
+                    return StreamPreflightOutcome::TransportFailover(
+                        "model route request timeout".into(),
+                    );
+                }
                 // A normal response may have a slow first semantic event. Commit the
                 // buffered stream instead of treating the account as unhealthy and
                 // delaying downstream response headers for the full idle timeout.

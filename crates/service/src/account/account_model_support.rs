@@ -13,6 +13,19 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+tokio::task_local! {
+    static ROUTE_MODEL_OVERRIDE: String;
+}
+
+/// One selected account-pool branch supplies the model to eligibility checks,
+/// sticky binding validation and the final wire body, across async awaits.
+pub(crate) async fn scope_route_model_override<F: std::future::Future>(
+    model: String,
+    future: F,
+) -> F::Output {
+    ROUTE_MODEL_OVERRIDE.scope(model, future).await
+}
+
 const ENV_TTL_SECS: &str = "CODEXMANAGER_ACCOUNT_MODEL_UNSUPPORTED_TTL_SECS";
 const DEFAULT_TTL_SECS: u64 = 30 * 60;
 
@@ -95,6 +108,13 @@ pub(crate) fn account_model_override_for_request(
     storage: &codexmanager_core::storage::Storage,
     requested_model: Option<&str>,
 ) -> Option<String> {
+    if let Ok(model) = ROUTE_MODEL_OVERRIDE.try_with(Clone::clone) {
+        return (!crate::models_v2::should_preserve_luna_reserve_alias(
+            requested_model,
+            Some(&model),
+        ))
+        .then_some(model);
+    }
     requested_model
         .and_then(|model| {
             crate::models_v2::enabled_model(storage, crate::models_v2::policy_catalog_slug(model))

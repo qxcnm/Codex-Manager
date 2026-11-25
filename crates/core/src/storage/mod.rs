@@ -70,6 +70,8 @@ pub use model_catalog_v2::{
     ModelFastPolicyV2, ModelPriceV2, ModelRouteV2, ResolvedModelCapabilitiesV2,
 };
 pub use model_display_order::{validate_managed_model_reorder_v2, ManagedModelReorderV2Params};
+mod model_route_policy;
+pub use model_route_policy::ModelRoutePolicyV2;
 pub use proxy_profiles::derive_proxy_profile_url_metadata;
 pub use request_log_payload_batch::{is_sqlite_busy_error, RequestLogPayloadBatch};
 pub use request_log_payload_store::{

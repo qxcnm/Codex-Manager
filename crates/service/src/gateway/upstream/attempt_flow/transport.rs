@@ -673,6 +673,7 @@ pub(in crate::gateway) enum AsyncStreamRequestError {
     WorkerUnavailable(String),
     ResponseMetadataUnavailable,
     ReplayBlocked,
+    AttemptBudgetExhausted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -691,7 +692,9 @@ impl AsyncStreamRequestError {
             | Self::ResponseHeadersTimeout(_)
             | Self::ResponseMetadataUnavailable
             | Self::ReplayBlocked => TransportReplaySafety::Ambiguous,
-            Self::WorkerLimit | Self::WorkerUnavailable(_) => TransportReplaySafety::NotSent,
+            Self::WorkerLimit | Self::WorkerUnavailable(_) | Self::AttemptBudgetExhausted => {
+                TransportReplaySafety::NotSent
+            }
         }
     }
 
@@ -732,6 +735,9 @@ impl std::fmt::Display for AsyncStreamRequestError {
                 )
             }
             Self::ReplayBlocked => formatter.write_str(AMBIGUOUS_UPSTREAM_DELIVERY_MESSAGE),
+            Self::AttemptBudgetExhausted => {
+                formatter.write_str("model route attempt budget exhausted")
+            }
         }
     }
 }
@@ -742,6 +748,7 @@ impl std::error::Error for AsyncStreamRequestError {
             Self::Request(err) => Some(err),
             Self::ResponseHeadersTimeout(_)
             | Self::WorkerLimit
+            | Self::AttemptBudgetExhausted
             | Self::WorkerUnavailable(_)
             | Self::ResponseMetadataUnavailable
             | Self::ReplayBlocked => None,
@@ -835,6 +842,9 @@ pub(in crate::gateway) async fn send_stream_request_with_capture(
         .is_some_and(UpstreamReplayGuard::is_blocked)
     {
         return Err(AsyncStreamRequestError::ReplayBlocked);
+    }
+    if !super::super::model_route_scheduler::take_transport_attempt() {
+        return Err(AsyncStreamRequestError::AttemptBudgetExhausted);
     }
     let logical_body = logical_body.cloned();
     let capture = capture.map(|scope| (scope.trace_id.to_string(), scope.key_id.to_string()));
@@ -1708,6 +1718,9 @@ async fn send_websocket_upstream_request_with_capture(
     capture: Option<super::super::super::OutboundPayloadContext<'_>>,
 ) -> Result<super::super::GatewayStreamResponse, String> {
     let body_text = websocket_upstream_request_text_from_http_body(request_body)?;
+    if !super::super::model_route_scheduler::take_transport_attempt() {
+        return Err("model route attempt budget exhausted".to_owned());
+    }
     let capture = capture.map(|scope| (scope.trace_id.to_string(), scope.key_id.to_string()));
 
     let ws_url = if target_url.starts_with("https://") {
@@ -1899,8 +1912,17 @@ async fn send_websocket_upstream_request_with_capture(
 
     // recv_timeout gives the task a small grace window beyond handshake_timeout to
     // deliver its meta result before we declare the operation hung.
+    let metadata_timeout = if super::super::model_route_scheduler::is_scheduled_request() {
+        request_deadline.map_or(handshake_timeout + Duration::from_secs(5), |deadline| {
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(handshake_timeout + Duration::from_secs(5))
+        })
+    } else {
+        handshake_timeout + Duration::from_secs(5)
+    };
     let metadata = crate::http::gateway_request::with_response_cancellation(tokio::time::timeout(
-        handshake_timeout + Duration::from_secs(5),
+        metadata_timeout,
         meta_rx,
     ))
     .await;

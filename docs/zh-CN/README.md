@@ -244,6 +244,7 @@ PatewayAI 专注于官方高质量模型 API 中继，完整支持 Claude、Code
 - 授权登录：支持 `chatgpt.com` 浏览器授权与 Device Code 登录；浏览器授权仍可手动粘贴回调地址完成解析
 - 平台 Key：随机生成或自定义固定 Key、禁用、删除、模型绑定、推理等级、服务等级（跟随请求 / Standard / Fast / Ultrafast / Flex）；可绑定自定义账号分组，并与账号计划筛选取交集后仅在授权池内轮转
 - 模型管理：模型目录 V2 是唯一运行时真相源；支持 builtin/custom、整数三价与长上下文阶梯价、账号池/聚合 API route、instructions policy、本地 JSON preview/commit，以及勾选模型后应用到 Codex 的 `model_catalog_json`。拉取新模型时保留来源提供的上下文和图片等能力；缺失能力时先匹配本地官方能力，再采用 Codex 未知模型默认值，保留显式手工覆盖，应用后重新打开 Codex 生效。
+- 模型路由可在编辑页按模型选择账号池优先、聚合优先或跨源优先级/权重调度，支持同一聚合多上游分支回退；默认保留旧行为。详见[调度规则](report/模型目录V2管理与计费说明.md#可选模型路由调度issue-537)。
 - 当前 builtin 目录共 12 条记录：`gpt-6.1-sol`、`gpt-6-astra`、`gpt-6-sol`、`gpt-6-luna`、GPT-5.6 三款模型、`gpt-5.5`、`gpt-image-2` 和两个 Image 2.5 变体共 11 款模型默认可见；只有 `codex-auto-review` 默认隐藏
 - `gpt-5.4` 与 `gpt-5.4-mini` 已于 2026-08-31 从 ChatGPT 登录的 Codex 退役，`gpt-5.2` 也已在该登录方式下 deprecated；通用 API 模型不受此清理影响。revision 9 会清理未定制的对应 builtin；带有用户编辑、价格阶梯、路由或权限关联的数据会转为 custom 保留，需要 API Key 继续使用时也可显式添加同名 custom 模型
 - 聚合 API：管理第三方最小转发上游，支持创建、编辑、余额和基于已配置 V2 route 的连通性测试；管理员可主动拉取并选择性关联，也可按账号或连接单独启停[后台模型同步](report/model-discovery-background.md)。后台同步默认关闭，只追加缺失模型与路由，保留已有配置。

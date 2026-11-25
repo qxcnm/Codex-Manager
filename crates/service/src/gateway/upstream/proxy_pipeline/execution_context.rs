@@ -26,6 +26,7 @@ pub(in super::super) struct GatewayUpstreamExecutionContext<'a> {
     estimated_input_tokens: i64,
     candidate_count: usize,
     account_max_inflight: usize,
+    following_model_routes: bool,
 }
 /// Owned metadata allows stream delivery to outlive the short routing worker.
 /// A fresh storage handle is acquired only for final accounting.
@@ -53,6 +54,7 @@ pub(in super::super) struct OwnedGatewayUpstreamExecutionContext {
     estimated_input_tokens: i64,
     candidate_count: usize,
     account_max_inflight: usize,
+    following_model_routes: bool,
 }
 
 impl GatewayUpstreamExecutionContext<'_> {
@@ -81,6 +83,7 @@ impl GatewayUpstreamExecutionContext<'_> {
             estimated_input_tokens: self.estimated_input_tokens,
             candidate_count: self.candidate_count,
             account_max_inflight: self.account_max_inflight,
+            following_model_routes: self.following_model_routes,
         }
     }
 }
@@ -115,6 +118,7 @@ impl OwnedGatewayUpstreamExecutionContext {
             estimated_input_tokens: self.estimated_input_tokens,
             candidate_count: self.candidate_count,
             account_max_inflight: self.account_max_inflight,
+            following_model_routes: self.following_model_routes,
         }
     }
 }
@@ -182,11 +186,17 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
             estimated_input_tokens,
             candidate_count,
             account_max_inflight,
+            following_model_routes: false,
         }
     }
 
     pub(in super::super) fn with_request_type(mut self, request_type: &'static str) -> Self {
         self.request_type = request_type;
+        self
+    }
+
+    pub(in super::super) fn with_following_model_routes(mut self, following: bool) -> Self {
+        self.following_model_routes = following;
         self
     }
 
@@ -202,7 +212,7 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
     /// # 返回
     /// 返回函数执行结果
     pub(in super::super) fn has_more_candidates(&self, idx: usize) -> bool {
-        idx + 1 < self.candidate_count
+        idx + 1 < self.candidate_count || self.following_model_routes
     }
 
     pub(in super::super) fn protocol_type(&self) -> &str {

@@ -4,6 +4,8 @@ import { useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 
 import { OrderControls } from "@/components/models/order-controls";
+import { RoutePolicySelect } from "@/components/models/route-policy-select";
+import { modelRoutePolicy } from "@/lib/model-route-policy";
 import { useListReorder } from "@/hooks/useListReorder";
 import { moveRouteOrder } from "@/lib/model-order";
 
@@ -571,6 +573,7 @@ export function ModelCatalogModal({
       const slug = draft.slug.trim();
       if (!slug) throw new Error("模型 slug 不能为空");
       const modelCapabilities = parseCapabilities(draft.capabilitiesJson);
+      modelRoutePolicy(modelCapabilities);
       const supportedEfforts = reasoningEffortsFor(modelCapabilities);
       const defaultEffort = draft.defaultReasoningEffort.trim();
       if (defaultEffort && !supportedEfforts.includes(defaultEffort)) {
@@ -1051,6 +1054,8 @@ export function ModelCatalogModal({
             </TabsContent>
 
             <TabsContent value="routes" className="mt-4 space-y-3">
+              <RoutePolicySelect capabilities={capabilities} disabled={isSaving}
+                onChange={(json) => updateDraft("capabilitiesJson", json)} />
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm text-muted-foreground">
                   {t("上游模型名始终手填；这里不会访问供应商 `/models`。")}

@@ -740,7 +740,7 @@ export default function ModelsPage() {
                           <TableCell>
                             {isAdminMode && !isSessionLoading ? (
                               <OrderControls
-                                position={modelKeys.indexOf(model.slug) + 1}
+                                position={index + 1}
                                 label={t("移动模型 {slug}", { slug: model.slug })}
                                 disabled={!canReorder}
                                 first={index === 0}
@@ -748,7 +748,7 @@ export default function ModelsPage() {
                                 handleProps={modelOrder.handleProps(model.slug)}
                                 onMove={(offset) => modelOrder.moveBy(model.slug, offset)}
                               />
-                            ) : <span className="font-mono text-xs">{modelKeys.indexOf(model.slug) + 1}</span>}
+                            ) : <span className="font-mono text-xs">{index + 1}</span>}
                           </TableCell>
                           <TableCell className="min-w-[240px]">
                             <div className="font-medium">{model.displayName}</div>

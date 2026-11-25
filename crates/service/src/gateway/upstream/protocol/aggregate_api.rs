@@ -1371,6 +1371,14 @@ pub(in super::super) async fn proxy_aggregate_request(
         failure_policy,
     } = params;
     let request_type = request.request_type();
+    let scheduled = route_source_for_log == Some("model_route");
+    // A scheduled branch is attempted once; the shared send budget also covers
+    // account executors. Legacy per-channel retry behavior is unchanged.
+    let retry_attempts = if scheduled {
+        0
+    } else {
+        AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL
+    };
     let estimated_input_tokens =
         super::super::super::request_log::estimate_input_tokens_from_body(body.as_ref());
     if aggregate_api_candidates.is_empty() {
@@ -1528,7 +1536,7 @@ pub(in super::super) async fn proxy_aggregate_request(
         };
 
         let mut succeeded = false;
-        for attempt_idx in 0..=AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
+        for attempt_idx in 0..=retry_attempts {
             if request.as_ref().is_some_and(Request::is_cancelled) {
                 last_attempt_url = Some(candidate_url.clone());
                 last_attempt_supplier_name = candidate_supplier_name.clone();
@@ -1712,7 +1720,7 @@ pub(in super::super) async fn proxy_aggregate_request(
                             last_attempt_error = Some(crate::http::gateway_replay_guard::AMBIGUOUS_UPSTREAM_DELIVERY_MESSAGE.to_owned());
                             break 'candidates;
                         }
-                        if attempt_idx < AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
+                        if attempt_idx < retry_attempts {
                             continue;
                         }
                         break;
@@ -1730,15 +1738,21 @@ pub(in super::super) async fn proxy_aggregate_request(
                     first_upstream_header(upstream.headers(), &["x-openai-authorization-error"]);
                 let upstream_identity_error_code =
                     crate::gateway::extract_identity_error_code_from_headers(upstream.headers());
-                let upstream_body = match upstream
-                    .read_all_bytes_cancellable(
-                        request
-                            .as_ref()
-                            .expect("request retained before bridge")
-                            .cancellation_receiver(),
-                    )
-                    .await
-                {
+                let read_body = upstream.read_all_bytes_cancellable(
+                    request
+                        .as_ref()
+                        .expect("request retained before bridge")
+                        .cancellation_receiver(),
+                );
+                let read_result = match request_deadline.filter(|_| scheduled) {
+                    Some(deadline) => {
+                        tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), read_body)
+                            .await
+                            .unwrap_or_else(|_| Err("model route request timeout".to_owned()))
+                    }
+                    None => read_body.await,
+                };
+                let upstream_body = match read_result {
                     Ok(body) => body,
                     Err(error) => {
                         last_attempt_url = Some(url.as_str().to_owned());
@@ -1747,13 +1761,20 @@ pub(in super::super) async fn proxy_aggregate_request(
                         last_failure_status = if request.as_ref().is_some_and(Request::is_cancelled)
                         {
                             499
+                        } else if scheduled {
+                            // Headers already classify this failure. A truncated
+                            // diagnostic body must not turn a fatal 4xx into a
+                            // retryable 502 and replay the POST on another route.
+                            status_code
                         } else {
                             502
                         };
-                        if last_failure_status == 499 {
+                        if last_failure_status == 499
+                            || (scheduled && !matches!(status_code, 408 | 429 | 500..=599))
+                        {
                             break 'candidates;
                         }
-                        if attempt_idx < AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
+                        if attempt_idx < retry_attempts {
                             continue;
                         }
                         break;
@@ -1770,12 +1791,61 @@ pub(in super::super) async fn proxy_aggregate_request(
                 last_attempt_url = Some(url.as_str().to_string());
                 last_attempt_supplier_name = candidate_supplier_name.clone();
                 last_attempt_error = Some(message);
-                last_failure_status = 502;
-                if attempt_idx < AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
+                last_failure_status = if scheduled { status_code } else { 502 };
+                if scheduled && !matches!(status_code, 408 | 429 | 500..=599) {
+                    break 'candidates;
+                }
+                if attempt_idx < retry_attempts {
                     continue;
                 }
                 break;
             }
+
+            let upstream = GatewayUpstreamResponse::Stream(upstream);
+            let upstream = if scheduled {
+                use super::super::proxy_pipeline::stream_preflight::{
+                    preflight_stream_response, StreamPreflightOutcome,
+                };
+                let preflight = preflight_stream_response(upstream, path, true, true);
+                let result = crate::http::gateway_request::with_response_cancellation(async {
+                    match super::super::support::deadline::remaining(request_deadline) {
+                        Some(left) => tokio::time::timeout(left, preflight).await.ok(),
+                        None => Some(preflight.await),
+                    }
+                })
+                .await;
+                let result = match result {
+                    Ok(result) => result,
+                    Err(()) => {
+                        last_failure_status = 499;
+                        last_attempt_error = Some("downstream request cancelled".to_owned());
+                        break 'candidates;
+                    }
+                };
+                match result {
+                    Some(StreamPreflightOutcome::Ready(response)) => response,
+                    other => {
+                        let message = match other {
+                            Some(StreamPreflightOutcome::Failover(message))
+                            | Some(StreamPreflightOutcome::RetryUsageNotice(message))
+                            | Some(StreamPreflightOutcome::TransportFailover(message))
+                            | Some(StreamPreflightOutcome::StatusFailover { message, .. })
+                            | Some(StreamPreflightOutcome::ModelUnsupported { message, .. }) => {
+                                message
+                            }
+                            None => "model route request timeout".to_owned(),
+                            Some(StreamPreflightOutcome::Ready(_)) => unreachable!(),
+                        };
+                        last_attempt_url = Some(url.to_string());
+                        last_attempt_supplier_name = candidate_supplier_name.clone();
+                        last_attempt_error = Some(message);
+                        last_failure_status = 502;
+                        break;
+                    }
+                }
+            } else {
+                upstream
+            };
 
             let inflight_guard = super::super::super::acquire_account_inflight(key_id);
             let passthrough_sse_protocol =
@@ -1816,7 +1886,7 @@ pub(in super::super) async fn proxy_aggregate_request(
             if request.is_native() {
                 super::super::super::defer_upstream_response(
                     request,
-                    GatewayUpstreamResponse::Stream(upstream),
+                    upstream,
                     inflight_guard,
                     response_adapter_for_candidate,
                     passthrough_sse_protocol,
@@ -1843,7 +1913,7 @@ pub(in super::super) async fn proxy_aggregate_request(
             {
                 let bridge = super::super::super::http_bridge::respond_with_upstream_async(
                     request,
-                    GatewayUpstreamResponse::Stream(upstream),
+                    upstream,
                     inflight_guard,
                     response_adapter_for_candidate,
                     passthrough_sse_protocol,
@@ -1879,6 +1949,7 @@ pub(in super::super) async fn proxy_aggregate_request(
         && !request
             .as_ref()
             .is_some_and(|request| request.upstream_replay_guard().is_blocked())
+        && (!scheduled || matches!(status_code, 408 | 429 | 500..=599))
         && matches!(failure_policy, AggregateFailurePolicy::ReleaseRequest)
     {
         if let Some(released_request) = request.take() {

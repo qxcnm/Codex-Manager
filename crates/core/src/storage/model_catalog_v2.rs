@@ -480,6 +480,13 @@ fn validate_route(route: &ModelRouteV2) -> Result<()> {
 }
 
 pub fn validate_managed_model_v2(model: &ManagedModelV2) -> Result<()> {
+    let route_policy = super::ModelRoutePolicyV2::from_capabilities(&model.capabilities)
+        .map_err(rusqlite::Error::InvalidParameterName)?;
+    if route_policy != super::ModelRoutePolicyV2::Legacy && model.routes.len() > 256 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "scheduled model supports at most 256 routes".to_string(),
+        ));
+    }
     if model.slug.trim().is_empty() || model.display_name.trim().is_empty() {
         return Err(rusqlite::Error::InvalidParameterName(
             "model slug and display name are required".to_string(),

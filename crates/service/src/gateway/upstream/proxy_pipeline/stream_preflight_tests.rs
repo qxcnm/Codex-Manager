@@ -6,6 +6,39 @@ use tokio::sync::mpsc;
 use super::*;
 use crate::gateway::upstream::{GatewayByteStream, GatewayByteStreamItem, GatewayStreamResponse};
 
+#[test]
+fn preflight_accepts_all_sse_line_endings_without_losing_terminal_events() {
+    let events = "event: response.created\ndata: {\"type\":\"response.created\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\"}\n\n";
+    for ending in ["\n", "\r", "\r\n"] {
+        let framed = events.replace('\n', ending);
+        assert_eq!(
+            classify_prefix(framed.as_bytes(), false),
+            PrefixDecision::Deliver
+        );
+        assert_eq!(
+            classify_prefix(framed.as_bytes(), true),
+            PrefixDecision::Deliver
+        );
+    }
+}
+
+#[tokio::test]
+async fn scheduled_transient_sse_errors_fallback_only_before_substantive_output() {
+    let failed = b"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_error\",\"message\":\"temporary server failure\"}}}\n\n";
+    assert!(matches!(
+        classify_prefix(failed, true),
+        PrefixDecision::Deliver
+    ));
+    super::super::super::model_route_scheduler::scope_attempt_budget(async {
+        assert!(matches!(classify_prefix(failed, true), PrefixDecision::Failover(_)));
+        let mut delivered = b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"visible\"}\n\n".to_vec();
+        delivered.extend_from_slice(failed);
+        assert!(matches!(classify_prefix(&delivered, true), PrefixDecision::Deliver));
+        let unknown = b"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"invalid_request_error\"}}}\n\n";
+        assert!(matches!(classify_prefix(unknown, true), PrefixDecision::Deliver));
+    }).await;
+}
+
 fn stream_response(body: &'static str) -> GatewayUpstreamResponse {
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));

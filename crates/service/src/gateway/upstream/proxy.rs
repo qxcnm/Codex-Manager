@@ -71,7 +71,7 @@ fn exhausted_gateway_error_for_log(
     parts.join("; ")
 }
 
-fn resolve_upstream_is_stream(client_is_stream: bool, path: &str) -> bool {
+pub(super) fn resolve_upstream_is_stream(client_is_stream: bool, path: &str) -> bool {
     let is_compact_path =
         path == "/v1/responses/compact" || path.starts_with("/v1/responses/compact?");
     client_is_stream || (path.starts_with("/v1/responses") && !is_compact_path)
@@ -157,7 +157,7 @@ fn should_fallback_to_aggregate_after_account_exhaustion(
         && configured_model.is_none_or(has_enabled_aggregate_api_route)
 }
 
-fn low_quota_candidate_mode_for_protocol(
+pub(super) fn low_quota_candidate_mode_for_protocol(
     protocol_type: &str,
 ) -> super::super::LowQuotaCandidateMode {
     if protocol_type == PROTOCOL_ANTHROPIC_NATIVE {
@@ -258,7 +258,7 @@ fn validate_model_route(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn respond_model_route_error(
+pub(super) fn respond_model_route_error(
     request: Request,
     storage: &crate::storage_helpers::StorageHandle,
     trace_id: &str,
@@ -342,6 +342,23 @@ fn resolve_aggregate_candidates_for_route(
     aggregate_api_id: Option<&str>,
     model_for_log: Option<&str>,
 ) -> Result<Vec<codexmanager_core::storage::AggregateApi>, String> {
+    let candidates = resolve_aggregate_source_candidates(
+        storage,
+        protocol_type,
+        original_path,
+        aggregate_api_id,
+        model_for_log,
+    )?;
+    apply_aggregate_model_filter(storage, candidates, model_for_log)
+}
+
+pub(super) fn resolve_aggregate_source_candidates(
+    storage: &codexmanager_core::storage::Storage,
+    protocol_type: &str,
+    original_path: &str,
+    aggregate_api_id: Option<&str>,
+    model_for_log: Option<&str>,
+) -> Result<Vec<codexmanager_core::storage::AggregateApi>, String> {
     let explicit_candidate =
         resolve_active_explicit_aggregate_candidate(storage, aggregate_api_id)?;
     let response_bridge_candidates =
@@ -370,7 +387,7 @@ fn resolve_aggregate_candidates_for_route(
         candidates.retain(|candidate| candidate.id != explicit_candidate.id);
         candidates.insert(0, explicit_candidate);
     }
-    apply_aggregate_model_filter(storage, candidates, model_for_log)
+    Ok(candidates)
 }
 
 fn resolve_responses_anthropic_route_candidates(
@@ -897,6 +914,61 @@ pub(in super::super) async fn proxy_validated_request(
             );
         }
     };
+
+    if let Some(model) = configured_model.as_ref().filter(|model| {
+        codexmanager_core::storage::ModelRoutePolicyV2::from_capabilities(&model.capabilities)
+            .is_ok_and(|policy| policy != codexmanager_core::storage::ModelRoutePolicyV2::Legacy)
+    }) {
+        let model = model.clone();
+        return Box::pin(super::model_route_scheduler::proxy_scheduled_request(
+            request,
+            LocalValidationResult {
+                trace_id,
+                incoming_headers,
+                storage,
+                original_path,
+                passthrough_path,
+                path,
+                passthrough_body,
+                body,
+                is_stream,
+                has_prompt_cache_key,
+                request_shape,
+                protocol_type,
+                rotation_strategy,
+                aggregate_api_id,
+                account_group_filter,
+                account_plan_filter,
+                response_adapter,
+                gemini_stream_output_mode,
+                tool_name_restore_map,
+                request_method,
+                key_id,
+                platform_key_hash,
+                local_conversation_id: _local_conversation_id,
+                route_conversation_id,
+                route_conversation_source,
+                conversation_binding,
+                client_model_for_log,
+                model_for_log,
+                model_source_for_log,
+                client_reasoning_for_log,
+                reasoning_for_log,
+                reasoning_source_for_log,
+                service_tier_for_log,
+                effective_service_tier_for_log,
+                service_tier_source_for_log,
+                gateway_mode_for_log,
+                method,
+            },
+            model,
+            execution_plan,
+            debug,
+            started_at,
+            request_deadline,
+        ))
+        .await;
+    }
 
     // 聚合优先混合轮转：聚合路径失败且请求未被消费时，需要把请求交还给账号路径继续，
     // 因此这里使用可变绑定。

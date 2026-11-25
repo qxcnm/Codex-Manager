@@ -22,6 +22,66 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 type WsServerRequest = tokio_tungstenite::tungstenite::handshake::server::Request;
 type WsServerResponse = tokio_tungstenite::tungstenite::handshake::server::Response;
 
+#[tokio::test]
+async fn model_route_deadline_bounds_optional_websocket_handshake_without_legacy_grace() {
+    use super::super::super::model_route_scheduler;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1/responses", listener.local_addr().unwrap());
+    let peer = tokio::spawn(async move {
+        let (_socket, _) = listener.accept().await.unwrap();
+        std::future::pending::<()>().await;
+    });
+    model_route_scheduler::scope_attempt_budget(async {
+        let started = Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_millis(500),
+            super::send_websocket_upstream_request(
+                &url,
+                "model-route-ws-deadline",
+                Some(started + Duration::from_millis(80)),
+                &[],
+                &Bytes::from_static(br#"{"model":"mock-model","input":"deadline"}"#),
+            ),
+        )
+        .await
+        .expect("scheduled handshake must not inherit the one-second legacy floor");
+        assert!(result.is_err());
+        assert!(started.elapsed() < Duration::from_millis(500));
+    })
+    .await;
+    peer.abort();
+    let _ = peer.await;
+}
+
+#[tokio::test]
+async fn model_route_budget_blocks_optional_websocket_handshake_before_connect() {
+    use super::super::super::model_route_scheduler;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1/responses", listener.local_addr().unwrap());
+    model_route_scheduler::scope_attempt_budget(async {
+        for _ in 0..model_route_scheduler::MAX_TRANSPORT_ATTEMPTS {
+            assert!(model_route_scheduler::take_transport_attempt());
+        }
+        let result = super::send_websocket_upstream_request(
+            &url,
+            "model-route-exhausted-ws-budget",
+            Some(Instant::now() + Duration::from_secs(1)),
+            &[],
+            &Bytes::from_static(br#"{"model":"mock-model","input":"budget"}"#),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(ref error) if error == "model route attempt budget exhausted")
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), listener.accept())
+                .await
+                .is_err()
+        );
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn native_transport_awaits_headers_and_body_without_blocking_caller_runtime() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -437,6 +497,7 @@ fn report_transport_headers(
         Err(super::AsyncStreamRequestError::WorkerUnavailable(_)) => "worker_unavailable",
         Err(super::AsyncStreamRequestError::ResponseMetadataUnavailable) => "metadata_unavailable",
         Err(super::AsyncStreamRequestError::ReplayBlocked) => "replay_blocked",
+        Err(super::AsyncStreamRequestError::AttemptBudgetExhausted) => "attempt_budget_exhausted",
     };
     eprintln!(
         "transport_client test={} phase={phase} elapsed={:?}",

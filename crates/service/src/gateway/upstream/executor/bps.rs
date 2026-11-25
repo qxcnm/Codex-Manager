@@ -293,6 +293,9 @@ async fn send_prepared(
     if timeout.is_zero() {
         return Err((504, "BPS request deadline exceeded".to_owned()));
     }
+    if !super::super::model_route_scheduler::take_transport_attempt() {
+        return Err((503, "model route attempt budget exhausted".to_owned()));
+    }
     let connect = crate::http::responses_websocket::connect_upstream_websocket_request_with_limit(
         request,
         &url,

@@ -3,6 +3,13 @@
 import type { MessageCatalog } from "../types";
 
 export const EN_MODELS_MESSAGES: MessageCatalog = {
+  "模型路由策略": "Model route policy",
+  "沿用 Key 策略（旧行为）": "Use Key policy (legacy)",
+  "账号池优先（优先级 + 权重）": "Account pool first (priority + weight)",
+  "聚合优先（优先级 + 权重）": "Aggregate first (priority + weight)",
+  "跨源优先级 + 权重": "Cross-source priority + weight",
+  "无效的模型路由策略": "Invalid model route policy",
+  "默认不改变现有调度。启用后优先级从高到低，同级按权重平滑轮询；来源偏好仅作用于混合 Key，专用 Key 和显式聚合绑定仍优先。": "Default keeps existing scheduling. Opt in for descending priority and smooth weighted round-robin within each tier. Source preference applies only to hybrid Keys; dedicated Keys and explicit aggregate bindings take precedence.",
   顺序: "Order",
   "模型等级（高级）": "Model rank (advanced)",
   "数值越小等级越高，影响模型上限；显示顺序请在列表中调整。": "Lower values mean higher model rank and affect model ceilings. Change display order in the list.",

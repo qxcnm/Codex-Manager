@@ -4,6 +4,7 @@ export type ModelInstructionsModeV2 = "passthrough" | "fallback" | "override";
 export type ModelFastPolicyV2 = "passthrough" | "filter" | "force" | "block";
 export type ModelVisibilityV2 = "list" | "hide";
 export type ModelRouteSourceKindV2 = "account_pool" | "aggregate_api";
+export type ModelRoutePolicyV2 = "legacy" | "account_first" | "aggregate_first" | "weighted";
 export type ModelRouteBatchModeV2 = "merge" | "replace";
 export type ManagedModelImportConflictStrategyV2 = "keep_existing" | "replace_custom";
 

@@ -296,6 +296,10 @@ pub(in super::super) async fn execute_candidate_sequence(
         .map(|(account, _)| account.id.clone())
         .collect::<Vec<_>>();
     for (idx, (account, mut token)) in candidates.into_iter().enumerate() {
+        if super::super::model_route_scheduler::budget_exhausted() {
+            last_attempt_error = Some("model route attempt budget exhausted".to_owned());
+            break;
+        }
         if finalize_cancelled_candidate(
             request
                 .as_ref()
@@ -449,6 +453,7 @@ pub(in super::super) async fn execute_candidate_sequence(
         // account instead of repeatedly hammering the current one.
         if matches!(decision, CandidateUpstreamDecision::Failover)
             && should_retry_same_account_after_failover(same_account_retry_count)
+            && !super::super::model_route_scheduler::budget_exhausted()
         {
             same_account_retry_count += 1;
             log::warn!(

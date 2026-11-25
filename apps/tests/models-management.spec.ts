@@ -2160,6 +2160,33 @@ test("模型目录支持中文展示并为多个模型批量分配路由", async
   }
 });
 
+for (const role of ["system_admin", "member"] as const) {
+  test(`模型序号在隐藏首项及筛选后从1连续显示（${role}）`, async ({ page }, testInfo) => {
+    const state = await installMockRuntime(page);
+    state.sessionRole = role;
+    state.models = [builtinModel("sort-hidden-first", 0, "hide"), ...orderModels()];
+    const originalModels = structuredClone(state.models);
+    await page.goto("/models/");
+    const positions = page.locator("[data-model-slug]").locator(
+      role === "member" ? "td:nth-child(1)" : "td:nth-child(2)",
+    );
+    await expect(positions).toHaveText(["1", "2", "3", "4"]);
+    await page.screenshot({ path: testInfo.outputPath("model-order.png"), fullPage: true });
+
+    await page.getByPlaceholder("搜索模型", { exact: true }).fill("sort-");
+    await expect(positions).toHaveText(["1", "2", "3"]);
+    await page.getByPlaceholder("搜索模型", { exact: true }).fill("sort-c");
+    await expect(positions).toHaveText(["1"]);
+    await page.getByPlaceholder("搜索模型", { exact: true }).clear();
+    await page.getByRole("combobox", { name: "筛选模型" }).click();
+    await page.getByRole("option", { name: "已隐藏", exact: true }).click();
+    await expect(positions).toHaveText(["1", "2"]);
+    expect(state.models).toEqual(originalModels);
+    expect(state.orderCalls).toHaveLength(0);
+    expect(state.upserts).toHaveLength(0);
+  });
+}
+
 test("模型排序拖动持久化完整目录且不改变模型权限等级", async ({ page }) => {
   const state = await installMockRuntime(page);
   state.models = orderModels();
@@ -2286,6 +2313,36 @@ test("模型排序成员只读且没有拖动或编辑入口", async ({ page }) 
   await expect(page.locator("[data-model-slug][draggable=true]")).toHaveCount(0);
   expect(state.orderCalls).toHaveLength(0);
   expect(state.upserts).toHaveLength(0);
+});
+
+test("模型路由策略与能力 JSON 同步保存且恢复默认不影响路由权重", async ({ page }) => {
+  const state = await installMockRuntime(page);
+  state.models = [routeOrderModel()];
+  const originalRoutes = structuredClone(state.models[0].routes);
+  await page.goto("/models/");
+  const edit = async () => {
+    await page.getByRole("button", { name: "编辑模型 gpt-6-sol", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("tab", { name: "路由", exact: true }).click();
+    return dialog;
+  };
+  let dialog = await edit();
+  await expect(dialog.locator("#model-route-policy")).toContainText("沿用 Key 策略");
+  await dialog.locator("#model-route-policy").click();
+  await page.getByRole("option", { name: "跨源优先级 + 权重", exact: true }).click();
+  await dialog.getByRole("button", { name: "保存模型", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(((state.upserts[0].model as JsonObject).capabilities as JsonObject).route_policy).toBe("weighted");
+  expect((state.upserts[0].model as JsonObject).routes).toEqual(originalRoutes);
+
+  dialog = await edit();
+  await expect(dialog.locator("#model-route-policy")).toContainText("跨源优先级 + 权重");
+  await dialog.locator("#model-route-policy").click();
+  await page.getByRole("option", { name: "沿用 Key 策略（旧行为）", exact: true }).click();
+  await dialog.getByRole("button", { name: "保存模型", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(((state.upserts[1].model as JsonObject).capabilities as JsonObject).route_policy).toBeUndefined();
+  expect((state.upserts[1].model as JsonObject).routes).toEqual(originalRoutes);
 });
 
 test("路由排序拖动保存真实优先级并保留来源、权重和启用状态", async ({ page }) => {
