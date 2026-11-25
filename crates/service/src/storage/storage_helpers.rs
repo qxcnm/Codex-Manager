@@ -16,6 +16,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const DEFAULT_STORAGE_MAX_CONNECTIONS: usize = 32;
 const DEFAULT_STORAGE_MAX_IDLE_CONNECTIONS: usize = 16;
 const DEFAULT_STORAGE_ACQUIRE_TIMEOUT_MS: u64 = 30_000;
+// The service and web processes share SQLite. Startup can wait longer for a
+// live writer than a request can, without replaying a partially applied migration.
+const SQLITE_STARTUP_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
 // Legacy domain helper signatures still carry a core Storage reference. In
 // remote mode this uninitialized memory handle is only a type boundary; it
 // must never open or modify the user's SQLite database.
@@ -676,7 +679,7 @@ fn model_catalog_v2_migration_needed(db_path: &Path) -> Result<bool, String> {
     if !db_path.exists() || db_path.metadata().map(|meta| meta.len()).unwrap_or(0) == 0 {
         return Ok(true);
     }
-    let conn = Connection::open(db_path)
+    let conn = Connection::open_with_busy_timeout(db_path, SQLITE_STARTUP_BUSY_TIMEOUT)
         .map_err(|err| format!("open database for migration inspection failed: {err}"))?;
     if !sqlite_table_exists(&conn, "schema_migrations")? {
         return Ok(true);
@@ -708,7 +711,7 @@ fn preflight_model_catalog_v2(db_path: &Path) -> Result<(), String> {
     if !db_path.exists() || db_path.metadata().map(|meta| meta.len()).unwrap_or(0) == 0 {
         return Ok(());
     }
-    let conn = Connection::open(db_path)
+    let conn = Connection::open_with_busy_timeout(db_path, SQLITE_STARTUP_BUSY_TIMEOUT)
         .map_err(|err| format!("open database for model catalog preflight failed: {err}"))?;
     if sqlite_table_exists(&conn, "model_catalog_models")? {
         let duplicates: i64 = conn
@@ -783,7 +786,7 @@ fn backup_model_catalog_database(db_path: &Path) -> Result<Option<PathBuf>, Stri
         db_path.display(),
         unix_timestamp()
     ));
-    let source = Connection::open(db_path)
+    let source = Connection::open_with_busy_timeout(db_path, SQLITE_STARTUP_BUSY_TIMEOUT)
         .map_err(|err| format!("open model catalog backup source failed: {err}"))?;
     let mut target = Connection::open(&backup_path)
         .map_err(|err| format!("open model catalog backup target failed: {err}"))?;
@@ -798,7 +801,7 @@ fn backup_model_catalog_database(db_path: &Path) -> Result<Option<PathBuf>, Stri
 fn restore_model_catalog_database(db_path: &Path, backup_path: &Path) -> Result<(), String> {
     let source = Connection::open(backup_path)
         .map_err(|err| format!("open model catalog restore source failed: {err}"))?;
-    let mut target = Connection::open(db_path)
+    let mut target = Connection::open_with_busy_timeout(db_path, SQLITE_STARTUP_BUSY_TIMEOUT)
         .map_err(|err| format!("open model catalog restore target failed: {err}"))?;
     let backup = Backup::new(&source, &mut target)
         .map_err(|err| format!("create model catalog restore backup failed: {err}"))?;
@@ -851,8 +854,8 @@ pub(crate) fn initialize_storage() -> Result<(), String> {
     } else {
         None
     };
-    let storage =
-        Storage::open(&path).map_err(|err| format!("open storage failed: {} ({})", path, err))?;
+    let storage = Storage::open_with_busy_timeout(&path, SQLITE_STARTUP_BUSY_TIMEOUT)
+        .map_err(|err| format!("open storage failed: {} ({})", path, err))?;
     let initialization = storage
         .init()
         .and_then(|_| storage.smoke_check_model_catalog_v2());

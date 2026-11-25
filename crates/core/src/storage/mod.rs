@@ -1687,6 +1687,8 @@ pub struct Storage {
     applied_migrations: Mutex<Option<HashSet<String>>>,
 }
 
+const REQUEST_BUSY_TIMEOUT: Duration = Duration::from_secs(3);
+
 impl Storage {
     /// Shares the existing database pool without opening a new database or
     /// checking out a connection. Async completion tasks can own this handle
@@ -1699,8 +1701,6 @@ impl Storage {
     }
 
     fn configure_connection(conn: &Connection) -> Result<()> {
-        // 中文注释：并发写入时给 SQLite 一点等待时间，避免瞬时 lock 导致请求直接失败。
-        conn.busy_timeout(Duration::from_millis(3000))?;
         // 中文注释：复杂筛选/聚合的临时 B-tree 优先走内存，减少报表查询落盘开销。
         // journal_size_limit caps the WAL file left behind after a checkpoint, so
         // a large purge does not keep a multi-GB WAL file around afterwards.
@@ -1710,15 +1710,18 @@ impl Storage {
         Ok(())
     }
 
-    fn configure_file_connection(conn: &Connection) -> Result<()> {
-        Self::configure_connection(conn)?;
+    fn from_file_connection(conn: Connection) -> Result<Self> {
+        Self::configure_connection(&conn)?;
         // 中文注释：文件库启用 WAL + NORMAL，可明显降低并发读写互斥开销；
         // 仅在 open(path) 上设置，避免影响 open_in_memory 的行为预期。
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;",
         )?;
-        Ok(())
+        Ok(Self {
+            conn,
+            applied_migrations: Mutex::new(None),
+        })
     }
 
     /// 函数 `open`
@@ -1734,11 +1737,13 @@ impl Storage {
     /// 返回函数执行结果
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let conn = Connection::open(path)?;
-        Self::configure_file_connection(&conn)?;
-        Ok(Self {
-            conn,
-            applied_migrations: Mutex::new(None),
-        })
+        conn.busy_timeout(REQUEST_BUSY_TIMEOUT)?;
+        Self::from_file_connection(conn)
+    }
+
+    /// Apply the caller's busy timeout from the initial WAL negotiation onward.
+    pub fn open_with_busy_timeout(path: impl AsRef<Path>, timeout: Duration) -> Result<Self> {
+        Self::from_file_connection(Connection::open_with_busy_timeout(path, timeout)?)
     }
 
     /// 函数 `open_in_memory`
@@ -1754,6 +1759,7 @@ impl Storage {
     /// 返回函数执行结果
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
+        conn.busy_timeout(REQUEST_BUSY_TIMEOUT)?;
         Self::configure_connection(&conn)?;
         Ok(Self {
             conn,
