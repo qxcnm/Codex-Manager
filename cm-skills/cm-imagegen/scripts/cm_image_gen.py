@@ -19,6 +19,7 @@ DEFAULT_MODEL = "gpt-image-2"
 DEFAULT_SIZE = "1024x1024"
 DEFAULT_RESPONSE_FORMAT = "b64_json"
 DEFAULT_MINIMAX_MODEL = "image-01"
+H3_MODELS = {"MiniMax-H3-Image", "MiniMax-H3-Image-Highspeed"}
 MINIMAX_HOST_FRAGMENTS = ("minimax.io", "minimaxi.com")
 
 
@@ -294,6 +295,49 @@ def parse_minimax_response(data: dict, out_dir: Path, filename: str | None, time
     return paths
 
 
+def h3_payload(args: argparse.Namespace, model: str) -> dict:
+    for option in ("width", "height", "seed", "quality", "background"):
+        if getattr(args, option) is not None:
+            raise SystemExit(f"--{option} is not supported for H3 generation.")
+    if args.n is not None and not 1 <= args.n <= 10:
+        raise SystemExit("--n must be between 1 and 10 for H3 generation.")
+    if args.aspect_ratio and args.size not in (None, "auto"):
+        raise SystemExit("Use either an explicit --size or --aspect-ratio for H3 generation.")
+    payload = {
+        "model": model,
+        "prompt": args.prompt,
+        "response_format": "b64_json" if args.response_format == "base64" else args.response_format,
+    }
+    for option in ("size", "aspect_ratio", "n", "output_format"):
+        value = getattr(args, option)
+        if value is not None:
+            payload[option] = value
+    if args.prompt_optimizer is False and args.size in (None, "auto") and args.aspect_ratio in (None, "auto"):
+        raise SystemExit("--prompt-optimizer false requires an explicit --size or --aspect-ratio for H3.")
+    if args.prompt_optimizer is not None:
+        payload["disable_prompt_enhanced"] = not args.prompt_optimizer
+    return payload
+
+
+def save_h3_images(items: list, out_dir: Path, filename: str | None, timeout: int) -> tuple[list[Path], list[dict]]:
+    paths = []
+    errors = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise SystemExit(f"Invalid H3 result at index {index}.")
+        if error := item.get("error"):
+            errors.append({"index": index, "error": error})
+        elif url := item.get("url"):
+            if not isinstance(url, str) or not url.startswith(("https://", "http://")):
+                raise SystemExit(f"Invalid image URL in H3 result {index}.")
+            paths.append(save_image_bytes(download_bytes(url, timeout), out_dir, filename, index))
+        else:
+            paths.append(save_image_from_item(item, out_dir, filename, index))
+    if not paths:
+        raise SystemExit(f"H3 generation failed: {json.dumps(errors, ensure_ascii=False)}")
+    return paths, errors
+
+
 def generate(args: argparse.Namespace) -> int:
     base_url = provider_base_url()
     api_key = load_api_key()
@@ -301,7 +345,8 @@ def generate(args: argparse.Namespace) -> int:
     model = args.model or os.environ.get("CODEXMANAGER_IMAGE_MODEL") or (
         DEFAULT_MINIMAX_MODEL if minimax else DEFAULT_MODEL
     )
-    if minimax:
+    h3 = model in H3_MODELS
+    if minimax and not h3:
         url = f"{base_url.rstrip('/')}/image_generation"
         payload = minimax_payload(args, model, args.prompt)
         data = request_json(url, api_key, payload, args.timeout)
@@ -318,26 +363,34 @@ def generate(args: argparse.Namespace) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     url = f"{base_url.rstrip('/')}/images/generations"
-    payload = {
-        "model": model,
-        "prompt": args.prompt,
-        "size": args.size,
-        "response_format": args.response_format,
-    }
-    if args.n is not None:
-        payload["n"] = args.n
-    if args.quality:
-        payload["quality"] = args.quality
-    if args.background:
-        payload["background"] = args.background
-    if args.output_format:
-        payload["output_format"] = args.output_format
-    data = request_json(url, api_key, payload, args.timeout)
+    if h3:
+        payload = h3_payload(args, model)
+        timeout = max(args.timeout, 600)
+    else:
+        payload = {
+            "model": model,
+            "prompt": args.prompt,
+            "size": args.size or DEFAULT_SIZE,
+            "response_format": args.response_format,
+        }
+        if args.n is not None:
+            payload["n"] = args.n
+        if args.quality:
+            payload["quality"] = args.quality
+        if args.background:
+            payload["background"] = args.background
+        if args.output_format:
+            payload["output_format"] = args.output_format
+        timeout = args.timeout
+    data = request_json(url, api_key, payload, timeout)
     items = data.get("data")
     if not isinstance(items, list) or not items:
         raise SystemExit(f"Images API returned no data items: {json.dumps(data, ensure_ascii=False)[:1000]}")
     out_dir = Path(args.out_dir) if args.out_dir else output_dir()
-    paths = [save_image_from_item(item, out_dir, args.filename, index) for index, item in enumerate(items)]
+    if h3:
+        paths, errors = save_h3_images(items, out_dir, args.filename, timeout)
+    else:
+        paths = [save_image_from_item(item, out_dir, args.filename, index) for index, item in enumerate(items)]
     result = {
         "ok": True,
         "base_url": base_url,
@@ -346,6 +399,8 @@ def generate(args: argparse.Namespace) -> int:
         "usage": data.get("usage"),
         "created": data.get("created"),
     }
+    if h3:
+        result.update(request_id=data.get("request_id"), errors=errors)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
@@ -357,6 +412,8 @@ def edit(args: argparse.Namespace) -> int:
     model = args.model or os.environ.get("CODEXMANAGER_IMAGE_MODEL") or (
         DEFAULT_MINIMAX_MODEL if minimax else DEFAULT_MODEL
     )
+    if model in H3_MODELS:
+        raise SystemExit("H3 text-to-image models support the generate command only.")
     image_paths = [Path(value).expanduser() for value in args.image]
     if minimax:
         url = f"{base_url.rstrip('/')}/image_generation"
@@ -443,7 +500,7 @@ def main() -> int:
     gen = sub.add_parser("generate")
     gen.add_argument("--prompt", required=True)
     gen.add_argument("--model")
-    gen.add_argument("--size", default=DEFAULT_SIZE)
+    gen.add_argument("--size")
     gen.add_argument("--response-format", default=DEFAULT_RESPONSE_FORMAT, choices=["b64_json", "url", "base64"])
     gen.add_argument("--out-dir")
     gen.add_argument("--filename")

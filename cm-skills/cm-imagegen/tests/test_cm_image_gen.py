@@ -1,5 +1,6 @@
 import base64
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -7,6 +8,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -199,6 +201,96 @@ class LocalGatewayTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+
+
+class H3GenerationTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.base_url = "https://api.minimax.io/v1"
+        self.model = "MiniMax-H3-Image"
+
+    def run_cli(self, *args):
+        argv = ["cm_image_gen.py", *args, "--prompt", "a plum blossom", "--out-dir", str(self.root)]
+        env = {"CODEXMANAGER_IMAGE_BASE_URL": self.base_url, "CODEXMANAGER_IMAGE_MODEL": self.model}
+        with patch.dict(os.environ, env, clear=True), patch.object(sys, "argv", argv), \
+                patch.object(imagegen, "load_api_key", return_value="fixture"), \
+                patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            self.assertEqual(imagegen.main(), 0)
+            return json.loads(stdout.getvalue())
+
+    def test_models_use_regional_endpoint_and_save_inline_output(self):
+        for region, model in (("io", "MiniMax-H3-Image"), ("cn", "MiniMax-H3-Image-Highspeed")):
+            with self.subTest(region=region):
+                self.base_url = f"https://api.minimax.{region}/v1"
+                self.model = model
+                data = {"data": [{"b64_json": base64.b64encode(PNG_BYTES).decode()}], "request_id": "r1"}
+                with patch("urllib.request.urlopen", return_value=io.BytesIO(json.dumps(data).encode())) as http:
+                    result = self.run_cli("generate", "--size", "1024x1024", "--timeout", "30")
+                http.assert_called_once()
+                req = http.call_args.args[0]
+                self.assertEqual((req.method, req.full_url), ("POST", self.base_url + "/images/generations"))
+                self.assertEqual(req.get_header("Authorization"), "Bearer fixture")
+                self.assertEqual(http.call_args.kwargs["timeout"], 600)
+                self.assertEqual(json.loads(req.data), {"model": model, "prompt": "a plum blossom",
+                                 "response_format": "b64_json", "size": "1024x1024"})
+                self.assertEqual(Path(result["paths"][0]).read_bytes(), PNG_BYTES)
+                self.assertEqual(result["request_id"], "r1")
+                self.assertEqual(result["errors"], [])
+
+    def test_partial_success_downloads_url_and_reports_failed_item(self):
+        error = {"code": "1027", "message": "image failed the content safety check"}
+        image_url = "https://cdn.example/image.png"
+        data = {"data": [{"error": error}, {"url": image_url}], "usage": {"generated_images": 1}}
+        with patch("urllib.request.urlopen", side_effect=[io.BytesIO(json.dumps(data).encode()),
+                                                          io.BytesIO(PNG_BYTES)]) as http:
+            result = self.run_cli("generate", "--n", "2", "--response-format", "url",
+                                  "--aspect-ratio", "3:2", "--output-format", "png", "--prompt-optimizer", "false")
+        post, download = http.call_args_list
+        payload = json.loads(post.args[0].data)
+        self.assertEqual(payload, {"model": self.model, "prompt": "a plum blossom", "response_format": "url",
+                                    "n": 2, "aspect_ratio": "3:2", "output_format": "png", "disable_prompt_enhanced": True})
+        self.assertEqual(download.args[0].full_url, image_url)
+        self.assertIsNone(download.args[0].get_header("Authorization"))
+        self.assertEqual(Path(result["paths"][0]).read_bytes(), PNG_BYTES)
+        self.assertEqual(result["errors"], [{"index": 0, "error": error}])
+        self.assertEqual(result["usage"], data["usage"])
+
+    def test_http_failure_is_reported_without_resubmission(self):
+        data = b'{"type":"error","error":{"type":"server_error","message":"internal error (1000)"}}'
+        error = urllib.error.HTTPError(self.base_url, 500, "Server Error", {}, io.BytesIO(data))
+        with patch("urllib.request.urlopen", side_effect=error) as http:
+            with self.assertRaisesRegex(SystemExit, r"HTTP 500.*internal error"):
+                self.run_cli("generate")
+            http.assert_called_once()
+
+    def test_item_errors_without_images_fail(self):
+        data = {"data": [{"error": {"code": "1027", "message": "rejected image"}}]}
+        with patch("urllib.request.urlopen", return_value=io.BytesIO(json.dumps(data).encode())) as http:
+            with self.assertRaisesRegex(SystemExit, "rejected image"):
+                self.run_cli("generate")
+            http.assert_called_once()
+
+    def test_edit_and_conflicting_size_fail_before_submission(self):
+        with patch("urllib.request.urlopen") as http:
+            with self.assertRaisesRegex(SystemExit, "generate command only"):
+                self.run_cli("edit", "--image", "unused.png")
+            with self.assertRaisesRegex(SystemExit, "explicit --size"):
+                self.run_cli("generate", "--size", "1024x1024", "--aspect-ratio", "1:1")
+            with self.assertRaisesRegex(SystemExit, "requires an explicit"):
+                self.run_cli("generate", "--prompt-optimizer", "false")
+            http.assert_not_called()
+
+    def test_existing_minimax_generation_uses_legacy_response(self):
+        self.model = "image-01"
+        data = {"base_resp": {"status_code": 0}, "data": {"image_base64": [base64.b64encode(PNG_BYTES).decode()]}}
+        with patch("urllib.request.urlopen", return_value=io.BytesIO(json.dumps(data).encode())) as http:
+            result = self.run_cli("generate")
+        req = http.call_args.args[0]
+        self.assertEqual(req.full_url, self.base_url + "/image_generation")
+        self.assertEqual(json.loads(req.data)["response_format"], "base64")
+        self.assertEqual(Path(result["paths"][0]).read_bytes(), PNG_BYTES)
 
 
 if __name__ == "__main__":
