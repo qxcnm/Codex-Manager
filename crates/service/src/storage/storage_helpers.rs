@@ -831,16 +831,20 @@ pub(crate) fn initialize_storage() -> Result<(), String> {
     }
     let path = std::env::var("CODEXMANAGER_DB_PATH")
         .map_err(|_| "CODEXMANAGER_DB_PATH not set".to_string())?;
+    initialize_sqlite_storage(&path)
+}
+
+fn initialize_sqlite_storage(path: &str) -> Result<(), String> {
     {
         let initialized = crate::lock_utils::lock_recover(
             initialized_storage_paths(),
             "initialized_storage_paths",
         );
-        if initialized.contains_key(&path) {
+        if initialized.contains_key(path) {
             return Ok(());
         }
     }
-    let db_path = Path::new(&path);
+    let db_path = Path::new(path);
     if !db_path.exists() {
         log::warn!("storage path missing: {}", path);
     }
@@ -854,7 +858,7 @@ pub(crate) fn initialize_storage() -> Result<(), String> {
     } else {
         None
     };
-    let storage = Storage::open_with_busy_timeout(&path, SQLITE_STARTUP_BUSY_TIMEOUT)
+    let storage = Storage::open_with_busy_timeout(path, SQLITE_STARTUP_BUSY_TIMEOUT)
         .map_err(|err| format!("open storage failed: {} ({})", path, err))?;
     let initialization = storage
         .init()
@@ -872,7 +876,7 @@ pub(crate) fn initialize_storage() -> Result<(), String> {
     }
     drop(migration_lock);
     crate::lock_utils::lock_recover(initialized_storage_paths(), "initialized_storage_paths")
-        .insert(path, ());
+        .insert(path.to_owned(), ());
     Ok(())
 }
 

@@ -145,12 +145,7 @@ fn pending_model_catalog_data_migration_requires_backup() {
 
 #[test]
 fn initialize_storage_waits_for_an_existing_sqlite_writer() {
-    if crate::loopback_proxy_test::run_proxy_control_in_isolated_process() {
-        return;
-    }
-    let _env_lock = crate::test_env_guard();
     let db_path = unique_db_path("codexmanager-startup-write-lock");
-    let _db_env = EnvGuard::set("CODEXMANAGER_DB_PATH", &db_path);
     let storage = codexmanager_core::storage::Storage::open(&db_path).unwrap();
     storage.init().unwrap();
     drop(storage);
@@ -162,7 +157,7 @@ fn initialize_storage_waits_for_an_existing_sqlite_writer() {
         thread::sleep(Duration::from_secs(5));
         writer.execute_batch("COMMIT").unwrap();
     });
-    let result = initialize_storage();
+    let result = super::initialize_sqlite_storage(&db_path);
     release.join().unwrap();
     let _ = std::fs::remove_file(&db_path);
     result.expect("startup should finish when the existing writer releases its lock");
