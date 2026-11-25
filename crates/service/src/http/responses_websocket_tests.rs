@@ -6,9 +6,8 @@ use super::{
     prepare_missing_ws_tool_call_retry, proxy_basic_auth_header,
     rebase_ws_request_for_account_change, remember_ws_tool_calls_from_upstream_event,
     rewrite_client_frame, should_attempt_ws_terminal_retry, should_buffer_ws_upstream_preamble,
-    strip_previous_response_id_from_ws_text, ws_request_has_tool_call_output,
-    ws_route_binding_for_frame, CompletedWsResponseCache, CompletedWsToolCallCache,
-    WsRequestContext, WsToolCallKind, WsUpstreamAuthorization,
+    ws_request_has_tool_call_output, ws_route_binding_for_frame, CompletedWsResponseCache,
+    CompletedWsToolCallCache, WsRequestContext, WsToolCallKind, WsUpstreamAuthorization,
 };
 use axum::http::{HeaderMap, HeaderValue};
 use codexmanager_core::storage::{
@@ -2050,26 +2049,6 @@ fn websocket_logs_client_ultra_and_sends_upstream_max() {
 }
 
 #[test]
-fn websocket_retry_can_strip_previous_response_id() {
-    let text = json!({
-        "type": "response.create",
-        "model": "gpt-5.4",
-        "previous_response_id": "resp_previous",
-        "input": "follow up"
-    })
-    .to_string();
-
-    let stripped = strip_previous_response_id_from_ws_text(text.as_str())
-        .expect("previous_response_id should be stripped");
-    let value: serde_json::Value =
-        serde_json::from_str(stripped.as_str()).expect("parse stripped frame");
-
-    assert_eq!(value["type"], "response.create");
-    assert!(value.get("previous_response_id").is_none());
-    assert_eq!(value["input"], "follow up");
-}
-
-#[test]
 fn websocket_response_history_expands_store_false_text_chain() {
     let mut cache = CompletedWsResponseCache::default();
     assert!(cache
@@ -2679,6 +2658,8 @@ fn websocket_recovered_request_state_keeps_history_expansion_consistent() {
     let mut history = CompletedWsResponseCache::default();
     super::cache_completed_ws_response(
         &mut history,
+        &context,
+        "acct",
         &prepared,
         &json!({"type":"response.completed", "response":{"id":"resp_recovered", "output":[]}})
             .to_string(),
@@ -2739,4 +2720,88 @@ fn websocket_missing_tool_recovery_has_a_per_turn_budget() {
         retried_calls.len(),
         super::RESPONSES_WS_MAX_TOOL_CONTEXT_RECOVERY_ATTEMPTS
     );
+}
+#[test]
+fn websocket_receipt_requires_exact_identity_completed_call_and_complete_history() {
+    use super::ToolReceiptScope;
+    let _guard = crate::test_env_guard();
+    let mut ctx = WsRequestContext {
+        api_key: sample_api_key(),
+        incoming_headers: sample_incoming_headers(None, None),
+        prompt_cache_key: None,
+        cache_affinity_key: Some("receipt-isolation".into()),
+        route_conversation_id: None,
+        route_conversation_source: None,
+        effective_upstream_base: "https://source.invalid".into(),
+        prefer_raw_errors: false,
+    };
+    let output = json!({"type":"function_call_output","call_id":"call_verified","output":"ok"});
+    let frame = |id: &str, input: Value, ctx: &WsRequestContext| {
+        rewrite_client_frame(&json!({
+        "type":"response.create","model":"gpt-4.1","store":false,"previous_response_id":id,"input":[input]
+    }).to_string(), ctx).unwrap()
+    };
+    let turn = frame("resp_isolated", output.clone(), &ctx);
+    let scope = ToolReceiptScope::for_request(&ctx, &turn, "account-a").unwrap();
+    let call = json!({"type":"function_call","call_id":"call_verified","name":"lookup","arguments":"{}","status":"completed"});
+    let term = |id: &str, item: Value| {
+        json!({"type":"response.completed","response":{"id":id,"status":"completed","output":[item]}}).to_string()
+    };
+    let mut history = CompletedWsResponseCache::default();
+    history
+        .observe_scoped_response(
+            &term("resp_isolated", call.clone()),
+            None,
+            &json!("seed"),
+            Some(scope),
+        )
+        .unwrap();
+    let expand =
+        |s, t: &super::PreparedClientFrame| CompletedWsResponseCache::expand_pending_receipt(s, t);
+    assert!(expand(scope, &turn).is_some());
+    assert!(expand(
+        ToolReceiptScope::for_request(&ctx, &turn, "account-b").unwrap(),
+        &turn
+    )
+    .is_none());
+    ctx.api_key.key_hash.push('x');
+    assert!(expand(
+        ToolReceiptScope::for_request(&ctx, &turn, "account-a").unwrap(),
+        &turn
+    )
+    .is_none());
+    ctx.api_key.key_hash.pop();
+    ctx.effective_upstream_base.push('x');
+    assert!(expand(
+        ToolReceiptScope::for_request(&ctx, &turn, "account-a").unwrap(),
+        &turn
+    )
+    .is_none());
+    ctx.effective_upstream_base.pop();
+    ctx.cache_affinity_key = Some("other-session".into());
+    let other = ToolReceiptScope::for_request(&ctx, &turn, "account-a").unwrap();
+    assert!(expand(other, &turn).is_none());
+    ctx.cache_affinity_key = None;
+    ctx.prompt_cache_key = Some("receipt-isolation".into());
+    ctx.route_conversation_id = Some("receipt-isolation".into());
+    assert!(ToolReceiptScope::for_request(&ctx, &turn, "account-a").is_none());
+    for invalid in [
+        json!({"type":"custom_tool_call_output","call_id":"call_verified","output":"ok"}),
+        json!({"type":"function_call_output","call_id":"unknown","output":"ok"}),
+        json!({"type":"function_call","role":"user","call_id":"call_verified"}),
+    ] {
+        assert!(expand(scope, &frame("resp_isolated", invalid, &ctx)).is_none());
+    }
+    let mut partial = call.clone();
+    partial["status"] = json!("in_progress");
+    for (id, parent, item, source) in [
+        ("resp_partial", None, partial, scope),
+        ("resp_gap", Some("resp_missing"), call.clone(), scope),
+        ("resp_mixed", Some("resp_isolated"), call, other),
+    ] {
+        history
+            .observe_scoped_response(&term(id, item), parent, &json!("next"), Some(source))
+            .unwrap();
+        assert!(expand(source, &frame(id, output.clone(), &ctx)).is_none());
+    }
 }

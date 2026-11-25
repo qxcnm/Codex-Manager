@@ -254,7 +254,62 @@ fn is_sse_stream_response(response: &GatewayUpstreamResponse) -> bool {
             .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/event-stream"))
 }
 
+// Only a recognized role-only chat preamble is safe to discard. Unknown or mixed
+// frames commit the source: retrying after text or tools could duplicate work.
+fn chat_role_preamble(value: &Value) -> bool {
+    value
+        .get("object")
+        .is_some_and(|v| v == "chat.completion.chunk")
+        && value.as_object().is_some_and(|o| {
+            o.keys().all(|k| {
+                matches!(
+                    k.as_str(),
+                    "object"
+                        | "id"
+                        | "model"
+                        | "created"
+                        | "system_fingerprint"
+                        | "service_tier"
+                        | "choices"
+                        | "usage"
+                )
+            })
+        })
+        && value.get("usage").is_none_or(Value::is_null)
+        && value
+            .get("choices")
+            .and_then(Value::as_array)
+            .is_some_and(|choices| {
+                !choices.is_empty()
+                    && choices.iter().all(|c| {
+                        c.as_object().is_some_and(|o| {
+                            o.keys().all(|k| {
+                                matches!(
+                                    k.as_str(),
+                                    "index" | "delta" | "finish_reason" | "logprobs"
+                                )
+                            })
+                        }) && c.get("logprobs").is_none_or(Value::is_null)
+                            && c.get("finish_reason").is_none_or(Value::is_null)
+                            && c.get("delta").and_then(Value::as_object).is_some_and(|d| {
+                                d.get("role").is_some_and(|v| v == "assistant")
+                                    && d.get("content").is_none_or(|v| v.is_null() || v == "")
+                                    && d.keys().all(|k| matches!(k.as_str(), "role" | "content"))
+                            })
+                    })
+            })
+}
+
+#[cfg(test)]
 fn classify_prefix(prefix: &[u8], include_incomplete_frame: bool) -> PrefixDecision {
+    classify_protocol_prefix(prefix, include_incomplete_frame, false)
+}
+
+fn classify_protocol_prefix(
+    prefix: &[u8],
+    include_incomplete_frame: bool,
+    chat: bool,
+) -> PrefixDecision {
     let (frames, has_incomplete_trailing_frame) =
         normalized_frames(prefix, include_incomplete_frame);
     if frames.is_empty() {
@@ -287,6 +342,33 @@ fn classify_prefix(prefix: &[u8], include_incomplete_frame: bool) -> PrefixDecis
                 .is_some_and(|byte| matches!(*byte, b'{' | b'['))
         {
             return PrefixDecision::NeedMore;
+        }
+        if chat {
+            if let Some(value) = &parsed {
+                if declared_event_type
+                    .as_deref()
+                    .is_none_or(|t| t == "message")
+                    && chat_role_preamble(value)
+                {
+                    continue;
+                }
+                if declared_event_type
+                    .as_deref()
+                    .is_none_or(|t| matches!(t, "error" | "message"))
+                    && value.get("type").is_none_or(|t| t == "error")
+                    && value.as_object().is_some_and(|o| {
+                        o.contains_key("error")
+                            && o.keys().all(|k| {
+                                matches!(k.as_str(), "error" | "type" | "id" | "request_id")
+                            })
+                    })
+                {
+                    if let Some(message) = recoverable_model_route_error(value) {
+                        return PrefixDecision::Failover(message);
+                    }
+                }
+            }
+            return PrefixDecision::Deliver;
         }
         let payload_event_type = parsed
             .as_ref()
@@ -480,9 +562,11 @@ async fn preflight_stream_response_with_timeouts(
         };
     }
 
+    let chat = super::super::model_route_scheduler::is_scheduled_request()
+        && request_path.split('?').next() == Some("/v1/chat/completions");
     if !upstream_is_stream
         || !has_more_candidates
-        || !request_path.starts_with("/v1/responses")
+        || !(chat || request_path.starts_with("/v1/responses"))
         || status_code >= 400
         || !is_sse_stream_response(&response)
     {
@@ -494,7 +578,12 @@ async fn preflight_stream_response_with_timeouts(
             STREAM_PREFLIGHT_MAX_BYTES,
             idle_timeout,
             wall_clock_timeout,
-            |prefix| !matches!(classify_prefix(prefix, false), PrefixDecision::NeedMore),
+            |prefix| {
+                !matches!(
+                    classify_protocol_prefix(prefix, false, chat),
+                    PrefixDecision::NeedMore
+                )
+            },
         )
         .await;
     let include_incomplete_frame = matches!(
@@ -503,7 +592,7 @@ async fn preflight_stream_response_with_timeouts(
             | GatewayStreamPrefetchTerminal::Error(_)
             | GatewayStreamPrefetchTerminal::Disconnected
     );
-    match classify_prefix(prefix.as_ref(), include_incomplete_frame) {
+    match classify_protocol_prefix(prefix.as_ref(), include_incomplete_frame, chat) {
         PrefixDecision::Failover(message) => StreamPreflightOutcome::Failover(message),
         PrefixDecision::RetryUsageNotice(message) => {
             StreamPreflightOutcome::RetryUsageNotice(message)

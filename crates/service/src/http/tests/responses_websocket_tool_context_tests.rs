@@ -10,6 +10,7 @@ enum ToolContextOutcome {
     SubstantiveOutput,
     UnknownCall,
     CustomModelSwitch,
+    ExpiredPreviousId,
     MetadataOnly,
     NativeReconnect,
 }
@@ -85,7 +86,9 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
     let native_reconnect = matches!(outcome, ToolContextOutcome::NativeReconnect);
     let custom = matches!(
         outcome,
-        ToolContextOutcome::CustomModelSwitch | ToolContextOutcome::MetadataOnly
+        ToolContextOutcome::CustomModelSwitch
+            | ToolContextOutcome::ExpiredPreviousId
+            | ToolContextOutcome::MetadataOnly
     );
     let call = if tool_search {
         json!({
@@ -128,13 +131,14 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
         ]
     });
     if custom {
-        follow_up["model"] = json!(
-            if matches!(outcome, ToolContextOutcome::CustomModelSwitch) {
-                "gpt-6.1-sol"
-            } else {
-                "gpt-6-sol"
-            }
-        );
+        follow_up["model"] = json!(if matches!(
+            outcome,
+            ToolContextOutcome::CustomModelSwitch | ToolContextOutcome::ExpiredPreviousId
+        ) {
+            "gpt-6.1-sol"
+        } else {
+            "gpt-6-sol"
+        });
     }
     if matches!(outcome, ToolContextOutcome::MetadataOnly) {
         follow_up["client_metadata"]["session_id"] = json!(session_id);
@@ -257,10 +261,13 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
         } else {
             "function call"
         };
-        let error = json!({
+        let mut error = json!({
             "type": "error", "status": 400,
             "error": {"type": "invalid_request_error", "message": format!("No tool call found for {tool_label} output with call_id {output_call_id}.")}
         });
+        if matches!(outcome, ToolContextOutcome::ExpiredPreviousId) {
+            error["error"]["message"] = json!("Invalid `previous_response_id`.");
+        }
         send_context_json(&mut resumed, error.clone()).await;
         if matches!(
             outcome,
@@ -344,6 +351,26 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
                 .await;
             }
         }
+        if matches!(outcome, ToolContextOutcome::ExpiredPreviousId) {
+            let retry = next_context_json(&mut resumed).await;
+            assert!(retry.get("previous_response_id").is_none());
+            assert_eq!(retry["model"], expected_follow_up["model"]);
+            assert_eq!(retry["client_metadata"], initial["client_metadata"]);
+            assert_eq!(retry["input"].as_array().unwrap().len(), 4);
+            assert_eq!(
+                retry["input"][0]["content"][0]["text"],
+                seed_request["input"]
+            );
+            assert_eq!(retry["input"][1], expected_call);
+            assert_eq!(retry["input"][2], expected_follow_up["input"][0]);
+            assert_eq!(retry["input"][3], expected_output);
+            send_context_json(
+                &mut resumed,
+                json!({"type":"response.created","response":{"id":"resp_tool_context_recovered"}}),
+            )
+            .await;
+            send_context_json(&mut resumed, json!({"type":"response.completed","response":{"id":"resp_tool_context_recovered","status":"completed","output":[]}})).await;
+        }
         // Keeping the mock alive until client close detects extra retries,
         // fabricated recovery for unknown calls, and replay after real output.
         finish_context_mock(&mut resumed).await;
@@ -412,6 +439,7 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
         ToolContextOutcome::Recover
             | ToolContextOutcome::MixedKnownCalls
             | ToolContextOutcome::CustomModelSwitch
+            | ToolContextOutcome::ExpiredPreviousId
             | ToolContextOutcome::MetadataOnly
             | ToolContextOutcome::NativeReconnect
     ) {
@@ -435,6 +463,7 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
         ToolContextOutcome::Recover
             | ToolContextOutcome::MixedKnownCalls
             | ToolContextOutcome::CustomModelSwitch
+            | ToolContextOutcome::ExpiredPreviousId
             | ToolContextOutcome::MetadataOnly
                 | ToolContextOutcome::NativeReconnect
     ) {
@@ -527,4 +556,10 @@ async fn official_responses_websocket_tool_context_never_replays_real_output_or_
 async fn official_responses_websocket_tool_context_native_reconnect_without_response_id() {
     let _guard = crate::test_env_guard();
     tool_context_case(false, ToolContextOutcome::NativeReconnect).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn official_responses_websocket_recovers_expired_previous_id_on_a_new_socket() {
+    let _guard = crate::test_env_guard();
+    tool_context_case(false, ToolContextOutcome::ExpiredPreviousId).await;
 }

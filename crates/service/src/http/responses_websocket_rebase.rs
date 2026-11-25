@@ -3,6 +3,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::responses_websocket_control::{is_interrupted_response, is_retained_interrupted_output};
 
+#[path = "responses_websocket_tool_receipts.rs"]
+mod tool_receipts;
+pub(super) use tool_receipts::ToolReceiptScope;
+
 const MAX_CACHED_WS_TOOL_CALLS: usize = 256;
 const MAX_CACHED_WS_RESPONSES: usize = 64;
 const MAX_CACHED_WS_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
@@ -64,6 +68,7 @@ pub(super) enum WsToolCallCacheEvent {
 
 #[derive(Clone)]
 struct CompletedWsResponse {
+    receipt_scope: Option<ToolReceiptScope>,
     previous_response_id: Option<String>,
     input: Vec<Value>,
     output: Vec<Value>,
@@ -248,6 +253,16 @@ impl CompletedWsResponseCache {
         previous_response_id: Option<&str>,
         input: &Value,
     ) -> Result<bool, String> {
+        self.observe_scoped_response(terminal_text, previous_response_id, input, None)
+    }
+
+    pub(super) fn observe_scoped_response(
+        &mut self,
+        terminal_text: &str,
+        previous_response_id: Option<&str>,
+        input: &Value,
+        receipt_scope: Option<ToolReceiptScope>,
+    ) -> Result<bool, String> {
         let terminal = serde_json::from_str::<Value>(terminal_text)
             .map_err(|err| format!("parse completed websocket response failed: {err}"))?;
         let event_type = terminal
@@ -270,6 +285,11 @@ impl CompletedWsResponseCache {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| "completed websocket response is missing a non-empty id".to_string())?
             .to_string();
+        let receipt_scope = receipt_scope.filter(|_| {
+            event_type == "response.completed"
+                && response.get("status").is_none_or(|s| s == "completed")
+                && response.get("error").is_none_or(Value::is_null)
+        });
         let mut output = response
             .get("output")
             .and_then(Value::as_array)
@@ -328,23 +348,26 @@ impl CompletedWsResponseCache {
         self.retained_bytes = self.retained_bytes.saturating_add(retained_bytes);
         self.insertion_order.push_back(response_id.clone());
         self.responses.insert(
-            response_id,
+            response_id.clone(),
             CompletedWsResponse {
+                receipt_scope,
                 previous_response_id,
                 input,
                 output,
                 retained_bytes,
             },
         );
+        if let Some(scope) = receipt_scope {
+            self.publish_pending_receipt(scope, &response_id);
+        }
         Ok(true)
     }
 
-    #[cfg(test)]
     pub(super) fn contains(&self, response_id: &str) -> bool {
         self.responses.contains_key(response_id)
     }
 
-    fn collect_history_items(&self, response_id: &str) -> Result<Vec<Value>, String> {
+    fn history_chain(&self, response_id: &str) -> Result<Vec<&CompletedWsResponse>, String> {
         let mut current_response_id = response_id.to_string();
         let mut visited = HashSet::new();
         let mut chain = Vec::new();
@@ -371,6 +394,11 @@ impl CompletedWsResponseCache {
             }
         }
 
+        Ok(chain)
+    }
+
+    fn collect_history_items(&self, response_id: &str) -> Result<Vec<Value>, String> {
+        let chain = self.history_chain(response_id)?;
         let capacity = chain.iter().fold(0usize, |total, response| {
             total
                 .saturating_add(response.input.len())

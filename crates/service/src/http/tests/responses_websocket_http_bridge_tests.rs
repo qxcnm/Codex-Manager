@@ -536,7 +536,19 @@ async fn responses_websocket_http_bridge_schedules_same_source_branches_per_turn
     }
     assert_eq!(mock.calls.load(Ordering::SeqCst), 4);
     shutdown(socket, signal, server, upstream).await;
-    let logs = storage.list_request_logs(None, 10).unwrap();
+    // A delivered terminal frame precedes the asynchronous request-log write.
+    // Wait for both writes, then assert the exact count and statuses below.
+    let logs = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let logs = storage.list_request_logs(None, 10).unwrap();
+            if logs.len() >= 2 {
+                break logs;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("both delivered turns must have a persisted request log");
     assert_eq!(logs.len(), 2);
     assert!(logs
         .iter()

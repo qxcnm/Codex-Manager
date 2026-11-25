@@ -27,7 +27,11 @@ including executor-local retries and BPS handshakes. Before delivery, connection
 failures and HTTP 408/429/5xx can fall back. Ordinary 4xx, ambiguous delivery
 after a submitted POST, downstream cancellation, or already-delivered content
 and tool calls do not trigger model-route replay. Existing account-pool recovery
-still applies inside an account branch.
+still applies inside an account branch. On a scheduled Chat Completions SSE stream,
+HTTP 200 can still be followed by a structured transient error. A heartbeat or
+assistant-role-only chunk does not commit the source; text, tools, usage,
+finish reasons and unknown data do. This also applies when Chat is the upstream
+format of a Responses request.
 
 State is per process and effective model/tier candidate set, not per Key. It is
 bounded to 512 entries, expires after 30 idle minutes and resets on restart.

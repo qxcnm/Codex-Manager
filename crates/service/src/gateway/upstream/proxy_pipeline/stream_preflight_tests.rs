@@ -798,3 +798,18 @@ async fn continuously_dripping_error_body_stops_at_wall_clock_limit() {
     ));
     producer.await.unwrap();
 }
+
+#[tokio::test]
+async fn scheduled_chat_only_discards_recognized_preambles_and_pure_transient_errors() {
+    super::super::super::model_route_scheduler::scope_attempt_budget(async {
+        let classify = |val: &str| classify_protocol_prefix(format!("data: {val}\r\n\r\n").as_bytes(), false, true);
+        assert!(matches!(classify(r#"{"error":{"code":"timeout"}}"#), PrefixDecision::Failover(_)));
+        for frame in [r#"{"choices":[{"delta":{"content":"text"}}],"error":{"code":"timeout"}}"#,
+            r#"{"type":"extension.notice","error":{"code":"timeout"}}"#,
+            r#"{"error":{"code":"invalid_request_error","message":"quota exceeded"}}"#,
+            r#"{"object":"chat.completion.chunk","choices":[{"delta":{"role":"assistant","reasoning_content":"thinking"}}]}"#,
+            r#"{"object":"chat.completion.chunk","choices":[{"delta":{"role":"assistant"},"finish_reason":"stop"}]}"#,
+            r#"{"object":"chat.completion.chunk","choices":[{"delta":{"role":"assistant"}}],"usage":{"completion_tokens":1}}"#,
+            "[DONE]"] { assert_eq!(classify(frame), PrefixDecision::Deliver, "{frame}"); }
+    }).await;
+}

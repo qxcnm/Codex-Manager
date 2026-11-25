@@ -1806,7 +1806,13 @@ pub(in super::super) async fn proxy_aggregate_request(
                 use super::super::proxy_pipeline::stream_preflight::{
                     preflight_stream_response, StreamPreflightOutcome,
                 };
-                let preflight = preflight_stream_response(upstream, path, true, true);
+                // Inspect the upstream wire format, before the downstream protocol adapter.
+                let wire_path = if bridge_responses_to_chat {
+                    "/v1/chat/completions"
+                } else {
+                    path
+                };
+                let preflight = preflight_stream_response(upstream, wire_path, true, true);
                 let result = crate::http::gateway_request::with_response_cancellation(async {
                     match super::super::support::deadline::remaining(request_deadline) {
                         Some(left) => tokio::time::timeout(left, preflight).await.ok(),

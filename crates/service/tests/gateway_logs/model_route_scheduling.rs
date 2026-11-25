@@ -691,3 +691,103 @@ fn scheduled_account_and_aggregate_sources_fallback_in_both_directions() {
         );
     }
 }
+
+#[test]
+fn scheduled_chat_sse_switches_only_before_delivery_on_recoverable_errors() {
+    let _lock = test_env_guard();
+    let path = "/v1/chat/completions";
+    for (client_path, delta, code, switch) in [
+        (
+            path,
+            r#"{"role":"assistant","content":""}"#,
+            "server_error",
+            true,
+        ),
+        (
+            "/v1/responses",
+            r#"{"role":"assistant"}"#,
+            "server_error",
+            true,
+        ),
+        (
+            path,
+            r#"{"role":"assistant"}"#,
+            "invalid_request_error",
+            false,
+        ),
+        (path, r#"{"content":"visible"}"#, "server_error", false),
+        (
+            path,
+            r#"{"tool_calls":[{"index":0,"id":"call_first"}]}"#,
+            "server_error",
+            false,
+        ),
+    ] {
+        let dir = new_test_dir("model-route-chat-stream-errors");
+        let db = dir.join("codexmanager.db");
+        let _db = EnvGuard::set("CODEXMANAGER_DB_PATH", db.to_str().unwrap());
+        let first_body = format!(": heartbeat\n\ndata: {{\"object\":\"chat.completion.chunk\",\"choices\":[{{\"index\":0,\"delta\":{delta},\"finish_reason\":null}}]}}\n\ndata: {{\"error\":{{\"type\":\"{code}\",\"message\":\"fixture failure\"}}}}\n\ndata: [DONE]\n\n");
+        let (a, a_rx, a_join) = start_mock_upstream_sequence_lenient_with_content_types(
+            vec![(200, first_body, "text/event-stream".into())],
+            Duration::from_secs(2),
+        );
+        let (ok, ct) = success(path, true);
+        let (b, b_rx, b_join) = start_mock_upstream_sequence_lenient_with_content_types(
+            vec![(200, ok, ct)],
+            Duration::from_secs(2),
+        );
+        let storage = Storage::open(&db).unwrap();
+        insert_aggregate_api(&storage, "agg_chat_a", &a, path, now_ts());
+        insert_aggregate_api(&storage, "agg_chat_b", &b, path, now_ts());
+        configure(
+            &storage,
+            "weighted",
+            vec![
+                route("agg_chat_a", "primary", 10, 1),
+                route("agg_chat_b", "backup", 0, 1),
+            ],
+        );
+        insert_hybrid_key(&storage, "gk_model_schedule", "pk_model_schedule", now_ts());
+        let server = codexmanager_service::start_one_shot_server().unwrap();
+        let (status, body) = send(&server.addr, client_path, true);
+        server.join();
+        a_join.join().unwrap();
+        b_join.join().unwrap();
+        assert_eq!(a_rx.try_iter().count(), 1);
+        assert_eq!(
+            b_rx.try_iter().count(),
+            usize::from(switch),
+            "{code}/{delta}: {body}"
+        );
+        assert_eq!(status, 200);
+        if client_path == "/v1/responses" {
+            let events: Vec<serde_json::Value> = body
+                .lines()
+                .filter_map(|line| serde_json::from_str(line.strip_prefix("data: ")?).ok())
+                .collect();
+            let completed = events
+                .iter()
+                .find(|e| e["type"] == "response.completed")
+                .expect("completed bridged stream");
+            let calls: Vec<_> = completed["response"]["output"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|item| item["type"] == "function_call")
+                .collect();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0]["call_id"], "call_lookup");
+        } else {
+            assert_eq!(body.matches("call_lookup").count(), usize::from(switch));
+        }
+        assert_eq!(body.contains("fixture failure"), !switch);
+        let logs = storage
+            .list_request_logs(Some("key:=gk_model_schedule"), 10)
+            .unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(
+            logs[0].actual_source_id.as_deref(),
+            Some(if switch { "agg_chat_b" } else { "agg_chat_a" })
+        );
+    }
+}

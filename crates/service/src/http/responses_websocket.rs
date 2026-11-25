@@ -43,7 +43,7 @@ use responses_websocket_control::{is_interrupted_response, parse_client_message,
 use responses_websocket_rebase::{
     expand_response_create_previous_response, normalize_ws_tool_call_outputs,
     rebase_response_create_for_account_change, rebase_response_create_for_missing_tool_call,
-    CompletedWsResponseCache, CompletedWsToolCallCache, WsToolCallKind,
+    CompletedWsResponseCache, CompletedWsToolCallCache, ToolReceiptScope, WsToolCallKind,
 };
 
 const RESPONSES_WS_ERROR_CODE: &str = "responses_websocket_error";
@@ -1379,6 +1379,8 @@ async fn run_responses_websocket_session(mut socket: WebSocket, context: WsReque
                                         .filter(|id| id.starts_with("resp_") && id != "resp_proxy");
                                     cache_completed_ws_response(
                                         &mut completed_responses,
+                                        &context,
+                                        &upstream.account_id,
                                         &pending.prepared,
                                         text.as_str(),
                                     );
@@ -4023,13 +4025,21 @@ fn replace_ws_request_text(
 
 fn cache_completed_ws_response(
     completed_responses: &mut CompletedWsResponseCache,
+    context: &WsRequestContext,
+    account_id: &str,
     prepared: &PreparedClientFrame,
     terminal_text: &str,
 ) {
-    if let Err(err) = completed_responses.observe_completed_response(
+    // Stored responses can be resumed upstream. Retain a short-lived local receipt only
+    // for explicitly non-stored native turns with a stable session anchor.
+    let scope = (!prepared.store)
+        .then(|| ToolReceiptScope::for_request(context, prepared, account_id))
+        .flatten();
+    if let Err(err) = completed_responses.observe_scoped_response(
         terminal_text,
         prepared.previous_response_id.as_deref(),
         &prepared.input,
+        scope,
     ) {
         log::warn!(
             "event=responses_ws_response_history_not_cached previous_response_id={} err={}",
@@ -4146,20 +4156,22 @@ async fn try_retry_ws_request_after_terminal(
         };
         retry_text = Some(rebased);
     } else if is_previous_response_not_found_terminal(terminal) {
-        if strip_previous_response_id_from_ws_text(pending.prepared.text.as_str()).is_none() {
+        let Some(id) = pending.prepared.previous_response_id.as_deref() else {
+            return Ok(false);
+        };
+        retry_text = if completed_responses.contains(id) {
+            expand_response_create_previous_response(&pending.prepared.text, completed_responses)
+                .map_err(ws_context_rebase_error)?
+        } else {
+            ToolReceiptScope::for_request(context, &pending.prepared, &upstream.account_id)
+                .and_then(|scope| {
+                    CompletedWsResponseCache::expand_pending_receipt(scope, &pending.prepared)
+                })
+        };
+        // Never drop the id and send an orphan result when we cannot prove its history.
+        if retry_text.is_none() {
             return Ok(false);
         }
-        let expanded = expand_response_create_previous_response(
-            pending.prepared.text.as_str(),
-            completed_responses,
-        )
-        .map_err(ws_context_rebase_error)?
-        .ok_or_else(|| {
-            ws_context_rebase_error(
-                "previous_response_id was rejected and no recoverable response id was found",
-            )
-        })?;
-        retry_text = Some(expanded);
     } else {
         let previous_account_id = upstream.account_id.clone();
         if !try_rotate_ws_upstream_after_terminal(
@@ -4414,8 +4426,13 @@ fn is_previous_response_not_found_terminal(terminal: &WsTerminalEvent) -> bool {
     let Some(error) = terminal.error.as_deref() else {
         return false;
     };
-    let lower = error.to_ascii_lowercase();
-    lower.contains("previous response") && lower.contains("not found")
+    rejected_previous_id_message(error)
+}
+
+fn rejected_previous_id_message(error: &str) -> bool {
+    let lower = error.trim().to_ascii_lowercase();
+    lower.trim_end_matches('.') == "invalid `previous_response_id`"
+        || (lower.contains("previous response") && lower.contains("not found"))
 }
 
 fn parse_missing_ws_tool_call_error_message(message: &str) -> Option<(WsToolCallKind, String)> {
@@ -4467,20 +4484,6 @@ fn missing_ws_tool_call_from_terminal(
     parse_missing_ws_tool_call_error_message(terminal.error.as_deref()?)
 }
 
-fn strip_previous_response_id_from_ws_text(text: &str) -> Option<String> {
-    let mut value = serde_json::from_str::<Value>(text).ok()?;
-    let object = value.as_object_mut()?;
-    if object
-        .get("type")
-        .and_then(Value::as_str)
-        .is_some_and(|value| value == "response.create")
-        && object.remove("previous_response_id").is_some()
-    {
-        return serde_json::to_string(&value).ok();
-    }
-    None
-}
-
 fn infer_ws_terminal_status(value: &Value, error_message: Option<&str>) -> u16 {
     if let Some(status_code) = value
         .get("status")
@@ -4490,7 +4493,9 @@ fn infer_ws_terminal_status(value: &Value, error_message: Option<&str>) -> u16 {
         return status_code;
     }
     if let Some(message) = error_message {
-        if parse_missing_ws_tool_call_error_message(message).is_some() {
+        if parse_missing_ws_tool_call_error_message(message).is_some()
+            || rejected_previous_id_message(message)
+        {
             return 400;
         }
         if crate::account_status::usage_limit_reason_from_message(message).is_some() {
