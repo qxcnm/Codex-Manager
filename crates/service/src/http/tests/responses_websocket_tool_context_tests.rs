@@ -144,7 +144,10 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
         follow_up["client_metadata"]["session_id"] = json!(session_id);
     }
     if native_reconnect {
-        follow_up.as_object_mut().unwrap().remove("previous_response_id");
+        follow_up
+            .as_object_mut()
+            .unwrap()
+            .remove("previous_response_id");
         follow_up["model"] = json!("gpt-5.6-terra");
     }
     let mut seed_calls = vec![call.clone()];
@@ -190,11 +193,16 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
             send_context_json(
                 &mut seed,
                 json!({"type":"response.in_progress","response":{"id":"resp_tool_context_seed"}}),
-            ).await;
+            )
+            .await;
             let mut partial = expected_call.clone();
             partial["arguments"] = json!("");
             partial["status"] = json!("in_progress");
-            send_context_json(&mut seed, json!({"type":"response.output_item.added", "output_index":0,"item":partial})).await;
+            send_context_json(
+                &mut seed,
+                json!({"type":"response.output_item.added", "output_index":0,"item":partial}),
+            )
+            .await;
             send_context_json(&mut seed, json!({"type":"response.function_call_arguments.delta", "delta":expected_call["arguments"]})).await;
             send_context_json(&mut seed, json!({"type":"response.function_call_arguments.done", "arguments":expected_call["arguments"]})).await;
         }
@@ -226,7 +234,10 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
         .await
         .unwrap();
         let initial = next_context_json(&mut resumed).await;
-        assert_eq!(initial["previous_response_id"], expected_follow_up["previous_response_id"]);
+        assert_eq!(
+            initial["previous_response_id"],
+            expected_follow_up["previous_response_id"]
+        );
         assert_eq!(initial["input"], expected_follow_up["input"]);
         if custom {
             assert_eq!(seed_request["model"], "gpt-6-sol");
@@ -237,11 +248,13 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
         send_context_json(
             &mut resumed,
             json!({"type":"codex.rate_limits","plan_type":"free","rate_limits":{}}),
-        ).await;
+        )
+        .await;
         send_context_json(
             &mut resumed,
             json!({"type":"codex.response.metadata","headers":{}}),
-        ).await;
+        )
+        .await;
         send_context_json(
             &mut resumed,
             json!({"type": "response.created", "response": {"id": "resp_tool_context_attempt"}}),
@@ -465,16 +478,19 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
             | ToolContextOutcome::CustomModelSwitch
             | ToolContextOutcome::ExpiredPreviousId
             | ToolContextOutcome::MetadataOnly
-                | ToolContextOutcome::NativeReconnect
+            | ToolContextOutcome::NativeReconnect
     ) {
         assert_eq!(
             events.last().unwrap()["response"]["id"],
             "resp_tool_context_recovered"
         );
-        assert!(events.iter().all(|event| !matches!(
-            event["type"].as_str(),
-            Some("codex.rate_limits" | "codex.response.metadata")
-        )), "failed attempt notifications must not escape before recovery");
+        assert!(
+            events.iter().all(|event| !matches!(
+                event["type"].as_str(),
+                Some("codex.rate_limits" | "codex.response.metadata")
+            )),
+            "failed attempt notifications must not escape before recovery"
+        );
         assert_eq!(
             events
                 .iter()
@@ -493,7 +509,10 @@ async fn tool_context_case(tool_search: bool, outcome: ToolContextOutcome) {
             1
         );
         assert_eq!(
-            events.iter().find(|event| event["type"] == "response.output_text.delta").unwrap()["delta"],
+            events
+                .iter()
+                .find(|event| event["type"] == "response.output_text.delta")
+                .unwrap()["delta"],
             "already delivered"
         );
     }

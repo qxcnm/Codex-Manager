@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "CodexManager"
-version = "0.7.5"
+version = "0.7.6"
 dependencies = [
  "chrono",
  "codexmanager-core",
@@ -917,7 +917,7 @@ dependencies = [
 
 [[package]]
 name = "codexmanager-core"
-version = "0.7.5"
+version = "0.7.6"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -933,7 +933,7 @@ dependencies = [
 
 [[package]]
 name = "codexmanager-service"
-version = "0.7.5"
+version = "0.7.6"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -982,7 +982,7 @@ dependencies = [
 
 [[package]]
 name = "codexmanager-storage-seaorm"
-version = "0.7.5"
+version = "0.7.6"
 dependencies = [
  "codexmanager-core",
  "futures-lite",
