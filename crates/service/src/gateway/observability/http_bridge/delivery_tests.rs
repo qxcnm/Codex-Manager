@@ -373,6 +373,7 @@ fn non_stream_chat_completion_response_adds_image_generation_message_images() {
 
     let mapped = convert_responses_body_to_chat_completions(
         serde_json::to_vec(&body).expect("body").as_slice(),
+        None,
     )
     .expect("convert chat completion body");
     let value: serde_json::Value = serde_json::from_slice(&mapped).expect("parse mapped body");
@@ -409,6 +410,7 @@ fn non_stream_chat_completion_response_preserves_reasoning_content() {
 
     let mapped = convert_responses_body_to_chat_completions(
         serde_json::to_vec(&body).expect("body").as_slice(),
+        None,
     )
     .expect("convert chat completion body");
     let value: serde_json::Value = serde_json::from_slice(&mapped).expect("parse mapped body");
@@ -443,6 +445,7 @@ fn non_stream_chat_completion_response_preserves_answer_and_reasoning_content() 
 
     let mapped = convert_responses_body_to_chat_completions(
         serde_json::to_vec(&body).expect("body").as_slice(),
+        None,
     )
     .expect("convert chat completion body");
     let value: serde_json::Value = serde_json::from_slice(&mapped).expect("parse mapped body");
@@ -467,7 +470,7 @@ fn non_stream_chat_responses_sse_json_mode_returns_single_parseable_content() {
     );
     let (body, _) = collect_non_stream_json_from_sse_bytes(sse.as_bytes());
     let body = body.expect("synthesized response json");
-    let mapped = convert_responses_body_to_chat_completions(body.as_slice())
+    let mapped = convert_responses_body_to_chat_completions(body.as_slice(), None)
         .expect("convert chat completion body");
     let value: serde_json::Value =
         serde_json::from_slice(&mapped).expect("parse chat completion body");
@@ -479,6 +482,57 @@ fn non_stream_chat_responses_sse_json_mode_returns_single_parseable_content() {
     let parsed: serde_json::Value =
         serde_json::from_str(content).expect("chat content is a single json document");
     assert_eq!(parsed["answer"], true);
+}
+
+#[test]
+fn non_stream_chat_completion_preserves_parallel_tool_calls_and_restores_names() {
+    let names =
+        std::collections::BTreeMap::from([("safe_echo".to_string(), "echo.probe".to_string())]);
+    let body = json!({
+        "id": "resp_tools", "model": "gpt-6-astra", "output_text": "Checking.",
+        "output": [
+            {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "safe_echo", "arguments": "{\"value\":\"hello\"}"},
+            {"type": "function_call", "id": "fc_2", "call_id": "call_2", "name": "second", "arguments": "{}"}
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+    });
+    let mapped = convert_responses_body_to_chat_completions(
+        &serde_json::to_vec(&body).unwrap(),
+        Some(&names),
+    )
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&mapped).unwrap();
+    let choice = &value["choices"][0];
+    assert_eq!(choice["finish_reason"], "tool_calls");
+    assert_eq!(choice["message"]["content"], "Checking.");
+    let calls = choice["message"]["tool_calls"].as_array().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0]["id"], "call_1");
+    assert_eq!(calls[0]["function"]["name"], "echo.probe");
+    assert_eq!(calls[0]["function"]["arguments"], "{\"value\":\"hello\"}");
+    assert_eq!(calls[1]["id"], "call_2");
+    assert_eq!(value["usage"]["prompt_tokens"], 10);
+}
+
+#[test]
+fn non_stream_chat_responses_sse_preserves_tool_only_completion() {
+    let response = json!({"type": "response.completed", "response": {
+        "id": "resp_tool_only", "model": "gpt-6-astra", "status": "completed",
+        "output": [{"type": "function_call", "call_id": "call_echo", "name": "echo_probe", "arguments": "{\"value\":\"ok\"}"}]
+    }});
+    let sse = format!(
+        "event: response.completed\ndata: {}\n\ndata: [DONE]\n\n",
+        response
+    );
+    let (body, _) = collect_non_stream_json_from_sse_bytes(sse.as_bytes());
+    let mapped = convert_responses_body_to_chat_completions(&body.unwrap(), None).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&mapped).unwrap();
+    assert_eq!(value["choices"][0]["finish_reason"], "tool_calls");
+    assert!(value["choices"][0]["message"]["content"].is_null());
+    assert_eq!(
+        value["choices"][0]["message"]["tool_calls"][0]["id"],
+        "call_echo"
+    );
 }
 
 #[test]
