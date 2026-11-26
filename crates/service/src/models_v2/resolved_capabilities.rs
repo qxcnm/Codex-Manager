@@ -51,7 +51,16 @@ fn resolve_with_official(
     let stored = discovery_metadata::sanitize_metadata(&model.capabilities)
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default();
-    let text_model = super::supports_text_generation(model);
+    let text_model = discovery_metadata::declared_text_generation(&stored)
+        .unwrap_or_else(|| super::supports_text_generation(model));
+    let official = official.filter(|entry| {
+        text_model
+            && entry
+                .metadata
+                .as_object()
+                .and_then(discovery_metadata::declared_text_generation)
+                != Some(false)
+    });
     let official_source = official
         .as_ref()
         .map(|item| item.source)
@@ -91,46 +100,32 @@ fn resolve_with_official(
         .unwrap_or_default();
     // Canonicalize only in this derived view. This also makes snake/camel
     // precedence identical for the editor, API selectors, and exported catalog.
-    capabilities.extend(stored.clone());
-    for (key, value) in &defaults {
-        if !matches!(
-            key.as_str(),
-            "context_window" | "max_context_window" | "default_reasoning_level"
-        ) && !stored.contains_key(key)
-        {
-            capabilities.insert(key.clone(), value.clone());
+    // Invalid raw values are not overrides. Drop them before the shared fill
+    // so, for example, an array of unsupported modalities cannot mask defaults.
+    for key in defaults
+        .keys()
+        .map(String::as_str)
+        .chain(["input_modalities"])
+    {
+        if !stored.contains_key(key) {
+            capabilities.remove(key);
         }
     }
-    if !stored_input && !defaults.contains_key("input_modalities")
-        || !capabilities
-            .get("input_modalities")
-            .is_some_and(Value::is_array)
-    {
-        capabilities.insert(
-            "input_modalities".into(),
-            serde_json::json!(["text", "image"]),
-        );
-    }
+    capabilities.extend(stored);
     effective.capabilities = Value::Object(capabilities);
-    effective.context_window = model
-        .context_window
-        .filter(|value| *value > 0)
-        .or(model.max_context_window.filter(|value| *value > 0))
-        .or_else(|| defaults.get("context_window").and_then(Value::as_i64))
-        .or_else(|| defaults.get("max_context_window").and_then(Value::as_i64))
-        .or_else(|| text_model.then_some(codex_capabilities::DEFAULT_CONTEXT_WINDOW));
-    effective.max_context_window = model
-        .max_context_window
-        .filter(|value| *value > 0)
-        .or(model.context_window.filter(|value| *value > 0))
-        .or_else(|| defaults.get("max_context_window").and_then(Value::as_i64))
-        .or(effective.context_window);
-    if !stored_reasoning {
-        effective.default_reasoning_effort = defaults
-            .get("default_reasoning_level")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
+    effective.context_window = model.context_window.filter(|n| *n > 0);
+    effective.max_context_window = model.max_context_window.filter(|n| *n > 0);
+    discovery_metadata::fill_official_defaults(&mut effective, &defaults);
+
+    // Only the read/export view needs compatibility defaults for unknown models.
+    if !effective.capabilities["input_modalities"].is_array() {
+        effective.capabilities["input_modalities"] = serde_json::json!(["text", "image"]);
     }
+    effective.context_window = effective
+        .context_window
+        .or(effective.max_context_window)
+        .or_else(|| text_model.then_some(codex_capabilities::DEFAULT_CONTEXT_WINDOW));
+    effective.max_context_window = effective.max_context_window.or(effective.context_window);
     let overall_source: String = [
         reasoning_source.as_str(),
         context_source.as_str(),
@@ -239,7 +234,7 @@ mod tests {
             .reasoning_efforts
             .iter()
             .any(|effort| effort == "high"));
-        assert_eq!(resolved.context_window, Some(272000));
+        assert_eq!(resolved.context_window, Some(500000));
         assert_eq!(resolved.input_modalities, ["text", "image"]);
         assert!(decorated.default_reasoning_effort.is_none());
         assert!(decorated.context_window.is_none());
@@ -260,7 +255,7 @@ mod tests {
 
     #[test]
     fn unknown_model_keeps_reasoning_unknown_instead_of_guessing_from_another_version() {
-        let (effective, resolved) = resolve(&model("gpt-6.2-sol"));
+        let (effective, resolved) = resolve(&model("gpt-99-unlisted"));
         assert!(resolved.matched_slug.is_none());
         assert_eq!(resolved.reasoning_source, "codex_default");
         assert!(resolved.reasoning_efforts.is_empty());
@@ -350,6 +345,56 @@ mod tests {
     }
 
     #[test]
+    fn output_only_image_model_does_not_claim_official_text_capabilities() {
+        let mut raw = model("gpt-6.2-sol");
+        raw.capabilities = json!({"outputModalities": ["image"]});
+        let (_, resolved) = resolve(&raw);
+        assert!(resolved.matched_slug.is_none());
+        assert!(resolved.context_window.is_none());
+        assert!(resolved.default_reasoning_effort.is_none());
+        assert!(resolved.reasoning_efforts.is_empty());
+        let info = super::super::model_info(&raw);
+        assert_eq!(info.extra["supports_text_generation"], false);
+        assert!(info.context_window.is_none());
+        // An explicit text-generation flag still wins over output modalities.
+        raw.capabilities["supportsTextGeneration"] = true.into();
+        assert!(super::super::supports_text_generation(&raw));
+    }
+
+    #[test]
+    fn partial_stored_limits_fill_only_missing_fields_in_the_view() {
+        for (ctx, max, expected_ctx, expected_max) in [
+            (Some(450_000), None, 450_000, 872_000),
+            (None, Some(600_000), 500_000, 600_000),
+            (None, Some(200_000), 200_000, 200_000),
+            (Some(1_000_000), None, 1_000_000, 1_000_000),
+        ] {
+            let mut raw = model("gpt-6.2-sol");
+            raw.context_window = ctx;
+            raw.max_context_window = max;
+            let (_, resolved) = resolve(&raw);
+            assert_eq!(resolved.context_window, Some(expected_ctx));
+            assert_eq!(resolved.max_context_window, Some(expected_max));
+            assert_eq!((raw.context_window, raw.max_context_window), (ctx, max));
+        }
+    }
+
+    #[test]
+    fn inherited_reasoning_default_must_be_allowed_by_the_stored_levels() {
+        for (levels, default) in [
+            (json!(["low", "high"]), Some("low")),
+            (json!(["high"]), None),
+            (json!([]), None),
+        ] {
+            let mut raw = model("gpt-6.2-sol");
+            raw.capabilities["reasoning_efforts"] = levels.clone();
+            let (effective, _) = resolve(&raw);
+            assert_eq!(effective.default_reasoning_effort.as_deref(), default);
+            assert_eq!(effective.capabilities["reasoning_efforts"], levels);
+        }
+    }
+
+    #[test]
     fn max_only_official_metadata_is_used_as_the_effective_context() {
         let raw = model("future-model");
         let (_, resolved) = resolve_with_official(
@@ -399,7 +444,7 @@ mod tests {
             .unwrap();
         assert!(reread.resolved_capabilities.is_none());
         let resolved = decorate(reread).resolved_capabilities.unwrap();
-        assert_eq!(resolved.context_window, Some(272000));
+        assert_eq!(resolved.context_window, Some(500000));
         assert!(!resolved
             .reasoning_efforts
             .iter()

@@ -21,12 +21,12 @@ pub(super) struct OfficialCapabilities {
 /// avoids repeated settings queries and parsing, and keeps the operation's view
 /// consistent if Codex replaces its cache while a catalog is being rendered.
 #[derive(Default)]
-pub(super) struct Catalog {
+pub(crate) struct Catalog {
     cached: Option<Value>,
 }
 
 impl Catalog {
-    pub(super) fn load(storage: Option<&Storage>) -> Self {
+    pub(crate) fn load(storage: Option<&Storage>) -> Self {
         let home = match storage {
             Some(storage) if !crate::storage_helpers::seaorm_enabled() => {
                 sqlite_profile_dir(storage)
@@ -39,7 +39,10 @@ impl Catalog {
 
     fn load_with_path(path: &Path) -> Self {
         Self {
-            cached: File::open(path).ok().and_then(read_catalog),
+            cached: File::open(path)
+                .ok()
+                .and_then(read_catalog)
+                .filter(is_usable_codex_cache),
         }
     }
 
@@ -93,6 +96,21 @@ fn read_catalog(reader: impl Read) -> Option<Value> {
         return None;
     }
     serde_json::from_slice(&contents).ok()
+}
+
+// A custom model_catalog_json can be mirrored into models_cache.json with a
+// placeholder envelope. Using it here feeds our own exports back as defaults.
+// Check the envelope only on disk, not on the independently bundled snapshot.
+fn is_usable_codex_cache(cache: &Value) -> bool {
+    let version = cache
+        .get("client_version")
+        .and_then(Value::as_str)
+        .map(str::trim);
+    let fetched_at = cache.get("fetched_at").and_then(Value::as_str);
+    version.is_some_and(|v| !v.is_empty() && v != "0.0.0")
+        && fetched_at.is_some_and(|ts| {
+            !ts.starts_with("2000-01-01") && chrono::DateTime::parse_from_rfc3339(ts).is_ok()
+        })
 }
 
 fn longest_prefix<'a>(models: &'a [Value], slug: &str) -> Option<&'a Value> {
@@ -179,11 +197,11 @@ mod tests {
     #[test]
     fn local_snapshot_is_reused_until_the_next_operation() {
         let file =
-            CacheFile::new(br#"{"models":[{"slug":"gpt-6.2-sol","context_window":500000}]}"#);
+            CacheFile::new(br#"{"client_version":"0.171.0-alpha.13.2","fetched_at":"2026-11-25T01:23:45Z","models":[{"slug":"gpt-6.2-sol","context_window":500000}]}"#);
         let snapshot = Catalog::load_with_path(&file.0);
         std::fs::write(
             &file.0,
-            br#"{"models":[{"slug":"gpt-6.2-sol","context_window":900000}]}"#,
+            br#"{"client_version":"0.171.0-alpha.13.2","fetched_at":"2026-11-25T01:23:45Z","models":[{"slug":"gpt-6.2-sol","context_window":900000}]}"#,
         )
         .unwrap();
         for _ in 0..2 {
@@ -204,6 +222,35 @@ mod tests {
     }
 
     #[test]
+    fn placeholder_or_unversioned_cache_cannot_shadow_the_bundled_catalog() {
+        let models = json!([
+            {"slug":"gpt-6.2-sol", "context_window":475000},
+            {"slug":"cn:third-party", "reasoning_efforts":["high"]}
+        ]);
+        let version = "0.171.0-alpha.13.2";
+        let fetched = "2026-11-25T01:23:45Z";
+        for mut envelope in [
+            json!({}),
+            json!({"fetched_at":fetched}),
+            json!({"client_version":"  ", "fetched_at":fetched}),
+            json!({"client_version":"0.0.0", "fetched_at":fetched}),
+            json!({"client_version":version}),
+            json!({"client_version":version, "fetched_at":"invalid"}),
+            json!({"client_version":version, "fetched_at":"2000-01-01T00:00:00Z"}),
+            json!({"client_version":"0.0.0", "fetched_at":"2000-01-01T00:00:00Z"}),
+        ] {
+            envelope["models"] = models.clone();
+            let file = CacheFile::new(&serde_json::to_vec(&envelope).unwrap());
+            let snapshot = Catalog::load_with_path(&file.0);
+            assert!(snapshot.lookup("cn:third-party").is_none(), "{envelope}");
+            let known = snapshot.lookup("gpt-6.2-sol").unwrap();
+            assert_eq!(known.source, "official_builtin");
+            assert_eq!(known.metadata["context_window"], 500000);
+            assert_eq!(known.metadata["effective_context_window_percent"], 95);
+        }
+    }
+
+    #[test]
     fn invalid_local_snapshot_keeps_the_builtin_fallback() {
         let file = CacheFile::new(b"invalid json");
         let snapshot = Catalog::load_with_path(&file.0);
@@ -211,7 +258,7 @@ mod tests {
             snapshot.lookup("gpt-6.1-sol").unwrap().source,
             "official_builtin"
         );
-        assert!(snapshot.lookup("gpt-6.2-sol").is_none());
+        assert!(snapshot.lookup("gpt-99-unlisted").is_none());
     }
 
     #[test]
@@ -234,7 +281,7 @@ mod tests {
         let found = builtin("gpt-6.1-sol").unwrap();
         assert_eq!(found.source, "official_builtin");
         assert_eq!(found.matched_slug, "gpt-6.1-sol");
-        assert_eq!(found.metadata["context_window"], 272_000);
+        assert_eq!(found.metadata["context_window"], 500_000);
         assert_eq!(found.metadata["max_context_window"], 872_000);
         assert_eq!(found.metadata["default_reasoning_level"], "low");
         assert_eq!(
@@ -247,7 +294,10 @@ mod tests {
     #[test]
     fn bundled_snapshot_contains_only_sanitized_capabilities() {
         let catalog: Value = serde_json::from_str(BUILTIN_CATALOG).unwrap();
-        assert_eq!(catalog["codex_version"], "0.169.0-alpha.11.1");
+        assert_eq!(catalog["source"], "codex debug models --bundled");
+        assert!(catalog["codex_version"]
+            .as_str()
+            .is_some_and(|v| !v.is_empty()));
         for model in catalog["models"].as_array().unwrap() {
             assert_eq!(
                 sanitize_metadata(&model["metadata"]).as_ref(),
@@ -276,10 +326,19 @@ mod tests {
     }
 
     #[test]
-    fn unknown_gpt62_does_not_inherit_gpt61_metadata() {
-        assert!(builtin("gpt-6.2-sol").is_none());
-        assert!(builtin("provider/gpt-6.2-sol-2026-11-18").is_none());
-        assert!(builtin("gpt-6.2-astra").is_none());
+    fn current_models_match_without_guessing_future_versions() {
+        for (slug, context) in [
+            ("provider/gpt-6.2-sol-2026-11-18", 500_000),
+            ("gpt-6.2-astra", 272_000),
+            ("gpt-6.1-terra", 500_000),
+        ] {
+            let found = builtin(slug).unwrap();
+            assert_eq!(found.metadata["context_window"], context);
+            assert_eq!(found.metadata["max_context_window"], 872_000);
+            assert_eq!(found.metadata["default_reasoning_level"], "low");
+        }
+        assert!(builtin("gpt-99-unlisted").is_none());
+        assert!(builtin("provider/gpt-99-unlisted").is_none());
     }
 
     #[test]

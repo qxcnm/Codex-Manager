@@ -2,283 +2,10 @@
 use codexmanager_core::storage::ManagedModelV2;
 use serde_json::{Map, Value};
 
-fn field<'a>(source: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a Value> {
-    keys.iter().find_map(|key| source.get(*key)).or_else(|| {
-        source
-            .get("capabilities")
-            .and_then(Value::as_object)
-            .and_then(|capabilities| keys.iter().find_map(|key| capabilities.get(*key)))
-    })
-}
+mod sanitizer;
+pub(crate) use sanitizer::sanitize_metadata;
 
-// Closed wire enums from Codex 0.169.0-alpha.11.1 protocol/openai_models.rs
-// and protocol/config_types.rs. ReasoningEffort deliberately stays extensible:
-// that version accepts every non-empty string as ReasoningEffort::Custom.
-fn supported_codex_string(field: &str, value: &str) -> bool {
-    match field {
-        "shell_type" => matches!(
-            value,
-            "unified_exec" | "disabled" | "default" | "local" | "shell_command"
-        ),
-        "apply_patch_tool_type" => value == "freeform",
-        "web_search_tool_type" => matches!(value, "text" | "text_and_image"),
-        "default_verbosity" => matches!(value, "low" | "medium" | "high"),
-        "default_reasoning_summary" => matches!(value, "auto" | "concise" | "detailed" | "none"),
-        "truncation_mode" => matches!(value, "tokens" | "bytes"),
-        _ => true,
-    }
-}
-
-/// Only typed capability fields are accepted. In particular, model instructions,
-/// arbitrary extra JSON and authentication fields never enter discovery metadata.
-pub(crate) fn sanitize_metadata(value: &Value) -> Option<Value> {
-    let source = value.as_object()?;
-    let mut metadata = Map::new();
-    for (name, aliases) in [
-        (
-            "context_window",
-            &["context_window", "contextWindow", "inputTokenLimit"][..],
-        ),
-        (
-            "max_context_window",
-            &["max_context_window", "maxContextWindow"][..],
-        ),
-        (
-            "api_context_window",
-            &["api_context_window", "apiContextWindow"][..],
-        ),
-        (
-            "max_output_tokens",
-            &["max_output_tokens", "maxOutputTokens", "outputTokenLimit"][..],
-        ),
-        (
-            "auto_compact_token_limit",
-            &["auto_compact_token_limit", "autoCompactTokenLimit"][..],
-        ),
-        (
-            "truncation_limit",
-            &["truncation_limit", "truncationLimit"][..],
-        ),
-    ] {
-        if let Some(number) = field(source, aliases)
-            .and_then(Value::as_i64)
-            .filter(|n| *n > 0)
-        {
-            metadata.insert(name.into(), number.into());
-        }
-    }
-    if let Some(percent) = field(
-        source,
-        &[
-            "effective_context_window_percent",
-            "effectiveContextWindowPercent",
-        ],
-    )
-    .and_then(Value::as_i64)
-    .filter(|n| (1..=100).contains(n))
-    {
-        metadata.insert("effective_context_window_percent".into(), percent.into());
-    }
-    for (name, aliases) in [
-        (
-            "supports_text_generation",
-            &["supports_text_generation", "supportsTextGeneration"][..],
-        ),
-        (
-            "supports_image_generation",
-            &["supports_image_generation", "supportsImageGeneration"][..],
-        ),
-        (
-            "supports_image_editing",
-            &["supports_image_editing", "supportsImageEditing"][..],
-        ),
-        (
-            "supports_parallel_tool_calls",
-            &["supports_parallel_tool_calls", "supportsParallelToolCalls"][..],
-        ),
-        (
-            "supports_reasoning_summaries",
-            &[
-                "supports_reasoning_summaries",
-                "supports_reasoning_summary_parameter",
-                "supportsReasoningSummaries",
-            ][..],
-        ),
-        (
-            "supports_verbosity",
-            &[
-                "supports_verbosity",
-                "support_verbosity",
-                "supportVerbosity",
-                "supportsVerbosity",
-            ][..],
-        ),
-        (
-            "supports_image_detail_original",
-            &[
-                "supports_image_detail_original",
-                "supportsImageDetailOriginal",
-            ][..],
-        ),
-        (
-            "supports_search_tool",
-            &["supports_search_tool", "supportsSearchTool"][..],
-        ),
-        (
-            "prefer_websockets",
-            &["prefer_websockets", "preferWebsockets"][..],
-        ),
-    ] {
-        if let Some(flag) = field(source, aliases).and_then(Value::as_bool) {
-            metadata.insert(name.into(), flag.into());
-        }
-    }
-    for (name, aliases) in [
-        (
-            "default_reasoning_level",
-            &[
-                "default_reasoning_level",
-                "defaultReasoningLevel",
-                "default_reasoning_effort",
-                "defaultReasoningEffort",
-            ][..],
-        ),
-        ("shell_type", &["shell_type", "shellType"][..]),
-        (
-            "default_reasoning_summary",
-            &["default_reasoning_summary", "defaultReasoningSummary"][..],
-        ),
-        (
-            "default_verbosity",
-            &["default_verbosity", "defaultVerbosity"][..],
-        ),
-        (
-            "apply_patch_tool_type",
-            &["apply_patch_tool_type", "applyPatchToolType"][..],
-        ),
-        (
-            "web_search_tool_type",
-            &["web_search_tool_type", "webSearchToolType"][..],
-        ),
-        (
-            "truncation_mode",
-            &["truncation_mode", "truncationMode"][..],
-        ),
-        (
-            "reasoning_summary_format",
-            &["reasoning_summary_format", "reasoningSummaryFormat"][..],
-        ),
-        (
-            "multi_agent_reasoning_effort",
-            &["multi_agent_reasoning_effort", "multiAgentReasoningEffort"][..],
-        ),
-        ("tool_mode", &["tool_mode", "toolMode"][..]),
-        (
-            "multi_agent_version",
-            &["multi_agent_version", "multiAgentVersion"][..],
-        ),
-        ("comp_hash", &["comp_hash", "compHash"][..]),
-        (
-            "default_service_tier",
-            &["default_service_tier", "defaultServiceTier"][..],
-        ),
-    ] {
-        if let Some(text) = field(source, aliases)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|s| !s.is_empty() && s.len() <= 200 && !s.chars().any(char::is_control))
-            .filter(|s| supported_codex_string(name, s))
-        {
-            metadata.insert(name.into(), text.into());
-        }
-    }
-    for (name, aliases, object_key) in [
-        (
-            "input_modalities",
-            &["input_modalities", "inputModalities"][..],
-            None,
-        ),
-        (
-            "output_modalities",
-            &["output_modalities", "outputModalities"][..],
-            None,
-        ),
-        (
-            "reasoning_efforts",
-            &[
-                "reasoning_efforts",
-                "reasoningEfforts",
-                "supported_reasoning_levels",
-                "supportedReasoningLevels",
-            ][..],
-            Some("effort"),
-        ),
-        (
-            "service_tiers",
-            &["service_tiers", "serviceTiers"][..],
-            Some("id"),
-        ),
-        (
-            "additional_speed_tiers",
-            &["additional_speed_tiers", "additionalSpeedTiers"][..],
-            None,
-        ),
-        (
-            "experimental_supported_tools",
-            &["experimental_supported_tools", "experimentalSupportedTools"][..],
-            None,
-        ),
-        (
-            "supported_endpoints",
-            &["supported_endpoints", "supportedEndpoints"][..],
-            None,
-        ),
-    ] {
-        if let Some(items) = field(source, aliases).and_then(Value::as_array) {
-            let strings: Vec<Value> = items
-                .iter()
-                .take(100)
-                .filter_map(|item| {
-                    item.as_str().or_else(|| {
-                        object_key
-                            .and_then(|key| item.get(key))
-                            .and_then(Value::as_str)
-                    })
-                })
-                .map(str::trim)
-                .filter(|s| !s.is_empty() && s.len() <= 200 && !s.chars().any(char::is_control))
-                .filter(|s| name != "input_modalities" || matches!(*s, "text" | "image" | "audio"))
-                .map(Value::from)
-                .collect();
-            // Unsupported future modalities are missing metadata rather than
-            // an explicit empty restriction. Preserve a deliberate empty list.
-            if name != "input_modalities" || items.is_empty() || !strings.is_empty() {
-                metadata.insert(name.into(), strings.into());
-            }
-        }
-    }
-    if let Some(policy) =
-        field(source, &["truncation_policy", "truncationPolicy"]).and_then(Value::as_object)
-    {
-        if let Some(mode) = policy
-            .get("mode")
-            .and_then(Value::as_str)
-            .filter(|s| matches!(*s, "tokens" | "bytes"))
-        {
-            metadata.insert("truncation_mode".into(), mode.into());
-        }
-        if let Some(limit) = policy
-            .get("limit")
-            .and_then(Value::as_i64)
-            .filter(|n| *n > 0)
-        {
-            metadata.insert("truncation_limit".into(), limit.into());
-        }
-    }
-    (!metadata.is_empty()).then_some(Value::Object(metadata))
-}
-
-pub(crate) fn apply_metadata(model: &mut ManagedModelV2, metadata: Option<&Value>) {
+fn apply_metadata(model: &mut ManagedModelV2, metadata: Option<&Value>) {
     let Some(Value::Object(mut metadata)) = metadata.and_then(sanitize_metadata) else {
         return;
     };
@@ -287,8 +14,7 @@ pub(crate) fn apply_metadata(model: &mut ManagedModelV2, metadata: Option<&Value
         .and_then(|value| value.as_i64());
     model.max_context_window = metadata
         .remove("max_context_window")
-        .and_then(|value| value.as_i64())
-        .or(model.context_window);
+        .and_then(|value| value.as_i64());
     model.default_reasoning_effort = metadata
         .remove("default_reasoning_level")
         .and_then(|value| value.as_str().map(str::to_owned));
@@ -298,6 +24,106 @@ pub(crate) fn apply_metadata(model: &mut ManagedModelV2, metadata: Option<&Value
         .expect("new discovery model capabilities are an object");
     capabilities.extend(metadata);
     capabilities.insert("discovery_metadata_version".into(), 1.into());
+}
+
+// An explicit generation flag takes precedence over output modalities. Without
+// either, discovery keeps its existing assumption that the model produces text.
+pub(super) fn declared_text_generation(metadata: &Map<String, Value>) -> Option<bool> {
+    metadata
+        .get("supports_text_generation")
+        .or_else(|| metadata.get("supportsTextGeneration"))
+        .and_then(Value::as_bool)
+        .or_else(|| {
+            let outputs = metadata
+                .get("output_modalities")
+                .or_else(|| metadata.get("outputModalities"))?
+                .as_array()?;
+            Some(
+                outputs
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|s| s.trim().eq_ignore_ascii_case("text")),
+            )
+        })
+}
+
+/// Fill canonicalized capabilities from a sanitized official entry. Compatibility
+/// fallbacks belong to the read-only view and must never become stored overrides.
+pub(super) fn fill_official_defaults(model: &mut ManagedModelV2, defaults: &Map<String, Value>) {
+    let Some(caps) = model.capabilities.as_object_mut() else {
+        return;
+    };
+    if declared_text_generation(caps) == Some(false)
+        || declared_text_generation(defaults) == Some(false)
+    {
+        return;
+    }
+    if model.context_window.is_none() {
+        model.context_window = defaults
+            .get("context_window")
+            .and_then(Value::as_i64)
+            .map(|ctx| model.max_context_window.map_or(ctx, |max| ctx.min(max)));
+    }
+    if model.max_context_window.is_none() {
+        model.max_context_window = defaults
+            .get("max_context_window")
+            .and_then(Value::as_i64)
+            .map(|max| model.context_window.map_or(max, |ctx| max.max(ctx)));
+    }
+    if model.default_reasoning_effort.is_none() {
+        model.default_reasoning_effort = defaults
+            .get("default_reasoning_level")
+            .and_then(Value::as_str)
+            .filter(|level| {
+                caps.get("reasoning_efforts").is_none_or(|efforts| {
+                    efforts
+                        .as_array()
+                        .is_some_and(|items| items.iter().any(|v| v.as_str() == Some(*level)))
+                })
+            })
+            .map(str::to_owned);
+    }
+    for (key, value) in defaults {
+        if !matches!(
+            key.as_str(),
+            "context_window" | "max_context_window" | "default_reasoning_level"
+        ) {
+            caps.entry(key).or_insert_with(|| value.clone());
+        }
+    }
+}
+
+/// Only for a newly discovered model. Upstream metadata, including restrictions,
+/// takes precedence over the official entry and the minimal discovery scaffold.
+pub(crate) fn apply_new_model_metadata(
+    model: &mut ManagedModelV2,
+    metadata: Option<&Value>,
+    catalog: &super::official_capabilities::Catalog,
+) {
+    apply_metadata(model, metadata);
+    let mut text = model
+        .capabilities
+        .as_object()
+        .and_then(declared_text_generation);
+    if text != Some(false) {
+        if let Some(Value::Object(defaults)) =
+            catalog.lookup(&model.slug).map(|entry| entry.metadata)
+        {
+            text = text.or_else(|| declared_text_generation(&defaults));
+            fill_official_defaults(model, &defaults);
+        }
+    }
+    let caps = model
+        .capabilities
+        .as_object_mut()
+        .expect("new discovery model capabilities are an object");
+    let text = text.unwrap_or(true);
+    caps.entry("supports_text_generation")
+        .or_insert(Value::Bool(text));
+    if text {
+        caps.entry("output_modalities")
+            .or_insert_with(|| serde_json::json!(["text"]));
+    }
 }
 
 #[cfg(test)]
@@ -360,6 +186,24 @@ mod tests {
             .capabilities
             .get("discovery_metadata_version")
             .is_none());
+    }
+
+    #[test]
+    fn unknown_discovery_with_only_context_does_not_invent_a_maximum() {
+        let mut model = ManagedModelV2 {
+            slug: "unknown-context-only".into(),
+            capabilities: json!({}),
+            ..Default::default()
+        };
+        apply_new_model_metadata(
+            &mut model,
+            Some(&json!({"contextWindow":2048})),
+            &crate::models_v2::official_capabilities::Catalog::default(),
+        );
+        assert_eq!(model.context_window, Some(2048));
+        assert!(model.max_context_window.is_none());
+        assert!(model.default_reasoning_effort.is_none());
+        assert!(model.capabilities.get("reasoning_efforts").is_none());
     }
 
     #[test]
