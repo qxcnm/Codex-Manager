@@ -42,7 +42,7 @@ fn revision10_adds_sol61_without_changing_revision9_models() {
         .unwrap()
         .unwrap();
     assert!(model.enabled && model.supported_in_api);
-    assert_eq!(model.builtin_revision, Some(10));
+    assert_eq!(model.builtin_revision, Some(MODEL_CATALOG_REVISION11));
     assert_eq!(
         model.capabilities["service_tiers"],
         serde_json::json!(["priority"])
@@ -147,7 +147,7 @@ fn revision10_does_not_seed_into_future_catalog() {
     storage
         .conn
         .execute(
-            "UPDATE models SET builtin_revision=11 WHERE slug='gpt-6-astra'",
+            "UPDATE models SET builtin_revision=12 WHERE slug='gpt-6-astra'",
             [],
         )
         .unwrap();
@@ -164,13 +164,20 @@ fn revision10_does_not_seed_into_future_catalog() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(revision, "11");
+    assert_eq!(revision, "12");
 }
 
 #[test]
 fn revision10_failed_insert_rolls_back_migration_markers() {
     let storage = revision9_storage();
     storage.conn.execute("CREATE TRIGGER reject_sol61 BEFORE INSERT ON models WHEN NEW.slug='gpt-6.1-sol' BEGIN SELECT RAISE(ABORT, 'test insert failure'); END;", []).unwrap();
+    storage
+        .conn
+        .execute(
+            "UPDATE models SET builtin_revision=9 WHERE origin='builtin' AND user_edited=0",
+            [],
+        )
+        .unwrap();
     assert!(storage.apply_model_catalog_revision10_migration().is_err());
     assert!(!storage
         .has_migration(MODEL_CATALOG_REVISION10_MIGRATION_VERSION)

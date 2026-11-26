@@ -45,12 +45,13 @@ struct BuiltinModelSeed {
 
 pub(crate) async fn reconcile_builtin_catalog(db: &DatabaseConnection) -> Result<(), DbErr> {
     reconcile_revision9_catalog(db).await?;
-    // Revision 10 only adds GPT-6.1 Sol. Existing rows own their metadata,
-    // prices and routes; insert_missing_seed also respects custom slugs and tombstones.
+    // Revision 11 adds GPT-6.1 Terra and the GPT-6.2 family. Existing rows own
+    // their metadata, prices and routes; insert_missing_seed also respects custom
+    // slugs and tombstones.
     let latest: BuiltinCatalogFixture = serde_json::from_str(include_str!(
-        "../../../core/seeds/model_catalog_v2_2026_09_30.json"
+        "../../../core/seeds/model_catalog_v2_2026_11_24.json"
     ))
-    .expect("revision 10 model catalog fixture must be valid");
+    .expect("revision 11 model catalog fixture must be valid");
     let tx = db.begin().await?;
     crate::UsersRepository::lock(&tx, "model_groups").await?;
     let stored_revision = meta_value(&tx, "builtin_revision")

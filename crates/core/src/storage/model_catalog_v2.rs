@@ -20,6 +20,7 @@ const MODEL_CATALOG_REVISION9_MIGRATION_VERSION: &str = "137_model_catalog_revis
 const MODEL_CATALOG_REVISION9: i64 = 9;
 const MODEL_CATALOG_REVISION10_MIGRATION_VERSION: &str = "138_model_catalog_gpt61_sol";
 const MODEL_CATALOG_REVISION10: i64 = 10;
+const MODEL_CATALOG_REVISION11: i64 = 11;
 const RETIRED_CODEX_MODEL_SLUGS_REVISION9: &[&str] = &["gpt-5.4", "gpt-5.4-mini", "gpt-5.2"];
 const GPT56_METADATA_FIX_CONTEXT_WINDOW: i64 = 272_000;
 const GPT56_METADATA_FIX_MAX_CONTEXT_WINDOW: i64 = 872_000;
@@ -41,6 +42,7 @@ const KNOWN_MODEL_CATALOG_SOURCE_SHA256: &[&str] = &[
     "ff99a8e61a58adaebb872d1970f746994cdbd1191e7adf74587cc1e6e01503d2",
     "e526f3b9048f16c07d3c1e15a1d43eec16a78f7fe18e6552419d02d8ccc8e064",
     "e993784040f785e736674a573347b353d6cd69b648398dbc56a5a548a72d6dd8",
+    "ba1159df618c9ae050d444e03e0a760a9c1fb4e2a0731de75780c9685fd9ca95",
 ];
 #[derive(Debug, Clone, Deserialize)]
 struct BuiltinCatalogFixture {
@@ -278,7 +280,7 @@ fn revision9_fixture() -> BuiltinCatalogFixture {
 }
 
 fn fixture() -> BuiltinCatalogFixture {
-    gpt61_sol_migration_fixture()
+    revision11_fixture()
 }
 
 fn gpt61_sol_migration_fixture() -> BuiltinCatalogFixture {
@@ -295,6 +297,17 @@ fn gpt61_sol_migration_fixture() -> BuiltinCatalogFixture {
         .find(|model| model.slug == GPT61_SOL_SLUG)
         .expect("GPT-6.1 Sol must be in revision 10");
     assert_eq!(sol.price_source.as_deref(), Some(GPT61_SOL_PRICE_SOURCE));
+    fixture
+}
+
+fn revision11_fixture() -> BuiltinCatalogFixture {
+    let fixture: BuiltinCatalogFixture =
+        serde_json::from_str(include_str!("../../seeds/model_catalog_v2_2026_11_24.json"))
+            .expect("model catalog V2 revision 11 fixture must be valid");
+    assert_eq!(
+        fixture.revision, MODEL_CATALOG_REVISION11,
+        "model catalog V2 revision 11 fixture must remain frozen"
+    );
     fixture
 }
 
@@ -3183,8 +3196,8 @@ mod tests {
         let storage = storage();
         let all = storage.list_managed_models_v2(true).expect("list all");
         let visible = storage.list_api_models_v2().expect("list visible");
-        assert_eq!(all.len(), 12);
-        assert_eq!(visible.len(), 11);
+        assert_eq!(all.len(), 15);
+        assert_eq!(visible.len(), 14);
         for slug in RETIRED_CODEX_MODEL_SLUGS_REVISION9 {
             assert!(all.iter().all(|model| model.slug != *slug));
         }
@@ -3976,7 +3989,7 @@ mod tests {
         storage
             .conn
             .execute(
-                "UPDATE models SET builtin_revision=11
+                "UPDATE models SET builtin_revision=12
                  WHERE origin='builtin' AND user_edited=0",
                 [],
             )
@@ -3997,7 +4010,7 @@ mod tests {
         storage
             .conn
             .execute(
-                "UPDATE model_catalog_v2_meta SET value='11' WHERE key='builtin_revision'",
+                "UPDATE model_catalog_v2_meta SET value='12' WHERE key='builtin_revision'",
                 [],
             )
             .unwrap();
@@ -4023,7 +4036,7 @@ mod tests {
             .unwrap()
             .expect("future Sol remains");
         assert_eq!(sol.display_name, "Future GPT-6 Sol");
-        assert_eq!(sol.builtin_revision, Some(11));
+        assert_eq!(sol.builtin_revision, Some(12));
         assert_eq!(sol.capabilities["future"], true);
         let revision: String = storage
             .conn
@@ -4033,7 +4046,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(revision, "11");
+        assert_eq!(revision, "12");
         let source_sha256: String = storage
             .conn
             .query_row(
@@ -4198,7 +4211,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(image.origin, "builtin");
-        assert_eq!(image.builtin_revision, Some(10));
+        assert_eq!(image.builtin_revision, Some(11));
         assert_eq!(image.routes.len(), 1);
         assert_eq!(image.routes[0].upstream_model, "gpt-image-2");
         let sol = storage
@@ -4214,7 +4227,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(revision, "10");
+        assert_eq!(revision, "11");
     }
 
     #[test]
@@ -4273,7 +4286,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(restored.origin, "builtin");
-        assert_eq!(restored.builtin_revision, Some(10));
+        assert_eq!(restored.builtin_revision, Some(11));
         assert_eq!(restored.routes[0].upstream_model, "gpt-image-2");
     }
 
