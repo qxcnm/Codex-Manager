@@ -1672,9 +1672,18 @@ export function normalizeRequestLogDetail(payload: unknown): RequestLogDetail {
     complete: asBoolean(source.complete, true),
     fields: asArray(source.fields).map((item) => {
       const field = asObject(item);
-      return { name: asString(field.name), value: asRawText(field.value) };
+      return {
+        name: asString(field.name),
+        value: asRawText(field.value),
+        bytes: asInteger(field.bytes, 0, 0),
+        truncated: asBoolean(field.truncated, false),
+      };
     }),
     items: asRawTextArray(source.items),
+    itemTotal: asInteger(source.itemTotal ?? source.item_total, 0, 0),
+    itemOffset: asInteger(source.itemOffset ?? source.item_offset, 0, 0),
+    itemLimit: asInteger(source.itemLimit ?? source.item_limit, 0, 0),
+    hasMore: asBoolean(source.hasMore ?? source.has_more, false),
     inheritedItemCount: asInteger(
       source.inheritedItemCount ?? source.inherited_item_count,
       0,

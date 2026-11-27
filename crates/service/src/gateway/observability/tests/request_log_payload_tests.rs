@@ -108,7 +108,8 @@ fn paused_real_writer_cannot_restore_cleared_payloads() {
                 &storage,
                 &RequestLogDetailParams {
                     trace_id: trace_id.to_string(),
-                    stage: None
+                    stage: None,
+                    ..Default::default()
                 },
                 None,
             )

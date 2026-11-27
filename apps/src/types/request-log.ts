@@ -82,6 +82,10 @@ export interface RequestLogDetailField {
   name: string;
   /** JSON text of the field value (raw text for non-JSON bodies). */
   value: string;
+  /** Stored length of the value in bytes before any truncation. */
+  bytes: number;
+  /** Set when the value was cut down to the requested field limit. */
+  truncated: boolean;
 }
 
 export interface RequestLogDetailContextSegment {
@@ -122,8 +126,16 @@ export interface RequestLogDetail {
   listField: string | null;
   complete: boolean;
   fields: RequestLogDetailField[];
-  /** JSON text of each list item, in request order. */
+  /** Items of the requested window, in request order. */
   items: string[];
+  /** Number of list items stored for this payload. */
+  itemTotal: number;
+  /** Offset the returned items start at. */
+  itemOffset: number;
+  /** Requested item limit; 0 means "everything after itemOffset". */
+  itemLimit: number;
+  /** Set when stored items remain after the returned window. */
+  hasMore: boolean;
   /** Number of leading items shared with the parent request of the conversation. */
   inheritedItemCount: number;
   parentTraceId: string | null;

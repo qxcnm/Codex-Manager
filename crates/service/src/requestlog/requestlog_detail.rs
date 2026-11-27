@@ -78,7 +78,7 @@ pub(crate) fn read_request_log_detail(
             if let Some(full) = full {
                 let context =
                     load_previous_response_context(storage, &full, log_key_id.as_deref())?;
-                let mut result = full_detail(full, context);
+                let mut result = full_detail(full, context, params);
                 result.stage = stage.clone();
                 result.stages = stages.clone();
                 result.attempt = attempt_meta.clone();
@@ -156,8 +156,29 @@ fn candidate_stages(stages: &[String], requested: Option<&str>) -> Vec<String> {
 fn full_detail(
     full: RequestLogPayloadFull,
     context: Vec<RequestLogDetailContextSegment>,
+    params: &RequestLogDetailParams,
 ) -> RequestLogDetailResult {
-    let manifest = full.manifest;
+    let RequestLogPayloadFull {
+        manifest,
+        fields,
+        items,
+        complete,
+    } = full;
+    let item_total = items.len();
+    let item_offset = params.item_offset.min(item_total);
+    let item_end = if params.item_limit == 0 {
+        item_total
+    } else {
+        item_offset
+            .saturating_add(params.item_limit)
+            .min(item_total)
+    };
+    let has_more = item_end < item_total;
+    let items = items
+        .into_iter()
+        .skip(item_offset)
+        .take(item_end - item_offset)
+        .collect();
     RequestLogDetailResult {
         trace_id: manifest.trace_id,
         stage: manifest.stage.clone(),
@@ -171,18 +192,43 @@ fn full_detail(
         created_at: manifest.created_at,
         body_kind: Some(manifest.body_kind),
         list_field: manifest.list_field,
-        complete: full.complete,
-        fields: full
-            .fields
+        complete,
+        fields: fields
             .into_iter()
-            .map(|(name, value)| RequestLogDetailField { name, value })
+            .map(|(name, value)| {
+                let (value, truncated, bytes) = truncate_field_value(value, params.field_limit);
+                RequestLogDetailField {
+                    name,
+                    value,
+                    bytes,
+                    truncated,
+                }
+            })
             .collect(),
-        items: full.items,
+        items,
+        item_total,
+        item_offset,
+        item_limit: params.item_limit,
+        has_more,
         inherited_item_count: manifest.shared_prefix_len,
         parent_trace_id: manifest.parent_trace_id,
         previous_response_id: manifest.previous_response_id,
         context,
     }
+}
+
+/// Cut one stored field value at a UTF-8 boundary so oversized bodies can be
+/// previewed without shipping megabytes to the browser on every request.
+fn truncate_field_value(value: String, limit: usize) -> (String, bool, usize) {
+    let bytes = value.len();
+    if limit == 0 || bytes <= limit {
+        return (value, false, bytes);
+    }
+    let mut end = limit;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    (value[..end].to_string(), true, bytes)
 }
 
 /// A request carrying `previous_response_id` only contains the new turn; the
@@ -359,6 +405,7 @@ mod tests {
         RequestLogDetailParams {
             trace_id: trace_id.to_string(),
             stage: None,
+            ..Default::default()
         }
     }
 
@@ -366,6 +413,7 @@ mod tests {
         RequestLogDetailParams {
             trace_id: trace_id.to_string(),
             stage: Some(stage.to_string()),
+            ..Default::default()
         }
     }
 
@@ -657,5 +705,37 @@ mod tests {
         let err = read_request_log_detail(&storage, &params("  "), None)
             .expect_err("blank trace id must fail");
         assert_eq!(err, "trace_id must not be empty");
+    }
+
+    #[test]
+    fn item_window_and_field_limit_are_applied() {
+        let storage = storage();
+        seed_trace(&storage, "trc_window", Some("gk_admin"));
+        seed_manifest(
+            &storage,
+            "trc_window",
+            1_700_000_200,
+            None,
+            &["\"a\"", "\"b\"", "\"c\""],
+        );
+        let mut params = params_with_stage("trc_window", "upstream");
+        params.item_offset = 1;
+        params.item_limit = 1;
+        params.field_limit = 4;
+        let detail =
+            read_request_log_detail(&storage, &params, None).expect("windowed detail succeeds");
+        assert_eq!(detail.item_total, 3);
+        assert_eq!(detail.item_offset, 1);
+        assert_eq!(detail.item_limit, 1);
+        assert_eq!(detail.items, vec!["\"b\"".to_string()]);
+        assert!(detail.has_more);
+        let model = detail
+            .fields
+            .iter()
+            .find(|field| field.name == "model")
+            .expect("model field");
+        assert!(model.truncated);
+        assert_eq!(model.bytes, "\"gpt-6-astra\"".len());
+        assert_eq!(model.value, "\"gpt");
     }
 }

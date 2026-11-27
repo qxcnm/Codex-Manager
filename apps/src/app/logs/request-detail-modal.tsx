@@ -25,6 +25,11 @@ import {
 
 const RAW_BODY_FIELD = "$body";
 const SUMMARY_MAX_CHARS = 160;
+/// Detail bodies can reach several megabytes; the modal transfers them in
+/// item windows and previews oversized first-level fields instead of asking
+/// the service for the whole thing on every open.
+const DETAIL_ITEM_PAGE_SIZE = 200;
+const DETAIL_FIELD_PREVIEW_BYTES = 64 * 1024;
 
 type DetailRow =
   | { kind: "header"; key: string; label: string; tone: "normal" | "muted" | "warning" }
@@ -379,17 +384,28 @@ export function RequestDetailModal({
   const { t } = useI18n();
   const traceId = log?.traceId?.trim() || "";
   const [stage, setStage] = useState<RequestLogDetailStage | null>(null);
+  const [itemLimit, setItemLimit] = useState(DETAIL_ITEM_PAGE_SIZE);
+  const [fieldLimit, setFieldLimit] = useState(DETAIL_FIELD_PREVIEW_BYTES);
 
-  // A new trace starts from the default stage again.
+  // A new trace starts from the default stage and the first payload window.
   useEffect(() => {
     setStage(null);
+    setItemLimit(DETAIL_ITEM_PAGE_SIZE);
+    setFieldLimit(DETAIL_FIELD_PREVIEW_BYTES);
   }, [traceId, open]);
 
   const { data: detail, isLoading } = useQuery({
-    queryKey: ["logs", "detail", serviceAddr, traceId, stage],
+    queryKey: ["logs", "detail", serviceAddr, traceId, stage, itemLimit, fieldLimit],
     queryFn: ({ signal }) =>
       serviceClient.requestLogDetail(
-        { traceId, stage, addr: serviceAddr },
+        {
+          traceId,
+          stage,
+          itemOffset: 0,
+          itemLimit,
+          fieldLimit,
+          addr: serviceAddr,
+        },
         { signal }
       ),
     enabled: open && traceId.length > 0,
@@ -546,6 +562,39 @@ export function RequestDetailModal({
                 </div>
               ) : null}
               <DetailEntries key={`${detail.traceId}-${detail.stage}`} detail={detail} t={t} />
+              {detail.hasMore ? (
+                <div className="flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-[11px] text-muted-foreground">
+                  <span>
+                    {t("已加载 {shown}/{total} 条，请求体较大时可继续加载。", {
+                      shown: detail.items.length,
+                      total: detail.itemTotal,
+                    })}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-[11px]"
+                    onClick={() => setItemLimit((prev) => prev + DETAIL_ITEM_PAGE_SIZE)}
+                  >
+                    {t("加载更多条目")}
+                  </Button>
+                </div>
+              ) : null}
+              {detail.fields.some((field) => field.truncated) ? (
+                <div className="flex items-center justify-between gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-600 dark:text-amber-400">
+                  <span>{t("部分字段内容过大，已截断显示。")}</span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-[11px]"
+                    onClick={() => setFieldLimit(0)}
+                  >
+                    {t("展开全部字段")}
+                  </Button>
+                </div>
+              ) : null}
             </>
           ) : dropReason ? (
             <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-6 text-center text-xs text-amber-700 dark:text-amber-400">

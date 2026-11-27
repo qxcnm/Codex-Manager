@@ -667,6 +667,10 @@ export const EN_MESSAGES: MessageCatalog = {
     "The request payload exceeds the storage cap; only the first 16 KB preview is kept.",
   "未找到该请求的内容记录；日志可能产生于旧版本，或已被清理。":
     "No payload record found for this request; the log may predate this feature or have been cleared.",
+  "已加载 {shown}/{total} 条，请求体较大时可继续加载。": "Showing {shown}/{total} items. Load more when the request body is large.",
+  "加载更多条目": "Load more items",
+  "部分字段内容过大，已截断显示。": "Some field values are truncated because they are very large.",
+  "展开全部字段": "Expand all fields",
   "有 {count} 条请求内容因磁盘空间不足等原因未记录": "{count} request bodies were not recorded (low disk space or similar)",
   "此请求内容因{reason}未记录": "This request body was not recorded: {reason}",
   "磁盘空间不足": "low disk space",
