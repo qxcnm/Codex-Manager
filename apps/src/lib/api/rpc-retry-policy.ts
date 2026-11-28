@@ -18,12 +18,27 @@ export function rpcAllowsReplay(method: string): boolean {
   return getRpcRetryKind(method) !== "non-idempotent-write";
 }
 
+/// Payload detail responses can reach several megabytes; the default 10s
+/// transfer budget makes slow remote links abort and surface a misleading
+/// "no payload record" state, so large reads get their own deadline.
+const RPC_METHOD_TIMEOUT_MS: Record<string, number> = {
+  "requestlog/detail": 120_000,
+};
+
 export function rpcRequestOptions(
   method: string,
   options: RequestOptions,
 ): RequestOptions {
+  const methodTimeout = RPC_METHOD_TIMEOUT_MS[method];
+  const withTimeout =
+    methodTimeout === undefined
+      ? options
+      : {
+          ...options,
+          timeoutMs: Math.max(options.timeoutMs ?? 0, methodTimeout),
+        };
   // Apply the safety cap after caller options, including at the outer IPC layer.
-  return rpcAllowsReplay(method) ? options : { ...options, retries: 0 };
+  return rpcAllowsReplay(method) ? withTimeout : { ...withTimeout, retries: 0 };
 }
 
 export function rpcResultUnknown(method: string, detail: string, cause?: unknown): Error {

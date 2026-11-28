@@ -1587,6 +1587,14 @@ pub struct RequestLogDetailParams {
     /// "the body actually forwarded upstream when available, otherwise the
     /// body as received from the client".
     pub stage: Option<String>,
+    /// Zero-based index of the first list item to return (`full` mode only).
+    pub item_offset: usize,
+    /// Maximum number of list items to return; `0` keeps the historical
+    /// behaviour of returning every item in one response.
+    pub item_limit: usize,
+    /// Maximum bytes of each top-level field value; `0` keeps every value
+    /// complete. Larger values are truncated and flagged in the result.
+    pub field_limit: usize,
 }
 
 /// Request payload of one gateway trace.
@@ -1619,7 +1627,16 @@ pub struct RequestLogDetailResult {
     pub list_field: Option<String>,
     pub complete: bool,
     pub fields: Vec<RequestLogDetailField>,
+    /// Items of the requested window; `item_total` counts every stored item.
     pub items: Vec<String>,
+    /// Number of list items stored for this payload.
+    pub item_total: usize,
+    /// Offset the returned items start at.
+    pub item_offset: usize,
+    /// Requested item limit; `0` means "everything after `item_offset`".
+    pub item_limit: usize,
+    /// Set when stored items remain after the returned window.
+    pub has_more: bool,
     pub inherited_item_count: i64,
     pub parent_trace_id: Option<String>,
     pub previous_response_id: Option<String>,
@@ -1642,6 +1659,10 @@ pub struct RequestLogAttemptDetail {
 pub struct RequestLogDetailField {
     pub name: String,
     pub value: String,
+    /// Stored length of the value in bytes before any truncation.
+    pub bytes: usize,
+    /// Set when `value` was cut down to the requested field limit.
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

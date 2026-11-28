@@ -179,7 +179,14 @@ export const serviceClient = {
     return normalizeRequestLogListWithSummaryResult(result);
   },
   async requestLogDetail(
-    params: { traceId: string; stage?: RequestLogDetailStage | null; addr?: string | null },
+    params: {
+      traceId: string;
+      stage?: RequestLogDetailStage | null;
+      itemOffset?: number;
+      itemLimit?: number;
+      fieldLimit?: number;
+      addr?: string | null;
+    },
     options?: RequestOptions,
   ): Promise<RequestLogDetail> {
     const result = await invoke<unknown>(
@@ -187,6 +194,9 @@ export const serviceClient = {
       withAddr({
         traceId: params.traceId,
         ...(params.stage ? { stage: params.stage } : {}),
+        ...(params.itemOffset === undefined ? {} : { itemOffset: params.itemOffset }),
+        ...(params.itemLimit === undefined ? {} : { itemLimit: params.itemLimit }),
+        ...(params.fieldLimit === undefined ? {} : { fieldLimit: params.fieldLimit }),
         ...(params.addr === undefined ? {} : { addr: params.addr || null }),
       }),
       options

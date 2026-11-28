@@ -225,6 +225,9 @@ jobs:
       - name: Test desktop settings publication
         run: cargo test --manifest-path apps/src-tauri/Cargo.toml commands::settings::ui::tests -- --test-threads=1
 
+      - name: Test desktop request log pagination
+        run: cargo test --locked --manifest-path apps/src-tauri/Cargo.toml --lib requestlog_detail_forwards_desktop_paging_and_legacy_defaults
+
       - name: Build Tauri app bundle
         uses: ./.github/actions/build-tauri-with-retry
         with:

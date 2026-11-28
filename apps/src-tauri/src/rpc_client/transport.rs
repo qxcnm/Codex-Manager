@@ -9,6 +9,7 @@ use super::retry_policy::{rpc_replay_safety, RpcReplaySafety};
 
 const RPC_CONNECT_TIMEOUT: Duration = Duration::from_millis(400);
 const RPC_DEFAULT_IO_TIMEOUT: Duration = Duration::from_secs(10);
+const RPC_REQUEST_LOG_DETAIL_IO_TIMEOUT: Duration = Duration::from_secs(120);
 const RPC_MANAGED_MODEL_PRICE_SYNC_IO_TIMEOUT: Duration = Duration::from_secs(60);
 const RPC_BULK_USAGE_REFRESH_IO_TIMEOUT: Duration = Duration::from_secs(600);
 const RPC_ACCOUNT_IMPORT_IO_TIMEOUT: Duration = Duration::from_secs(600);
@@ -78,6 +79,10 @@ fn validate_http_status(response: &str) -> Result<(), RpcAttemptError> {
 /// # 返回
 /// 返回函数执行结果
 fn rpc_io_timeout(method: &str, params: Option<&serde_json::Value>) -> Duration {
+    if method == "requestlog/detail" {
+        return RPC_REQUEST_LOG_DETAIL_IO_TIMEOUT;
+    }
+
     if method == "account/import" {
         return RPC_ACCOUNT_IMPORT_IO_TIMEOUT;
     }
