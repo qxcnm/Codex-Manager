@@ -78,16 +78,29 @@ struct ActiveTransaction {
 
 impl Connection {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path = path.as_ref().to_path_buf();
+        Self::open_file(path.as_ref(), SqliteConnectOptions::new())
+    }
+
+    pub fn open_with_busy_timeout(path: impl AsRef<Path>, timeout: Duration) -> Result<Self> {
+        Self::open_file(
+            path.as_ref(),
+            SqliteConnectOptions::new().busy_timeout(timeout),
+        )
+    }
+
+    fn open_file(path: &Path, options: SqliteConnectOptions) -> Result<Self> {
         let rt = sqlite_runtime()?;
-        let options = sqlite_options_for_path(&path)?;
+        let options = options
+            .filename(path)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal);
         let pool = block_on_runtime(&rt, async {
             single_handle_pool_options().connect_with(options).await
         })?;
         Ok(Self {
             rt,
             pool,
-            path: Some(path),
+            path: Some(path.to_path_buf()),
             active_transaction: Arc::new(StdMutex::new(None)),
             last_known_rowid: Arc::new(AtomicI64::new(0)),
         })
@@ -363,13 +376,6 @@ fn single_handle_pool_options() -> SqlitePoolOptions {
         .max_connections(1)
         .max_lifetime(None)
         .idle_timeout(None)
-}
-
-fn sqlite_options_for_path(path: &Path) -> Result<SqliteConnectOptions> {
-    Ok(SqliteConnectOptions::new()
-        .filename(path)
-        .create_if_missing(true)
-        .journal_mode(SqliteJournalMode::Wal))
 }
 
 #[derive(Debug)]
