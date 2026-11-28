@@ -22,9 +22,20 @@ For edits the CLI sends JSON `images: [{"image_url": "data:image/...;base64,..."
 
 The OpenAI-compatible CLI path saves `data[].b64_json` and reports absolute file paths. It does not save URL-only responses. Image option support and limits depend on the gateway and selected upstream model; check the actual error before retrying with different options.
 
-## MiniMax image generation API
+## MiniMax H3 text-to-image
 
-When the provider base URL targets `minimax.io` or `minimaxi.com`, the CLI uses `POST <provider.base_url>/image_generation` for generate and edit. The default model is `image-01`.
+Select `MiniMax-H3-Image` or `MiniMax-H3-Image-Highspeed` with `generate --model` or `CODEXMANAGER_IMAGE_MODEL`.
+Use the base URL for the credential region, `https://api.minimax.io/v1` or `https://api.minimax.cn/v1`.
+The CLI sends one POST to `<provider.base_url>/images/generations` with a timeout of at least 600 seconds.
+
+- Set `--size WIDTHxHEIGHT` or `--aspect-ratio X:Y`. Omitting both lets H3 choose the dimensions.
+- Set `--n` from 1 to 10. Use `--output-format` for the encoded file format.
+- The default `--response-format b64_json` saves inline images. With `--response-format url`, the CLI downloads each successful image.
+- For a mixed response, `paths` contains the saved images and `errors` lists each failed item's zero-based index and provider error. The CLI includes the `request_id` for troubleshooting.
+
+## Legacy MiniMax image generation API
+
+For other models, when the provider base URL targets `minimax.io` or `minimaxi.com`, the CLI uses `POST <provider.base_url>/image_generation` for generate and edit. The default model is `image-01`.
 
 Request fields:
 
