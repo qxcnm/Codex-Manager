@@ -5,6 +5,23 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-11-26
+
+### Model catalog and routing
+
+- Fixed incorrect context windows, reasoning levels and image-input support in Codex CLI after linking official models to an aggregated upstream. The catalog fills only missing fields, keeps explicit upstream values and does not apply official defaults to unknown third-party models (#534, #539).
+- Added opt-in priority and weighted routing: sources at the same priority share traffic by weight, with fallback on failure. Existing routing remains the default, and platform key source restrictions still apply (#537).
+
+### Connections and desktop
+
+- Added API-key-only authentication for the local gateway. Existing account authentication is preserved by default and backed up before switching. The connection page follows the active endpoint, and BPS authorization requests can inherit the system proxy (#525).
+- Restored drag and drop in the main desktop window (#532).
+
+### Gateway and security
+
+- Fixed lost Responses tool context after a WebSocket reconnect or model switch in the same conversation. Chat streams can fail over before output begins. Codex telemetry requests are now blocked locally by default to avoid unnecessary retries (#527, #536, #537).
+- Tightened permission checks in the web and service components and updated Next.js, Rust dependencies and Python aiohttp.
+
 ## [0.7.5] - 2026-11-13
 
 ### Changed

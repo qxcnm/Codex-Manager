@@ -200,8 +200,15 @@ fn discovery_metadata_round_trips_to_new_models_and_does_not_overwrite_existing_
     );
     let (slug, _, metadata) = parsed.into_iter().next().unwrap();
     let metadata = BTreeMap::from([(slug.clone(), metadata.unwrap())]);
-    let plan = prepare_with_metadata(&api(), &[], vec![slug.clone()], &BTreeMap::new(), &metadata)
-        .unwrap();
+    let plan = prepare_with_metadata(
+        &api(),
+        &[],
+        vec![slug.clone()],
+        &BTreeMap::new(),
+        &metadata,
+        &Catalog::default(),
+    )
+    .unwrap();
     storage
         .upsert_missing_managed_models_and_ensure_routes_v2(&plan.candidates, &plan.routes)
         .unwrap();
@@ -226,6 +233,7 @@ fn discovery_metadata_round_trips_to_new_models_and_does_not_overwrite_existing_
         vec![slug.clone()],
         &BTreeMap::new(),
         &metadata,
+        &Catalog::default(),
     )
     .unwrap();
     assert!(plan.candidates.is_empty());
@@ -253,4 +261,85 @@ fn discovery_without_metadata_keeps_input_capability_unknown() {
         .capabilities
         .get("input_modalities")
         .is_none());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn aggregate_association_exports_explicit_limits_and_excludes_non_text_models() {
+    let storage = Storage::open_in_memory().unwrap();
+    storage.init().unwrap();
+    // Use the bundled catalog, not the developer's local Codex cache.
+    let empty_home = std::env::temp_dir().join(format!(
+        "codexmanager-no-cache-{:016x}",
+        rand::random::<u64>()
+    ));
+    storage
+        .set_app_setting("codex_profile.codex_home", empty_home.to_str().unwrap(), 1)
+        .unwrap();
+    let api = api();
+    storage.insert_aggregate_api(&api).unwrap();
+    let limited = "vendor/gpt-6.1-terra-limited";
+    let image = "vendor/gpt-6.1-terra-image";
+    let audio = "vendor/gpt-6.1-terra-audio";
+    let fetched = super::super::parse_fetched_models_with_metadata(
+        &json!({"data":[
+            {"id":limited, "contextWindow":200000, "reasoningEfforts":[], "supportsVerbosity":false, "inputModalities":["text"]},
+            {"id":image, "supportsTextGeneration":false, "supportsImageGeneration":true},
+            {"id":audio, "outputModalities":["audio"]}
+        ]}),
+        false,
+    );
+    let (slugs, metadata) = fetched
+        .into_iter()
+        .map(|(slug, _, meta)| (slug.clone(), (slug, meta.unwrap())))
+        .unzip();
+    let result =
+        associate_with_storage(&storage, &api.id, slugs, &BTreeMap::new(), &metadata).unwrap();
+    assert_eq!(result.created_models, [limited, image, audio]);
+
+    let saved = storage.get_managed_model_v2(limited).unwrap().unwrap();
+    assert_eq!(
+        (saved.context_window, saved.max_context_window),
+        (Some(200_000), Some(872_000))
+    );
+    assert!(saved.default_reasoning_effort.is_none());
+    assert_eq!(saved.capabilities["reasoning_efforts"], json!([]));
+    assert_eq!(saved.capabilities["input_modalities"], json!(["text"]));
+    assert_eq!(saved.capabilities["supports_verbosity"], false);
+
+    for slug in [image, audio] {
+        let saved = storage.get_managed_model_v2(slug).unwrap().unwrap();
+        assert_eq!(saved.capabilities["supports_text_generation"], false);
+        assert_eq!(
+            (
+                saved.context_window,
+                saved.max_context_window,
+                saved.default_reasoning_effort
+            ),
+            (None, None, None)
+        );
+        assert!(saved.capabilities.get("reasoning_efforts").is_none());
+        assert!(saved.capabilities.get("input_modalities").is_none());
+        if slug == image {
+            assert_eq!(saved.capabilities["supports_image_generation"], true);
+            assert!(saved.capabilities.get("output_modalities").is_none());
+        } else {
+            assert_eq!(saved.capabilities["output_modalities"], json!(["audio"]));
+        }
+    }
+
+    let (content, _) = crate::codex_model_catalog::managed_model_catalog_content_async(&storage)
+        .await
+        .unwrap();
+    let catalog: Value = serde_json::from_str(&content).unwrap();
+    let models = catalog["models"].as_array().unwrap();
+    let exported = models.iter().find(|m| m["slug"] == limited).unwrap();
+    assert_eq!(exported["context_window"], 200_000);
+    assert_eq!(exported["max_context_window"], 872_000);
+    assert!(exported["default_reasoning_level"].is_null());
+    assert_eq!(exported["supported_reasoning_levels"], json!([]));
+    assert_eq!(exported["support_verbosity"], false);
+    assert_eq!(exported["input_modalities"], json!(["text"]));
+    assert!(!models
+        .iter()
+        .any(|m| m["slug"] == image || m["slug"] == audio));
 }

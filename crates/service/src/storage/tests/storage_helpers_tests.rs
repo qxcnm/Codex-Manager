@@ -144,6 +144,26 @@ fn pending_model_catalog_data_migration_requires_backup() {
 }
 
 #[test]
+fn initialize_storage_waits_for_an_existing_sqlite_writer() {
+    let db_path = unique_db_path("codexmanager-startup-write-lock");
+    let storage = codexmanager_core::storage::Storage::open(&db_path).unwrap();
+    storage.init().unwrap();
+    drop(storage);
+
+    let writer = Connection::open(&db_path).unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let release = thread::spawn(move || {
+        // A live service can hold the writer past the normal request timeout.
+        thread::sleep(Duration::from_secs(5));
+        writer.execute_batch("COMMIT").unwrap();
+    });
+    let result = super::initialize_sqlite_storage(&db_path);
+    release.join().unwrap();
+    let _ = std::fs::remove_file(&db_path);
+    result.expect("startup should finish when the existing writer releases its lock");
+}
+
+#[test]
 fn model_catalog_preflight_allows_case_conflicting_legacy_slugs() {
     let db_path = unique_db_path("codexmanager-model-catalog-duplicate-slugs");
     let conn = Connection::open(&db_path).expect("open database");

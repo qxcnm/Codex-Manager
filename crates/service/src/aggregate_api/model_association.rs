@@ -4,13 +4,14 @@ use std::collections::{BTreeMap, HashSet};
 use codexmanager_core::rpc::types::AggregateApiAssociateModelsResult;
 use codexmanager_core::storage::{
     AggregateApi, ManagedModelRouteEnsureV2, ManagedModelV2, ManagedModelV2Upsert,
-    ModelFastPolicyV2, ModelPriceV2, ModelRouteV2,
+    ModelFastPolicyV2, ModelPriceV2, ModelRouteV2, Storage,
 };
 use serde_json::{json, Value};
 
 use super::{
     normalize_fetched_model_id, normalize_provider_type_value, AGGREGATE_API_PROVIDER_GEMINI,
 };
+use crate::models_v2::{discovery_metadata, official_capabilities::Catalog};
 
 struct AssociationPlan {
     candidates: Vec<ManagedModelV2Upsert>,
@@ -29,7 +30,23 @@ pub(super) fn associate(
     }
     let storage =
         crate::storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_owned())?;
-    let storage = crate::account::remote_storage::AccountStorage::new(&storage);
+    associate_with_storage(
+        &storage,
+        api_id,
+        upstream_models,
+        &display_names,
+        &model_metadata,
+    )
+}
+
+fn associate_with_storage(
+    storage: &Storage,
+    api_id: &str,
+    upstream_models: Vec<String>,
+    display_names: &BTreeMap<String, String>,
+    model_metadata: &BTreeMap<String, Value>,
+) -> Result<AggregateApiAssociateModelsResult, String> {
+    let storage = crate::account::remote_storage::AccountStorage::new(storage);
     let api = storage
         .find_aggregate_api_by_id(api_id)
         .map_err(|err| err.to_string())?
@@ -41,8 +58,9 @@ pub(super) fn associate(
         &api,
         &models,
         upstream_models,
-        &display_names,
-        &model_metadata,
+        display_names,
+        model_metadata,
+        &Catalog::load(Some(&storage)),
     )?;
     let result = storage
         .upsert_missing_managed_models_and_ensure_routes_v2(&plan.candidates, &plan.routes)
@@ -67,6 +85,7 @@ fn prepare(
         upstream_models,
         display_names,
         &BTreeMap::new(),
+        &Catalog::default(),
     )
 }
 
@@ -76,6 +95,7 @@ fn prepare_with_metadata(
     upstream_models: Vec<String>,
     display_names: &BTreeMap<String, String>,
     model_metadata: &BTreeMap<String, Value>,
+    catalog: &Catalog,
 ) -> Result<AssociationPlan, String> {
     let provider_type = normalize_provider_type_value(&api.provider_type);
     let mut requested = Vec::new();
@@ -131,10 +151,7 @@ fn prepare_with_metadata(
                 supported_in_api: true,
                 visibility: "list".to_owned(),
                 sort_order: next_sort + index as i64,
-                capabilities: json!({
-                    "supports_text_generation": true,
-                    "output_modalities": ["text"]
-                }),
+                capabilities: json!({}),
                 instructions_mode: "passthrough".to_owned(),
                 fast_policy: ModelFastPolicyV2::Passthrough,
                 price: ModelPriceV2 {
@@ -147,7 +164,7 @@ fn prepare_with_metadata(
                 .iter()
                 .find(|(key, _)| key.eq_ignore_ascii_case(&upstream_model))
                 .map(|(_, value)| value);
-            crate::models_v2::discovery_metadata::apply_metadata(&mut model, metadata);
+            discovery_metadata::apply_new_model_metadata(&mut model, metadata, catalog);
             plan.candidates.push(ManagedModelV2Upsert {
                 model,
                 ..Default::default()

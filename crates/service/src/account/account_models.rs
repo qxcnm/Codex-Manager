@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 
+use crate::models_v2::{discovery_metadata, official_capabilities::Catalog};
 use crate::storage_helpers::open_storage;
 
 const ACCOUNT_POOL_SOURCE_KIND: &str = "account_pool";
@@ -108,7 +109,7 @@ fn parse_account_models_with_metadata(
         parsed.push((
             upstream_model,
             model_display_name_from_value(&value),
-            crate::models_v2::discovery_metadata::sanitize_metadata(&value),
+            discovery_metadata::sanitize_metadata(&value),
         ));
         if parsed.len() >= MAX_FETCHED_MODELS {
             break;
@@ -397,6 +398,7 @@ fn associate_account_models_with_storage_and_metadata(
         + 1;
     let mut create_candidates = Vec::new();
     let mut route_inputs = Vec::new();
+    let catalog = Catalog::load(Some(storage));
 
     for (upstream_model, catalog_model) in &requested {
         if let Some(model) = models
@@ -452,10 +454,7 @@ fn associate_account_models_with_storage_and_metadata(
             supported_in_api: true,
             visibility: "list".to_string(),
             sort_order: next_sort + create_candidates.len() as i64,
-            capabilities: json!({
-                "supports_text_generation": true,
-                "output_modalities": ["text"]
-            }),
+            capabilities: json!({}),
             instructions_mode: "passthrough".to_string(),
             fast_policy: ModelFastPolicyV2::Passthrough,
             price: ModelPriceV2 {
@@ -470,7 +469,7 @@ fn associate_account_models_with_storage_and_metadata(
                 key.eq_ignore_ascii_case(upstream_model) || key.eq_ignore_ascii_case(catalog_model)
             })
             .map(|(_, value)| value);
-        crate::models_v2::discovery_metadata::apply_metadata(&mut model, metadata);
+        discovery_metadata::apply_new_model_metadata(&mut model, metadata, &catalog);
         create_candidates.push(ManagedModelV2Upsert {
             model,
             ..Default::default()
@@ -614,7 +613,82 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(saved.context_window.is_none());
+        assert!(saved.max_context_window.is_none());
+        assert!(saved.default_reasoning_effort.is_none());
+        assert!(saved.capabilities.get("reasoning_efforts").is_none());
         assert!(saved.capabilities.get("input_modalities").is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn account_association_persists_and_exports_official_defaults_without_metadata() {
+        use crate::codex_model_catalog::{write_gateway_model_catalog_async, GatewayCatalogPolicy};
+        use std::fs;
+
+        let storage = Storage::open_in_memory().unwrap();
+        storage.init().unwrap();
+        let home = std::env::temp_dir().join(format!(
+            "codexmanager-account-catalog-{:016x}",
+            rand::random::<u64>()
+        ));
+        fs::create_dir(&home).unwrap();
+        storage
+            .set_app_setting("codex_profile.codex_home", home.to_str().unwrap(), 1)
+            .unwrap();
+        let slug = "account-cache-only-test";
+        let cache = home.join("models_cache.json");
+        fs::write(&cache, json!({
+            "client_version":"0.171.0-alpha.13.2", "fetched_at":"2026-11-25T00:00:00Z",
+            "models":[{"slug":slug, "context_window":180000, "max_context_window":360000,
+                "default_reasoning_level":"high", "supported_reasoning_levels":[{"effort":"high"}],
+                "input_modalities":["text","image"], "supports_verbosity":true}]
+        }).to_string()).unwrap();
+
+        let result =
+            associate_account_models_with_storage(&storage, vec![slug.into()], BTreeMap::new())
+                .unwrap();
+        // This slug is not bundled. After removing the cache the export can only
+        // get its limits and reasoning level from the newly persisted SQLite row.
+        fs::remove_file(cache).unwrap();
+        assert_eq!(result.created_models, [slug]);
+        let saved = storage.get_managed_model_v2(slug).unwrap().unwrap();
+        assert_eq!(
+            (saved.context_window, saved.max_context_window),
+            (Some(180_000), Some(360_000))
+        );
+        assert_eq!(saved.default_reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(saved.capabilities["reasoning_efforts"], json!(["high"]));
+        assert_eq!(
+            saved.capabilities["input_modalities"],
+            json!(["text", "image"])
+        );
+        assert_eq!(saved.capabilities["supports_verbosity"], true);
+        assert!(saved
+            .capabilities
+            .get("discovery_metadata_version")
+            .is_none());
+
+        let path = home.join("gateway-models.json");
+        write_gateway_model_catalog_async(&storage, "", &path, GatewayCatalogPolicy::Managed)
+            .await
+            .unwrap();
+        let catalog: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(home).unwrap();
+        let model = catalog["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["slug"] == slug)
+            .unwrap();
+        assert_eq!(model["context_window"], 180_000);
+        assert_eq!(model["max_context_window"], 360_000);
+        assert_eq!(model["default_reasoning_level"], "high");
+        assert_eq!(
+            model["supported_reasoning_levels"],
+            json!([{"effort":"high", "description":""}])
+        );
+        assert_eq!(model["input_modalities"], json!(["text", "image"]));
+        assert_eq!(model["support_verbosity"], true);
     }
 
     #[test]

@@ -3,7 +3,7 @@ pub(crate) mod discovery_metadata;
 pub(crate) mod fast_policy;
 mod import;
 pub(crate) mod instructions;
-mod official_capabilities;
+pub(crate) mod official_capabilities;
 mod official_pricing;
 mod ordering;
 mod pricing_sync;
@@ -340,12 +340,11 @@ pub(crate) fn should_preserve_luna_reserve_alias(
 }
 
 pub(crate) fn supports_text_generation(model: &ManagedModelV2) -> bool {
-    capability(
-        model,
-        &["supports_text_generation", "supportsTextGeneration"],
-    )
-    .and_then(Value::as_bool)
-    .unwrap_or(true)
+    model
+        .capabilities
+        .as_object()
+        .and_then(discovery_metadata::declared_text_generation)
+        .unwrap_or(true)
 }
 
 pub(crate) fn supports_image_generation(model: &ManagedModelV2) -> bool {
