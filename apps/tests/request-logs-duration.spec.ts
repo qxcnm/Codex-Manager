@@ -184,6 +184,50 @@ test("timeline expands request metadata without fetching the payload until reque
   expect(state.detailTraces).toEqual(["trace-duration-1"]);
 });
 
+test("paged payloads load on demand and copy the full captured stage", async ({ page }) => {
+  await mockLogs(page);
+  const items = Array.from({ length: 201 }, (_, i) => i);
+  const note = "x".repeat(65_537);
+  const field = JSON.stringify(note);
+  const requests: Record<string, unknown>[] = [];
+  let copied = "";
+  await page.exposeFunction("captureRequestCopy", (text: string) => { copied = text; });
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: Reflect.get(window, "captureRequestCopy") },
+    });
+  });
+  await page.route("**/api/rpc*", async (route) => {
+    const { id, method, params } = route.request().postDataJSON();
+    if (method !== "requestlog/detail") return route.fallback();
+    requests.push(params);
+    const shown = items.slice(0, params.itemLimit || items.length);
+    const value = field.slice(0, params.fieldLimit || field.length);
+    return route.fulfill({ json: { id, result: {
+      traceId: params.traceId, stage: "client", stages: ["client"], storageMode: "full",
+      bodyKind: "json_list", listField: "input", complete: true,
+      fields: [{ name: "note", value, truncated: value !== field, bytes: field.length }],
+      itemTotal: items.length, items: shown.map(String), hasMore: shown.length < items.length,
+    } } });
+  });
+  await page.goto("/logs/");
+  const entry = page.getByTestId("request-log-entry-trace-duration-1");
+  await entry.locator("summary").click();
+  await entry.getByRole("button", { name: "查看请求内容" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("200/201");
+  expect(requests[0]).toMatchObject({ itemOffset: 0, itemLimit: 200, fieldLimit: 65_536 });
+  await dialog.getByRole("button", { name: "复制完整请求" }).click();
+  await expect.poll(() => copied.length).toBeGreaterThan(0);
+  expect(JSON.parse(copied)).toEqual({ note, input: items });
+  expect(requests[1].stage).toBe("client");
+  await dialog.getByRole("button", { name: "加载更多条目" }).click();
+  await expect(dialog.getByRole("button", { name: "加载更多条目" })).toHaveCount(0);
+  await dialog.getByRole("button", { name: "展开全部字段" }).click();
+  await expect.poll(() => requests.at(-1)?.fieldLimit).toBe(0);
+  await expect(dialog.getByRole("button", { name: "展开全部字段" })).toHaveCount(0);
+});
+
 test("timeline displays explicit upstream errors as failures even with HTTP 200", async ({ page }) => {
   await mockLogs(page, { log: { status_code: 200, error: "upstream stream closed before completion" } });
   await page.goto("/logs/");

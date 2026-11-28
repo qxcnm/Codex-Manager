@@ -432,12 +432,20 @@ export function RequestDetailModal({
   const copyFullRequest = useCallback(async () => {
     if (!detail) return;
     try {
-      await navigator.clipboard.writeText(buildFullRequestJson(detail));
+      const needsFullBody = detail.hasMore || detail.fields.some((field) => field.truncated);
+      const fullDetail = needsFullBody
+        ? await serviceClient.requestLogDetail({
+            traceId: detail.traceId,
+            stage: detail.stage,
+            addr: serviceAddr,
+          })
+        : detail;
+      await navigator.clipboard.writeText(buildFullRequestJson(fullDetail));
       toast.success(t("已复制完整请求内容"));
     } catch {
       toast.error(t("复制失败"));
     }
-  }, [detail, t]);
+  }, [detail, serviceAddr, t]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

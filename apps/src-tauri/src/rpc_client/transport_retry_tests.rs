@@ -52,6 +52,51 @@ fn assert_no_pending_connection(listener: &TcpListener) {
 }
 
 #[test]
+fn requestlog_detail_forwards_desktop_paging_and_legacy_defaults() {
+    use serde_json::json;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    for (offset, limit, field_limit) in [
+        (Some(1), Some(2), Some(4)),
+        (Some(1), Some(2), Some(0)),
+        (None, None, None),
+    ] {
+        let socket = listener.try_clone().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = socket.accept().unwrap();
+            let request = read_rpc_request(&mut stream);
+            assert_eq!(request["method"], "requestlog/detail");
+            let reply = json!({"result": request["params"]});
+            stream
+                .write_all(response(&reply.to_string()).as_bytes())
+                .unwrap();
+        });
+        let reply =
+            tauri::async_runtime::block_on(crate::commands::requestlog::service_requestlog_detail(
+                Some(addr.clone()),
+                Some("trace".into()),
+                Some("upstream".into()),
+                offset,
+                limit,
+                field_limit,
+            ))
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(
+            reply["result"],
+            json!({
+                "traceId": "trace", "stage": "upstream", "itemOffset": offset.unwrap_or(0),
+                "itemLimit": limit.unwrap_or(0), "fieldLimit": field_limit.unwrap_or(0)
+            })
+        );
+    }
+    assert_eq!(
+        rpc_io_timeout("requestlog/detail", None),
+        Duration::from_secs(120)
+    );
+}
+
+#[test]
 fn managed_model_price_sync_uses_a_dedicated_timeout() {
     assert_eq!(
         rpc_io_timeout("apikey/managedModelPriceSyncV2", None),
