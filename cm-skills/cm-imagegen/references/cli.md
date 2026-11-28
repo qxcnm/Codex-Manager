@@ -36,8 +36,9 @@ Use `python3` on systems where that is the installed interpreter name.
 ## Defaults and options
 
 - Model: `gpt-image-2` for OpenAI-compatible Images endpoints; `image-01` for MiniMax endpoints. `--model` takes precedence over `CODEXMANAGER_IMAGE_MODEL`.
-- Size: `1024x1024`; use `--size` to override.
-- Response format: `b64_json`. The OpenAI-compatible path saves `data[].b64_json`; URL responses are not saved by that path. MiniMax supports `url` and `base64` and converts `b64_json` to `base64`.
+- Select `MiniMax-H3-Image` or `MiniMax-H3-Image-Highspeed` for H3 text-to-image. See [the H3 API reference](image-api.md#minimax-h3-text-to-image) for H3 size and response defaults.
+- Size: H3 selects the dimensions when omitted. The standard Images endpoint defaults to `1024x1024`.
+- Response format: `b64_json`. The OpenAI-compatible path saves `data[].b64_json`; URL responses are not saved by that path. The legacy MiniMax endpoint supports `url` and `base64` and converts `b64_json` to `base64`.
 - Output directory: `generated-images/` under the current working directory, overridden by `CODEXMANAGER_IMAGE_OUTPUT_DIR` or `--out-dir`.
 - Filename: generated automatically, overridden by `--filename`. Existing paths receive a timestamp suffix.
 - Timeout: 600 seconds, overridden by `--timeout`.
